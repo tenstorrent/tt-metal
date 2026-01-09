@@ -859,13 +859,13 @@ LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() co
                 cluster.read_from_device(
                     &retrain_count_val, src_chip_id, translated_eth_core, retrain_count_addr, sizeof(uint32_t));
                 cluster.read_from_device(&crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
-                cluster.read_from_device(&corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
+                cluster.read_from_device(&corr_val_lo, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
                 cluster.read_from_device(
-                    &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + 4, sizeof(uint32_t));
+                    &corr_val_hi, src_chip_id, translated_eth_core, corr_addr + 4, sizeof(uint32_t));
                 cluster.read_from_device(
-                    &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr, sizeof(uint32_t));
+                    &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr, sizeof(uint32_t));
                 cluster.read_from_device(
-                    &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + 4, sizeof(uint32_t));
+                    &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr + 4, sizeof(uint32_t));
 
                 local_ethernet_metrics[asic][src_eth_chan] = {
                     .retrain_count = retrain_count_val,
