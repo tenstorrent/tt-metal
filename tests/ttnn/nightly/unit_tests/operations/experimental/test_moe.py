@@ -31,6 +31,8 @@ def get_accuracy_metrics(torch_output, tt_output):
 def run_test_moe(device, M, K, N, check_accuracy):
     logger.info(f"Running test_moe with M={M}, K={K}, N={N}, check_accuracy={check_accuracy}")
 
+    NUM_EXPERTS = 64  # 8x8 core grid
+
     if check_accuracy:
         torch_input = torch.randn((M, K), dtype=torch.float32)
         torch_w0 = torch.randn((K, 12 * 5 * 32), dtype=torch.float32)
@@ -50,6 +52,26 @@ def run_test_moe(device, M, K, N, check_accuracy):
     weight2_shard_spec = ttnn.ShardSpec(shard_grid_all_12_dram, [N, 18 * 32], ttnn.ShardOrientation.ROW_MAJOR)
     weight2_shard_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, weight2_shard_spec
+    )
+
+    # Create HEIGHT_SHARDED memory config for input
+    # Each core (expert) gets a copy of the original (M, K) input
+    input_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, K),  # Shard shape - each core gets (M, K)
+        core_grid=ttnn.CoreGrid(x=8, y=8),  # 64 cores
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Replicate empty input 64 times for performance testing
+    torch_input_replicated = torch.empty((NUM_EXPERTS * M, K), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input_replicated,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=input_sharded_mem_config,
     )
 
     # Prepare TT tensors
@@ -100,6 +122,7 @@ def run_test_moe(device, M, K, N, check_accuracy):
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight2_shard_memory_config,
         )
+
         tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
 
     if check_accuracy:
