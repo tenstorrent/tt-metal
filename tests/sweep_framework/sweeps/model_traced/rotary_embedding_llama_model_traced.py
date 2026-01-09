@@ -371,7 +371,7 @@ def run(
         assert seq_len_dim == 1, "Decode mode requires seq_len (dim 0) to be 1"
     else:
         # Prefill mode shape: [batch, n_heads, seq_len, head_dim]
-        batch, n_heads, seq_len, head_dim = shape_a  # noqa: F841 - seq_len used in prefill golden
+        batch, n_heads, seq_len, head_dim = shape_a
 
     # --- Generate Input Tensor (random) ---
     torch_input_tensor = (torch.rand(shape_a) * 2 - 1).to(torch.bfloat16)
