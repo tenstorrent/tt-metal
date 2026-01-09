@@ -14,36 +14,39 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-void bind_fused_rms_1_1_32_8192(nb::module_& mod) {
+void bind_fused_rms_minimal(nb::module_& mod) {
     ttnn::bind_registered_operation(
         mod,
-        ttnn::fused_rms_1_1_32_8192,
-        R"doc(Only works for sharded shape (1,1,32,8192) sharded on 1 core
+        ttnn::fused_rms_minimal,
+        R"doc(
+            This fuses pre RMS, all gather, post rms, residual add, gamma operations, and output resharding into one.
+            Requires a pre-allocated persistent tensor for the intermediate all gather that is tiled,
+                shape per device (32,32) and sharded with a shard shape (32,32) on core (0,0)
+            Requires that input the tensor be of shape (1,1,32,M) where M is a multiple of 32
         )doc",
         // Stats is internally computed
-        ttnn::nanobind_arguments_t{
-            // Used by all
-            nb::arg("input_tensor"),
-            nb::arg("program_config"),
-            nb::arg("cluster_axis"),
-            nb::arg("mesh_device"),
-            nb::arg("global_semaphore"),  // TODO: Build this internally
-            nb::kw_only(),
-            // all gather
-            nb::arg("persistent_output_tensor") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology") = ttnn::ccl::Topology::Linear,
-            nb::arg("subdevice_id") = nb::none(),
-            // common
-            nb::arg("dtype") = nb::none(),  // Should default to BFLOAT 16 on pre, nullopt on post
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            // on pre only
-            nb::arg("residual_input_tensor") = nb::none(),
-            // on post only
-            nb::arg("epsilon") = 1e-12,  // constant 1e-12 on pre, value only affects post
-            nb::arg("weight") = nb::none(),
-            nb::arg("stats") = nb::none(),
-            nb::arg("use_noc1_only") = false});
+        ttnn::nanobind_arguments_t{// Used by all
+                                   nb::arg("input_tensor"),
+                                   nb::arg("program_config"),
+                                   nb::arg("cluster_axis"),
+                                   nb::arg("mesh_device"),
+                                   nb::arg("global_semaphore"),
+                                   nb::kw_only(),
+                                   // all gather
+                                   nb::arg("persistent_output_tensor") = nb::none(),
+                                   nb::arg("num_links") = nb::none(),
+                                   nb::arg("topology") = ttnn::ccl::Topology::Linear,
+                                   nb::arg("subdevice_id") = nb::none(),
+                                   // common
+                                   nb::arg("dtype") = nb::none(),
+                                   nb::arg("compute_kernel_config") = nb::none(),
+                                   nb::arg("memory_config") = nb::none(),
+                                   // on pre only
+                                   nb::arg("residual_input_tensor") = nb::none(),
+                                   // on post only
+                                   nb::arg("epsilon") = 1e-12,
+                                   nb::arg("weight") = nb::none(),
+                                   nb::arg("stats") = nb::none(),
+                                   nb::arg("use_noc1_only") = false});
 }
 }  // namespace ttnn::operations::experimental::ccl
