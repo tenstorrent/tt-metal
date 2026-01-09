@@ -54,24 +54,26 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
     CoreCoord core = {0, 0};
     CoreRange core_range(core, core);
 
-    // Create circular buffers
-    uint32_t input_row_bytes = input_width * input.element_size();
+    // Create circular buffers bound to sharded buffers
+    // uint32_t input_row_bytes = input_width * input.element_size();
 
     auto [src0_cb_index, cb_src0] = create_cb(
-        CBIndex::c_0,
+        tt::CBIndex::c_0,
         program,
         core_range,
         input_single_tile_size,
         tiles_per_row * 2,  // Double buffer
-        input_cb_data_format);
+        input_cb_data_format,
+        input.buffer());  // Bind to input buffer
 
     auto [output_cb_index, cb_output] = create_cb(
-        CBIndex::c_16,
+        tt::CBIndex::c_16,
         program,
         core_range,
         output_single_tile_size,
         tiles_per_row * 2,  // Double buffer
-        output_cb_data_format);
+        output_cb_data_format,
+        output.buffer());  // Bind to output buffer
 
     // Prepare compile-time arguments for reader with ShardedAddrGen
     std::vector<uint32_t> reader_ct_args = {
@@ -120,17 +122,16 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
     uint32_t packed_pad_value = detail::get_packed_value(input, pad_value);
 
     std::vector<uint32_t> reader_rt_args = {
-        output.buffer()->address(),  // dst_addr
-        input_width,                 // logical_width
-        output_width,                // padded_width
-        input_height,                // logical_height
-        output_height,               // padded_height
+        input_width,    // logical_width
+        output_width,   // padded_width
+        input_height,   // logical_height
+        output_height,  // padded_height
         tiles_per_row,
         tile_rows,
         num_batches,
         packed_pad_value};
 
-    // Add ShardedAddrGen runtime args
+    // Add ShardedAddrGen runtime args (mapping table)
     shard_builder::extend_sharding_run_time_args(input, reader_rt_args);
 
     SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
@@ -158,9 +159,9 @@ void TilizeWithValPaddingSingleCoreShardedFactory::override_runtime_arguments(
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* dst_buffer = output.buffer();
 
-    // Update buffer addresses if they changed
-    auto& reader_args = GetRuntimeArgs(program, shared_variables.reader_kernel_id, {0, 0});
-    reader_args[0] = dst_buffer->address();
+    // Update CB-bound buffer addresses following WIDTH_SHARDED pattern
+    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src0, *src_buffer);
+    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
 }
 
 }  // namespace ttnn::operations::data_movement::tilize_with_val_padding::program

@@ -15,7 +15,6 @@ void kernel_main() {
 
     // Runtime args
     uint32_t rt_arg_ind = 0;
-    uint32_t dst_addr = get_arg_val<uint32_t>(rt_arg_ind++);
     uint32_t logical_width = get_arg_val<uint32_t>(rt_arg_ind++);
     uint32_t padded_width = get_arg_val<uint32_t>(rt_arg_ind++);
     uint32_t logical_height = get_arg_val<uint32_t>(rt_arg_ind++);
@@ -26,7 +25,7 @@ void kernel_main() {
     uint32_t packed_pad_value = get_arg_val<uint32_t>(rt_arg_ind++);
 
 #ifdef SHARDED
-    // ShardedAddrGen setup
+    // ShardedAddrGen setup - buffer address comes from bound CB
     using tensor_shard_info = ShardedInfo<
         get_compile_time_arg_val(4),    // Memory layout
         get_compile_time_arg_val(5),    // Number of sharding cores
@@ -38,7 +37,8 @@ void kernel_main() {
 
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));
-    experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
+    uint32_t src_addr = get_noc_addr_helper(cb_id_0, 0);  // Get address from bound CB
+    experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = src_addr, .shard_array = mapping_table};
 #endif
 
     uint32_t row_bytes = logical_width * element_size;

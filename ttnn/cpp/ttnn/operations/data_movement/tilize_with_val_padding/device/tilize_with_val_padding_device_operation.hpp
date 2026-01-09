@@ -14,8 +14,8 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_interleaved_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_sharded_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation_types.hpp"
 
 namespace ttnn::operations::data_movement {
 
