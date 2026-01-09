@@ -271,6 +271,9 @@ class MLP1D(LightweightModule):
 
         # Seq_len-dependent: reshape for long sequences
         if seq_len >= cfg.prefill_len_cutoff:
+            assert (
+                seq_len % cfg.prefill_len_cutoff == 0
+            ), f"seq_len ({seq_len}) must be divisible by prefill_len_cutoff ({cfg.prefill_len_cutoff})"
             x = ttnn.reshape(x, [1, seq_len // cfg.prefill_len_cutoff, cfg.prefill_len_cutoff, -1])
 
         # Seq_len-dependent: get program configs by calling methods on config
