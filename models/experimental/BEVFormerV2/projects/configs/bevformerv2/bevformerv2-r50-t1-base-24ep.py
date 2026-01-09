@@ -25,7 +25,7 @@ class_names = [
     "truck",
 ]
 dataset_type = "CustomNuScenesDatasetV2"
-data_root = "data/nuscenes/"
+data_root = "models/experimental/BEVFormerV2/data/nuscenes/"
 # Input modality for nuScenes dataset, this is consistent with the submission
 # format which requires the information in input_modality.
 input_modality = dict(use_lidar=False, use_camera=True, use_radar=False, use_map=False, use_external=False)
@@ -62,38 +62,38 @@ ida_aug_conf_eval = {
 #         './data/nuscenes/': 's3://nuscenes/nuscenes/',
 #         'data/nuscenes/': 's3://nuscenes/nuscenes/'
 #     }))
-train_pipeline = [
-    dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="PhotoMetricDistortionMultiViewImage"),
-    dict(type="LoadAnnotations3D", with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
-    dict(type="ObjectRangeFilter", point_cloud_range=point_cloud_range),
-    dict(type="ObjectNameFilter", classes=class_names),
-    dict(type="CropResizeFlipImage", data_aug_conf=ida_aug_conf, training=True, debug=False),
-    dict(type="NormalizeMultiviewImage", **img_norm_cfg),
-    dict(type="PadMultiViewImage", size_divisor=32),
-    dict(type="DefaultFormatBundle3D", class_names=class_names),
-    dict(
-        type="CustomCollect3D",
-        keys=[
-            "gt_bboxes_3d",
-            "gt_labels_3d",
-            "img",
-            "ego2global_translation",
-            "ego2global_rotation",
-            "lidar2ego_translation",
-            "lidar2ego_rotation",
-            "timestamp",
-            "mono_input_dict",
-            "mono_ann_idx",
-            "aug_param",
-        ],
-    ),
-    dict(
-        type="DD3DMapper",
-        is_train=True,
-        tasks=dict(box2d_on=True, box3d_on=True),
-    ),
-]
+# train_pipeline = [
+#     dict(type="LoadMultiViewImageFromFiles", to_float32=True),
+#     dict(type="PhotoMetricDistortionMultiViewImage"),
+#     dict(type="LoadAnnotations3D", with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
+#     dict(type="ObjectRangeFilter", point_cloud_range=point_cloud_range),
+#     dict(type="ObjectNameFilter", classes=class_names),
+#     dict(type="CropResizeFlipImage", data_aug_conf=ida_aug_conf, training=True, debug=False),
+#     dict(type="NormalizeMultiviewImage", **img_norm_cfg),
+#     dict(type="PadMultiViewImage", size_divisor=32),
+#     dict(type="DefaultFormatBundle3D", class_names=class_names),
+#     dict(
+#         type="CustomCollect3D",
+#         keys=[
+#             "gt_bboxes_3d",
+#             "gt_labels_3d",
+#             "img",
+#             "ego2global_translation",
+#             "ego2global_rotation",
+#             "lidar2ego_translation",
+#             "lidar2ego_rotation",
+#             "timestamp",
+#             "mono_input_dict",
+#             "mono_ann_idx",
+#             "aug_param",
+#         ],
+#     ),
+#     dict(
+#         type="DD3DMapper",
+#         is_train=True,
+#         tasks=dict(box2d_on=True, box3d_on=True),
+#     ),
+# ]
 eval_pipeline = [
     dict(
         type="LoadMultiViewImageFromFiles",
@@ -128,23 +128,23 @@ data = dict(
     samples_per_gpu=1,
     workers_per_gpu=4,
     persistent_workers=True,
-    train=dict(
-        type="CustomNuScenesDatasetV2",
-        frames=frames,
-        data_root=data_root,
-        ann_file=data_root + "nuscenes_infos_temporal_train.pkl",
-        pipeline=train_pipeline,
-        classes=class_names,
-        modality=input_modality,
-        test_mode=False,
-        use_valid_flag=True,
-        box_type_3d="LiDAR",
-        mono_cfg=dict(name="nusc_trainval", data_root="data/nuscenes/", min_num_lidar_points=3, min_box_visibility=0.2),
-    ),
+    # train=dict(
+    #     type="CustomNuScenesDatasetV2",
+    #     frames=frames,
+    #     data_root=data_root,
+    #     ann_file=data_root + "nuscenes_infos_temporal_train.pkl",
+    #     pipeline=train_pipeline,
+    #     classes=class_names,
+    #     modality=input_modality,
+    #     test_mode=False,
+    #     use_valid_flag=True,
+    #     box_type_3d="LiDAR",
+    #     mono_cfg=dict(name="nusc_trainval", data_root="data/nuscenes/", min_num_lidar_points=3, min_box_visibility=0.2),
+    # ),
     val=dict(
         type="CustomNuScenesDatasetV2",
         frames=frames,
-        data_root="data/nuscenes/",
+        data_root="models/experimental/BEVFormerV2/data/nuscenes/",
         ann_file=data_root + "nuscenes_infos_temporal_val.pkl",
         pipeline=eval_pipeline,
         classes=class_names,
@@ -154,7 +154,7 @@ data = dict(
     test=dict(
         type="CustomNuScenesDatasetV2",
         frames=frames,
-        data_root="data/nuscenes/",
+        data_root="models/experimental/BEVFormerV2/data/nuscenes/",
         ann_file=data_root + "nuscenes_infos_temporal_val.pkl",
         pipeline=eval_pipeline,
         classes=class_names,
@@ -166,9 +166,10 @@ data = dict(
 evaluation = dict(interval=4, pipeline=eval_pipeline)
 
 # model
-load_from = "./ckpts/fcos_r50_coco_2mmdet.pth"
+# load_from = "models/experimental/BEVFormerV2/chkpt/epoch_24.pth"
+load_from = "models/experimental/BEVFormerV2/chkpt/fcos_r50_coco_2mmdet.pth"
 plugin = True
-plugin_dir = "projects/mmdet3d_plugin/"
+plugin_dir = "models/experimental/BEVFormerV2/projects/mmdet3d_plugin/"
 _dim_ = 256
 _pos_dim_ = 128
 _ffn_dim_ = 512
@@ -332,21 +333,21 @@ model = dict(
         ),
         nusc_loss_weight=dict(attr_loss_weight=0.2, speed_loss_weight=0.2),
     ),
-    train_cfg=dict(
-        pts=dict(
-            grid_size=[512, 512, 1],
-            voxel_size=voxel_size,
-            point_cloud_range=point_cloud_range,
-            out_size_factor=4,
-            assigner=dict(
-                type="HungarianAssigner3D",
-                cls_cost=dict(type="FocalLossCost", weight=2.0),
-                reg_cost=dict(type="SmoothL1Cost", weight=0.75),
-                iou_cost=dict(type="IoUCost", weight=0.0),
-                pc_range=point_cloud_range,
-            ),
-        )
-    ),
+    # train_cfg=dict(
+    #     pts=dict(
+    #         grid_size=[512, 512, 1],
+    #         voxel_size=voxel_size,
+    #         point_cloud_range=point_cloud_range,
+    #         out_size_factor=4,
+    #         assigner=dict(
+    #             type="HungarianAssigner3D",
+    #             cls_cost=dict(type="FocalLossCost", weight=2.0),
+    #             reg_cost=dict(type="SmoothL1Cost", weight=0.75),
+    #             iou_cost=dict(type="IoUCost", weight=0.0),
+    #             pc_range=point_cloud_range,
+    #         ),
+    #     )
+    # ),
 )
 
 # optimizer

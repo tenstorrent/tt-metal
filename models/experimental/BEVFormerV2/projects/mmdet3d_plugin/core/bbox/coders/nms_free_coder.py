@@ -1,8 +1,27 @@
 import torch
+from abc import abstractmethod, ABCMeta
 
-from mmdet.core.bbox import BaseBBoxCoder
-from mmdet.core.bbox.builder import BBOX_CODERS
-from projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox
+# from mmdet.core.bbox import BaseBBoxCoder
+# from mmdet.core.bbox.builder import BBOX_CODERS
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import BBOX_CODERS
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox
+
+
+# taken from mmdet.models.task_modules import BaseBBoxCoder
+class BaseBBoxCoder(metaclass=ABCMeta):
+    encode_size = 4
+
+    def __init__(self, use_box_type: bool = False, **kwargs):
+        self.use_box_type = use_box_type
+
+    @abstractmethod
+    def encode(self, bboxes, gt_bboxes):
+        """Encode deltas between bboxes and ground truth boxes."""
+
+    @abstractmethod
+    def decode(self, bboxes, bboxes_pred):
+        """Decode the predicted bboxes according to prediction and base
+        boxes."""
 
 
 @BBOX_CODERS.register_module()

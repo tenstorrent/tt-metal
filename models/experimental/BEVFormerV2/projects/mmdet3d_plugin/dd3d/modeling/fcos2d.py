@@ -2,18 +2,24 @@
 # Adapted from AdelaiDet:
 #   https://github.com/aim-uofa/AdelaiDet
 import torch
-from fvcore.nn import sigmoid_focal_loss
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import sigmoid_focal_loss
 from torch import nn
 from torch.nn import functional as F
 
-from detectron2.layers import Conv2d, batched_nms, cat, get_norm
-from detectron2.structures import Boxes, Instances
-from detectron2.utils.comm import get_world_size
-from mmcv.runner import force_fp32
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    Conv2d,
+    batched_nms,
+    cat,
+    get_norm,
+    Boxes,
+    Instances,
+    get_world_size,
+    force_fp32,
+)
 
-from projects.mmdet3d_plugin.dd3d.layers.iou_loss import IOULoss
-from projects.mmdet3d_plugin.dd3d.layers.normalization import ModuleListDial, Scale
-from projects.mmdet3d_plugin.dd3d.utils.comm import reduce_sum
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.layers.iou_loss import IOULoss
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.layers.normalization import ModuleListDial, Scale
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.utils.comm import reduce_sum
 
 INF = 100000000
 

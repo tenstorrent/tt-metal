@@ -4,20 +4,22 @@
 #  Modified by Zhiqi Li
 # ---------------------------------------------
 
-from mmcv.ops.multi_scale_deform_attn import multi_scale_deformable_attn_pytorch
 import warnings
 import torch
 import torch.nn as nn
-from mmcv.cnn import xavier_init, constant_init
-from mmcv.cnn.bricks.registry import ATTENTION, TRANSFORMER_LAYER_SEQUENCE
-from mmcv.cnn.bricks.transformer import TransformerLayerSequence
 import math
-from mmcv.runner.base_module import BaseModule
-from mmcv.utils import deprecated_api_warning
 
-from mmcv.utils import ext_loader
-from .multi_scale_deformable_attn_function import (
-    MultiScaleDeformableAttnFunction_fp32,
+from .multi_scale_deformable_attn_function import MultiScaleDeformableAttnFunction_fp32
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    ATTENTION,
+    TRANSFORMER_LAYER_SEQUENCE,
+    BaseModule,
+    xavier_init,
+    constant_init,
+    deprecated_api_warning,
+    ext_loader,
+    multi_scale_deformable_attn_pytorch,
+    TransformerLayerSequence,
 )
 
 ext_module = ext_loader.load_ext("_ext", ["ms_deform_attn_backward", "ms_deform_attn_forward"])
@@ -51,6 +53,9 @@ class DetectionTransformerDecoder(TransformerLayerSequence):
     """
 
     def __init__(self, *args, return_intermediate=False, **kwargs):
+        # Map transformerlayers (plural) to transformerlayer (singular) for parent class
+        if "transformerlayers" in kwargs and "transformerlayer" not in kwargs:
+            kwargs["transformerlayer"] = kwargs.pop("transformerlayers")
         super(DetectionTransformerDecoder, self).__init__(*args, **kwargs)
         self.return_intermediate = return_intermediate
         self.fp16_enabled = False

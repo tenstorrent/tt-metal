@@ -9,33 +9,18 @@ import warnings
 
 import torch
 
-from mmcv import ConfigDict
-from mmcv.cnn import build_norm_layer
-from mmcv.runner.base_module import BaseModule, ModuleList
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import ConfigDict
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import build_norm_layer
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import BaseModule, ModuleList
 
-from mmcv.cnn.bricks.registry import (
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
     TRANSFORMER_LAYER,
 )
 
-# Avoid BC-breaking of importing MultiScaleDeformableAttention from this file
-try:
-    from mmcv.ops.multi_scale_deform_attn import MultiScaleDeformableAttention  # noqa F401
-
-    warnings.warn(
-        ImportWarning(
-            "``MultiScaleDeformableAttention`` has been moved to "
-            "``mmcv.ops.multi_scale_deform_attn``, please change original path "  # noqa E501
-            "``from mmcv.cnn.bricks.transformer import MultiScaleDeformableAttention`` "  # noqa E501
-            "to ``from mmcv.ops.multi_scale_deform_attn import MultiScaleDeformableAttention`` "  # noqa E501
-        )
-    )
-except ImportError:
-    warnings.warn(
-        "Fail to import ``MultiScaleDeformableAttention`` from "
-        "``mmcv.ops.multi_scale_deform_attn``, "
-        "You should install ``mmcv-full`` if you need this module. "
-    )
-from mmcv.cnn.bricks.transformer import build_feedforward_network, build_attention
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    build_feedforward_network,
+    build_attention,
+)
 
 
 @TRANSFORMER_LAYER.register_module()

@@ -3,12 +3,10 @@ import warnings
 import torch
 import torch.nn as nn
 
-from mmcv.runner.base_module import BaseModule
-from mmcv.utils import deprecated_api_warning
-from mmcv.cnn.bricks.drop import build_dropout
-from mmcv.cnn.bricks.registry import (
-    ATTENTION,
-)
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import BaseModule
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import deprecated_api_warning
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import build_dropout
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import ATTENTION
 
 
 @ATTENTION.register_module()

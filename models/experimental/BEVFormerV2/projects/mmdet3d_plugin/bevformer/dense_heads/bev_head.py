@@ -1,13 +1,16 @@
 import torch
 import torch.nn as nn
 
-from mmdet.models import HEADS
-from mmcv.cnn.bricks.transformer import build_positional_encoding
-from mmcv.runner import BaseModule, force_fp32
-from projects.mmdet3d_plugin.bevformer.modules import PerceptionTransformerBEVEncoder
-from mmdet.models.utils import build_transformer
-from mmdet3d.models.builder import build_head
-from mmdet3d.models.dense_heads.free_anchor3d_head import FreeAnchor3DHead
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    HEADS,
+    build_positional_encoding,
+    BaseModule,
+    force_fp32,
+    build_transformer,
+    build_head,
+    FreeAnchor3DHead,
+)
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.bevformer.modules import PerceptionTransformerBEVEncoder
 
 
 @HEADS.register_module()

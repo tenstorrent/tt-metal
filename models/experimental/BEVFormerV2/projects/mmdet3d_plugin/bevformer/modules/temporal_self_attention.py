@@ -4,17 +4,20 @@
 #  Modified by Zhiqi Li
 # ---------------------------------------------
 
-from .multi_scale_deformable_attn_function import MultiScaleDeformableAttnFunction_fp32
-from mmcv.ops.multi_scale_deform_attn import multi_scale_deformable_attn_pytorch
 import warnings
 import torch
 import torch.nn as nn
-from mmcv.cnn import xavier_init, constant_init
-from mmcv.cnn.bricks.registry import ATTENTION
 import math
-from mmcv.runner.base_module import BaseModule
 
-from mmcv.utils import ext_loader
+from .multi_scale_deformable_attn_function import MultiScaleDeformableAttnFunction_fp32
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    ATTENTION,
+    BaseModule,
+    xavier_init,
+    constant_init,
+    ext_loader,
+    multi_scale_deformable_attn_pytorch,
+)
 
 ext_module = ext_loader.load_ext("_ext", ["ms_deform_attn_backward", "ms_deform_attn_forward"])
 

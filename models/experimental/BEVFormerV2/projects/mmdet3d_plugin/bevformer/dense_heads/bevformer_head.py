@@ -2,15 +2,23 @@ import copy
 import torch
 import torch.nn as nn
 
-from mmcv.cnn import Linear, bias_init_with_prob
-from mmcv.utils import TORCH_VERSION, digit_version
-from mmdet.core import multi_apply, multi_apply, reduce_mean
-from mmdet.models.utils.transformer import inverse_sigmoid
-from mmdet.models import HEADS
-from mmdet.models.dense_heads import DETRHead
-from mmdet3d.core.bbox.coders import build_bbox_coder
-from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
-from mmcv.runner import force_fp32, auto_fp16
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    Linear,
+    bias_init_with_prob,
+    TORCH_VERSION,
+    digit_version,
+    multi_apply,
+    reduce_mean,
+    inverse_sigmoid,
+    HEADS,
+    DETRHead,
+    build_bbox_coder,
+    build_positional_encoding,
+    build_transformer,
+    force_fp32,
+    auto_fp16,
+)
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
 
 
 @HEADS.register_module()
@@ -61,8 +69,28 @@ class BEVFormerHead(DETRHead):
         self.real_w = self.pc_range[3] - self.pc_range[0]
         self.real_h = self.pc_range[4] - self.pc_range[1]
         self.num_cls_fcs = num_cls_fcs - 1
+        # Store transformer config to use in _init_layers before transformer is built
+        self._transformer_cfg = transformer
+        # Extract positional_encoding from kwargs and build it
+        positional_encoding_cfg = kwargs.pop("positional_encoding", None)
         super(BEVFormerHead, self).__init__(*args, transformer=transformer, **kwargs)
+        # Build transformer if not already built by parent class
+        if not hasattr(self, "transformer") or self.transformer is None:
+            self.transformer = build_transformer(transformer) if transformer else None
+        # Build positional_encoding if provided
+        if positional_encoding_cfg is not None:
+            self.positional_encoding = build_positional_encoding(positional_encoding_cfg)
+        # Set embed_dims - usually equals in_channels in DETR-based models
+        if not hasattr(self, "embed_dims"):
+            if hasattr(self, "in_channels"):
+                self.embed_dims = self.in_channels
+            elif transformer and "embed_dims" in transformer:
+                self.embed_dims = transformer["embed_dims"]
+            else:
+                self.embed_dims = 256
         self.code_weights = nn.Parameter(torch.tensor(self.code_weights, requires_grad=False), requires_grad=False)
+        # Initialize layers (creates query_embedding and bev_embedding)
+        self._init_layers()
 
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
@@ -86,9 +114,10 @@ class BEVFormerHead(DETRHead):
 
         # last reg_branch is used to generate proposal from
         # encode feature map when as_two_stage is True.
-        num_pred = (
-            (self.transformer.decoder.num_layers + 1) if self.as_two_stage else self.transformer.decoder.num_layers
-        )
+        # Get num_layers from transformer config (transformer may not be built yet)
+        decoder_cfg = self._transformer_cfg.get("decoder", {}) if self._transformer_cfg else {}
+        num_decoder_layers = decoder_cfg.get("num_layers", 6)
+        num_pred = (num_decoder_layers + 1) if self.as_two_stage else num_decoder_layers
 
         if self.with_box_refine:
             self.cls_branches = _get_clones(fc_cls, num_pred)
@@ -128,6 +157,7 @@ class BEVFormerHead(DETRHead):
         """
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         dtype = mlvl_feats[0].dtype
+
         object_query_embeds = self.query_embedding.weight.to(dtype)
         bev_queries = self.bev_embedding.weight.to(dtype)
 

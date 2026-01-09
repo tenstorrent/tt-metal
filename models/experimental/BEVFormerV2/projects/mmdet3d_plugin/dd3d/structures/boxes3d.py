@@ -4,8 +4,8 @@ import torch
 from pyquaternion import Quaternion
 from torch.cuda import amp
 
-from projects.mmdet3d_plugin.dd3d.utils.geometry import unproject_points2d
-import projects.mmdet3d_plugin.dd3d.structures.transform3d as t3d
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.utils.geometry import unproject_points2d
+import models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.structures.transform3d as t3d
 
 # yapf: disable
 BOX3D_CORNER_MAPPING = [

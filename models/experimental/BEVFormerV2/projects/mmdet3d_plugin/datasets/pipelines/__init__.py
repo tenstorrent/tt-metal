@@ -7,7 +7,9 @@ from .transform_3d import (
 )
 from .formating import CustomDefaultFormatBundle3D
 from .augmentation import CropResizeFlipImage, GlobalRotScaleTransImage
-from .dd3d_mapper import DD3DMapper
+from .loading import LoadMultiViewImageFromFiles
+
+# from .dd3d_mapper import DD3DMapper
 
 __all__ = [
     "PadMultiViewImage",
@@ -18,5 +20,6 @@ __all__ = [
     "RandomScaleImageMultiViewImage",
     "CropResizeFlipImage",
     "GlobalRotScaleTransImage",
-    "DD3DMapper",
+    "LoadMultiViewImageFromFiles",
+    # "DD3DMapper",
 ]

@@ -1,6 +1,8 @@
 import numpy as np
 import torch
-from mmdet.datasets.builder import PIPELINES
+
+# from mmdet.datasets.builder import PIPELINES
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import PIPELINES
 from PIL import Image
 import random
 

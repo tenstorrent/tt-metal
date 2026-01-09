@@ -325,6 +325,8 @@ def obtain_sensor2top(nusc, sensor_token, l2e_t, l2e_r_mat, e2g_t, e2g_r_mat, se
     data_path = str(nusc.get_sample_data_path(sd_rec["token"]))
     if os.getcwd() in data_path:  # path from lyftdataset is absolute path
         data_path = data_path.split(f"{os.getcwd()}/")[-1]  # relative path
+        print("data_path: ", data_path)
+        print("os.getcwd(): ", os.getcwd())
     sweep = {
         "data_path": data_path,
         "type": sensor_type,

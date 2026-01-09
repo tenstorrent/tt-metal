@@ -1,25 +1,45 @@
 # Copyright 2021 Toyota Research Institute.  All rights reserved.
 import torch
 import torch.nn.functional as F
-from fvcore.nn.smooth_l1_loss import smooth_l1_loss
 from torch import nn
 
-from detectron2.layers import Conv2d, cat
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    HEADS,
+    force_fp32,
+    smooth_l1_loss,
+    Conv2d,
+    cat,
+)
 
-# from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
-from detectron2.modeling.postprocessing import detector_postprocess as resize_instances
-from detectron2.structures import Instances
-from detectron2.utils import comm as d2_comm
-from mmdet.models.builder import HEADS
-from mmcv.runner import force_fp32
+# detectron2 imports - only needed for training/inference (which raises NotImplementedError)
+# For CPU-only inference, we provide minimal stubs
+try:
+    from detectron2.modeling.postprocessing import detector_postprocess as resize_instances
+    from detectron2.structures import Instances
+    from detectron2.utils import comm as d2_comm
+except ImportError:
+    # Stubs for CPU-only inference (inference path raises NotImplementedError anyway)
+    def resize_instances(*args, **kwargs):
+        raise NotImplementedError("resize_instances not available without detectron2")
 
-from projects.mmdet3d_plugin.dd3d.datasets.nuscenes import MAX_NUM_ATTRIBUTES
+    class Instances:
+        @staticmethod
+        def cat(*args, **kwargs):
+            raise NotImplementedError("Instances.cat not available without detectron2")
+
+    class d2_comm:
+        @staticmethod
+        def get_world_size():
+            return 1
+
+
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.datasets.nuscenes import MAX_NUM_ATTRIBUTES
 from .core import DD3D
 
 # from tridet.modeling.dd3d.postprocessing import get_group_idxs, nuscenes_sample_aggregate
 from .prepare_targets import DD3DTargetPreparer
-from projects.mmdet3d_plugin.dd3d.structures.boxes3d import Boxes3D
-from projects.mmdet3d_plugin.dd3d.utils.comm import reduce_sum
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.structures.boxes3d import Boxes3D
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.utils.comm import reduce_sum
 
 INF = 100000000.0
 

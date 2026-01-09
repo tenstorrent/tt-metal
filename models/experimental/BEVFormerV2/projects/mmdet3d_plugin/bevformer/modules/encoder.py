@@ -8,12 +8,19 @@ import numpy as np
 import torch
 import copy
 import warnings
-from mmcv.cnn.bricks.registry import TRANSFORMER_LAYER, TRANSFORMER_LAYER_SEQUENCE
-from mmcv.cnn.bricks.transformer import TransformerLayerSequence
-from mmcv.runner import force_fp32, auto_fp16
-from mmcv.utils import TORCH_VERSION, digit_version
-from mmcv.utils import ext_loader
+
 from .custom_base_transformer_layer import MyCustomBaseTransformerLayer
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    TRANSFORMER_LAYER,
+    TRANSFORMER_LAYER_SEQUENCE,
+    TransformerLayerSequence,
+    force_fp32,
+    auto_fp16,
+    TORCH_VERSION,
+    digit_version,
+    ext_loader,
+    build_attention,
+)
 
 ext_module = ext_loader.load_ext("_ext", ["ms_deform_attn_backward", "ms_deform_attn_forward"])
 
@@ -33,6 +40,9 @@ class BEVFormerEncoder(TransformerLayerSequence):
     def __init__(
         self, *args, pc_range=None, num_points_in_pillar=4, return_intermediate=False, dataset_type="nuscenes", **kwargs
     ):
+        # Map transformerlayers (plural) to transformerlayer (singular) for parent class
+        if "transformerlayers" in kwargs and "transformerlayer" not in kwargs:
+            kwargs["transformerlayer"] = kwargs.pop("transformerlayers")
         super(BEVFormerEncoder, self).__init__(*args, **kwargs)
         self.return_intermediate = return_intermediate
 
@@ -417,9 +427,6 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
                 ffn_index += 1
 
         return query
-
-
-from mmcv.cnn.bricks.transformer import build_attention
 
 
 @TRANSFORMER_LAYER.register_module()

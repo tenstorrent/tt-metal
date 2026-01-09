@@ -4,7 +4,7 @@ import logging
 import torch
 import torch.nn as nn
 
-from projects.mmdet3d_plugin.dd3d.layers.smooth_l1_loss import smooth_l1_loss
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.layers.smooth_l1_loss import smooth_l1_loss
 
 LOG = logging.getLogger(__name__)
 

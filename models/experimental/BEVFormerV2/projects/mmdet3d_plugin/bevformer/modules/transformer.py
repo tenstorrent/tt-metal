@@ -7,18 +7,19 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from mmcv.cnn import xavier_init
-from mmcv.cnn.bricks.transformer import build_transformer_layer_sequence
-from mmcv.runner.base_module import BaseModule
-
-from mmdet.models.utils.builder import TRANSFORMER
 from torch.nn.init import normal_
-from mmcv.runner.base_module import BaseModule
 from torchvision.transforms.functional import rotate
+
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    TRANSFORMER,
+    BaseModule,
+    auto_fp16,
+    xavier_init,
+    build_transformer_layer_sequence,
+)
 from .temporal_self_attention import TemporalSelfAttention
 from .spatial_cross_attention import MSDeformableAttention3D
 from .decoder import CustomMSDeformableAttention
-from mmcv.runner import auto_fp16
 
 
 @TRANSFORMER.register_module()

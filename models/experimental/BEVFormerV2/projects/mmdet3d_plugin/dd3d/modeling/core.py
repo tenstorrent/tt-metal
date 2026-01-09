@@ -3,10 +3,12 @@ import torch
 from torch import nn
 
 # from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
-from detectron2.modeling.postprocessing import detector_postprocess as resize_instances
-from detectron2.structures import Instances
-from detectron2.layers import ShapeSpec
-from mmcv.runner import force_fp32
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    detector_postprocess as resize_instances,
+    Instances,
+    ShapeSpec,
+    force_fp32,
+)
 
 from .fcos2d import FCOS2DHead, FCOS2DLoss
 from .fcos3d import FCOS3DHead, FCOS3DLoss
@@ -15,7 +17,9 @@ from .fcos3d import FCOS3DHead, FCOS3DLoss
 from .prepare_targets import DD3DTargetPreparer
 
 # from tridet.modeling.feature_extractor import build_feature_extractor
-from projects.mmdet3d_plugin.dd3d.utils.tensor2d import compute_features_locations as compute_locations_per_level
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.utils.tensor2d import (
+    compute_features_locations as compute_locations_per_level,
+)
 
 
 # @META_ARCH_REGISTRY.register()
