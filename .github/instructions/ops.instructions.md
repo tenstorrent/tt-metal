@@ -1,5 +1,5 @@
 ---
-applyTo: "ttnn/cpp/ttnn/operations"
+applyTo: "ttnn/cpp/ttnn/operations/**"
 ---
 
 For TT-NN Operations code:
