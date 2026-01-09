@@ -26,11 +26,11 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
         # 2x4 config with sp enabled - sp on axis 0 enables fsdp weight sharding (no cfg parallel)
-        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "2x4sp2tp4",
+        "2x4sp1tp4",
         "4x8sp4tp4",
     ],
     indirect=["mesh_device"],
@@ -38,8 +38,8 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 @pytest.mark.parametrize(
     "use_torch_text_encoder",
     [
-        pytest.param(True, id="encoder_cpu"),
-        # pytest.param(False, id="encoder_device"),
+        # pytest.param(True, id="encoder_cpu"),
+        pytest.param(False, id="encoder_device"),
     ],
 )
 @pytest.mark.parametrize(
@@ -65,7 +65,13 @@ def test_qwenimage_pipeline(
     no_prompt: bool,
     use_torch_text_encoder: bool,
     traced: bool,
+    is_ci_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Set TT_DIT_CACHE in CI environment
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
     pipeline = QwenImagePipeline.create_pipeline(
         mesh_device=mesh_device,
         dit_cfg=cfg,
@@ -79,7 +85,6 @@ def test_qwenimage_pipeline(
         topology=topology,
         width=width,
         height=height,
-        is_fsdp=True,  # enable fsdp to avoid model load/unload cycle
     )
 
     prompts = [
