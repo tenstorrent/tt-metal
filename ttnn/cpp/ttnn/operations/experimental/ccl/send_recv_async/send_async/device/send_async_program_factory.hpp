@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "send_async_op_device_operation_types.hpp"
+#include "send_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::ccl::send_async {
