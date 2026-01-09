@@ -14,9 +14,9 @@ The reader kernel issues NOC instructions to read data from an interleaved buffe
 
 The writer kernel issues NOC instructions to write data from the L1 address of the Tensix core into an interleaved buffer. A write barrier is placed after these transactions in order to ensure data validity.
 
-Transactions exceeding 16 pages will consecutively overwrite the same 16 pages so as not to take up excess L1 memory. Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is read from the output interleaved buffer if the writer kernel is run (or directly from L1 memory otherwise), cross-checked with original data, and validated through a pcc check.
+Transactions exceeding 16 pages will consecutively overwrite the same 16 pages so as not to take up excess L1 memory. Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is read from the output interleaved buffer if the writer kernel is run (or directly from L1 memory otherwise), cross-checked with original data, and validated through an equality check.
 
-Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+Test expectations are that the equality checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:
