@@ -35,7 +35,9 @@ struct MoEDeviceOperation {
         const Tensor& w0_tensor,
         const Tensor& w1_tensor,
         const Tensor& w2_tensor,
-        const Tensor& output_tensor);
+        const Tensor& output_tensor,
+        MathFidelity math_fidelity = MathFidelity::LoFi,
+        bool fp32_dest_acc_en = true);
 };
 
 }  // namespace ttnn::operations::experimental::moe

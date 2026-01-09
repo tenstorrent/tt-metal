@@ -39,6 +39,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Get input data format and tile size
     tt::DataFormat input_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_tile_size = tt::tile_size(input_df);
+    tt::DataFormat w0_tensor_df = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.w0_tensor.dtype());
+    uint32_t w0_tile_size = tt::tile_size(w0_tensor_df);
 
     // Create CBs for the program
     // CBs used in the MOE operation
@@ -46,25 +48,29 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         ----------------------------------------------------------------------------------------
         |     Name      |   CB Index    |   Dtype    | Bytes/tile | Tiles/CB |  Total size (B) |
         ----------------------------------------------------------------------------------------
-        | cb_r2c_w0     | CBIndex::c_0  | bfloat8_b  |    1024    |    2     |      2048       |
-        | cb_s2c_in     | CBIndex::c_1  | bfloat8_b  |    1024    |    2     |      2048       |
-        | cb_c2c_mm0    | CBIndex::c_2  | bfloat8_b  |    1024    |    1     |      1024       |
-        | cb_c2c_mm1    | CBIndex::c_3  | bfloat8_b  |    1024    |    1     |      1024       |
-        | cb_c2w_elt    | CBIndex::c_4  | bfloat8_b  |    1024    |    1     |      1024       |
-        | cb_r2c_in2    | CBIndex::c_5  | bfloat8_b  |    1024    |    2     |      2048       |
-        | cb_c2w_mm2    | CBIndex::c_6  | bfloat8_b  |    1024    |    1     |      1024       |
+        | cb_r2c_w0     | CBIndex::c_0  | bfp8_b     |    1024    |    2     |      2048       |
+        | cb_s2c_in     | CBIndex::c_1  | sharded    |    var     |    var   |      var        |
+        | cb_c2c_mm0    | CBIndex::c_2  | bfp8_b     |    1024    |    1     |      1024       |
+        | cb_c2c_mm1    | CBIndex::c_3  | bfp8_b     |    1024    |    1     |      1024       |
+        | cb_c2w_elt    | CBIndex::c_4  | bfp8_b     |    1024    |    1     |      1024       |
+        | cb_r2c_in2    | CBIndex::c_5  | bfp8_b     |    1024    |    1     |      1024       |
+        | cb_c2w_mm2    | CBIndex::c_6  | bfp8_b     |    1024    |    1     |      1024       |
+        | cb_c2w_out    | CBIndex::c_7  | sharded    |    var     |    1     |      var        |
         ----------------------------------------------------------------------------------------
     */
 
     // Define the CB configuration as a map: name -> tuple<CBIndex, DataFormat, bytes_per_tile, tiles_per_cb>
     // Note: cb_s2c_in is handled separately as it's a sharded CB
+    tt::DataFormat intermediate_df =
+        operation_attributes.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    uint32_t intermediate_tile_size = tt::tile_size(w0_tensor_df);
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t, uint32_t>> cb_specs = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, 1024, 2},
-        {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Bfp8_b, 1024, 1},
-        {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Bfp8_b, 1024, 1},
-        {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Bfp8_b, 1024, 1},
-        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Bfp8_b, 1024, 1},
-        {"cb_c2w_mm2", tt::CBIndex::c_6, tt::DataFormat::Bfp8_b, 1024, 1}};
+        {"cb_r2c_w0", tt::CBIndex::c_0, w0_tensor_df, w0_tile_size, 2},
+        {"cb_c2c_mm0", tt::CBIndex::c_2, intermediate_df, intermediate_tile_size, 1},
+        {"cb_c2c_mm1", tt::CBIndex::c_3, intermediate_df, intermediate_tile_size, 1},
+        {"cb_c2w_elt", tt::CBIndex::c_4, intermediate_df, intermediate_tile_size, 1},
+        {"cb_r2c_in2", tt::CBIndex::c_5, w0_tensor_df, w0_tile_size, 1},
+        {"cb_c2w_mm2", tt::CBIndex::c_6, w0_tensor_df, w0_tile_size, 1}};
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles;
 
@@ -75,6 +81,30 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .set_page_size(tt::CBIndex::c_1, input_tile_size)
             .set_globally_allocated_address(*input_tensor.buffer());
     cb_handles["cb_s2c_in"] = tt::tt_metal::CreateCircularBuffer(program, cores, cb_s2c_in_config);
+
+    // Get output tensor info for sharded CB configuration
+    const auto& output_tensor = tensor_args.output_tensor;
+    const auto& output_shard_spec = output_tensor.shard_spec().value();
+    const auto& output_shard_shape = output_shard_spec.shape;
+
+    // Calculate tiles per core for sharded outpu1
+    // output_shard_shape is [height, width] in elements - should be (32, 32) = 1 tile per core
+    uint32_t output_shard_height_tiles = output_shard_shape[0] / tt::constants::TILE_HEIGHT;
+    uint32_t output_shard_width_tiles = output_shard_shape[1] / tt::constants::TILE_WIDTH;
+    uint32_t output_tiles_per_core = output_shard_height_tiles * output_shard_width_tiles;
+
+    // Get output data format and tile size
+    tt::DataFormat output_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    uint32_t output_tile_size = tt::tile_size(output_df);
+
+    // Create sharded CB for output (cb_c2w_out at CBIndex::c_7)
+    // This CB points directly to the sharded output tensor's L1 buffer
+    // Each core has one tile (32x32) of the output
+    auto cb_c2w_out_config =
+        tt::tt_metal::CircularBufferConfig(output_tiles_per_core * output_tile_size, {{tt::CBIndex::c_7, output_df}})
+            .set_page_size(tt::CBIndex::c_7, output_tile_size)
+            .set_globally_allocated_address(*output_tensor.buffer());
+    cb_handles["cb_c2w_out"] = tt::tt_metal::CreateCircularBuffer(program, cores, cb_c2w_out_config);
 
     // Create other CBs
     for (const auto& [name, index, dtype, bytes_per_tile, tiles_per_cb] : cb_specs) {
@@ -120,8 +150,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute.cpp",
         cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
-            .fp32_dest_acc_en = true,
+            .math_fidelity = operation_attributes.math_fidelity,
+            .fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en,
             .dst_full_sync_en = false,
             .bfp8_pack_precise = true,
             .math_approx_mode = false,

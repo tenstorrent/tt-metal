@@ -5,10 +5,14 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/base_types.hpp>
 
 namespace ttnn::operations::experimental::moe {
 
-struct operation_attributes_t {};
+struct operation_attributes_t {
+    MathFidelity math_fidelity = MathFidelity::LoFi;
+    bool fp32_dest_acc_en = true;
+};
 
 struct tensor_args_t {
     const Tensor& input_tensor;
