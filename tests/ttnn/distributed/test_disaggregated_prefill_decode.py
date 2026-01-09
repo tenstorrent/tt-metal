@@ -19,6 +19,7 @@ Run with:
            python3 tests/ttnn/distributed/test_disaggregated_prefill_decode.py
 """
 
+import time
 import torch
 import ttnn
 from loguru import logger
@@ -89,7 +90,7 @@ def create_model_and_cache(device, max_batch_size=1, max_seq_len=2048):
     return model, model_args, kv_cache
 
 
-def run_prefill_node(device, model, model_args, kv_cache, tokens, socket_config, actual_seq_len=None):
+def run_prefill_node(device, model, model_args, kv_cache, tokens, send_socket, actual_seq_len=None):
     """
     Prefill Node (Process 0):
     1. Run prefill to populate KV cache
@@ -97,6 +98,7 @@ def run_prefill_node(device, model, model_args, kv_cache, tokens, socket_config,
     3. Send the output logits (for next token)
 
     Args:
+        send_socket: Pre-created MeshSocket for sending data (created before prefill to avoid timeout).
         actual_seq_len: The actual sequence length before padding (for metadata).
                         If None, uses tokens.shape[1] (assumes no padding).
     """
@@ -110,7 +112,8 @@ def run_prefill_node(device, model, model_args, kv_cache, tokens, socket_config,
     # Prepare inputs
     prefill_input, rot_mats, *_ = model.prepare_inputs_prefill(tokens)
 
-    # Run prefill forward pass
+    # Run prefill forward pass with timing
+    t_prefill_start = time.perf_counter()
     tt_logits = model.ttnn_prefill_forward(
         prefill_input,
         rot_mats_global=rot_mats,
@@ -122,15 +125,16 @@ def run_prefill_node(device, model, model_args, kv_cache, tokens, socket_config,
 
     # Get the next token prediction
     logits_cpu = model.process_output_prefill(tt_logits.cpu(), (actual_seq_len - 1) % 32)
+    t_prefill_end = time.perf_counter()
+    prefill_time_ms = (t_prefill_end - t_prefill_start) * 1000
+
     # logits_cpu is already a 1D tensor [vocab_size] for the last token
     next_token = torch.argmax(logits_cpu)
 
-    logger.info(f"Prefill complete. Next token: {next_token.item()}")
+    logger.info(f"Prefill complete in {prefill_time_ms:.1f}ms. Next token: {next_token.item()}")
 
-    # Create socket and send KV cache
-    send_socket = ttnn.MeshSocket(device, socket_config)
-
-    # Send KV cache layer by layer
+    # Send KV cache layer by layer with timing
+    t_transfer_start = time.perf_counter()
     for layer_idx, (k_cache, v_cache) in enumerate(kv_cache):
         logger.info(f"Sending KV cache layer {layer_idx}")
         ttnn.experimental.send_async(k_cache, send_socket)
@@ -139,33 +143,43 @@ def run_prefill_node(device, model, model_args, kv_cache, tokens, socket_config,
     # Also send the sequence length and next token as metadata
     # (In practice, you'd use a separate control channel)
     # Use actual_seq_len for metadata (before padding)
-    # Convert to float32 first, then to BFLOAT16 for transmission
-    metadata = torch.tensor([float(actual_seq_len), float(next_token.item())], dtype=torch.float32)
+    #
+    # NOTE: We use UINT32 dtype to preserve integer precision.
+    # BFLOAT16 loses precision for large integers (e.g., token IDs > 32K)
+    # which causes the wrong token to be decoded on the receiver side.
+    metadata = torch.tensor([actual_seq_len, next_token.item()], dtype=torch.int32)
     metadata_tt = ttnn.from_torch(
         metadata.unsqueeze(0).unsqueeze(0),
         device=device,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
     )
     logger.info(f"Sending metadata: seq_len={actual_seq_len}, next_token={next_token.item()}")
     ttnn.experimental.send_async(metadata_tt, send_socket)
+    t_transfer_end = time.perf_counter()
+    transfer_time_ms = (t_transfer_end - t_transfer_start) * 1000
 
-    logger.info("KV cache sent to decode node")
+    logger.info(f"KV cache sent to decode node in {transfer_time_ms:.1f}ms")
+    logger.info(f"=== PREFILL TIMING SUMMARY ===")
+    logger.info(f"  Prefill compute: {prefill_time_ms:.1f}ms")
+    logger.info(f"  KV cache transfer: {transfer_time_ms:.1f}ms")
+    logger.info(f"  Total: {prefill_time_ms + transfer_time_ms:.1f}ms")
     return next_token
 
 
-def run_decode_node(device, model, model_args, kv_cache, socket_config, tokenizer, max_new_tokens=20):
+def run_decode_node(device, model, model_args, kv_cache, recv_socket, tokenizer, max_new_tokens=20):
     """
     Decode Node (Process 1):
     1. Receive KV cache from prefill node
     2. Continue autoregressive decode
+
+    Args:
+        recv_socket: Pre-created MeshSocket for receiving data (created before prefill to avoid timeout).
     """
     logger.info("=== DECODE NODE (Process 1) ===")
 
-    # Create socket and receive KV cache
-    recv_socket = ttnn.MeshSocket(device, socket_config)
-
-    # Receive KV cache layer by layer
+    # Receive KV cache layer by layer with timing
+    t_recv_start = time.perf_counter()
     for layer_idx in range(len(kv_cache)):
         k_cache_recv = ttnn.allocate_tensor_on_device(kv_cache[layer_idx][0].spec, device)
         v_cache_recv = ttnn.allocate_tensor_on_device(kv_cache[layer_idx][1].spec, device)
@@ -177,9 +191,9 @@ def run_decode_node(device, model, model_args, kv_cache, socket_config, tokenize
         kv_cache[layer_idx] = [k_cache_recv, v_cache_recv]
         logger.info(f"Received KV cache layer {layer_idx}")
 
-    # Receive metadata
+    # Receive metadata (UINT32 to preserve integer precision for token IDs)
     metadata_recv = ttnn.allocate_tensor_on_device(
-        ttnn.TensorSpec([1, 1, 32, 32], ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT), device
+        ttnn.TensorSpec([1, 1, 32, 32], ttnn.DataType.UINT32, ttnn.TILE_LAYOUT), device
     )
     ttnn.experimental.recv_async(metadata_recv, recv_socket)
     # Convert metadata tensor to torch
@@ -196,13 +210,15 @@ def run_decode_node(device, model, model_args, kv_cache, socket_config, tokenize
 
     # Extract metadata from the first tile (data is in the first row of the first tile)
     # The tensor shape is [1, 1, 32, 32] but we only sent 2 values, so they're at [0, 0, 0, 0] and [0, 0, 0, 1]
-    seq_len = int(round(metadata[0, 0, 0, 0].item()))
-    current_token = int(round(metadata[0, 0, 0, 1].item()))
+    seq_len = int(metadata[0, 0, 0, 0].item())
+    current_token = int(metadata[0, 0, 0, 1].item())
+    t_recv_end = time.perf_counter()
+    recv_time_ms = (t_recv_end - t_recv_start) * 1000
 
     logger.info(
         f"Received metadata: seq_len={seq_len}, current_token={current_token} ({tokenizer.decode([current_token])})"
     )
-    logger.info(f"Received KV cache. Starting decode from position {seq_len}")
+    logger.info(f"Received KV cache in {recv_time_ms:.1f}ms. Starting decode from position {seq_len}")
 
     # Decode loop
     generated_tokens = [current_token]
@@ -212,7 +228,11 @@ def run_decode_node(device, model, model_args, kv_cache, socket_config, tokenize
         f"Starting decode loop. Initial token: {current_token} ({tokenizer.decode([current_token])}) at pos={current_pos}"
     )
 
+    t_decode_start = time.perf_counter()
+    decode_times = []
     for step in range(max_new_tokens):
+        t_step_start = time.perf_counter()
+
         # Prepare decode input (single token)
         token_tensor = torch.tensor([[current_token]], dtype=torch.long)
         pos_tensor = torch.tensor([current_pos], dtype=torch.long)
@@ -233,7 +253,13 @@ def run_decode_node(device, model, model_args, kv_cache, socket_config, tokenize
         logits_cpu = model.process_output_decode(tt_logits.cpu(), 1, S=1)
         next_token = torch.argmax(logits_cpu[:, -1], dim=-1).item()
 
-        logger.info(f"Step {step}: Generated token {next_token} ({tokenizer.decode([next_token])})")
+        t_step_end = time.perf_counter()
+        step_time_ms = (t_step_end - t_step_start) * 1000
+        decode_times.append(step_time_ms)
+
+        logger.info(
+            f"Step {step}: Generated token {next_token} ({tokenizer.decode([next_token])}) [{step_time_ms:.1f}ms]"
+        )
 
         generated_tokens.append(next_token)
         current_token = next_token
@@ -244,10 +270,23 @@ def run_decode_node(device, model, model_args, kv_cache, socket_config, tokenize
             logger.info(f"EOS token detected at step {step}")
             break
 
+    # Decode timing summary
+    t_decode_end = time.perf_counter()
+    total_decode_time_ms = (t_decode_end - t_decode_start) * 1000
+    num_tokens = len(generated_tokens) - 1  # Exclude the initial token from prefill
+    avg_decode_time_ms = sum(decode_times) / len(decode_times) if decode_times else 0
+    tokens_per_sec = (num_tokens / total_decode_time_ms * 1000) if total_decode_time_ms > 0 else 0
+
     # Decode tokens to text
     logger.info(f"All generated tokens: {generated_tokens}")
     generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
     logger.info(f"Generated text: {generated_text}")
+
+    logger.info(f"=== DECODE TIMING SUMMARY ===")
+    logger.info(f"  KV cache receive: {recv_time_ms:.1f}ms")
+    logger.info(f"  Decode steps: {num_tokens} tokens in {total_decode_time_ms:.1f}ms")
+    logger.info(f"  Avg time per token: {avg_decode_time_ms:.1f}ms")
+    logger.info(f"  Throughput: {tokens_per_sec:.1f} tokens/sec")
 
     return generated_tokens, generated_text
 
@@ -297,10 +336,27 @@ def run_disaggregated_prefill_decode():
     # Setup sockets for KV cache transfer
     socket_config = setup_kv_cache_sockets(device, mesh_shape, model_args.n_layers)
 
-    # The prompt to process
-    prompt = "Quick brown fox"
+    # The prompt to process - can be overridden by environment variable
+    import os
+
+    prompt = os.environ.get("PROMPT", "Quick brown fox")
 
     logger.info(f"Prompt: '{prompt}'")
+
+    # === CREATE SOCKETS BEFORE HEAVY COMPUTATION ===
+    # This ensures both ranks establish the socket connection before prefill starts.
+    # Without this, the decode node would timeout waiting while prefill is running.
+    logger.info(f"Rank {rank}: Creating socket before computation...")
+    if rank == 0:
+        socket = ttnn.MeshSocket(device, socket_config)
+        logger.info("Prefill node: Send socket created")
+    else:
+        socket = ttnn.MeshSocket(device, socket_config)
+        logger.info("Decode node: Receive socket created")
+
+    # Barrier to ensure both sockets are established
+    ttnn.distributed_context_barrier()
+    logger.info(f"Rank {rank}: Socket handshake complete, proceeding with computation")
 
     if rank == 0:
         # === PREFILL NODE ===
@@ -317,13 +373,13 @@ def run_disaggregated_prefill_decode():
             logger.info(f"Padded sequence from {actual_seq_len} to {padded_len} tokens")
 
         next_token = run_prefill_node(
-            device, model, model_args, kv_cache, tokens, socket_config, actual_seq_len=actual_seq_len
+            device, model, model_args, kv_cache, tokens, socket, actual_seq_len=actual_seq_len
         )
         logger.info(f"Prefill node complete. First generated token: {tokenizer.decode([next_token.item()])}")
     else:
         # === DECODE NODE ===
         generated_tokens, generated_text = run_decode_node(
-            device, model, model_args, kv_cache, socket_config, tokenizer, max_new_tokens=20
+            device, model, model_args, kv_cache, socket, tokenizer, max_new_tokens=20
         )
         logger.info("Decode node complete.")
         logger.info(f"Full output: {prompt}{generated_text}")
