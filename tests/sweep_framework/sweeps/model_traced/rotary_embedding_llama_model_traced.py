@@ -20,7 +20,7 @@ Tensor formats:
 - trans_mat: [1, 1, 32, 32] fixed transformation matrix
 
 RoPE Parameter Support:
-This test supports different RoPE configurations across various model families:
+This sweep test supports different RoPE configurations across various model families:
 - Standard RoPE (LLaMA 1/2, Mistral): theta=10000.0, no scaling
 - LLaMA 3+ RoPE: theta=500000.0, llama3 scaling with factor=8.0
 - YARN RoPE (Qwen 2.5): theta varies, yarn scaling
