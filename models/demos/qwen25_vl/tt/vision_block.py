@@ -24,13 +24,13 @@ class VisionBlock(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.args = args
-        self.hidden_size = args.qwen_vl_dim
-        self.n_heads = args.qwen_vl_n_heads
+        self.hidden_size = args.vision_dim
+        self.n_heads = args.vision_n_heads
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = args.max_seq_len
-        self.dim = args.qwen_vl_dim
+        self.dim = args.vision_dim
         self.max_batch_size = args.max_batch_size
-        self.n_kv_heads = args.qwen_vl_n_kv_heads
+        self.n_kv_heads = args.vision_n_kv_heads
         self.current = 0
         self.model_config = args.get_model_config()
 
@@ -58,7 +58,7 @@ class VisionBlock(LightweightModule):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
         self.attention_norm = RMSNorm(
             device=mesh_device,
-            dim=args.qwen_vl_dim,
+            dim=args.vision_dim,
             eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
             state_dict=state_dict,
             state_dict_prefix=args.get_state_dict_prefix("", layer_num),
@@ -70,7 +70,7 @@ class VisionBlock(LightweightModule):
         # args.dim = 1280
         self.ff_norm = RMSNorm(
             device=mesh_device,
-            dim=args.qwen_vl_dim,
+            dim=args.vision_dim,
             eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
             state_dict=state_dict,
             state_dict_prefix=args.get_state_dict_prefix("", layer_num),
