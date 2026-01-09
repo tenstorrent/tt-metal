@@ -65,10 +65,10 @@ FORCE_INLINE void update_pages_acked(
     uint32_t sender_noc_y = receiver_cb_interface.sender_noc_y;
 
     // increment the aligned pages acked because we skipped to next aligned page location
-    volatile tt_l1_ptr uint32_t* pages_acked_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_acked_addr);
+    volatile tt_l1_ptr uintptr_t* pages_acked_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uintptr_t*>(aligned_pages_acked_addr);
     *pages_acked_ptr += aligned_page_adjustment;
-    uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, (uint32_t)pages_acked_ptr, noc);
+    uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, (uintptr_t)pages_acked_ptr, noc);
     noc_fast_atomic_increment<nm>(
         noc,
         cmd_buf,

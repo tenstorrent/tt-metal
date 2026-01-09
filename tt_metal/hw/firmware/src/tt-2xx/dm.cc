@@ -77,11 +77,11 @@ void invalidate_trisc_instruction_cache() {
 }
 
 void deassert_trisc() {
-    mailboxes->subordinate_sync.allDMs = RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
-    mailboxes->subordinate_sync.allNeo0 = RUN_SYNC_MSG_ALL_INIT;
-    // mailboxes->subordinate_sync.allNeo1 = RUN_SYNC_MSG_ALL_INIT;
-    // mailboxes->subordinate_sync.allNeo2 = RUN_SYNC_MSG_ALL_INIT;
-    // mailboxes->subordinate_sync.allNeo3 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allDMs = RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
+    subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
+    // subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
+    // subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
+    // subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
 
@@ -106,7 +106,7 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
 
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    DPRINT << "DM-FW: waiting for TRISC0 to complete " << mailboxes->subordinate_sync.neo0_trisc0 << ENDL();
+    DPRINT << "DM-FW: waiting for TRISC0 to complete " << subordinate_sync->neo0_trisc0 << ENDL();
     while (subordinate_sync->neo0_trisc0 != RUN_SYNC_MSG_DONE) {
         invalidate_l1_cache();
     }
@@ -115,7 +115,7 @@ inline void run_triscs(uint32_t enables) {
         (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E0_MATH0))) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc1 = RUN_SYNC_MSG_GO;
-        subordinate_sync->.neo0_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo0_trisc2 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
     }
 }
@@ -151,6 +151,8 @@ extern "C" uint32_t _start1() {
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
+    DPRINT << "DM0-FW: initialized" << ENDL();
+
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
@@ -165,6 +167,7 @@ extern "C" uint32_t _start1() {
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
         deassert_trisc();
+        DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
@@ -179,6 +182,7 @@ extern "C" uint32_t _start1() {
             // written in order, so it will arrive in order. We also have a barrier
             // before mcasting the launch message (as a hang workaround), which
             // ensures that the unicast data will also have been received.
+            DPRINT << "DM0-FW: waiting for GO message" << ENDL();
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
@@ -234,7 +238,7 @@ extern "C" uint32_t _start1() {
                 // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
                 //     RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
-                run_triscs(enables);
+                // run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
