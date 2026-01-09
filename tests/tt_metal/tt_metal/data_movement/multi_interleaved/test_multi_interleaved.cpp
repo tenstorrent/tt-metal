@@ -172,14 +172,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     Finish(cq);
 
     vector<uint32_t> packed_output;
-    bool pcc = false;
+    bool is_equal = false;
 
     if (test_config.write_kernel) {
         detail::ReadFromBuffer(output_buffer, packed_output);
-        pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-            packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-        if (!pcc) {
-            log_error(tt::LogTest, "PCC Check failed");
+        is_equal = (packed_output == packed_golden);
+        if (!is_equal) {
+            log_error(tt::LogTest, "Equality Check failed");
             log_info(tt::LogTest, "Golden vector");
             print_vector<uint32_t>(packed_golden);
             log_info(tt::LogTest, "Output vector");
@@ -188,19 +187,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     } else {
         for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
             detail::ReadFromDeviceL1(device, core_list[i], l1_addrs[i], total_size_bytes, packed_output);
-            pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-                packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-            if (!pcc) {
-                log_error(tt::LogTest, "PCC Check failed");
+            is_equal = (packed_output == packed_golden);
+            if (!is_equal) {
+                log_error(tt::LogTest, "Equality Check failed");
                 log_info(tt::LogTest, "Golden vector");
                 print_vector<uint32_t>(packed_golden);
                 log_info(tt::LogTest, "Output vector");
                 print_vector<uint32_t>(packed_output);
-                return pcc;
+                return is_equal;
             }
         }
     }
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(
