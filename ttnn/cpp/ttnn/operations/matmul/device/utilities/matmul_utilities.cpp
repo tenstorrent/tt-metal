@@ -204,9 +204,8 @@ tt::tt_metal::Tile get_output_tile(
         }
 
         return override_output_tile;
-    } else {
-        return tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
     }
+    return tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 }
 
 tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {

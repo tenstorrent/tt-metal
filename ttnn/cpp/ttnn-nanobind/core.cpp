@@ -5,7 +5,6 @@
 #include "core.hpp"
 
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -17,11 +16,9 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
-#include <nanobind/stl/optional.h>
 #include <reflect>
 
 #include "ttnn/core.hpp"
-#include "ttnn/common/guard.hpp"
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>

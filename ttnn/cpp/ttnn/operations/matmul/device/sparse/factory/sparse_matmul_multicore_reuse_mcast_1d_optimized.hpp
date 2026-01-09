@@ -40,10 +40,10 @@ struct SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& operation_attributes,
+        const operation_attributes_t& attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& output);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,

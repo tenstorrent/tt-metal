@@ -24,7 +24,6 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
 #include <nanobind/stl/vector.h>
-#include <nanobind/stl/filesystem.h>
 
 #include "small_vector_caster.hpp"
 #include "tools/profiler/op_profiler.hpp"

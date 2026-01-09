@@ -1196,16 +1196,7 @@ MatmulDeviceOperation::create_op_performance_model(
 
     operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor_a, input_tensor_b}, output_tensors, ideal_dev_clock_cycles);
-#if 0
-        log_info(tt::LogOp, "Matmul PerfModel:");
-        for (auto i = 0; i < out_shape.rank() - 2; i++) {
-            log_info(tt::LogOp, "\t Batch Values: (Index: {}, Value: {})", i, out_shape[i]);
-        }
-        log_info(tt::LogOp, "\t In A (H, W): ({}, {})", in_a_shape[-2], in_a_shape[-1]);
-        log_info(tt::LogOp, "\t In B (H, W): ({}, {})", in_b_shape[-2], in_b_shape[-1]);
-        log_info(tt::LogOp, "\t Out (H, W): ({}, {})", out_shape[-2], out_shape[-1]);
-        log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
-#endif
+
     return result;
 }
 

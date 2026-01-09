@@ -5,7 +5,6 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::matmul {
 
@@ -139,9 +138,9 @@ std::vector<uint32_t> get_multi_dim_per_core_factor(
         if (in0_block_w % per_core_factor_k != 0) {
             continue;
         }
-        for (auto it = factors.crbegin(); it != factors.crend(); ++it) {
-            uint32_t per_core_factor_m = std::get<0>(it->second);
-            uint32_t per_core_factor_n = std::get<1>(it->second);
+        for (const auto& [multiple, factor] : factors) {
+            uint32_t per_core_factor_m = std::get<0>(factor);
+            uint32_t per_core_factor_n = std::get<1>(factor);
 
             size = utilities::get_estimated_size_of_cbs(
                 per_core_factor_m,
@@ -685,8 +684,8 @@ MatmulProgramConfig get_matmul_program_config(
                 .fused_activation = fused_activation,
                 .mcast_in0 = mcast_in0,
             };
-        } else if (
-            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
+        }
+        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
             (grid_size.x > 1 and grid_size.y > 1)) {
             bool transpose_mcast = input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
 
@@ -878,35 +877,33 @@ inline MatmulProgramConfig generate_matmul_program_config(
                 compute_kernel_config,
                 mem_config,
                 output_dtype);
-        } else {
-            tt::tt_metal::IDevice* device = input_tensor_a.device();
-            auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-            return create_simple_matmul_program_config(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                compute_kernel_config,
-                compute_with_storage_grid_size,
-                mem_config,
-                output_dtype);
         }
-    } else {
-        bool bmm = user_run_batched;
-        return get_matmul_program_config(
+        tt::tt_metal::IDevice* device = input_tensor_a.device();
+        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        return create_simple_matmul_program_config(
             input_tensor_a,
             input_tensor_b,
             transpose_a,
             transpose_b,
             bias_single_tile_size,
-            mem_config,
-            std::nullopt,
-            !bmm,
-            user_core_coord,
             compute_kernel_config,
+            compute_with_storage_grid_size,
+            mem_config,
             output_dtype);
     }
+    bool bmm = user_run_batched;
+    return get_matmul_program_config(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a,
+        transpose_b,
+        bias_single_tile_size,
+        mem_config,
+        std::nullopt,
+        !bmm,
+        user_core_coord,
+        compute_kernel_config,
+        output_dtype);
 }
 
 /***************************************************************************************/
@@ -1127,7 +1124,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 compute_kernel_config,
                 output_dtype,
                 all_dram_interleaved);
-        } else if (core_range.x == 1 or use_mcast_1d_in1_config) {
+        }
+        if (core_range.x == 1 or use_mcast_1d_in1_config) {
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -1142,8 +1140,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 compute_kernel_config,
                 output_dtype,
                 all_dram_interleaved);
-        } else if (
-            (core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
+        }
+        if ((core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
             bool transpose_mcast =
                 input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;

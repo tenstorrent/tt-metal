@@ -97,7 +97,7 @@ ttnn::Tensor encoder(
                                       query,
                                       key,
                                       /*bias=*/std::nullopt,
-                                      /*output_tensor=*/std::nullopt,
+                                      /*optional_output_tensor=*/std::nullopt,
                                       attributes)
                                       .at(0);
 
@@ -122,7 +122,7 @@ ttnn::Tensor encoder(
                                        pre_softmax_bmm_matmul,
                                        value,
                                        /*bias=*/std::nullopt,
-                                       /*output_tensor=*/std::nullopt,
+                                       /*optional_output_tensor=*/std::nullopt,
                                        attributes)
                                        .at(0);
     pre_softmax_bmm_matmul.deallocate();
@@ -151,7 +151,7 @@ ttnn::Tensor encoder(
                                   concat_heads_output,
                                   parameters.at(fmt::format("selfout_weight_{}", encoder_index)),
                                   parameters.at(fmt::format("selfout_bias_{}", encoder_index)),
-                                  /*output_tensor=*/std::nullopt,
+                                  /*optional_output_tensor=*/std::nullopt,
                                   attributes)
                                   .at(0);
     concat_heads_output.deallocate();
@@ -185,7 +185,7 @@ ttnn::Tensor encoder(
                                  attention_layernorm_output,
                                  parameters.at(fmt::format("ff1_weight_{}", encoder_index)),
                                  parameters.at(fmt::format("ff1_bias_{}", encoder_index)),
-                                 /*output_tensor=*/std::nullopt,
+                                 /*optional_output_tensor=*/std::nullopt,
                                  attributes)
                                  .at(0);
 
@@ -208,7 +208,7 @@ ttnn::Tensor encoder(
                                  ff1_matmul_output,
                                  parameters.at(fmt::format("ff2_weight_{}", encoder_index)),
                                  parameters.at(fmt::format("ff2_bias_{}", encoder_index)),
-                                 /*output_tensor=*/std::nullopt,
+                                 /*optional_output_tensor=*/std::nullopt,
                                  attributes)
                                  .at(0);
     ff1_matmul_output.deallocate();
