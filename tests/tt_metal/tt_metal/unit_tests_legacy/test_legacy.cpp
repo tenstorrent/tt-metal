@@ -4370,16 +4370,16 @@ bool run_sdpa_reduce_c_variant(
 
 }  // anonymous namespace
 
-TEST_F(FastDispatchFixture, SdpaReduceC) {
+TEST_F(FastDispatchFixture, NIGHTLY_SdpaReduceC) {
     bool pass = true;
     try {
         IDevice* dev = device();
         auto& cq = command_queue();
 
-        // Test a subset of parameter combinations (full sweep would take too long)
-        std::vector<uint32_t> q_chunk_sizes = {1, 2, 4};
-        std::vector<uint32_t> k_chunk_sizes = {1, 2, 4};
-        std::vector<bool> fp32_dest_acc_ens = {false};
+        // Parameters to sweep over for correctness
+        std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
+        std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
+        std::vector<bool> fp32_dest_acc_ens = {false, true};
         std::vector<bool> do_eltwise = {false, true};
 
         std::vector<std::pair<std::string, std::string>> kernel_variants = {

@@ -13,7 +13,7 @@ if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
 fi
 
 if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
-    ./build/test/tt_metal/unit_tests_legacy --gtest_shuffle
+    ./build/test/tt_metal/unit_tests_legacy --gtest_shuffle --gtest_filter=-*NIGHTLY_*
     env python3 tests/scripts/run_tt_eager.py --dispatch-mode slow
 else
     # Enable this on BH after #14613
@@ -24,6 +24,6 @@ else
     # Programming example
     ./build/programming_examples/contributed/vecadd
     # tt_metal fast dispatch tests
-    ./build/test/tt_metal/unit_tests_legacy --gtest_shuffle
+    ./build/test/tt_metal/unit_tests_legacy --gtest_shuffle --gtest_filter=-*NIGHTLY_*
     ./build/test/tt_metal/unit_tests_noc
 fi
