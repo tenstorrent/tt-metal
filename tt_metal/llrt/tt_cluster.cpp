@@ -385,7 +385,6 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
-    std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc;
     if (this->target_type_ == TargetDevice::Silicon) {
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
@@ -420,7 +419,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     } else if (this->target_type_ == TargetDevice::Mock) {
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
-        mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+        auto mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,

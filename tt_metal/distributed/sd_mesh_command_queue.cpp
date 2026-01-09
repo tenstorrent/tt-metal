@@ -113,6 +113,10 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
 
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     for (const auto& device : mesh_device_->get_devices()) {
         tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());

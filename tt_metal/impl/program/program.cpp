@@ -1473,8 +1473,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     bool is_mock =
         tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
     if (!is_mock) {
-        for (auto& kernels : kernels_) {
-            for (auto& [id, kernel] : kernels) {
+        for (const auto& kernels : kernels_) {
+            for (const auto& pair : kernels) {
+                const auto& kernel = pair.second;
                 launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
             }
         }

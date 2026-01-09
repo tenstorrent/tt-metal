@@ -84,22 +84,22 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) : device_id(device_id) {
-    this->completion_byte_addrs.resize(num_hw_cqs);
-    this->prefetcher_cores.resize(num_hw_cqs);
+SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
+    device_id(device_id),
+    completion_byte_addrs(num_hw_cqs),
+    cq_to_event_locks(num_hw_cqs),
+    prefetcher_cores(num_hw_cqs),
+    prefetch_q_dev_ptrs(num_hw_cqs),
+    prefetch_q_dev_fences(num_hw_cqs) {
     this->prefetch_q_writers.reserve(num_hw_cqs);
     this->completion_q_writers.reserve(num_hw_cqs);
-    this->prefetch_q_dev_ptrs.resize(num_hw_cqs);
-    this->prefetch_q_dev_fences.resize(num_hw_cqs);
 
     if (is_mock_device()) {
-        this->cq_size = 0x10000;
+        this->cq_size = 65536;
         this->cq_sysmem_start = nullptr;
         this->channel_offset = 0;
         this->cq_to_event.resize(num_hw_cqs, 0);
         this->cq_to_last_completed_event.resize(num_hw_cqs, 0);
-        std::vector<std::mutex> temp_mutexes(num_hw_cqs);
-        this->cq_to_event_locks.swap(temp_mutexes);
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             this->cq_interfaces.emplace_back(0, cq_id, this->cq_size, 0);
         }
@@ -194,8 +194,6 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
             prefetch_q_base + MetalContext::instance().dispatch_mem_map().prefetch_q_entries() *
                                   sizeof(DispatchSettings::prefetch_q_entry_type);
     }
-    std::vector<std::mutex> temp_mutexes(num_hw_cqs);
-    cq_to_event_locks.swap(temp_mutexes);
 }
 
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
@@ -315,28 +313,28 @@ std::vector<uint32_t>& SystemMemoryManager::get_bypass_data() { return this->byp
 
 uint32_t SystemMemoryManager::get_issue_queue_size(const uint8_t cq_id) const {
     if (is_mock_device()) {
-        return 0x10000;
+        return 65536;
     }
     return this->cq_interfaces[cq_id].issue_fifo_size << 4;
 }
 
 uint32_t SystemMemoryManager::get_issue_queue_limit(const uint8_t cq_id) const {
     if (is_mock_device()) {
-        return 0x10000;
+        return 65536;
     }
     return this->cq_interfaces[cq_id].issue_fifo_limit << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_size(const uint8_t cq_id) const {
     if (is_mock_device()) {
-        return 0x10000;
+        return 65536;
     }
     return this->cq_interfaces[cq_id].completion_fifo_size << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_limit(const uint8_t cq_id) const {
     if (is_mock_device()) {
-        return 0x10000;
+        return 65536;
     }
     return this->cq_interfaces[cq_id].completion_fifo_limit << 4;
 }
@@ -375,7 +373,7 @@ uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_
 
 uint32_t SystemMemoryManager::get_cq_size() const {
     if (is_mock_device()) {
-        return 0x10000;
+        return 65536;
     }
     return this->cq_size;
 }
@@ -386,7 +384,7 @@ std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() {
 
 void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
     if (is_mock_device()) {
-        thread_local static std::vector<char> dummy_buffer(0x10000);
+        thread_local static std::vector<char> dummy_buffer(65536);
         return dummy_buffer.data();
     }
 
