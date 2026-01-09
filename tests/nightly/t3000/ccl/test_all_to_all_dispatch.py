@@ -51,7 +51,7 @@ def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random"
     factor = 1
     for _ in range(batch):
         for _ in range(seq_len):
-            if scheme == "random" or scheme == "worst_perf" or scheme == "avg_perf":
+            if scheme == "random" or scheme == "worst_perf" or scheme == "avg_perf" or scheme == "worst_congestion":
                 tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=dtype))
             elif scheme == "sequential":
                 tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=dtype) * factor)
@@ -70,7 +70,7 @@ def gen_expert_mapping(experts, devices, scheme="random"):
     experts_per_devices = experts // devices
     device_expert_count = {d: 0 for d in range(devices)}
     for i in range(experts):
-        if scheme == "sequential" or scheme == "worst_perf" or scheme == "avg_perf":
+        if scheme == "sequential" or scheme == "worst_perf" or scheme == "avg_perf" or scheme == "worst_congestion":
             if i > 0 and i % experts_per_devices == 0:
                 device_id += 1
             expert_mapping[0, 0, i, device_id] = 1
@@ -142,6 +142,27 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
                     expert_indices[b, 0, s, k] = (
                         experts - 1
                     )  # technically each expert index should be different, but we're sending to the same device regardless
+                elif scheme == "worst_congestion":
+                    # Worst case link congestion: each token selects experts on consecutive
+                    # devices in one direction, maximizing traffic through intermediate links.
+                    # From device D, select experts on devices D+1, D+2, ..., D+k
+                    # This creates a cascade where link i→i+1 carries traffic from all
+                    # devices 0..i to all devices i+1..n, maximizing link utilization.
+                    devices = mesh_shape[0] * mesh_shape[1]
+                    experts_per_device = experts // devices
+
+                    # Determine source device for this token (batch is sharded across devices)
+                    src_device = b % devices
+
+                    # Target device is src_device + k + 1 (wrapping around)
+                    target_device = (src_device + 1 + k) % devices
+
+                    # Expert offset: if we wrap around and visit a device multiple times,
+                    # pick a different expert on that device each time
+                    expert_offset = k // devices
+                    expert_id = target_device * experts_per_device + (expert_offset % experts_per_device)
+
+                    expert_indices[b, 0, s, k] = expert_id
                 else:
                     raise ValueError(f"Invalid scheme: {scheme}")
     return expert_indices
@@ -730,7 +751,7 @@ def test_all_to_all_dispatch_trace(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
@@ -781,8 +802,8 @@ def test_decode_perf(
         num_iters,
         warmup_iters,
         trace_mode,
-        num_links=num_links,
-        scheme="worst_perf",
+        n8m_links=num_links,
+        scheme="worst_congestion",
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
@@ -824,7 +845,7 @@ def test_decode_perf(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_prefill_perf(
     mesh_device,
-    trace_mode,
+    worst_perfmode,
     mesh_shape,
     cluster_axis,
     batches_per_device,

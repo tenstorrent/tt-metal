@@ -405,18 +405,23 @@ def test_all_to_all_dispatch_trace(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 500000,
         }
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((8, 2), (8, 2), id="8x2_grid")], indirect=["mesh_device"]
+    "mesh_shape, mesh_device",
+    [
+        pytest.param((1, 16), (1, 16), id="1x16_grid"),
+    ],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("batches_per_device", [32])
-@pytest.mark.parametrize("experts", [256])
+@pytest.mark.parametrize("experts", [2 * 16])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
@@ -477,7 +482,7 @@ def test_decode_perf(
         warmup_iters,
         trace_mode,
         num_links=num_links,
-        scheme="avg_perf",
+        scheme="worst_congestion",
         topology=topology,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
