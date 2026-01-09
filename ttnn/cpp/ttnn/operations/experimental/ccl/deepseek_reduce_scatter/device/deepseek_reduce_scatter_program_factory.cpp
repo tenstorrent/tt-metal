@@ -110,7 +110,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const ttnn::MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
-    uint32_t ring_size,
     uint32_t ring_index,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
@@ -118,23 +117,15 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset) {
     auto* mesh_device = input_tensor.device();
-    [[maybe_unused]] bool is_first_chip = ring_index == 0;
-    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
 
-    auto topology = tt::tt_fabric::Topology::Ring;
-
-    log_trace(
-        tt::LogOp,
-        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device_coord,
-        is_first_chip,
-        is_last_chip);
+    const uint32_t dim = 3;
+    const uint32_t ring_size = 8;
 
     // op hyperparams
     // Get worker cores
     // 2 senders per direction (2: forward, backward) per link (num_links)
     // Each sender is reader + compute + writer
-    uint32_t num_directions_per_link = 2;
+    const uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 1;
     uint32_t num_workers_per_direction = 1;  // TODO: should this be per link or not
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
@@ -146,9 +137,15 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
-        topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
+        tt::tt_fabric::Topology::Ring, sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [mcast_forward_args, mcast_backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
-        topology, sender_device_coord, forward_coord, backward_coord, ring_size - 1, ring_size - 1, mesh_device);
+        tt::tt_fabric::Topology::Ring,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        ring_size - 1,
+        ring_size - 1,
+        mesh_device);
 
     const auto [all_core_range, all_cores] =
         ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
@@ -194,27 +191,15 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         input_tensor_shape[-1],
         tt::constants::TILE_WIDTH);
 
-    const uint32_t normalized_dim = 3;
     const uint32_t input_tensor_B = input_tensor_shape[-4];
     const uint32_t input_tensor_C = input_tensor_shape[-3];
     const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
 
-    uint32_t slice_B = input_tensor_B;
-    uint32_t slice_C = input_tensor_C;
-    uint32_t slice_Ht = input_tensor_Ht;
-    uint32_t slice_Wt = input_tensor_Wt;
-    if (normalized_dim == 0) {
-        slice_B /= ring_size;
-    } else if (normalized_dim == 1) {
-        slice_C /= ring_size;
-    } else if (normalized_dim == 2) {
-        slice_Ht /= ring_size;
-    } else if (normalized_dim == 3) {
-        slice_Wt /= ring_size;
-    } else {
-        TT_FATAL(false, "deepseek_reduce_scatter only supports scattering on dim 0, 1, 2, or 3");
-    }
+    const uint32_t slice_B = input_tensor_B;
+    const uint32_t slice_C = input_tensor_C;
+    const uint32_t slice_Ht = input_tensor_Ht;
+    const uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
     const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
@@ -257,20 +242,8 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
 
-    bool input_is_sharded = input_tensor.is_sharded();
-    bool intermediate_is_sharded = intermediate_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
-
-    std::map<std::string, std::string> reader_compute_defines;
     std::map<std::string, std::string> writer_compute_defines;
-
-    if (input_is_sharded) {
-        reader_compute_defines["INPUT_IS_SHARDED"] = "1";
-    }
-    if (intermediate_is_sharded) {
-        reader_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
-        writer_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
-    }
     if (output_is_sharded) {
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
@@ -319,19 +292,11 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         slice_C,                  // slice_C
         slice_Ht,                 // slice_Ht
         slice_Wt,                 // slice_Wt
-        normalized_dim,           // dim normalized to 4D
+        dim,                      // dim normalized to 4D
     };
 
-    if (input_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
-    }
-    if (intermediate_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_reader_compile_args);
-    }
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_reader_compile_args);
 
     std::string sender_reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/kernels/"
@@ -341,7 +306,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         program,
         sender_reader_kernel_path,
         sender_worker_core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
+        tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args));
 
     // Writer
     std::vector<uint32_t> sender_writer_compile_args = {
@@ -360,7 +325,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         slice_C,                        // slice_C
         slice_Ht,                       // slice_Ht
         slice_Wt,                       // slice_Wt
-        normalized_dim                  // dim normalized to 4D
+        dim                             // dim normalized to 4D
     };
 
     deepseek_append_fabric_mux_connection_ct_args(
@@ -378,11 +343,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     sender_writer_compile_args.insert(
         sender_writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
 
-    if (intermediate_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_writer_compile_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_writer_compile_args);
-    }
+    tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_writer_compile_args);
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
     } else {
@@ -469,13 +430,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                     start_pages_read_in_row,                   // start_pages_read_in_row
                     start_row_offset,                          // start_row_offset (unused by dim0 kernel)
                 };
-                if (input_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
-                }
-                if (intermediate_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(intermediate_tensor, reader_rt_args);
-                }
-
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
                 CoreCoord termination_master_virtual_core =
@@ -510,9 +464,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                     termination_master_virtual_core,
                     program,
                     writer_rt_args);
-                if (intermediate_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(intermediate_tensor, writer_rt_args);
-                }
                 if (output_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
                 }
@@ -662,7 +613,6 @@ DeepseekReduceScatterMeshWorkloadFactory::create_at(
         mesh_coordinate,
         forward_coordinate,
         backward_coordinate,
-        /* ring size */ 8,
         device_index,
         multidevice_semaphores,
         barrier_semaphore,
