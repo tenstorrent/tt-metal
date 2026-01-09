@@ -36,15 +36,15 @@
 
 ## 1. Overview
 
-With Multi-Mesh, you can split a connected Tenstorrent system into multiple independent logical meshes. Each mesh is managed by a separate process. This works well for workloads that partition computation across distinct stages or models.
+The Multi-Mesh programming model enables splitting a Tenstorrent system into multiple independent logical meshes. Each mesh is managed by a separate process, potentially running on a different host. This works well for workloads that partition computation across distinct stages or models.
 
-A mesh is a 2D grid of Tenstorrent devices that work together on computations. In single-mesh programming, one process controls all devices. Multi-Mesh flips this: each process runs independently with its own devices and memory. Meshes communicate through sockets. There's no implicit data sharing. Each process is completely isolated with its own memory space, compiled kernels, and execution state.
+A mesh is a uniformly connected grid of Tenstorrent devices that work together on computations. Each device on the same mesh has identical memory and runtime state, which allows you to virtualize an arbitrarily sized mesh as a single device. Conversely, the Multi-Mesh programming model allows each mesh to operate independently. Meshes can have non-uniform runtime state and are managed by independent processes. Meshes communicate through sockets. There's no implicit data sharing. Each process is completely isolated with its own memory space, compiled kernels, and execution state.
 
 ### 1.1 When to Use Multi-Mesh
 
 Multi-Mesh works well for:
 
-- **Pipeline Parallelism**: Different model layers run on different meshes, with data flowing between them via sockets. This reduces memory pressure per mesh and lets you run models too large for a single mesh. You can optimize each stage independently. For example, the first 40 transformer layers on mesh 0, the next 40 on mesh 1.
+- **Pipeline Parallelism**: Different model layers run on different meshes, with data flowing between them via sockets. This reduces memory pressure per mesh and lets you run models too large for a single mesh. You can optimize each stage independently. Pipeline parallelism is ideal for low-latency workloads where stages can overlap execution. For example, the first 40 transformer layers on mesh 0, the next 40 on mesh 1.
 
 - **Multi-Model Inference**: Run independent models (like encoder and decoder) on separate meshes at the same time. Each gets its own resources. If one model crashes, the others keep running.
 
@@ -54,11 +54,11 @@ Multi-Mesh works well for:
 
 TT-Metal supports two independent distributed execution patterns:
 
-- **Big-Mesh (scale-up)**: All processes share one mesh and run identical code in lockstep (SPMD). Use this for tensor/data parallelism where you need a unified view of all devices, like large matrix multiplications split across the mesh.
+- **Big-Mesh (scale-up)**: All processes share one mesh and run identical code in lockstep (SPMD). Use this for tensor/data parallelism where you need a unified view of all devices, like large matrix multiplications split across the mesh. Big-Mesh requires tight synchronization and deterministic execution across all ranks. Every process must execute the same sequence of operations on its local sub-mesh. This lockstep model enables efficient data parallelism (DP) and tensor parallelism (TP) for scaling models like Llama from 70B to 2T+ parameters.
 
-- **Multi-Mesh (scale-out)**: Each process owns a separate mesh and communicates via sockets. Use this for pipeline parallelism or multi-model inference where stages run asynchronously.
+- **Multi-Mesh (scale-out)**: Each process owns a separate mesh and communicates via sockets. Use this for pipeline parallelism or multi-model inference where stages run asynchronously. Unlike Big-Mesh, processes don't need to stay in lockstep. One mesh can be computing while another is idle or running completely different code. This decoupling makes Multi-Mesh ideal for pipeline parallelism where different transformer layers run on different meshes with data flowing through sockets.
 
-In the Big-Mesh case, all devices are managed in lockstep. In the Multi-Mesh case, devices across meshes can have independent state. These patterns can be combined: you can build Multi Big-Meshes where each mesh uses scale-up internally while multiple meshes communicate via scale-out.
+In the Big-Mesh case, all devices are managed in lockstep. In the Multi-Mesh case, devices across meshes can have independent state. These patterns can be combined: you can build Multi Big-Meshes where each mesh uses scale-up internally while multiple meshes communicate via scale-out. For example, a 4-mesh pipeline where each mesh is internally a Big-Mesh using TP/DP.
 
 This document focuses on the **Multi-Mesh** pattern.
 
@@ -104,7 +104,9 @@ The WH Galaxy All-to-All system consists of 5 Galaxy systems in an all-to-all to
 
 ## 3. Mesh Graph Descriptors
 
-Now that we've seen the physical hardware, let's virtualize these topologies through software. A Mesh Graph Descriptor (MGD) defines the logical topology required by a workload. It tells the runtime how to organize physical devices into logical meshes and how those meshes connect. The MGD is a configuration file you write once and reference from your rank bindings. It's the blueprint for your distributed workload.
+Now that we've seen the physical hardware, let's virtualize these topologies through software. A Mesh Graph Descriptor (MGD) defines the logical topology required by a workload. It's the blueprint for your distributed workload.
+
+MGDs are **validated at initialization time** before any device opens. Validation checks include topology consistency (mesh dimensions, host topology), connection feasibility (channel counts match physical links), and architecture compatibility (all meshes in a graph must use the same chip architecture). If validation fails, you get a detailed error report pointing to the specific problem. This early validation catches configuration errors before expensive resource allocation.
 
 ### 3.1 The Purpose of MGDs
 
@@ -237,7 +239,7 @@ When launching a Multi-Mesh workload, multiple processes need to coordinate owne
 
 Without rank bindings, ownership of meshes across processes would be ambiguous. The `tt-run` launcher reads the binding file and sets up the environment for each rank.
 
-Rank bindings decouple your code from hardware. The same Python script runs on a 2-mesh Galaxy or a 16-mesh Closetbox. Only the binding file changes.
+Rank bindings decouple your code from hardware. The same Python script runs on a 2-mesh Galaxy or a 16-mesh Closetbox. Only the binding file changes. This is powerful for development: write and debug on a small system, then deploy to production scale without code modifications.
 
 ### 4.2 Rank Binding Format
 
@@ -277,27 +279,12 @@ tt-run --rank-binding tests/tt_metal/distributed/config/wh_closetbox_rank_bindin
 ```
 
 `tt-run` spawns one process per rank and automatically manages per-rank environments:
-- `TT_METAL_CACHE`: Unique cache directory per rank (prevents kernel compilation conflicts)
+- `TT_METAL_CACHE`: Unique cache directory per rank (prevents kernel compilation conflicts when multiple processes compile kernels simultaneously)
 - `TT_MESH_ID`: Mesh identifier from rank binding
 - `TT_MESH_GRAPH_DESC_PATH`: Path to topology descriptor
 - `TT_MESH_HOST_RANK`: Host rank within mesh (if specified)
 
-Each process inherits these environment variables before your script starts. You don't need to parse them. The runtime reads them automatically when you open a device.
-
-### 4.4 Generating Rank Bindings
-
-For Galaxy systems, use the rank binding generator script to automatically map physical device IDs to PCIe devices:
-
-```bash
-# Generates rank bindings with proper TT_VISIBLE_DEVICES for Galaxy
-# Output files are written to current working directory
-python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
-```
-
-This produces rank binding files in the current directory:
-- `4x4_multi_mesh_rank_binding.yaml` - 2 processes, each with 4×4 mesh
-- `4x2_multi_mesh_rank_binding.yaml` - 4 processes, each with 4×2 mesh
-- `4x4_multi_big_mesh_rank_binding.yaml` - Big-Mesh pattern (2 processes per mesh)
+Each process inherits these environment variables before your script starts. You don't need to parse them. The runtime reads them automatically when you open a device. This automatic environment setup prevents common pitfalls like cache conflicts where multiple processes try to write the same compiled kernel artifacts.
 
 ## 5. Multi-Processing Support
 
@@ -430,7 +417,41 @@ tt-run --rank-binding tests/tt_metal/distributed/config/p300_1x1_multi_mesh_rank
        python3 tests/ttnn/distributed/test_multi_mesh_p300.py
 ```
 
-The P300 example follows the same pattern as the Galaxy example but with a 1×1 mesh. No mesh mapper is needed since each mesh is a single device.
+The P300 example follows the same pattern as the Galaxy example but with a 1×1 mesh.
+
+### 5.4 Generating Rank Bindings for Galaxy Systems
+
+For Wormhole (WH) Galaxy systems, use the rank binding generator script to automatically create rank binding configurations:
+
+```bash
+# Generates rank bindings with proper TT_VISIBLE_DEVICES for Galaxy
+# Output files are written to current working directory
+python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+```
+
+>[!NOTE]
+>This functionality is currently limited to WH Galaxy systems only.
+
+This script enables logical partitioning of a Galaxy cluster to simulate more complex systems. This is useful for software bringups where you want to test different topologies without physical hardware changes. You can partition the Galaxy in several ways:
+
+**Option 1: Split by Halves (2 processes)**
+- Top 2 trays → mesh 0 (process 0)
+- Bottom 2 trays → mesh 1 (process 1)
+- Result: Two 4×4 meshes
+- File: `4x4_multi_mesh_rank_binding.yaml`
+
+**Option 2: Split by Tray (4 processes)**
+- Each tray → separate mesh (one process per tray)
+- Result: Four 4×2 meshes
+- File: `4x2_multi_mesh_rank_binding.yaml`
+
+**Option 3: Multi Big-Mesh (4 processes)**
+- Top 2 trays → mesh 0 (2 processes share ownership, simulating Big-Mesh)
+- Bottom 2 trays → mesh 1 (2 processes share ownership, simulating Big-Mesh)
+- Result: Two 4×4 meshes, each owned by 2 processes
+- File: `4x4_multi_big_mesh_rank_binding.yaml`
+
+The script automatically sets the correct `TT_VISIBLE_DEVICES` mappings based on Galaxy's physical device IDs. These files serve as templates you can modify for custom partitioning schemes.
 
 ## 6. Fabric Configuration
 
@@ -450,12 +471,12 @@ The fabric config tells the runtime which routing strategy to use.
 |--------|-------------|
 | `DISABLED` | Fabric disabled |
 | `FABRIC_1D` | Linear routing along one axis (no turns between rows/columns) |
-| `FABRIC_1D_RING` | Ring routing (1D with endpoints connected) |
+| `FABRIC_1D_RING` | Ring routing (1D Torus, endpoints connected) |
 | `FABRIC_1D_NEIGHBOR_EXCHANGE` | Direct neighbor-only routing, no forwarding |
-| `FABRIC_2D` | Full mesh routing with row/column turns (recommended for Galaxy) |
+| `FABRIC_2D` | Full mesh routing with row/column turns (recommended for generic workloads) |
 | `CUSTOM` | Custom configuration |
 
-**Choosing the right config:** Use `FABRIC_2D` for Galaxy systems. It gives you the most flexible routing and can handle any traffic pattern. Use `FABRIC_1D` variants for simpler topologies or when you want to restrict traffic to a single dimension. `DISABLED` is for single-mesh workloads that don't need inter-mesh communication. If you're unsure, start with `FABRIC_2D`.
+**Choosing the right config:** Use `FABRIC_2D` for most workloads. It allows routing between any set of chips on a cluster and is the easiest to use. This is also the only config that allows intermesh traffic. Use `FABRIC_1D` variants for high-performance, highly customized workloads that send traffic along a single axis and don't require intermesh communication. `DISABLED` is for single-mesh workloads that don't need fabric at all. If you're unsure, start with `FABRIC_2D`.
 
 ### 6.3 Setting Fabric Configuration
 
@@ -485,25 +506,26 @@ With the fabric initialized, your meshes can communicate. Sockets are the primar
 
 ### 7.1 Understanding Sockets
 
-Sockets are point-to-point channels for transferring tensor data between meshes. Unlike collective operations (all-gather, reduce-scatter) that work within a single mesh, sockets connect two separate meshes. One process sends, another receives.
+Sockets are point-to-point chip-to-chip channels for transferring tensor data between meshes. Unlike collective operations (all-gather, reduce-scatter) that work within a single mesh, sockets connect two separate meshes. One process sends, another receives.
 
-A socket connects specific cores on specific devices across two meshes. When you send a tensor, data flows through TT-Fabric using the ethernet links defined in your MGD. The socket handles:
+A socket connects specific cores on specific devices across two meshes. When you send a tensor, data flows through TT-Fabric using the ethernet links defined in your MGD. **Sockets are asymmetric**: one end is the sender, the other is the receiver. Both processes must create the socket with matching configurations, but the sender and receiver take different code paths. The socket handles:
 
-- **Flow control**: Prevents the sender from overwhelming the receiver
-- **Buffering**: Uses configurable buffers in L1 (fast on-chip SRAM, ~1MB per core) or DRAM (larger off-chip memory, ~12GB per device)
-- **Synchronization**: The receiver knows when data has fully arrived
+- **Flow control**: Prevents the sender from overwriting data on the receiver. The receiver maintains metadata about which data has been consumed, and the sender checks this before transmitting new data.
+- **Buffering**: Uses configurable buffers in L1 (fast on-chip SRAM, ~1.5MB per core) or DRAM (larger off-chip memory, ~12GB per device). Buffers are circular: data wraps around when reaching the end, allowing continuous streaming without reallocation.
+- **Synchronization**: The receiver knows when data has fully arrived. The sender embeds metadata in the packet stream indicating transfer completion.
+- **Cross-host communication**: Sockets abstract away any setup required for meshes across hosts to communicate. TT-Distributed sockets behave similar to TCP sockets or IPC sockets (for multi-process communication). All you have to do is open a sender or receiver connection between any two meshes. The socket infrastructure handles all handshaking required to establish the requested connection, including coordinating with the distributed context to exchange endpoint information.
 
-Both endpoints need matching connection specs. Create a socket once and reuse it for all transfers.
+Both endpoints need matching connection specs. Create a socket once and reuse it for all transfers. Socket creation involves expensive setup (allocating buffers, configuring routing tables), so reuse is critical for performance.
 
 ### 7.2 Socket Configuration
 
 Creating a socket requires three components:
 
-1. **SocketConnection** (the connection list): Defines which cores on the sender mesh connect to which cores on the receiver mesh. Each connection is a 1:1 pairing. You typically create one connection per device in your mesh, so a 4×4 mesh would have 16 connections. The connection list determines how data is distributed across the receiver mesh.
+1. **SocketConnection** (the connection list): Defines which cores on the sender mesh connect to which cores on the receiver mesh. Each connection is a 1:1 pairing. The easiest way to transfer data from one mesh to another is to open a single socket connection per device. The connection list determines how data is distributed across the receiver mesh. For advanced use cases, you can create multiple connections per device (targeting different cores) to increase parallelism and bandwidth. The runtime validates that no sender or receiver core appears in multiple connections within the same socket.
 
-2. **SocketMemoryConfig**: Where the socket buffers live (L1 or DRAM) and how large they are. L1 gives lower latency but has limited space (~1MB per core). DRAM can hold larger buffers but is slower. Buffer size affects throughput: larger buffers reduce overhead for big transfers but consume more memory.
+2. **SocketMemoryConfig**: Where the socket buffers live (L1 or DRAM) and how large they are. L1 gives lower latency but has limited space (~1.5MB per core). DRAM can hold larger buffers but is slower. Buffer size affects throughput: larger buffers reduce overhead for big transfers but consume more memory. The buffer size must be large enough to hold at least one full packet plus metadata overhead.
 
-3. **SocketConfig**: Bundles the connection list and memory config together with the sender and receiver MPI ranks. The ranks tell the runtime which processes are the endpoints. Both processes must create a socket with the same config.
+3. **SocketConfig**: Bundles the connection list and memory config together with the sender and receiver MPI ranks. The ranks tell the runtime which processes are the endpoints. Both processes must create a socket with the same config. The runtime performs validation at socket creation time, checking that both processes have compatible fabric configs and that the connection endpoints exist in their respective meshes.
 
 ```python
 import ttnn
@@ -581,7 +603,9 @@ Both sockets are returned directly. No need to create them separately. Data flow
 
 ## 8. Programming Example
 
-Let's put everything together with a complete working example. This demonstrates a two-stage pipeline: Process 0 applies ReLU and sends to Process 1, which applies Exp and validates. Both processes run the same Python script but take different code paths based on their rank. This is the SPMD (Single Program, Multiple Data) pattern in action, deployed across both meshes.
+Let's put everything together with a complete working example. This demonstrates a two-stage pipeline: Process 0 applies ReLU and sends to Process 1, which applies Exp and validates. Both processes run the same Python script but take different code paths based on their rank. This is the SPMD (Single Program, Multiple Data) pattern deployed across both meshes.
+
+**Key insight**: In Multi-Mesh SPMD, your code must be **rank-aware**. You use `ttnn.distributed_context_get_rank()` to determine which process you are, then branch accordingly. The sender creates a send socket, the receiver creates a recv socket. Both use the same `SocketConfig`, but internally the runtime configures them differently based on whether the rank matches `sender_rank` or `receiver_rank`.
 
 ```bash
 # Generate rank binding file (run once)
@@ -684,10 +708,10 @@ if __name__ == "__main__":
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | `RuntimeError: Distributed context not initialized` | Called `get_rank()` or `get_size()` before opening any device | Open a device first, or call `ttnn.init_distributed_context()` manually |
-| Processes hang on socket operations | Ranks are incorrectly specified in socket configuration | Ensure `sender_rank` and `receiver_rank` are correct and match the actual process ranks |
+| Processes hang on socket operations | Ranks are incorrectly specified in socket configuration | Ensure `sender_rank` and `receiver_rank` are correct and match the actual process ranks. Mismatched socket configs will produce an error. |
 | `TT_VISIBLE_DEVICES` not working | Environment variable not set before device opens | Set `TT_VISIBLE_DEVICES` before importing `ttnn`, or use `env_overrides` in rank bindings |
 | Kernel compilation conflicts | Multiple processes sharing cache | Set unique `TT_METAL_CACHE` per process (done automatically by `tt-run`) |
-| Fabric initialization fails | MGD doesn't match physical hardware | Use `RELAXED` channel policy or verify ethernet links match MGD specification |
+| Fabric initialization fails | Incorrect MGD, unstable hardware, or missing ethernet links | 1) Use `RELAXED` channel policy to allow fewer links than specified. 2) Verify ethernet links match MGD specification. 3) Run physical validation to ensure cluster is healthy: `python tests/tt_metal/distributed/test_physical_ethernet_link_ping.py` |
 
 ### Debugging Tips
 
