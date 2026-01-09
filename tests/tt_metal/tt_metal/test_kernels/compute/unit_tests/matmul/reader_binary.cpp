@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/endpoints.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc.h"
 
 void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
@@ -24,24 +27,24 @@ void kernel_main() {
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb0(in0_cb);
+    experimental::CircularBuffer cb1(in1_cb);
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src0;
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src1;
+
     // read ublocks from src0/src1 to CB0/CB1, then push ublocks to compute (unpacker)
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t src0_noc_addr = get_noc_addr_from_bank_id<true>(src0_dram_bank_id, src0_addr);
-        uint64_t src1_noc_addr = get_noc_addr_from_bank_id<true>(src1_dram_bank_id, src1_addr);
+        cb0.reserve_back(ublock_size_tiles);
+        cb1.reserve_back(ublock_size_tiles);
 
-        cb_reserve_back(in0_cb, ublock_size_tiles);
-        cb_reserve_back(in1_cb, ublock_size_tiles);
+        noc.async_read(dram_src0, cb0, ublock_size_bytes_0, {.bank_id = src0_dram_bank_id, .addr = src0_addr}, {});
+        noc.async_read(dram_src1, cb1, ublock_size_bytes_1, {.bank_id = src1_dram_bank_id, .addr = src1_addr}, {});
 
-        l1_write_addr_in0 = get_write_ptr(in0_cb);
-        l1_write_addr_in1 = get_write_ptr(in1_cb);
+        noc.async_read_barrier();
 
-        noc_async_read(src0_noc_addr, l1_write_addr_in0, ublock_size_bytes_0);
-        noc_async_read(src1_noc_addr, l1_write_addr_in1, ublock_size_bytes_1);
-
-        noc_async_read_barrier();
-
-        cb_push_back(in0_cb, ublock_size_tiles);
-        cb_push_back(in1_cb, ublock_size_tiles);
+        cb0.push_back(ublock_size_tiles);
+        cb1.push_back(ublock_size_tiles);
 
         src0_addr += ublock_size_bytes_0;
         src1_addr += ublock_size_bytes_1;

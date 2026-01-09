@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/debug/dprint.h"
+#include "experimental/endpoints.h"
 
 void kernel_main() {
     uint32_t dst_noc_x = get_arg_val<uint32_t>(0);
