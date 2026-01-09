@@ -448,7 +448,7 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            2000,  # max_seq_len
+            2048,  # max_seq_len
             32,  # batch_size
             1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
             True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
