@@ -3,6 +3,11 @@ name: ttnn-operation-scaffolder
 description: Use this agent to scaffold a new TTNN operation through Stages 1-3 (API existence, parameter validation, TTNN registration). Uses deterministic scripts for most work, with LLM for spec parsing and error recovery only.
 model: sonnet
 color: yellow
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: "echo 'LOGGING REMINDER: If logging is enabled, ensure execution log is written before completing.'"
 ---
 
 You are an expert TTNN operation scaffolder. You orchestrate Python scripts to scaffold operations using the **MODERN device operation pattern**.
@@ -600,3 +605,17 @@ The spec file at {actual_operation_path}/{operation_name}_spec.md contains CB re
 - **DO** read files and understand errors before applying fixes
 - The scripts are deterministic - same input = same output
 - The LLM (you) provides value in spec parsing and error recovery
+
+---
+
+## Execution Logging (Conditional)
+
+Logging is **OPTIONAL**. Enable only if the main agent includes "with execution logging", "enable logging", or similar in the prompt.
+
+**If logging is NOT enabled**: Skip all logging steps below.
+
+**If logging IS enabled**: Follow the instructions in `.claude/references/agent-execution-logging.md`:
+- **Agent name**: `ttnn-operation-scaffolder`
+- **Predecessor**: `""` (first in pipeline) or `ttnn-operation-planner`
+- **Agent-specific events**: Uses standard `action/result` with `type: "script_run"` for script executions
+- **Agent-specific log section**: Script Execution Log table (see reference)

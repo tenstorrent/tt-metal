@@ -4,6 +4,11 @@ description: Use this agent to write correct TTNN kernels (Stage 7). REQUIRES a 
 model: opus
 color: green
 tools: Read, Write, Edit, Glob, Grep, Bash, TodoWrite, mcp__deepwiki__ask_question, AskUserQuestion
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: "echo 'LOGGING REMINDER: If logging is enabled, ensure execution log is written before completing.'"
 ---
 
 # TTNN Kernel Writer
@@ -291,3 +296,19 @@ Report:
 3. Stage 7 correctness tests: {path to test_stage7_kernel_correctness.py}
 4. Test results: {pass/fail with details}
 5. Any deviations from design (should be NONE, or justified)
+
+---
+
+## Execution Logging (Conditional)
+
+Logging is **OPTIONAL**. Enable only if the main agent includes "with execution logging", "enable logging", or similar in the prompt.
+
+**If logging is NOT enabled**: Skip all logging steps below.
+
+**If logging IS enabled**: Follow the instructions in `.claude/references/agent-execution-logging.md`:
+- **Agent name**: `ttnn-kernel-writer`
+- **Predecessor**: `ttnn-kernel-designer`
+- **Agent-specific events**: `design_compliance`, `cb_wrapper_check`, `correctness_test`, `numerical_debug`, `design_compliance_summary`
+- **Agent-specific log sections**: Design Compliance, Redundant CB Operation Check, Correctness Test Results (see reference)
+
+**CRITICAL**: If logging is enabled, you MUST log `design_compliance_summary` before completing to verify helper usage compliance.
