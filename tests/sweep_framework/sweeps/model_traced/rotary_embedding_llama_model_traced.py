@@ -7,7 +7,7 @@ Sweep test for ttnn.experimental.rotary_embedding_llama operation.
 
 This test validates the Llama-style rotary positional embedding operation used
 in transformer attention layers. The operation applies position-dependent
-rotation to query/key vectors.
+rotation to query/key vectors in both prefill and decode modes.
 
 Mathematical basis:
 - Rotary embedding treats pairs of dimensions as 2D rotation
@@ -15,9 +15,15 @@ Mathematical basis:
 - This is equivalent to complex multiplication in the frequency domain
 
 Tensor formats:
-- Input: [batch, n_heads, seq_len, head_dim] for prefill mode
+Prefill mode (INTERLEAVED memory):
+- Input: [batch, n_heads, seq_len, head_dim]
 - cos/sin: [1, n_heads_or_1, seq_len, head_dim] in TTNN "doubled" format
 - trans_mat: [1, 1, 32, 32] fixed transformation matrix
+
+Decode mode (HEIGHT_SHARDED memory):
+- Input: [1, batch, n_heads, head_dim] (seq_len=1, sharded over batch)
+- cos/sin: [1, batch_or_1, 1, head_dim] in TTNN "doubled" format
+- trans_mat: [1, 1, batch*32, 32] repeated for each core
 
 RoPE Parameter Support:
 This sweep test supports different RoPE configurations across various model families:
@@ -40,8 +46,6 @@ For other models, RoPE parameters can be provided explicitly via:
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
-from functools import partial
 
 # Import helper functions for proper cos/sin generation and transformation matrix
 from models.tt_transformers.tt.common import (
@@ -100,28 +104,11 @@ def invalidate_vector(test_vector) -> tuple:
     """
     Invalidate test vectors that are not supported by this sweep test.
 
-    Currently, decode mode (HEIGHT_SHARDED memory) is not supported because it requires:
-    - Complex sharding setup for input/cos/sin/trans_mat
-    - RotarySetup class for on-device cos/sin generation
-    - Special tensor layouts
+    All modes (prefill and decode with HEIGHT_SHARDED memory) are supported.
 
     Returns:
         Tuple of (is_invalid: bool, reason: str or None)
     """
-    # Check memory config for HEIGHT_SHARDED (indicates decode mode)
-    mem_config = test_vector.get("input_a_memory_config")
-
-    # Handle ttnn.MemoryConfig object (during generation)
-    if hasattr(mem_config, "memory_layout"):
-        mem_layout_str = str(mem_config.memory_layout)
-        if "HEIGHT_SHARDED" in mem_layout_str:
-            return True, "Decode mode (HEIGHT_SHARDED) not supported - requires complex sharding setup"
-    # Handle serialized dict (after JSON load)
-    elif isinstance(mem_config, dict):
-        data = mem_config.get("data", {})
-        if data.get("memory_layout") == "HEIGHT_SHARDED":
-            return True, "Decode mode (HEIGHT_SHARDED) not supported - requires complex sharding setup"
-
     return False, None
 
 
@@ -277,21 +264,9 @@ def extract_rope_parameters(traced_source: str = None) -> dict:
         "rope_type": "llama3",  # LLaMA 3 scaling type
     }
 
-    # TODO: Extract from HF model config if traced_source contains HF_MODEL
-    # For now, we use LLaMA 3 defaults since that's the primary traced model
-    # In the future, this could load the actual model config from HuggingFace
-    # and extract rope_theta and rope_scaling parameters
-
-    # Example of a future implementation (requires HuggingFace transformers):
-    # In the future, this function could:
-    #   - Parse the HF model name from traced_source (for example, from a "HF_MODEL:" tag).
-    #   - Use transformers.AutoConfig.from_pretrained(model_name) to load the model config.
-    #   - Read rope_theta and any rope_scaling fields from the config.
-    #   - Update rope_params["theta"], rope_params["scale_factor"],
-    #     rope_params["orig_context_len"], and rope_params["rope_type"] accordingly.
-    #
-    # This behavior is intentionally not implemented here to keep tests free of
-    # an unconditional dependency on the transformers library.
+    # Note: For other models, RoPE parameters can be extracted from HuggingFace config
+    # via traced_source (e.g., parsing HF_MODEL tag and using AutoConfig).
+    # Currently using LLaMA 3 defaults as that's the primary traced model.
 
     return rope_params
 
@@ -311,15 +286,14 @@ def run(
     input_d_layout=None,
     input_d_memory_config=None,
     output_memory_config=None,
-    storage_type=None,
     traced_source=None,
-    traced_machine_info=None,
     rope_theta=None,
     rope_scale_factor=None,
     rope_orig_context_len=None,
     rope_type=None,
     *,
     device,
+    **_kwargs,  # Captures unused traced config fields (storage_type, traced_machine_info, etc.)
 ) -> list:
     """
     Run the rotary_embedding_llama sweep test.
@@ -337,7 +311,10 @@ def run(
 
         If not provided, defaults are extracted from traced_source or use LLaMA 3 values.
 
-    Note: Decode mode (HEIGHT_SHARDED) requires regenerating vectors with invalidate_vector.
+    Mode Detection:
+        The function automatically detects prefill vs decode mode based on memory config:
+        - INTERLEAVED memory → Prefill mode (processes full sequences)
+        - HEIGHT_SHARDED memory → Decode mode (processes single tokens, sharded over batch)
     """
     torch.manual_seed(0)
 
@@ -362,7 +339,6 @@ def run(
         shape_a = input_shape["input_a"]  # Main input: [batch, n_heads, seq_len, head_dim]
         shape_b = input_shape["input_b"]  # cos_cache: [1, n_heads_or_1, cache_size, head_dim]
         shape_c = input_shape["input_c"]  # sin_cache: [1, n_heads_or_1, cache_size, head_dim]
-        shape_d = input_shape["input_d"]  # trans_mat: [1, 1, 32, 32]
     else:
         # Sample configuration - derive shapes from input_shape
         # input_shape format: [batch, n_heads, seq_len, head_dim]
@@ -372,20 +348,55 @@ def run(
         cache_size = max(seq_len, 1024)  # Use at least 1024 for cache
         shape_b = [1, 1, cache_size, head_dim]  # cos cache
         shape_c = [1, 1, cache_size, head_dim]  # sin cache
-        shape_d = [1, 1, 32, 32]  # trans_mat (fixed size)
 
-    # Extract dimensions (for prefill mode: [batch, n_heads, seq_len, head_dim])
-    batch, n_heads, seq_len, head_dim = shape_a
-
-    # For prefill mode, is_decode_mode is always False
-    # Decode mode configs should be filtered out by invalidate_vector
+    # Detect decode mode from memory config
+    # Decode mode uses HEIGHT_SHARDED memory layout
     is_decode_mode = False
+    if hasattr(input_a_memory_config, "memory_layout"):
+        mem_layout_str = str(input_a_memory_config.memory_layout)
+        if "HEIGHT_SHARDED" in mem_layout_str:
+            is_decode_mode = True
+    elif isinstance(input_a_memory_config, dict):
+        data = input_a_memory_config.get("data", {})
+        if data.get("memory_layout") == "HEIGHT_SHARDED":
+            is_decode_mode = True
+
+    # Extract dimensions based on mode
+    if is_decode_mode:
+        # Decode mode shape: [seq_len=1, batch, n_heads, head_dim]
+        # The batch dimension is what gets sharded across cores
+        seq_len_dim, batch, n_heads, head_dim = shape_a
+        assert seq_len_dim == 1, "Decode mode requires seq_len (dim 0) to be 1"
+    else:
+        # Prefill mode shape: [batch, n_heads, seq_len, head_dim]
+        batch, n_heads, seq_len, head_dim = shape_a  # noqa: F841 - seq_len used in prefill golden
 
     # --- Generate Input Tensor (random) ---
     torch_input_tensor = (torch.rand(shape_a) * 2 - 1).to(torch.bfloat16)
 
     # --- Generate cos/sin (properly computed, not random!) ---
-    if is_traced_config:
+    if is_decode_mode:
+        # For decode mode, cos/sin shapes from traced configs are typically [1, 1, 1, head_dim]
+        # or [1, batch, 1, head_dim] depending on the configuration
+        # Generate position-specific cos/sin values (use position 0 for testing)
+        max_cache_size = 2048  # Reasonable cache size for lookup
+        cos_cache_full, sin_cache_full = generate_cos_sin_for_prefill(
+            max_cache_size,
+            head_dim,
+            theta=rope_params["theta"],
+            scale_factor=rope_params["scale_factor"],
+            orig_context_len=rope_params["orig_context_len"],
+            rope_type=rope_params["rope_type"],
+        )
+        # For testing, use position 0 and create shape matching traced config
+        # Shape: [1, batch or 1, 1, head_dim]
+        if is_traced_config:
+            cos_cache = cos_cache_full[:, :, 0:1, :].expand(shape_b)
+            sin_cache = sin_cache_full[:, :, 0:1, :].expand(shape_c)
+        else:
+            cos_cache = cos_cache_full[:, :, 0:1, :].expand(1, batch, 1, head_dim)
+            sin_cache = sin_cache_full[:, :, 0:1, :].expand(1, batch, 1, head_dim)
+    elif is_traced_config:
         # For traced configs, generate cos/sin that match the traced shapes
         cache_size = shape_b[2]
         cos_cache, sin_cache = generate_cos_sin_for_prefill(
@@ -418,14 +429,46 @@ def run(
     torch_sin_cache = sin_cache.to(torch.bfloat16)
 
     # --- Generate Transformation Matrix (exact structure, not random!) ---
-    torch_trans_mat = get_rot_transformation_mat(head_dim).to(torch.bfloat16)
+    if is_decode_mode:
+        # For decode mode, transformation matrix is [1, 1, batch*32, 32]
+        # Each core gets a [32, 32] shard
+        torch_trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, batch, 1).to(torch.bfloat16)
+    else:
+        # For prefill mode, use standard transformation matrix based on head_dim
+        torch_trans_mat = get_rot_transformation_mat(head_dim).to(torch.bfloat16)
 
     # --- Compute Golden Reference Output ---
-    torch_output_tensor = apply_rotary_emb_golden(
-        torch_input_tensor.float(),  # Use float for golden computation
-        torch_cos_cache.float(),
-        torch_sin_cache.float(),
-    ).to(torch.bfloat16)
+    if is_decode_mode:
+        # For decode mode, input shape is [1, batch, n_heads, head_dim]
+        # Apply rotary embedding position-wise
+
+        # Get single position cos/sin values (position 0)
+        # cos/sin shape may be [1, batch_or_1, 1, head_dim]
+        # We only need one position's cos/sin - take first element and broadcast
+        cos_single = torch_cos_cache[0, 0, 0, :]  # [head_dim]
+        sin_single = torch_sin_cache[0, 0, 0, :]  # [head_dim]
+
+        # Get frequency components (undoubled from TTNN format)
+        freqs_cos = cos_single[0::2]  # [head_dim//2]
+        freqs_sin = sin_single[0::2]
+
+        # Input: [1, batch, n_heads, head_dim]
+        x_even = torch_input_tensor[..., 0::2]  # [1, batch, n_heads, head_dim//2]
+        x_odd = torch_input_tensor[..., 1::2]
+
+        # Apply 2D rotation
+        cos_part = x_even * freqs_cos - x_odd * freqs_sin
+        sin_part = x_even * freqs_sin + x_odd * freqs_cos
+
+        # Interleave back to original format
+        torch_output_tensor = torch.stack([cos_part, sin_part], dim=-1).flatten(-2).to(torch.bfloat16)
+    else:
+        # For prefill mode
+        torch_output_tensor = apply_rotary_emb_golden(
+            torch_input_tensor.float(),  # Use float for golden computation
+            torch_cos_cache.float(),
+            torch_sin_cache.float(),
+        ).to(torch.bfloat16)
 
     # --- Create TTNN Tensors ---
     # Use defaults for non-traced parameters
@@ -448,41 +491,106 @@ def run(
     if input_d_memory_config is None:
         input_d_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    # Convert input tensor to TTNN
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
+    if is_decode_mode:
+        # --- Decode Mode: Create sharded tensors ---
+        # Get core grid for sharding
+        core_grid = device.compute_with_storage_grid_size()
+        batch_grid = ttnn.num_cores_to_corerangeset(batch, core_grid, row_wise=True)
 
-    # Convert cos cache to TTNN
-    cos_cache_tt = ttnn.from_torch(
-        torch_cos_cache,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
+        # Create sharded memory config for input, cos, sin
+        # Each shard has shape [TILE_HEIGHT=32, head_dim]
+        shard_mem_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, head_dim),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
-    # Convert sin cache to TTNN
-    sin_cache_tt = ttnn.from_torch(
-        torch_sin_cache,
-        dtype=input_c_dtype,
-        layout=input_c_layout,
-        device=device,
-        memory_config=input_c_memory_config,
-    )
+        # Create sharded memory config for transformation matrix
+        # Each shard has shape [TILE_SIZE, TILE_SIZE]
+        trans_mat_mem_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
-    # Convert transformation matrix to TTNN
-    trans_mat_tt = ttnn.from_torch(
-        torch_trans_mat,
-        dtype=input_d_dtype,
-        layout=input_d_layout,
-        device=device,
-        memory_config=input_d_memory_config,
-    )
+        # Convert tensors to device as interleaved first, then shard
+        input_tensor_interleaved = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_interleaved, shard_mem_config)
+
+        cos_cache_interleaved = ttnn.from_torch(
+            torch_cos_cache,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cos_cache_tt = ttnn.interleaved_to_sharded(cos_cache_interleaved, shard_mem_config)
+
+        sin_cache_interleaved = ttnn.from_torch(
+            torch_sin_cache,
+            dtype=input_c_dtype,
+            layout=input_c_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        sin_cache_tt = ttnn.interleaved_to_sharded(sin_cache_interleaved, shard_mem_config)
+
+        trans_mat_interleaved = ttnn.from_torch(
+            torch_trans_mat,
+            dtype=input_d_dtype,
+            layout=input_d_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        trans_mat_tt = ttnn.interleaved_to_sharded(trans_mat_interleaved, trans_mat_mem_config)
+
+    else:
+        # --- Prefill Mode: Use interleaved memory ---
+        # Convert input tensor to TTNN
+        input_tensor_a = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=input_a_memory_config,
+        )
+
+        # Convert cos cache to TTNN
+        cos_cache_tt = ttnn.from_torch(
+            torch_cos_cache,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=input_b_memory_config,
+        )
+
+        # Convert sin cache to TTNN
+        sin_cache_tt = ttnn.from_torch(
+            torch_sin_cache,
+            dtype=input_c_dtype,
+            layout=input_c_layout,
+            device=device,
+            memory_config=input_c_memory_config,
+        )
+
+        # Convert transformation matrix to TTNN
+        trans_mat_tt = ttnn.from_torch(
+            torch_trans_mat,
+            dtype=input_d_dtype,
+            layout=input_d_layout,
+            device=device,
+            memory_config=input_d_memory_config,
+        )
 
     # --- Execute TTNN Operation ---
     start_time = start_measuring_time()
