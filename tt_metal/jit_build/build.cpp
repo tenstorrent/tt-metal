@@ -160,7 +160,7 @@ void JitBuildEnv::init(
         // Log ccache configuration for debugging
         log_info(tt::LogBuildKernels, "CCACHE: Kernel compilation will use ccache");
         if (const char* remote_storage = std::getenv("CCACHE_REMOTE_STORAGE")) {
-            log_info(tt::LogBuildKernels, "CCACHE: Remote storage configured (Redis or similar)");
+            log_info(tt::LogBuildKernels, "CCACHE: Remote storage: {}", remote_storage);
         }
         if (const char* remote_only = std::getenv("CCACHE_REMOTE_ONLY")) {
             log_info(tt::LogBuildKernels, "CCACHE: Remote-only mode: {}", remote_only);
