@@ -89,7 +89,7 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(a, b, c)) {
+    if (!is_native_L1_sharding(a, b, c.memory_config())) {
         // treat as interleaved
         return std::nullopt;
     }

@@ -2463,6 +2463,12 @@ def test_binary_sharded_bcast_w_block(device, dtype_pt, dtype_tt):
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert_with_pcc(out_pt, out_tt_sharded)
 
+        # swap a and b
+        out_pt = torch.add(b_pt, a_pt)
+        out_tt_sharded = ttnn.add(b_tt, a_tt, use_legacy=None)
+        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+        assert_with_pcc(out_pt, out_tt_sharded)
+
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
@@ -3010,6 +3016,12 @@ def test_binary_sharded_bcast_w_block_uneven(device, dtype_pt, dtype_tt):
 
         out_pt = torch.add(a_pt, b_pt)
         out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+        assert_with_pcc(out_pt, out_tt_sharded)
+
+        # swap a and b
+        out_pt = torch.add(b_pt, a_pt)
+        out_tt_sharded = ttnn.add(b_tt, a_tt, use_legacy=None)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert_with_pcc(out_pt, out_tt_sharded)
 
@@ -4217,3 +4229,44 @@ def test_binary_sharded_bcast_identical_sdxl(device, dtype_pt, dtype_tt):
         out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert_with_pcc(out_pt, out_tt_sharded)
+
+
+def test_binary_reshard(device):
+    torch.manual_seed(0)
+    # Create input tensors (32x8192 = 1x256 tiles)
+    torch_a = torch.randn(32, 8192, dtype=torch.bfloat16)
+    torch_b = torch.randn(32, 8192, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors on device (DRAM interleaved)
+    a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT)
+    b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Shard both inputs to 64 cores (8x8 grid)
+    # 256 tiles / 64 cores = 4 tiles per shard
+    shard_spec_64 = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        (32, 128),  # shard shape: 32 rows x 128 cols (4 tiles width)
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config_64 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec_64)
+
+    # Output shard spec: 32 cores (first 4 columns of 8x8 grid)
+    # 256 tiles / 32 cores = 8 tiles per shard
+    shard_spec_32 = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        (32, 256),  # shard shape: 32 rows x 256 cols (8 tiles width)
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config_32 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec_32)
+    # a_sharded = ttnn.to_memory_config(a, mem_config_64)
+    # b_sharded = ttnn.to_memory_config(b, mem_config_64)
+    # result = ttnn.add(a_sharded, b_sharded, memory_config=mem_config_32, use_legacy=None)
+
+    a_sharded = ttnn.to_memory_config(a, mem_config_32)
+    b_sharded = ttnn.to_memory_config(b, mem_config_32)
+
+    # Multiply completes but hangs afterward
+    result = ttnn.add(a_sharded, b_sharded, memory_config=mem_config_32, use_legacy=None)
+    result = ttnn.to_torch(result)
+    expected = torch_a + torch_b
+    assert_with_pcc(expected, result)

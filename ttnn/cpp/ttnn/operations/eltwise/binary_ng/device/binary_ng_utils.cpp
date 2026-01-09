@@ -664,7 +664,7 @@ inline auto is_uneven(const TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
 }
 
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c) {
     // scalar value treated as interleaved
     if (!b.has_value()) {
         return false;
@@ -676,18 +676,17 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
     //     return !is_uneven(a);
     // }
 
-    if (!c.memory_config().is_sharded()) {
+    if (!c.is_sharded()) {
         return false;
     }
 
     // a and b identical shape, no broadcast on any dimension
     if (b.has_value() && (a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
-        if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
+        if (is_uneven(a) || is_uneven(*b)) {
             return false;
         }
         if (a.memory_config().buffer_type() == BufferType::DRAM ||
-            b->memory_config().buffer_type() == BufferType::DRAM ||
-            c.memory_config().buffer_type() == BufferType::DRAM) {
+            b->memory_config().buffer_type() == BufferType::DRAM || c.buffer_type() == BufferType::DRAM) {
             return false;
         }
         if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
@@ -696,11 +695,35 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
         if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
             return true;
         }
-        if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
+        if (c.is_sharded() && c.buffer_type() == BufferType::L1) {
             return true;
         }
     }
 
     return false;
+}
+
+ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b) {
+    // Broadcasting Rules Overview:
+    // - If the two tensors have different ranks, we virtually pad the smaller-rank tensor's shape
+    //   with ones on the left (i.e., higher-order dimensions) until both shapes have the same length.
+    // - For each dimension (starting from the rightmost), the sizes are compatible if:
+    //     - They are equal, or
+    //     - One of them is 1 (the dimension can be broadcast to match the other size).
+
+    const int rank_a = shape_a.rank();
+    const int rank_b = shape_b.rank();
+    const int larger_rank = std::max(rank_a, rank_b);
+    SmallVector<uint32_t> output_shape(larger_rank, 1);
+    for (int i = -1; i >= -larger_rank; --i) {
+        auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
+        auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;
+        if (dim_a != 1 && dim_b != 1) {
+            output_shape[i + larger_rank] = dim_a;
+        } else {
+            output_shape[i + larger_rank] = dim_a + dim_b - 1;
+        }
+    }
+    return ttnn::Shape(output_shape);
 }
 }  // namespace ttnn::operations::binary_ng

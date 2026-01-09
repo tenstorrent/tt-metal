@@ -69,7 +69,8 @@ CoreRangeSet get_worker_grid(
     const Tensor* input_tensor_b,
     const std::optional<Tensor>& output_tensor,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const MemoryConfig& memory_config_actual) {
     // If sub_core_grids is provided, use it directly
     if (sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
@@ -123,20 +124,10 @@ CoreRangeSet get_worker_grid(
         return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
     }
 
-    // now c is not specified, gets its shard spec from a or b
-    TensorSpec c = input_tensor_a.tensor_spec();
-    if (input_tensor_b && input_tensor_b->is_sharded()) {
-        if (!input_tensor_a.is_sharded()) {
-            c = input_tensor_b->tensor_spec();
-        } else if (input_tensor_b->shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
-            c = input_tensor_b->tensor_spec();
-        }
-    }
-
     if (is_native_L1_sharding(
             input_tensor_a.tensor_spec(),
             input_tensor_b ? std::optional<TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
-            c)) {
+            memory_config_actual)) {
         if (input_tensor_a.is_sharded()) {
             log_debug(
                 tt::LogOp,
@@ -344,27 +335,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         }
     }
 
-    // Broadcasting Rules Overview:
-    // - If the two tensors have different ranks, we virtually pad the smaller-rank tensor's shape
-    //   with ones on the left (i.e., higher-order dimensions) until both shapes have the same length.
-    // - For each dimension (starting from the rightmost), the sizes are compatible if:
-    //     - They are equal, or
-    //     - One of them is 1 (the dimension can be broadcast to match the other size).
-    auto compute_broadcasted_output = [rank_a, rank_b, larger_rank](const auto& shape_a, const auto& shape_b) {
-        SmallVector<uint32_t> output_shape(larger_rank, 1);
-        for (int i = -1; i >= -larger_rank; --i) {
-            auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
-            auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;
-            if (dim_a != 1 && dim_b != 1) {
-                output_shape[i + larger_rank] = dim_a;
-            } else {
-                output_shape[i + larger_rank] = dim_a + dim_b - 1;
-            }
-        }
-        return ttnn::Shape(output_shape);
-    };
-
-    auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
+    auto output_shape = ttnn::operations::binary_ng::compute_broadcasted_output(input_shape_a, input_shape_b);
 
     if (output_tensor.has_value()) {
         auto shapes_equal = [=](const auto& shape_a, const auto& shape_b) {
@@ -397,39 +368,9 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         const auto& memory_layout = attributes.memory_config.memory_layout();
         const auto& buffer_type = attributes.memory_config.buffer_type();
         const auto& shard_spec = attributes.memory_config.shard_spec();
-        const auto& input_a_shard_spec = input_tensor_a.memory_config().shard_spec();
-        const auto& input_b_shard_spec = tensor_b.has_value() ? tensor_b->memory_config().shard_spec() : std::nullopt;
-
-        ShardSpec output_shard_spec{CoreRangeSet(), {0, 0}};
-        // Check if memory config was inherited from an input (needs adjustment)
-        // or explicitly provided by user (use as-is)
-        bool inherited_from_input_a =
-            input_a_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_a_shard_spec;
-        bool inherited_from_input_b =
-            input_b_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_b_shard_spec;
-
-        if (shard_spec.has_value() && !inherited_from_input_a && !inherited_from_input_b) {
-            // User explicitly provided a shard spec that differs from both inputs - use as-is
-            output_shard_spec = *shard_spec;
-        } else if (input_a_shard_spec.has_value() && !inherited_from_input_b) {
-            // A has a spec AND we're not using B's spec → adjust from A
-            auto padded_output_shape = input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-            output_shard_spec =
-                adjust_to_shape(*input_a_shard_spec, input_tensor_a.padded_shape(), padded_output_shape);
-        } else if (input_b_shard_spec.has_value()) {
-            // B has a spec (either inherited from B or fallback to B) → adjust from B
-            TT_FATAL(tensor_b.has_value(), "Cannot adjust from input_b when tensor_b is not present");
-            auto padded_output_shape = tensor_b->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-            output_shard_spec = adjust_to_shape(*input_b_shard_spec, tensor_b->padded_shape(), padded_output_shape);
-        } else {
-            TT_FATAL(shard_spec.has_value(), "Sharded memory config specified but no shard spec available");
-            output_shard_spec = *shard_spec;
-        }
-
         return TensorSpec(
             output_shape,
-            TensorLayout(
-                output_dtype, PageConfig(Layout::TILE), MemoryConfig(memory_layout, buffer_type, output_shard_spec)));
+            TensorLayout(output_dtype, PageConfig(Layout::TILE), MemoryConfig(memory_layout, buffer_type, shard_spec)));
     }
 
     // If not sharded, use the memory config from input a that is interleaved
@@ -535,31 +476,51 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
          binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
 
-    MemoryConfig mem_config = input_tensor_a.memory_config();
+    auto compute_mem_config_actual = [](const auto& input_tensor_a, const auto& shape_b) {
+        // Compute adjusted shard spec for output shape
+        const auto& padded_a_shape = input_tensor_a.padded_shape();
+        const auto& logical_out_shape =
+            operations::binary_ng::compute_broadcasted_output(input_tensor_a.logical_shape(), shape_b);
+        const auto& padded_out_shape =
+            input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(logical_out_shape);
+
+        auto adjusted_shard_spec = ttnn::operations::binary_ng::adjust_to_shape(
+            *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
+
+        return MemoryConfig(
+            input_tensor_a.memory_config().memory_layout(),
+            input_tensor_a.memory_config().buffer_type(),
+            adjusted_shard_spec);
+    };
+
+    MemoryConfig mem_config_actual = input_tensor_a.memory_config();
+    if (input_tensor_a.is_sharded()) {
+        mem_config_actual = compute_mem_config_actual(input_tensor_a, input_tensor_b.logical_shape());
+    }
     if (!memory_config.has_value() && !output_tensor.has_value()) {
-        // if a is interleaved but in L1 (not DRAM), still use a's memory config
-        if (!input_tensor_a.memory_config().is_sharded() &&
-            input_tensor_a.memory_config().buffer_type() == BufferType::DRAM) {
-            if (input_tensor_b.memory_config().is_sharded()) {
-                if (!input_tensor_a.memory_config().is_sharded()) {
-                    mem_config = input_tensor_b.memory_config();
+        if (input_tensor_b.memory_config().is_sharded()) {
+            // if a is interleaved but in L1 (not DRAM), still use a's memory config
+            if (!input_tensor_a.memory_config().is_sharded()) {
+                if (input_tensor_a.memory_config().buffer_type() == BufferType::DRAM) {
+                    mem_config_actual = compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
                     log_debug(
                         tt::LogOp,
                         "BinaryNgDeviceOperation: Using memory config from input tensor B since it is sharded");
-                } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
-                    mem_config = input_tensor_b.memory_config();
-                    log_debug(
-                        tt::LogOp,
-                        "BinaryNgDeviceOperation: Using memory config from input tensor B since it has a larger shard "
-                        "grid");
                 }
+            } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
+                mem_config_actual = compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
+                ;
+                log_debug(
+                    tt::LogOp,
+                    "BinaryNgDeviceOperation: Using memory config from input tensor B since it has a larger shard "
+                    "grid");
             }
         }
     } else if (memory_config.has_value()) {
-        mem_config = *memory_config;
+        mem_config_actual = *memory_config;
         log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");
     } else {
-        mem_config = output_tensor->memory_config();
+        mem_config_actual = output_tensor->memory_config();
         log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using memory config from output tensor since it is provided");
     }
 
@@ -569,12 +530,12 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         {rhs_activations.begin(), rhs_activations.end()},
         {post_activations.begin(), post_activations.end()},
         scalar_value,
-        mem_config,
+        mem_config_actual,
         is_where_op ? dtype_b : dtype_a,  // TODO: For mixed dtypes we need to set this value to the appropriate
                                           // dtype depending on which LLK is meant to be used.
         output_dtype,
         ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, &input_tensor_b, output_tensor, memory_config, sub_core_grids),
+            input_tensor_a, &input_tensor_b, output_tensor, memory_config, sub_core_grids, mem_config_actual),
         std::nullopt,
         sub_core_grids,
         subtile_broadcast_type,
@@ -604,7 +565,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
-    MemoryConfig mem_config = memory_config.value_or(
+    MemoryConfig mem_config_actual = memory_config.value_or(
         output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config());
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -613,11 +574,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         {rhs_activations.begin(), rhs_activations.end()},
         {post_activations.begin(), post_activations.end()},
         scalar,
-        mem_config,
+        mem_config_actual,
         input_tensor_a.dtype(),
         output_dtype,
         ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, nullptr, output_tensor, memory_config, sub_core_grids),
+            input_tensor_a, nullptr, output_tensor, memory_config, sub_core_grids, mem_config_actual),
         std::nullopt,
         sub_core_grids,
         ttnn::operations::binary_ng::SubtileBroadcastType::NONE,
