@@ -97,3 +97,17 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
             break
     if not passed:
         print(f"Operation {func_name} PCC < 0.99.")
+
+
+def ensure_tile_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
+    """Convert tensor to TILE_LAYOUT if needed.
+
+    Args:
+        tensor: TTNN tensor to convert
+
+    Returns:
+        Tensor in TILE_LAYOUT
+    """
+    if tensor.layout != ttnn.TILE_LAYOUT:
+        return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return tensor
