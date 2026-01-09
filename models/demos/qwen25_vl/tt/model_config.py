@@ -24,12 +24,14 @@ class VisionModelArgs(ModelArgs):
         super().__init__(*args, **kwargs)
 
         # Core dimensions from HF config
+        self.vision_dim = self.hf_config.vision_config.hidden_size
         self.vision_unpadded_hidden_dim = self.hf_config.vision_config.intermediate_size
         self.vision_hidden_dim = nearest_multiple(  # pad to a tile multiple per device
             self.vision_unpadded_hidden_dim, self.tile_size * self.num_devices
         )
         if self.vision_hidden_dim != self.vision_unpadded_hidden_dim:
             logger.info(f"padding hidden dim from {self.vision_unpadded_hidden_dim} to {self.vision_hidden_dim}")
+        self.vision_head_dim = self.hf_config.vision_config.hidden_size // self.hf_config.vision_config.num_heads
         self.vision_n_heads = self.hf_config.vision_config.num_heads
         self.vision_n_kv_heads = self.hf_config.vision_config.num_heads
 
