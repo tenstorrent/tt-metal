@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 // #include "api/debug/dprint.h"
 

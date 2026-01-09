@@ -80,7 +80,7 @@ using std::chrono::microseconds;
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
+std::vector<T> slice_vec(const std::vector<T>& v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -111,12 +111,10 @@ std::tuple<uint32_t, uint32_t, uint32_t> get_max_page_size_and_num_pages(
     if (total_size <= max_page_size) {
         // If total size fits in one page, use it
         return {total_size, 1, total_size};
-    } else {
-        // Use max_page_size for all pages except the last one
-        uint32_t num_pages = (total_size + max_page_size - 1) / max_page_size;
-        uint32_t last_page_size = total_size - ((num_pages - 1) * max_page_size);
-        return {max_page_size, num_pages, last_page_size};
-    }
+    }  // Use max_page_size for all pages except the last one
+    uint32_t num_pages = (total_size + max_page_size - 1) / max_page_size;
+    uint32_t last_page_size = total_size - ((num_pages - 1) * max_page_size);
+    return {max_page_size, num_pages, last_page_size};
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
@@ -572,8 +570,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
-    } else {
-        log_error(LogTest, "Test Failed");
-        return 1;
     }
+    log_error(LogTest, "Test Failed");
+    return 1;
 }
