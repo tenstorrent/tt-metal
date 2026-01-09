@@ -463,10 +463,16 @@ void GraphArgumentSerializer::register_optional_type() {
             // std::reference_wrapper<std::optional<
             // std::vector<std::optional<tt::tt_metal::Tensor>, std::allocator<std::optional<tt::tt_metal::Tensor> > > >
             // > It gets tricky to do a generic solution.
-            // Try all array sizes from 1 to 16
-            bool handled = [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-                return (handle_optional_array.template operator()<(Is + 1)>() || ...);
-            }(std::make_index_sequence<16>{});
+            // Try all array sizes to handle all cases
+            bool handled =
+                (handle_optional_array.template operator()<1>() || handle_optional_array.template operator()<2>() ||
+                 handle_optional_array.template operator()<3>() || handle_optional_array.template operator()<4>() ||
+                 handle_optional_array.template operator()<5>() || handle_optional_array.template operator()<6>() ||
+                 handle_optional_array.template operator()<7>() || handle_optional_array.template operator()<8>() ||
+                 handle_optional_array.template operator()<9>() || handle_optional_array.template operator()<10>() ||
+                 handle_optional_array.template operator()<11>() || handle_optional_array.template operator()<12>() ||
+                 handle_optional_array.template operator()<13>() || handle_optional_array.template operator()<14>() ||
+                 handle_optional_array.template operator()<15>() || handle_optional_array.template operator()<16>());
 
             if (!handled) {
                 oss << "Unable to parse" << graph_demangle(value.type().name());
@@ -478,10 +484,23 @@ void GraphArgumentSerializer::register_optional_type() {
 
     registry()[typeid(std::reference_wrapper<OptionalT>)] = register_function;
 
-    // Register array types from 1 to 16
-    [this, &register_function]<std::size_t... Is>(std::index_sequence<Is...>) {
-        ((registry()[typeid(std::reference_wrapper<std::array<OptionalT, (Is + 1)>>)] = register_function), ...);
-    }(std::make_index_sequence<16>{});
+    // Register all array types to handle all cases
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 1>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 2>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 3>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 4>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 5>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 6>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 7>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 8>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 9>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 10>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 11>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 12>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 13>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 14>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 15>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 16>>)] = register_function;
 }
 
 template <typename T>
@@ -510,9 +529,6 @@ void GraphArgumentSerializer::register_type() {
         } else if (value.type() == typeid(std::reference_wrapper<const T>)) {
             auto referenced_value = std::any_cast<std::reference_wrapper<const T>>(value);
             serialize_value(oss, referenced_value.get());
-        } else if (value.type() == typeid(std::reference_wrapper<const T>)) {
-            auto referenced_value = std::any_cast<std::reference_wrapper<const T>>(value);
-            serialize_value(oss, referenced_value.get());
         } else if (value.type() == typeid(std::reference_wrapper<T*>)) {
             auto referenced_value = std::any_cast<std::reference_wrapper<T*>>(value);
             serialize_value(oss, referenced_value.get());
@@ -528,7 +544,6 @@ void GraphArgumentSerializer::register_type() {
 
     // regular cases
     registry()[typeid(std::reference_wrapper<T>)] = regular_function;
-    registry()[typeid(std::reference_wrapper<const T>)] = regular_function;
     registry()[typeid(std::reference_wrapper<const T>)] = regular_function;
     registry()[typeid(const std::reference_wrapper<T>)] = regular_function;
     registry()[typeid(std::reference_wrapper<T*>)] = regular_function;
@@ -550,25 +565,67 @@ void GraphArgumentSerializer::register_type() {
     register_optional_reference_type<ttsl::optional_reference<T>>();
     register_optional_reference_type<ttsl::optional_reference<const T>>();
 
-    // Handle complex types (feel free to add more in the future)
-    // Register small vectors from 2 to 16
-    [this]<std::size_t... Is>(std::index_sequence<Is...>) {
-        ((register_small_vector<T, (Is + 1)>()), ...);
-    }(std::make_index_sequence<15>{});  // 15 elements: 2,3,4,...,16
+    // Handle complex types - split registrations to avoid ASan stack overflow during static initialization
+    // Register small vectors in two batches: 2-8 first, then 9-16
+    register_small_vector<T, 2>();
+    register_small_vector<T, 3>();
+    register_small_vector<T, 4>();
+    register_small_vector<T, 5>();
+    register_small_vector<T, 6>();
+    register_small_vector<T, 7>();
+    register_small_vector<T, 8>();
+
+    // Register remaining small vector sizes 9-16
+    register_small_vector<T, 9>();
+    register_small_vector<T, 10>();
+    register_small_vector<T, 11>();
+    register_small_vector<T, 12>();
+    register_small_vector<T, 13>();
+    register_small_vector<T, 14>();
+    register_small_vector<T, 15>();
+    register_small_vector<T, 16>();
 
     // Skip array registration for bool type due to std::array<bool, N> serialization issues
     if constexpr (!std::is_same_v<T, bool> && !std::is_abstract_v<T>) {
-        // Register arrays for all sizes from 2 to 16
-        [this]<std::size_t... Is>(std::index_sequence<Is...>) {
-            ((register_array<T, (Is + 1)>()), ...);
-        }(std::make_index_sequence<15>{});  // 15 elements: 2,3,4,...,16
+        // Register arrays in two batches: 2-8 first, then 9-16
+        register_array<T, 2>();
+        register_array<T, 3>();
+        register_array<T, 4>();
+        register_array<T, 5>();
+        register_array<T, 6>();
+        register_array<T, 7>();
+        register_array<T, 8>();
+
+        // Register remaining array sizes 9-16
+        register_array<T, 9>();
+        register_array<T, 10>();
+        register_array<T, 11>();
+        register_array<T, 12>();
+        register_array<T, 13>();
+        register_array<T, 14>();
+        register_array<T, 15>();
+        register_array<T, 16>();
 
         register_vector<T>();
 
-        // Register optional arrays for all sizes from 2 to 16
-        [this]<std::size_t... Is>(std::index_sequence<Is...>) {
-            ((register_optional_type<std::optional<std::array<T, (Is + 1)>>>()), ...);
-        }(std::make_index_sequence<15>{});  // 15 elements: 2,3,4,...,16
+        // Register optional arrays in two batches: 2-8 first, then 9-16
+        register_optional_type<std::optional<std::array<T, 2>>>();
+        register_optional_type<std::optional<std::array<T, 3>>>();
+        register_optional_type<std::optional<std::array<T, 4>>>();
+        register_optional_type<std::optional<std::array<T, 5>>>();
+        register_optional_type<std::optional<std::array<T, 6>>>();
+        register_optional_type<std::optional<std::array<T, 7>>>();
+        register_optional_type<std::optional<std::array<T, 8>>>();
+
+        // Register remaining optional array sizes 9-16
+        register_optional_type<std::optional<std::array<T, 9>>>();
+        register_optional_type<std::optional<std::array<T, 10>>>();
+        register_optional_type<std::optional<std::array<T, 11>>>();
+        register_optional_type<std::optional<std::array<T, 12>>>();
+        register_optional_type<std::optional<std::array<T, 13>>>();
+        register_optional_type<std::optional<std::array<T, 14>>>();
+        register_optional_type<std::optional<std::array<T, 15>>>();
+        register_optional_type<std::optional<std::array<T, 16>>>();
     }
 
     // register vector of optional (only if T is not abstract)
