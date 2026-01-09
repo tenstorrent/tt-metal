@@ -139,22 +139,37 @@ jobs:
           TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
           TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
           ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
-          TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_6U_galaxy_quick.yaml
+          # TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_6U_galaxy_quick.yaml
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - name: Check for benchmark data
+        id: check-benchmark-data
+        if: ${{ !cancelled() && github.ref_name == 'jhaiTT/34732-add-benchmark-upload-guards' }}
+        shell: bash
+        run: |
+          if [ -d "generated/fabric" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            echo "Benchmark files found, will upload to database"
+          else
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+            echo "Benchmark files not found, database upload will be skipped"
+          fi
       - name: Upload benchmark data
         ## Only upload fabric benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-        with:
-          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_bandwidth_benchmark_data_batchfile.txt
-          username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
-          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
-          path: /work
+        if: ${{ !cancelled() && github.ref_name == 'jhaiTT/34732-add-benchmark-upload-guards' && steps.check-benchmark-data.outputs.has_benchmark_data == 'true' }}
+        shell: bash
+        run:
+          echo "Uploading benchmark data"
+        # uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        # with:
+        #   ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+        #   sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_bandwidth_benchmark_data_batchfile.txt
+        #   username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+        #   hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+        #   path: /work
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
