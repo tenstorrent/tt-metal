@@ -58,7 +58,7 @@ void kernel_main() {
         get_noc_addr(mcast_sender_noc_x, mcast_sender_noc_y, mcast_sender_semaphore_addr);
 
 #ifdef ROW_OF_M_FITS_IN_L1
-    // ================== Loop structure with W1 multicast receive ==================
+    // ================== Loop structure with W1/W2/W3 multicast receive (flash-attention) ==================
     // Flash-attention optimization: for r in rows:
     //     # Phase A: Compute XW1[r, :] and XW3[r, :] - read X[r, p_block] only once!
     //     for p_block in p_blocks:                    # OUTER LOOP - read X once per p_block
@@ -70,7 +70,8 @@ void kernel_main() {
     //            [RECEIVER] wait for W1[p, k_block] multicast to arrive
     //          # Then process W3 for all p in p_block (compute processes W3 second)
     //          for p in p_block:
-    //            read W3[p, k_block] (no multicast yet - Phase 1)
+    //            [RECEIVER] signal sender ready for W3[p, k_block]
+    //            [RECEIVER] wait for W3[p, k_block] multicast to arrive
     //
     //     # Phase B: Compute M[r,:] once
     //     [no reading required to compute M[r, :]]
@@ -78,7 +79,9 @@ void kernel_main() {
     //     # Phase C: Use M[r, :] for all c-blocks to compute Y[r, :]
     //     for c_block in c_blocks:
     //        for k_block in k_blocks:
-    //           read W2[k_block, c_block] (no multicast yet - Phase 1)
+    //          for c in c_block:
+    //            [RECEIVER] signal sender ready for W2[k_block, c]
+    //            [RECEIVER] wait for W2[k_block, c] multicast to arrive
     // ============================================================================
     for (uint32_t r = start_row; r < end_row_for_sync; ++r) {
         // ---- Phase A: Compute XW1[r,:] and XW3[r,:] with flash-attention optimization ----
@@ -129,7 +132,20 @@ void kernel_main() {
     }
 
 #else
-    // ================== Loop structure with W1 multicast receive (non-flash-attention) ==================
+    // ================== Loop structure with W1/W2/W3 multicast receive (non-flash-attention) ==================
+    // Standard approach: for r in rows:
+    //     for c_block in c_blocks:              # Process output columns in blocks
+    //        for k_block in k_blocks:           # Process hidden dimension in blocks
+    //          for k in k_block:                # For each element in k_block
+    //            for p_block in p_blocks:       # Accumulate across input dimension
+    //              [RECEIVER] signal sender ready for W1[p_block, k]
+    //              [RECEIVER] wait for W1[p_block, k] multicast to arrive
+    //              [RECEIVER] signal sender ready for W3[p_block, k]
+    //              [RECEIVER] wait for W3[p_block, k] multicast to arrive
+    //          for c in c_block:                # For each column in c_block
+    //            [RECEIVER] signal sender ready for W2[k_block, c]
+    //            [RECEIVER] wait for W2[k_block, c] multicast to arrive
+    // ============================================================================
     for (uint32_t r = start_row; r < end_row_for_sync; ++r) {
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : (Wt - c_block_start);
