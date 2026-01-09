@@ -69,7 +69,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     std::vector<Tensor>& output_tensor,
-    uint32_t dim,
+    int32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t ring_index,
