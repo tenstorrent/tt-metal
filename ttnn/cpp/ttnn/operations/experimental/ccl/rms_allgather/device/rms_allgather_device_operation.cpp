@@ -35,6 +35,10 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
     TT_FATAL(
+        a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] == 32 &&
+            a.logical_shape()[3] % 32 == 0,
+        "Input tensor shape does not meet the requirements set by this OP: input tensor shape must be (1,1,32,M) where M is a multiple of 32");
+    TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
