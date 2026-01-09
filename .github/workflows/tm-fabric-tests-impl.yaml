@@ -150,13 +150,14 @@ jobs:
         if: ${{ !cancelled() && github.ref_name == 'jhaiTT/34732-add-benchmark-upload-guards' }}
         shell: bash
         run: |
-          if [ -d "generated/fabric" ]; then
+          if [ -f "generated/fabric/bandwidth_summary_results_wormhole_b0_upload.csv" ]; then
             echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
             echo "Benchmark files found, will upload to database"
             ls -la generated/fabric
           else
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
             echo "Benchmark files not found, database upload will be skipped"
+            ls -la generated/fabric
           fi
       - name: Upload benchmark data
         ## Only upload fabric benchmark data for main branch
