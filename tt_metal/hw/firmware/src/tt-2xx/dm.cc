@@ -36,7 +36,8 @@ uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
-tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
+tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
+tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 void device_setup() {
     // instn_buf
@@ -54,37 +55,38 @@ void device_setup() {
 inline __attribute__((always_inline)) void signal_subordinate_completion() {
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
-    *((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
+    *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
 }
 
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    while (mailboxes->subordinate_sync.trisc0 != RUN_SYNC_MSG_DONE) {
-        invalidate_l1_cache();
-    }
+    // while (mailboxes->subordinate_sync.trisc0 != RUN_SYNC_MSG_DONE) {
+    //     invalidate_l1_cache();
+    // }
 
-    if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0))) {
-        mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_GO;
-        mailboxes->subordinate_sync.trisc1 = RUN_SYNC_MSG_GO;
-        mailboxes->subordinate_sync.trisc2 = RUN_SYNC_MSG_GO;
-    }
+    // if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0)))
+    // {
+    //     mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_GO;
+    //     mailboxes->subordinate_sync.trisc1 = RUN_SYNC_MSG_GO;
+    //     mailboxes->subordinate_sync.trisc2 = RUN_SYNC_MSG_GO;
+    // }
 }
 
 inline void start_subordinate_kernel_run_early(uint32_t enables) {
     for (int i = 1; i < NUM_DM_CORES; i++) {  // start from 1 to skip DM0
         if (enables & (1u << i)) {
-            *((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + i - 1) = RUN_SYNC_MSG_GO;
+            *((volatile uint8_t*)&(subordinate_sync->dm1) + i - 1) = RUN_SYNC_MSG_GO;
         }
     }
 }
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
-    while (mailboxes->subordinate_sync.allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE);
+    while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE);
     WAYPOINT("NTD");
 }
 
-inline void trigger_sync_register_init() { mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
+// inline void trigger_sync_register_init() { mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
 extern "C" uint32_t _start1() {
     configure_csr();
@@ -97,7 +99,6 @@ extern "C" uint32_t _start1() {
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
-
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
@@ -170,7 +171,7 @@ extern "C" uint32_t _start1() {
                 // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
                 // if (enables &
                 //     (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1)))
-                //     { mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
+                //     { subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
@@ -300,8 +301,8 @@ extern "C" uint32_t _start1() {
         // WAYPOINT("GW");
         WAYPOINT("W1");
         while (true) {
-            if (*((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
-                *((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
+            if (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
+                *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
                 break;
             }
             asm("nop; nop; nop; nop; nop");
@@ -327,7 +328,7 @@ extern "C" uint32_t _start1() {
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
         WAYPOINT("R1");
-        while (*((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
+        while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
             asm("nop; nop; nop; nop; nop");
         }
         asm("FENCE.i");
@@ -336,7 +337,7 @@ extern "C" uint32_t _start1() {
         record_stack_usage(stack_free);
         WAYPOINT("D1");
 
-        *((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
+        *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }
 
     return 0;

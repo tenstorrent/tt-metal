@@ -18,6 +18,7 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
 
@@ -483,9 +484,7 @@ process_agmm_fusion_program_and_create_override_variables(
     auto all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_major);
     auto worker_cores_vec = corerange_to_cores(all_worker_cores, std::nullopt, row_major);
     auto hop_cores_vec = corerange_to_cores(hop_cores, std::nullopt, row_major);
-    for (uint32_t i = 0; i < all_cores_vec.size(); ++i) {
-        auto core = all_cores_vec[i];
-
+    for (auto core : all_cores_vec) {
         auto all_worker_cores_iter = std::find(worker_cores_vec.begin(), worker_cores_vec.end(), core);
         auto hop_cores_iter = std::find(hop_cores_vec.begin(), hop_cores_vec.end(), core);
         bool core_is_in_all_worker_cores = all_worker_cores_iter != worker_cores_vec.end();
@@ -690,8 +689,7 @@ inline void override_agmm_fusion_program_parameters(
 
     if (not src1_sharded) {
         auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
-        for (uint32_t i = 0; i < override_variables.cores.size(); ++i) {
-            const auto& core = override_variables.cores[i];
+        for (const auto& core : override_variables.cores) {
             auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
 
             /* in1 */

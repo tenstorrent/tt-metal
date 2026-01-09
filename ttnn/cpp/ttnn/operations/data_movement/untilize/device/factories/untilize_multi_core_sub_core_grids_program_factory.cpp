@@ -41,9 +41,8 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
     for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (ntiles % ncores == 0) {
             break;
-        } else {
-            ncores--;
         }
+        ncores--;
     }
 
     TT_ASSERT(ntiles % (ncores) == 0);
@@ -149,9 +148,7 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
 
     auto nsticks_per_core = ntiles_per_column * TILE_HEIGHT;
 
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        CoreCoord core = cores[i];
-
+    for (auto core : cores) {
         // reader runtime args
         auto ntiles_per_core = ntiles_per_block * nblocks_per_core;
         const std::array reader_rt_args = {

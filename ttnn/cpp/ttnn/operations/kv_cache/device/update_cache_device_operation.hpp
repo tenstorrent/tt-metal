@@ -33,19 +33,17 @@ struct UpdateKVCacheOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& cache,
-        const Tensor& input,
-        uint32_t batch_idx,
-        uint32_t update_index,
-        uint32_t batch_offset,
-        UpdateCacheOpType op_type,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::kv_cache
 
 namespace ttnn::prim {
-constexpr auto update_cache =
-    ttnn::register_operation<"ttnn::prim::update_cache", ttnn::operations::kv_cache::UpdateKVCacheOperation>();
+ttnn::operations::kv_cache::UpdateKVCacheOperation::tensor_return_value_t update_cache(
+    const Tensor& cache,
+    const Tensor& input,
+    uint32_t batch_idx,
+    uint32_t update_index,
+    uint32_t batch_offset,
+    ttnn::operations::kv_cache::UpdateCacheOpType op_type,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 }  // namespace ttnn::prim
