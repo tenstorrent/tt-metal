@@ -552,32 +552,22 @@ inline void run_clamp_loadmacro() {
 
 template <bool USE_ARECIP_INSTR, int NUM_TERMS, uint32_t SCALE>
 void calculate_exponential_more_terms_init() {
-    constexpr float M_LN2 = -0.69314718055994530942f;  // -ln(2)
-
-    // L11 is used by LCONST_neg1 in the floor function.
-    // L14 is used by SWAP LoadMacro.
-
     constexpr float scale_fp32 = __builtin_bit_cast(float, SCALE);
     TTI_SFPLOADI(0, 0xA, lo16(scale_fp32));
     TTI_SFPLOADI(0, 0x8, hi16(scale_fp32));
+    TTI_SFPCONFIG(0, 11, 0);
+
+    constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
+    TTI_SFPLOADI(0, 0xA, lo16(LN2_RECIP));
+    TTI_SFPLOADI(0, 0x8, hi16(LN2_RECIP));
     TTI_SFPCONFIG(0, 12, 0);
 
-    // -ln(2) for computing r = x - k*ln2.
+    constexpr float M_LN2 = -0.69314718055994530942f;  // -ln(2)
     TTI_SFPLOADI(0, 0xA, lo16(M_LN2));
     TTI_SFPLOADI(0, 0x8, hi16(M_LN2));
     TTI_SFPCONFIG(0, 13, 0);
 
-    if constexpr (!USE_ARECIP_INSTR) {
-        LLK_ASSERT(NUM_TERMS >= 1 && NUM_TERMS <= 3, "Only 1, 2, or 3 terms is supported");
-
-        float c0 = (NUM_TERMS == 1)   ? 1.03022936050163882354355235184958220293399209290987f
-                   : (NUM_TERMS == 2) ? 0.999848792924395313327307061545061386175496934006f
-                                      : 0.99992449655091231753798502608929170703152709521188f;
-
-        TTI_SFPLOADI(0, 0xA, lo16(c0));
-        TTI_SFPLOADI(0, 0x8, hi16(c0));
-        TTI_SFPCONFIG(0, 11, 0);  // L11 also used by the floor function.
-    }
+    // L14 is used by SWAP LoadMacro.
 
     init_clamp_loadmacro<SCALE>();
 }
@@ -594,17 +584,12 @@ void calculate_exponential_more_terms(const uint16_t /*exp_base_scale_factor*/) 
     }
         .set(ADDR_MOD_7);
 
-    constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
-
-    if constexpr (USE_ARECIP_INSTR) {
-        TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(LN2_RECIP));
-        TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(LN2_RECIP));
-    } else {
+    if constexpr (!USE_ARECIP_INSTR) {
         LLK_ASSERT(NUM_TERMS >= 1 && NUM_TERMS <= 3, "Only 1, 2, or 3 terms is supported");
 
-        TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(LN2_RECIP));
-        TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(LN2_RECIP));
-
+        float c0 = (NUM_TERMS == 1)   ? 1.03022936050163882354355235184958220293399209290987f
+                   : (NUM_TERMS == 2) ? 0.999848792924395313327307061545061386175496934006f
+                                      : 0.99992449655091231753798502608929170703152709521188f;
         float c1 = (NUM_TERMS == 1)   ? 1.0201394465967894800285756834161653337107187804001f
                    : (NUM_TERMS == 2) ? 1.01508760098521056684783640695492761469306929535975f
                                       : 0.99993960415029750534472970577402987498389428593233f;
@@ -614,57 +599,57 @@ void calculate_exponential_more_terms(const uint16_t /*exp_base_scale_factor*/) 
         float c3 = (NUM_TERMS == 1) ? 0 : (NUM_TERMS == 2) ? 0 : 0.16817330195731531429790827442800245470170482723302f;
 
         switch (NUM_TERMS) {
-            case 3: TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c3)); TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c3));
-            case 2: TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c2)); TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c2));
-            case 1: TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c1)); TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c1));
+            case 3: TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3)); TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
+            case 2: TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2)); TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
+            case 1: TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1)); TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
+            case 0: TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0)); TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
             default: break;
         }
     }
 
     for (int d = 0; d < ITERATIONS; d++) {
         // Load the input.
-        TTI_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, 0);
 
         if constexpr (SCALE_EN) {
-            TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG11, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
         }
 
+        // Multiply by 1/ln(2) and round.
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
+        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
+
         if constexpr (USE_ARECIP_INSTR) {
-            // Multiply by 1/ln(2).
-            TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            // if v>u, set v=v-1 to compute floor(x).
+            TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);                                    // SFPGT_MOD1_SET_CC
+            TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 2);  // SFPMAD_MOD1_NEGATE_VC
+            TTI_SFPENCC(0, 0, 0, 0);
 
             // Compute exp(x - k*ln2).
-            ckernel::sfpu::_floor_body_();  // L1=floor(L0).
-            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, p_sfpu::LREG0, 0);
             TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
         } else {
-            // Multiply by 1/ln(2).
-            TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-
-            // Compute r = x - k*ln2.
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
-            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
-            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, p_sfpu::LREG0, 0);
 
             // Compute polynomial.
             if constexpr (NUM_TERMS == 1) {
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else if constexpr (NUM_TERMS == 2) {
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG2, 0);
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG11, p_sfpu::LREG0, 0);
-            } else {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG2, 0);
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+            } else {
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             }
         }
 
-        // Set the new exponent.
-        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);  // 0=debias, 1=no debias.
-        TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG2, 0);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
-        TTI_SFPSETEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+        // Multiply by 2^k.
+        TT_SFPADDI(0x42fe, p_sfpu::LREG1, 0);  // Add 127.
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
+        TTI_SFPSETEXP(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
 
         // Store the result.
         TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0);
