@@ -5,7 +5,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include <cstdint>
 #include <utility>
@@ -50,54 +49,12 @@ void kernel_main() {
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 16;
-
-#ifdef INPUT_IS_SHARDED
-    constexpr uint32_t ct_offset = 7;
-
-    using input_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx),       // Memory layout
-        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
-
-    const auto [input_mapping_table, input_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<input_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<input_tensor_shard_info> input_tensor_addrgen = {
-        .bank_base_address = input_tensor_address, .shard_array = input_mapping_table};
-
-    arg_idx += input_rt_increment;
-#else
-    constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<16>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
     auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
-#endif
 
-#ifdef INTERMEDIATE_IS_SHARDED
-    using intermediate_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx + ct_offset),       // Memory layout
-        get_compile_time_arg_val(ct_idx + ct_offset + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + ct_offset + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + ct_offset + 3),   // The number of pages in each sharding row not including
-                                                            // padding pages
-        get_compile_time_arg_val(ct_idx + ct_offset + 4),   // This defines times when contiguous pages can't be
-                                                            // calculated
-        get_compile_time_arg_val(ct_idx + ct_offset + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + ct_offset + 6)>;  // pages_per_shard_y
-
-    const auto [intermediate_mapping_table, intermediate_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<intermediate_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<intermediate_tensor_shard_info> intermediate_tensor_addrgen = {
-        .bank_base_address = intermediate_tensor_address, .shard_array = intermediate_mapping_table};
-
-    arg_idx += intermediate_rt_increment;
-#else
-    constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<16 + ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
-#endif
 
     uint32_t chunk_count = 0;
     uint32_t sem_target = 0;

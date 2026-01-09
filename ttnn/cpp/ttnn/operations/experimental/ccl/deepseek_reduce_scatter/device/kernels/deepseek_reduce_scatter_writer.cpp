@@ -107,30 +107,9 @@ void kernel_main() {
     constexpr uint32_t ct_idx =
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
-#ifdef INTERMEDIATE_IS_SHARDED
-    constexpr uint32_t ct_offset = 7;
-
-    using intermediate_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx),       // Memory layout
-        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
-
-    const auto [intermediate_mapping_table, intermediate_rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<intermediate_tensor_shard_info>(get_arg_addr(arg_idx));
-    experimental::ShardedAddrGen<intermediate_tensor_shard_info> intermediate_addrgen = {
-        .bank_base_address = intermediate_address, .shard_array = intermediate_mapping_table};
-
-    arg_idx += intermediate_rt_increment;
-
-#else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
     auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, page_size);
-#endif
 
 #ifdef OUTPUT_IS_SHARDED
     using output_tensor_shard_info = ShardedInfo<
