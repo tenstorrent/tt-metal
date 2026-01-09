@@ -9,13 +9,18 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/tt-metalium/constants.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 
-template <uint32_t t>
+// Reads a single row from DRAM and broadcasts it to all rows in a tile.
+// For TILE layout: read row 0 from face 0&1, copy to face 2&3
+// For ROW_MAJOR layout: read row from DRAM, copy within L1 to face 2&3
+template <uint32_t is_row_major, uint32_t element_size>
 void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr);
+
 void kernel_main() {
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_stats = tt::CBIndex::c_1;
@@ -33,7 +38,9 @@ void kernel_main() {
     constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(4);
     constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    constexpr uint32_t gamma_element_size = get_compile_time_arg_val(7);
+    constexpr uint32_t beta_element_size = get_compile_time_arg_val(8);
+    constexpr auto src_args = TensorAccessorArgs<9>();
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -96,7 +103,7 @@ void kernel_main() {
                 uint32_t l1_write_addr_g = get_write_ptr(cb_gamma);
                 for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
                     uint64_t gamma_noc_addr = get_noc_addr(col_tile + i, addrg);
-                    async_read_row_to_tile<gamma_is_row_major>(gamma_noc_addr, l1_write_addr_g);
+                    async_read_row_to_tile<gamma_is_row_major, gamma_element_size>(gamma_noc_addr, l1_write_addr_g);
                     l1_write_addr_g += gamma_tile_bytes;
                 }
                 noc_async_read_barrier();
@@ -111,7 +118,7 @@ void kernel_main() {
                 uint32_t l1_write_addr_b = get_write_ptr(cb_beta);
                 for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
                     uint64_t beta_noc_addr = get_noc_addr(col_tile + i, addrb);
-                    async_read_row_to_tile<beta_is_row_major>(beta_noc_addr, l1_write_addr_b);
+                    async_read_row_to_tile<beta_is_row_major, beta_element_size>(beta_noc_addr, l1_write_addr_b);
                     l1_write_addr_b += beta_tile_bytes;
                 }
                 noc_async_read_barrier();
@@ -121,16 +128,29 @@ void kernel_main() {
         }
     }
 }
-template <uint32_t t>
+
+// Reads a single row (32 elements) from DRAM and places it in tile format for row broadcast.
+// Tile memory layout: Face 0 (256 elems), Face 1 (256 elems), Face 2 (256 elems), Face 3 (256 elems)
+// For row broadcast, we read the first row and copy it to the position for faces 2&3.
+template <uint32_t is_row_major, uint32_t element_size>
 void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr) {
-    noc_async_read(DRAM_src_addr, L1_dst_addr, 32 * 2);
-    if constexpr (t == 0) {  // TILE layout
-        noc_async_read(DRAM_src_addr + 512, L1_dst_addr + 512, 64);
-    } else if constexpr (t == 1) {  // ROW_MAJOR layout
+    // Byte sizes for tile layout
+    constexpr uint32_t face_row_bytes = tt::constants::FACE_WIDTH * element_size;  // 16 elements per row
+    constexpr uint32_t tile_row_bytes = tt::constants::TILE_WIDTH * element_size;  // 32 elements per row
+    constexpr uint32_t single_face_bytes = tt::constants::FACE_HW * element_size;  // 16*16 = 256 elements
+
+    // Read row 0 into face 0 (first 32 elements of the tile)
+    noc_async_read(DRAM_src_addr, L1_dst_addr, tile_row_bytes);
+
+    if constexpr (is_row_major == 0) {  // TILE layout
+        // For TILE layout, face 1 row 0 is at offset single_face_bytes in DRAM, read it
+        noc_async_read(DRAM_src_addr + single_face_bytes, L1_dst_addr + single_face_bytes, face_row_bytes);
+    } else if constexpr (is_row_major == 1) {  // ROW_MAJOR layout
+        // For ROW_MAJOR, source is 1D row, copy the data we read to face 1 position
         noc_async_read_barrier();
-        uint64_t noc_addr = get_noc_addr(L1_dst_addr + 32);
-        noc_async_read(noc_addr, L1_dst_addr + 512, 64);
+        uint64_t l1_noc_addr = get_noc_addr(L1_dst_addr + face_row_bytes);
+        noc_async_read(l1_noc_addr, L1_dst_addr + single_face_bytes, face_row_bytes);
     } else {
-        static_assert(t == 0 || t == 1, "Layout must be ROW_MAJOR (t==1) or TILE (t==0)");
+        static_assert(is_row_major == 0 || is_row_major == 1, "Layout must be ROW_MAJOR (1) or TILE (0)");
     }
 }

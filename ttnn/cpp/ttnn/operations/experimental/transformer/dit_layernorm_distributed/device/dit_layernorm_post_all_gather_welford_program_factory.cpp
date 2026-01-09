@@ -130,11 +130,16 @@ PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgram
     } else if (beta.has_value() and beta.value().layout() == Layout::TILE) {
         beta_page_size = beta_single_tile_size;
     }
+    uint32_t gamma_element_size = gamma.has_value() ? gamma.value().element_size() : 0;
+    uint32_t beta_element_size = beta.has_value() ? beta.value().element_size() : 0;
+
     reader_compile_time_args.push_back((std::uint32_t)gamma_page_size);
     reader_compile_time_args.push_back((std::uint32_t)beta_page_size);
     reader_compile_time_args.push_back((std::uint32_t)gamma_is_row_major);
     reader_compile_time_args.push_back((std::uint32_t)beta_is_row_major);
     reader_compile_time_args.push_back((std::uint32_t)Wt);
+    reader_compile_time_args.push_back((std::uint32_t)gamma_element_size);
+    reader_compile_time_args.push_back((std::uint32_t)beta_element_size);
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
