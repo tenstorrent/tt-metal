@@ -318,10 +318,16 @@ def _collect_device_perf(
         op_stats[op_code] = {
             "avg_kernel_duration_ns": sum(kernel_vals) / len(kernel_vals),
             "avg_op_to_op_latency_ns": sum(op_to_op_vals) / len(op_to_op_vals),
+            # Also track totals for proper per-iteration calculation
+            "total_kernel_duration_ns": sum(kernel_vals),
+            "total_op_to_op_latency_ns": sum(op_to_op_vals),
+            "call_count": len(kernel_vals),
         }
 
-    total_kernel_ns = sum(entry["avg_kernel_duration_ns"] for entry in op_stats.values())
-    total_op_to_op_ns = sum(entry["avg_op_to_op_latency_ns"] for entry in op_stats.values())
+    # Calculate total kernel/op-to-op time across ALL ops (not just averages per op type)
+    # This gives accurate totals that match tt-perf-report stacked output
+    total_kernel_ns = sum(entry["total_kernel_duration_ns"] for entry in op_stats.values())
+    total_op_to_op_ns = sum(entry["total_op_to_op_latency_ns"] for entry in op_stats.values())
     return op_stats, total_kernel_ns, total_op_to_op_ns
 
 
@@ -418,8 +424,10 @@ def _run_experts_test(
         num_devices=num_devices,
     )
 
-    dispatch_config = AllToAllDispatchConfig(cluster_axis=0)
-    combine_config = AllToAllCombineConfig(cluster_axis=0)
+    # Use DRAM_MEMORY_CONFIG for decode to avoid L1 OOM with larger models (e.g., 120b with 4 experts/device)
+    # This matches the configuration used in mlp.py
+    dispatch_config = AllToAllDispatchConfig(cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    combine_config = AllToAllCombineConfig(cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     program_config = ThroughputProgramConfig()
 
     # Create expert mapping tensors
