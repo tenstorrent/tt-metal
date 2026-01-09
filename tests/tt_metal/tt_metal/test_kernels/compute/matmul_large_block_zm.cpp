@@ -6,6 +6,7 @@
 
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
+#include "experimental/circular_buffer.h"
 
 // #include "tools/profiler/kernel_profiler.hpp"
 namespace NAMESPACE {
@@ -24,14 +25,19 @@ void MAIN {
 
     bool spill = num_blocks > uint32_t(1);
 
+    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
+    experimental::CircularBuffer cb1(tt::CBIndex::c_1);
+    experimental::CircularBuffer cb24(tt::CBIndex::c_24);
+    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     bool enable_reload = false;
 
     for (uint32_t block = 0; block < num_blocks; block++) {
         bool last_out = block == (num_blocks - 1);
 
-        cb_wait_front(tt::CBIndex::c_0, in0_block_num_tiles);
-        cb_wait_front(tt::CBIndex::c_1, in1_block_num_tiles);
+        cb0.wait_front(in0_block_num_tiles);
+        cb1.wait_front(in1_block_num_tiles);
         int in0_index_subblock_offset = 0;
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
@@ -40,11 +46,11 @@ void MAIN {
 
                 if (enable_reload) {
                     copy_tile_to_dst_init_short(tt::CBIndex::c_24);
-                    cb_wait_front(tt::CBIndex::c_24, out_subblock_num_tiles);
+                    cb24.wait_front(out_subblock_num_tiles);
                     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                         copy_tile(tt::CBIndex::c_24, i, i);
                     }
-                    cb_pop_front(tt::CBIndex::c_24, out_subblock_num_tiles);
+                    cb24.pop_front(out_subblock_num_tiles);
                     mm_init_short(tt::CBIndex::c_0, tt::CBIndex::c_1);
                 }
 
@@ -67,18 +73,18 @@ void MAIN {
 
                 if (last_out) {
                     // Pack out to output buffer
-                    cb_reserve_back(tt::CBIndex::c_16, out_subblock_num_tiles);
+                    cb16.reserve_back(out_subblock_num_tiles);
                     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                         pack_tile(i, tt::CBIndex::c_16);
                     }
-                    cb_push_back(tt::CBIndex::c_16, out_subblock_num_tiles);
+                    cb16.push_back(out_subblock_num_tiles);
                 } else {
                     // Move partial result to interm buffer
-                    cb_reserve_back(tt::CBIndex::c_24, out_subblock_num_tiles);
+                    cb24.reserve_back(out_subblock_num_tiles);
                     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                         pack_tile(i, tt::CBIndex::c_24);
                     }
-                    cb_push_back(tt::CBIndex::c_24, out_subblock_num_tiles);
+                    cb24.push_back(out_subblock_num_tiles);
                 }
 
                 release_dst();
@@ -91,8 +97,8 @@ void MAIN {
             enable_reload = true;
         }
 
-        cb_pop_front(tt::CBIndex::c_0, in0_block_num_tiles);
-        cb_pop_front(tt::CBIndex::c_1, in1_block_num_tiles);
+        cb0.pop_front(in0_block_num_tiles);
+        cb1.pop_front(in1_block_num_tiles);
     }
 }
 }  // namespace NAMESPACE

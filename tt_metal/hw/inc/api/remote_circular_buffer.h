@@ -9,6 +9,8 @@
 #include "api/alignment.h"
 #ifndef COMPILE_FOR_TRISC
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/lock.h"
 #endif
 
 namespace experimental {
