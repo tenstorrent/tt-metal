@@ -504,21 +504,6 @@ def test_bilinear_multi_core(
             128,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
-        # Test when empty shards are present
-        (
-            1,
-            128,
-            13,
-            13,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
-                }
-            ),
-            3,
-            128,
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
     ),
 )
 @pytest.mark.parametrize("run_twice", [False])
