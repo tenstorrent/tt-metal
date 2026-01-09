@@ -82,6 +82,7 @@ run_python_model_tests_blackhole() {
 
     pytest models/demos/wormhole/resnet50/tests/test_resnet50_functional.py
     pytest models/experimental/functional_unet/tests/test_unet_model.py
+    pytest models/demos/deepseek_v3_b1/tests/unit_tests/
 }
 
 run_python_model_tests_slow_runtime_mode_blackhole() {

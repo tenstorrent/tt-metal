@@ -204,7 +204,8 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
         // Reassign worker cores based on harvesting for WH.
         return reassign_dram_interface_cores_for_wormhole(
             non_worker_rows, dram_interface_workers, num_dram_banks, max_worker_y_physical, min_worker_y_physical);
-    } else if (arch == ARCH::BLACKHOLE) {
+    }
+    if (arch == ARCH::BLACKHOLE) {
         // Reassign worker cores based on harvesting for BH.
         // Need to account for column harvesting here.
         for (int x_coord = 0; x_coord < full_grid_size_x; ++x_coord) {

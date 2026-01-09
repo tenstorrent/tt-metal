@@ -18,9 +18,8 @@ ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
         return ReshapeRMProgramFactory{};
-    } else {
-        return ReshapeTileProgramFactory{};
     }
+    return ReshapeTileProgramFactory{};
 }
 
 void ReshapeDeviceOperation::validate_on_program_cache_miss(
