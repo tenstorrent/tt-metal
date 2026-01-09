@@ -1045,7 +1045,14 @@ class MLA1D(AbstractModule):
         if seq_len > SEQ_LEN_CHUNK_SIZE:
             num_heads_local = v_out.shape[2]
             v_head_dim = v_out.shape[3]
-            num_chunks = even_int_div(seq_len, SEQ_LEN_CHUNK_SIZE)
+            # Use ceiling division instead of even_int_div to handle non-multiples of 8192
+            num_chunks = (seq_len + SEQ_LEN_CHUNK_SIZE - 1) // SEQ_LEN_CHUNK_SIZE
+
+            # Pad seq_len to be a multiple of SEQ_LEN_CHUNK_SIZE if needed
+            padded_seq_len = num_chunks * SEQ_LEN_CHUNK_SIZE
+            if seq_len != padded_seq_len:
+                # Pad the sequence dimension (dim=1)
+                v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
 
             # Reshape to [num_chunks, chunk_size, num_heads_local, v_head_dim] (4D with chunks as batch)
             v_out = ttnn.reshape(v_out, (num_chunks, SEQ_LEN_CHUNK_SIZE, num_heads_local, v_head_dim))
@@ -1062,9 +1069,13 @@ class MLA1D(AbstractModule):
 
             out = ttnn.linear(v_out, **cfg["wo"])  # [num_chunks, 1, chunk_size, dim]
 
-            # De-chunk: [num_chunks, 1, chunk_size, dim] -> [1, 1, seq_len, dim]
+            # De-chunk: [num_chunks, 1, chunk_size, dim] -> [1, 1, padded_seq_len, dim]
             output_dim = out.shape[3]
-            out = ttnn.reshape(out, (1, 1, seq_len, output_dim))
+            out = ttnn.reshape(out, (1, 1, padded_seq_len, output_dim))
+
+            # Trim padding if we added any
+            if seq_len != padded_seq_len:
+                out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, seq_len, output_dim))
         else:
             # Non-chunked path for shorter sequences
             v_out = ttnn.experimental.all_gather_async(

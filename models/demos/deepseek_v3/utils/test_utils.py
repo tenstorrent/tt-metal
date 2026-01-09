@@ -421,10 +421,12 @@ def run_reference_with_attention(
                 )
 
                 # Extract output and update cache
-                # Handle tuple return from DeepseekV3Attention
+                # Handle tuple return from different module types
                 if isinstance(chunk_output, tuple):
                     chunk_out = chunk_output[0]
-                    current_cache = chunk_output[2]
+                    # DeepseekV3Attention returns 3-tuple: (output, attn_weights, cache)
+                    # DeepseekV3DecoderLayer with output_attentions=False returns 2-tuple: (output, cache)
+                    current_cache = chunk_output[2] if len(chunk_output) == 3 else chunk_output[1]
                 else:
                     chunk_out = chunk_output.last_hidden_state
                     current_cache = chunk_output.past_key_values
@@ -459,12 +461,21 @@ def run_reference_with_attention(
             )
 
             if isinstance(model_output_raw, tuple):
-                model_output = MockOutput(model_output_raw[0], model_output_raw[2])
+                # DeepseekV3Attention returns 3-tuple: (output, attn_weights, cache)
+                # DeepseekV3DecoderLayer with output_attentions=False returns 2-tuple: (output, cache)
+                cache_idx = 2 if len(model_output_raw) == 3 else 1
+                model_output = MockOutput(model_output_raw[0], model_output_raw[cache_idx])
             else:
                 model_output = model_output_raw
 
     # Extract output
-    out = model_output.last_hidden_state
+    # Handle both DecoderLayer (last_hidden_state) and CausalLM (logits) outputs
+    if hasattr(model_output, "last_hidden_state"):
+        out = model_output.last_hidden_state
+    elif hasattr(model_output, "logits"):
+        out = model_output.logits
+    else:
+        raise AttributeError(f"Model output has neither 'last_hidden_state' nor 'logits': {type(model_output)}")
     output_cache = model_output.past_key_values
     return out, input_cache, output_cache
 
@@ -658,8 +669,10 @@ def get_rope_tensors(
 def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:
     if system_name == "TG":
         return ttnn.MeshShape(4, 8)
+    elif system_name == "T3K":
+        return ttnn.MeshShape(1, 8)
     elif system_name == "DUAL":
         return ttnn.MeshShape(8, 8)
     elif system_name == "QUAD":
         return ttnn.MeshShape(16, 8)
-    raise ValueError(f"Unsupported system name: {system_name}. Supported values are DUAL, QUAD, and TG.")
+    raise ValueError(f"Unsupported system name: {system_name}. Supported values are T3K, TG, DUAL, and QUAD.")

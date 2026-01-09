@@ -89,6 +89,8 @@ def test_forward_pass(
     tt_output = run_module_forward(LMHead1D, mode, tt_input, run_config)
 
     # Deallocate input tensor as it's no longer needed
+    # Synchronize device to ensure all operations complete before deallocation
+    ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(tt_input)
     del tt_input
     gc.collect()
