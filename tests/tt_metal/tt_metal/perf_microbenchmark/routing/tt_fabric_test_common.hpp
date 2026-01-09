@@ -1666,7 +1666,7 @@ private:
         tt_fabric::FabricTensixConfig fabric_tensix_config,
         tt_fabric::FabricReliabilityMode reliability_mode) {
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
-        // tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, std::nullopt, fabric_tensix_config);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, std::nullopt, fabric_tensix_config);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
         // first need to re-init contorl plane so that it checks out the latest fabric config.
