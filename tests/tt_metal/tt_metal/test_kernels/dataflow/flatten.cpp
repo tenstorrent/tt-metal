@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
 
 void kernel_main() {
     // Kernel args

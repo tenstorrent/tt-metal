@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/endpoints.h"
+#include "experimental/noc_semaphore.h"
 
 // DRAM to L1 read
 void kernel_main() {
