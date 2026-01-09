@@ -146,7 +146,7 @@ jobs:
               "save-perf-data": true,
               "timeout": 30,
               "tracy": true,
-              "cmd": "export HF_MODEL=/mnt/MLPerf/tt_dnn-models/gpt-oss/gpt-oss-20b/ && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ && pytest models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_experts.py::test_gpt_oss_experts_device_perf -k \"decode\" && pytest models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_prepare_expert_tensors.py::test_gpt_oss_prepare_expert_tensors_device_perf -k \"decode\"",
+              "cmd": "pip install -r models/demos/gpt_oss/requirements.txt && export HF_MODEL=/mnt/MLPerf/tt_dnn-models/gpt-oss/gpt-oss-20b/ && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ && pytest models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_experts.py::test_gpt_oss_experts_device_perf -k \"decode\" && pytest models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_prepare_expert_tensors.py::test_gpt_oss_prepare_expert_tensors_device_perf -k \"decode\"",
               "owner_id": "U08TJ70UFRT"
             } # Harry Andrews
           ]' --compact-output)
