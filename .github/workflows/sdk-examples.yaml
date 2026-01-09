@@ -56,6 +56,7 @@ jobs:
         timeout-minutes: 15
         env:
           TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
+          TT_METAL_KERNEL_PATH: /usr/share/${{ inputs.product }}/examples
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
           CC: gcc-12
