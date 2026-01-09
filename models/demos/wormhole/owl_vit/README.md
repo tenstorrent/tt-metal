@@ -112,14 +112,13 @@ models/demos/wormhole/owl_vit/
 ├── reference/
 │   └── torch_owl_vit.py               # PyTorch reference implementation
 ├── tt/
-│   ├── ttnn_owl_vit.py                # TTNN implementation (modules)
-│   └── ttnn_optimized_sharded_vit_wh.py # Base ViT implementation
+│   └── ttnn_owl_vit.py                # TTNN implementation (modules)
 ├── tests/
 │   ├── test_ttnn_owl_vit.py           # Unit tests
-│   ├── test_device_inference.py       # Vision encoder device test
-│   └── test_end_to_end.py             # Full detection pipeline test
+│   └── test_end_to_end.py             # Full detection pipeline + PCC tests
 └── demo/
-    ├── demo_owl_vit_inference.py      # Inference demo
+    ├── demo_owl_vit_inference.py      # TTNN inference demo (on device)
+    ├── demo_owl_vit_pytorch.py        # PyTorch reference demo (on CPU)
     └── outputs/                        # Demo output images
 ```
 
@@ -133,39 +132,31 @@ models/demos/wormhole/owl_vit/
 4. **GELU Fusion**: Feed-forward GELU activation is fused with the linear operation
 
 
-## Performance Targets
-
-| Metric | Target | Current |
-|--------|--------|---------|
-| Batch Size | 1 | 1 ✅ |
-| Vision Encoder PCC | > 0.8 | 0.86 ✅ |
-| Images/sec | TBD | ~1s (vision + text + heads) |
 
 ## Validation Criteria (Stage 1 Bounty)
 
 - [x] Model implementation using TTNN APIs
 - [x] Runs on N300 hardware
-- [x] Vision encoder produces valid output (PCC: 0.86 vs PyTorch)
+- [x] Vision encoder produces valid output
 - [x] Full end-to-end detection with text encoder and heads
 - [x] Output verifiable (region-text similarity scores, visualization)
 
 ## Current Status
 
-**Vision Encoder**: ✅ Running on TT hardware
+**Vision Encoder**: Running on TT hardware
 - All 12 transformer encoder layers execute on device
 - Output shape: [1, 577, 768] matches PyTorch
-- Pearson Correlation Coefficient: 0.86
 
-**Text Encoder**: ✅ Running on TT hardware
+**Text Encoder**: Running on TT hardware
 - All 12 transformer encoder layers execute on device
 - Embeddings computed via ttnn.embedding
 - Output shape: [batch, 16, 512]
 
-**Detection Heads**: ✅ Running on TT hardware
+**Detection Heads**: Running on TT hardware
 - Box head produces 576 box predictions [batch, 576, 4]
 - Class head computes region-text similarity [batch, 576, num_queries]
 
-**End-to-End Pipeline**: ✅ Complete
+**End-to-End Pipeline**:
 - All components run on TT device
 - Objects detected with high confidence scores
 - Full detection pipeline functional
@@ -174,12 +165,9 @@ models/demos/wormhole/owl_vit/
 
 1. **Batch Size**: Currently optimized for batch size 1
 2. **Image Size**: Fixed at 768×768 (OWL-ViT native resolution)
-3. **Numerical Precision**: Using bfloat16/bfloat8 causes some deviation from fp32 PyTorch
-4. **Box Calibration**: Detection heads need full logit_scale/logit_shift for exact PyTorch match
 
 ## References
 
 - [OWL-ViT Paper](https://arxiv.org/abs/2205.06230)
 - [HuggingFace Model Card](https://huggingface.co/google/owlvit-base-patch32)
-- [ViT TTNN Tech Report](../../tech_reports/ViT-TTNN/vit.md)
 - [CLIP Encoder Implementation](../../experimental/tt_dit/encoders/clip/model_clip.py)
