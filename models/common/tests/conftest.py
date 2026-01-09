@@ -88,10 +88,11 @@ def ttnn_mesh_device(request):
     else:
         # Provide default fabric config for the mesh we actually open (full system mesh).
         num_devices = parent_shape[0] * parent_shape[1]
-        if fabric_config is None and num_devices >= 8:
-            fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
-        else:
-            fabric_config = ttnn.FabricConfig.FABRIC_1D
+        if fabric_config is None:
+            if num_devices >= 8:
+                fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
+            else:
+                fabric_config = ttnn.FabricConfig.FABRIC_1D
         # set all other input arguments to default values by top-level conftest.py
         ttnn.set_fabric_config(
             fabric_config, ttnn.FabricReliabilityMode.STRICT_INIT, None, ttnn.FabricTensixConfig.DISABLED
