@@ -274,7 +274,7 @@ TP_SWEEP = [
 )
 @pytest.mark.parametrize("mesh_device, mesh_axis", TP_SWEEP, indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_distributed_layernorm_use_cases(
+def test_distributed_layernorm(
     mesh_device: ttnn.MeshDevice,
     mesh_axis: int,
     embedding_dim: int,
