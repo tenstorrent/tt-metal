@@ -26,7 +26,7 @@ pytest models/experimental/maskformer_swin/tests/test_e2e_demo.py::test_maskform
 Executes transformer decoder + heads on TT (optional TT mask projection). Saves overlay and perf artifacts under `generated/`:
 
 ```bash
-python -m models.experimental.maskformer_swin.runner \
+python -m models.experimental.maskformer_swin.demo.runner \
   --image models/sample_data/demo.jpeg \
   --weights facebook/maskformer-swin-base-coco \
   --device wormhole_n300 \
@@ -44,7 +44,7 @@ Use `--height/--width` to set the image processor’s resize (e.g., 320×320 or 
 
 ```bash
 # mIoU only (no panopticapi or GT):
-python -m models.experimental.maskformer_swin.runner \
+python -m models.experimental.maskformer_swin.demo.runner \
   --image models/sample_data/demo.jpeg \
   --weights facebook/maskformer-swin-base-coco \
   --device wormhole_n300 \
@@ -55,7 +55,7 @@ python -m models.experimental.maskformer_swin.runner \
   --dump-perf generated/tt_perf.json
 
 # mIoU + PQ (panopticapi installed)
-python -m models.experimental.maskformer_swin.runner \
+python -m models.experimental.maskformer_swin.demo.runner \
   --image models/sample_data/demo.jpeg \
   --weights facebook/maskformer-swin-base-coco \
   --device wormhole_n300 \
@@ -85,7 +85,7 @@ python -m models.experimental.maskformer_swin.runner \
 - Patch embedding parity:
 
 ```bash
-python -m models.experimental.maskformer_swin.runner \
+python -m models.experimental.maskformer_swin.demo.runner \
   --image models/sample_data/demo.jpeg \
   --weights facebook/maskformer-swin-base-coco \
   --device wormhole_n300 \
@@ -107,8 +107,8 @@ python -m models.experimental.maskformer_swin.runner \
 - Known limitation: TT mask projection will fall back to the HF conv if TT-CNN configs are unsupported on a given firmware/runtime; the fallback is logged and the rest of the TT path continues.
 
 ## Details
-- Entry points: `runner.py` (CLI demo), `fallback.py` (CPU pipeline)
-- Modules: `backbone_swin.py`, `pixel_decoder.py`, `transformer_decoder.py`, `heads.py`, `weights.py`
+- Entry points: `demo/runner.py` (CLI demo), `tt/fallback.py` (CPU pipeline)
+- Modules: `tt/backbone_swin.py`, `tt/pixel_decoder.py`, `tt/transformer_decoder.py`, `tt/heads.py`, `tt/weights.py`
 
 ## Status & limitations
 - Swin backbone + most pixel decoder layers are still CPU; TT coverage is decoder + heads + optional mask projection.
