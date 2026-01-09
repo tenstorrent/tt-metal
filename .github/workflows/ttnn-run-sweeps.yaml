@@ -734,10 +734,15 @@ jobs:
         run: |
           echo "::group::🔧 Database Setup"
 
-          # Install PostgreSQL 18 client tools (pg_restore, pg_isready, psql)
-          # Need v18 to match the postgres:18 service container
-          apt-get update -qq && apt-get install -y -qq postgresql-common
-          yes '' | /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh
+          # Install PostgreSQL 18 client (need matching version for pg_restore)
+          apt-get update -qq
+          apt-get install -y -qq wget ca-certificates gnupg lsb-release
+          # Try multiple key sources in case one fails
+          mkdir -p /usr/share/keyrings
+          wget -qO- https://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg || \
+            gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys ACCC4CF8 && gpg --export ACCC4CF8 > /usr/share/keyrings/postgresql-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+          apt-get update -qq
           apt-get install -y -qq postgresql-client-18
 
           if ! python3 -c "import psycopg2" 2>/dev/null; then
