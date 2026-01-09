@@ -73,19 +73,19 @@ class TT_CCL:
                 )
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
-        semaphore_index = 2 if not cluster_axis else cluster_axis
+        semaphore_index = 2 if cluster_axis is None else cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]
         self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % 2
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
 
     def get_and_cycle_ag_semaphore_handles(self, cluster_axis=None):
-        semaphore_index = 2 if not cluster_axis else cluster_axis
+        semaphore_index = 2 if cluster_axis is None else cluster_axis
         current_idx = self.ag_semaphores_idx[semaphore_index]
         self.ag_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.ag_semaphore_handles[semaphore_index][current_idx]
 
     def get_and_cycle_rs_semaphore_handles(self, cluster_axis=None):
-        semaphore_index = 2 if not cluster_axis else cluster_axis
+        semaphore_index = 2 if cluster_axis is None else cluster_axis
         current_idx = self.rs_semaphores_idx[semaphore_index]
         self.rs_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.rs_semaphore_handles[semaphore_index][current_idx]
