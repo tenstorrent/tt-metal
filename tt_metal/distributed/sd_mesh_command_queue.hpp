@@ -37,7 +37,10 @@ public:
     std::optional<MeshTraceId> trace_id() const override;
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
-    void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
+    void enqueue_mesh_workload(
+        MeshWorkload& mesh_workload,
+        bool blocking,
+        const std::optional<MeshCoordinate>& offset = std::nullopt) override;
 
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},

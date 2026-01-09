@@ -30,7 +30,7 @@ private:
     bool runs_on_noc_multicast_only_cores();
     bool runs_on_noc_unicast_only_cores();
     void compile(MeshDevice* mesh_device);
-    void load_binaries(MeshCommandQueue& mesh_cq);
+    void load_binaries(MeshCommandQueue& mesh_cq, const MeshCoordinate& offset);
     void generate_dispatch_commands(MeshCommandQueue& mesh_cq);
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);

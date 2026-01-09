@@ -216,9 +216,14 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
 }
 
-void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+void FDMeshCommandQueue::enqueue_mesh_workload(
+    MeshWorkload& mesh_workload, bool blocking, const std::optional<MeshCoordinate>& offset) {
     auto lock = lock_api_function_();
     in_use_ = true;
+
+    // If no offset provided, use zero offset (no translation)
+    const MeshCoordinate effective_offset =
+        offset.value_or(MeshCoordinate::zero_coordinate(mesh_device_->shape().dims()));
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
@@ -333,6 +338,13 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // physical device tied to the program.
     TracyTTMetalEnqueueMeshWorkloadTrace(mesh_device_, mesh_workload, this->trace_id());
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
+        // Translate device_range from parent mesh coordinates to local submesh coordinates
+        auto translated_range = translate_range_by_offset(device_range, effective_offset, mesh_device_->shape());
+        if (!translated_range.has_value()) {
+            // This program's device_range doesn't intersect with this submesh, skip it
+            continue;
+        }
+
         auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
         TT_ASSERT(
             use_prefetcher_cache == program_cmd_seq.prefetcher_cache_used,
@@ -354,7 +366,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         if (sysmem_manager.get_bypass_mode()) {
             auto local_mesh_range = mesh_device_->get_view().get_local_mesh_coord_range();
-            auto local_device_range = local_mesh_range.intersection(device_range);
+            auto local_device_range = local_mesh_range.intersection(translated_range.value());
             if (local_device_range.has_value()) {
                 this->capture_program_trace_on_subgrid(
                     local_device_range.value(),
@@ -366,7 +378,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             }
         } else {
             this->write_program_cmds_to_subgrid(
-                device_range.intersection(mesh_device_->get_view().get_local_mesh_coord_range()).value(),
+                translated_range.value().intersection(mesh_device_->get_view().get_local_mesh_coord_range()).value(),
                 program_cmd_seq,
                 dispatch_metadata.stall_first,
                 dispatch_metadata.stall_before_program,

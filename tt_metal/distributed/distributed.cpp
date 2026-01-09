@@ -9,6 +9,7 @@
 #include "mesh_device.hpp"
 #include "mesh_trace.hpp"
 #include "mesh_workload_impl.hpp"
+#include "mesh_workload_utils.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
@@ -24,7 +25,7 @@ MeshCoordinate compute_submesh_offset(MeshDevice* parent_mesh, MeshDevice* subme
     return parent_mesh->get_view().find_device(submesh_origin_device->id());
 }
 
-// Helper to check if a parent coordinate falls within a mesh when translated by offset.
+// Helper to check if a parent coordinate falls within a submesh when translated by offset.
 // Returns true if (parent_coord - offset) is a valid coordinate in mesh_shape.
 bool is_coord_in_mesh_with_offset(
     const MeshCoordinate& parent_coord, const MeshCoordinate& offset, const MeshShape& mesh_shape) {
@@ -71,10 +72,10 @@ void EnqueueMeshWorkloadWithOffset(
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
-        mesh_workload.impl().load_binaries(mesh_cq);
+        mesh_workload.impl().load_binaries(mesh_cq, offset);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     }
-    mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
+    mesh_cq.enqueue_mesh_workload(mesh_workload, blocking, offset);
 }
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
@@ -111,31 +112,18 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         for (auto& submesh : submeshes) {
             auto offset = compute_submesh_offset(mesh_device, submesh.get());
 
-            // Check if this submesh has any programs
-            bool has_programs_for_submesh = false;
-            for (const auto& [device_range, program] : mesh_workload.get_programs()) {
-                for (const auto& coord : device_range) {
-                    if (is_coord_in_mesh_with_offset(coord, offset, submesh->shape())) {
-                        has_programs_for_submesh = true;
-                        break;
-                    }
-                }
-                if (has_programs_for_submesh) {
-                    break;
-                }
-            }
-
-            if (has_programs_for_submesh) {
-                for (uint8_t cq_id = 0; cq_id < submesh->num_hw_cqs(); ++cq_id) {
-                    auto& submesh_cq = submesh->mesh_command_queue(cq_id);
-                    EnqueueMeshWorkloadWithOffset(submesh_cq, mesh_workload, blocking, offset);
-                }
+            for (uint8_t cq_id = 0; cq_id < submesh->num_hw_cqs(); ++cq_id) {
+                auto& submesh_cq = submesh->mesh_command_queue(cq_id);
+                EnqueueMeshWorkloadWithOffset(submesh_cq, mesh_workload, blocking, offset);
             }
         }
         return;
     }
 
     // Non-parent mesh path (standalone mesh without submeshes)
+    // Use zero offset since device_range coordinates match the mesh's local coordinates
+    auto zero_offset = MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+
     bool has_programs_for_device = !mesh_workload.get_programs().empty();
 
     if (!has_programs_for_device) {
@@ -144,10 +132,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
-        mesh_workload.impl().load_binaries(mesh_cq);
+        mesh_workload.impl().load_binaries(mesh_cq, zero_offset);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     }
-    mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
+    mesh_cq.enqueue_mesh_workload(mesh_workload, blocking, zero_offset);
 }
 
 void EventSynchronize(const MeshEvent& event) {

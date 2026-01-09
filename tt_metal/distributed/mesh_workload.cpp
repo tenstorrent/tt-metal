@@ -36,6 +36,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
@@ -119,10 +120,11 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     finalize_offsets(mesh_device);
 }
 
-void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
+void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq, const MeshCoordinate& offset) {
     // Load binaries for all programs to their respective devices in the Mesh.
     // This is done per MeshDevice - if the same MeshWorkload is used on multiple
     // MeshDevices (e.g., submesh routing), binaries are loaded separately for each.
+    // The offset is used to translate device_range from parent mesh coordinates to local submesh coordinates.
     auto* mesh_device = mesh_cq.device();
     auto status = get_program_binary_status(mesh_device->id());
 
@@ -162,6 +164,13 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
         auto& kernel_bin_buf = kernel_bin_buf_.at(mesh_device->id());
         // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
         for (auto& [device_range, program] : this->programs_) {
+            // Translate device_range from parent mesh coordinates to local submesh coordinates
+            auto translated_range = translate_range_by_offset(device_range, offset, mesh_device->shape());
+            if (!translated_range.has_value()) {
+                // This program's device_range doesn't intersect with this submesh, skip it
+                continue;
+            }
+
             std::size_t kernel_bin_size =
                 program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
             global_kernel_bin_buf_config.size = kernel_bin_size;
@@ -174,7 +183,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             mesh_cq.enqueue_write_shard_to_sub_grid(
                 *kernel_bin_buf_view,
                 program.impl().get_program_transfer_info().binary_data.data(),
-                device_range,
+                translated_range.value(),
                 false);
 
             std::shared_ptr<Buffer> buffer_view = Buffer::create(

@@ -233,7 +233,10 @@ public:
     std::optional<MeshTraceId> trace_id() const override { return this->trace_id_; }
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override { return config_buffer_mgr_[index]; };
-    void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
+    void enqueue_mesh_workload(
+        MeshWorkload& mesh_workload,
+        bool blocking,
+        const std::optional<MeshCoordinate>& offset = std::nullopt) override;
 
     // TODO: This will error out for SD mesh command queues
     // - Need to add equivalent APIs for SD and expose via mesh command queue base or mesh command queue

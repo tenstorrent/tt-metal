@@ -74,7 +74,10 @@ public:
     uint32_t id() const { return id_; }
     virtual std::optional<MeshTraceId> trace_id() const = 0;
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
-    virtual void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) = 0;
+    // The offset parameter is used to translate device_range coordinates from parent mesh
+    // to local submesh coordinates. If not provided, no translation is performed (equivalent to zero offset).
+    virtual void enqueue_mesh_workload(
+        MeshWorkload& mesh_workload, bool blocking, const std::optional<MeshCoordinate>& offset = std::nullopt) = 0;
 
     // Specifies host data to be written to or read from a MeshBuffer shard.
     struct ShardDataTransfer {

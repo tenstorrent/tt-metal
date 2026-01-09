@@ -4,6 +4,7 @@
 
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"
+#include "mesh_workload_utils.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
@@ -68,14 +69,27 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
     TT_THROW("Not supported for slow dispatch");
 }
 
-void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+void SDMeshCommandQueue::enqueue_mesh_workload(
+    MeshWorkload& mesh_workload, bool blocking, const std::optional<MeshCoordinate>& offset) {
     auto lock = lock_api_function_();
     if (!blocking) {
         log_debug(
             tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload execution.", __FUNCTION__);
     }
+
+    // If no offset provided, use zero offset (no translation)
+    const MeshCoordinate effective_offset =
+        offset.value_or(MeshCoordinate::zero_coordinate(mesh_device_->shape().dims()));
+
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
-        for (const auto& coord : coord_range) {
+        // Translate coord_range from parent mesh coordinates to local submesh coordinates
+        auto translated_range = translate_range_by_offset(coord_range, effective_offset, mesh_device_->shape());
+        if (!translated_range.has_value()) {
+            // This program's coord_range doesn't intersect with this submesh, skip it
+            continue;
+        }
+
+        for (const auto& coord : translated_range.value()) {
             if (mesh_device_->is_local(coord)) {
                 auto* device = mesh_device_->get_device(coord);
                 tt_metal::detail::LaunchProgram(device, program, false);
@@ -83,7 +97,13 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         }
     }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
-        for (const auto& coord : coord_range) {
+        // Translate coord_range from parent mesh coordinates to local submesh coordinates
+        auto translated_range = translate_range_by_offset(coord_range, effective_offset, mesh_device_->shape());
+        if (!translated_range.has_value()) {
+            continue;
+        }
+
+        for (const auto& coord : translated_range.value()) {
             if (mesh_device_->is_local(coord)) {
                 auto* device = mesh_device_->get_device(coord);
                 tt_metal::detail::WaitProgramDone(device, program);
