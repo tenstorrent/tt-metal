@@ -23,7 +23,11 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // Get the cores for the program
-    auto cores = tt::tt_metal::CoreRangeSet({tt::tt_metal::CoreRange({0, 0}, {7, 7})});
+    std::vector<tt::tt_metal::CoreCoord> cores_vec = {
+        tt::tt_metal::CoreCoord({0, 9}),
+        // tt::tt_metal::CoreCoord({4, 0}),
+    };
+    auto cores = tt::tt_metal::CoreRangeSet(cores_vec);
 
     // Create CBs for the program
     // CBs used in the MOE operation
@@ -41,18 +45,19 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         ----------------------------------------------------------------------------------------
     */
 
-    // Define the CB configuration as a map: name -> tuple<CBIndex, DataFormat, bytes_per_tile, tiles_per_cb>
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t, uint32_t>> cb_specs = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, 1024, 2},
-        {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Bfp8_b, 1024, 2},
-        {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Bfp8_b, 1024, 1},
-        {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Bfp8_b, 1024, 1},
-        {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Bfp8_b, 1024, 1},
-        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Bfp8_b, 1024, 2},
-        {"cb_c2w_mm2", tt::CBIndex::c_6, tt::DataFormat::Bfp8_b, 1024, 1}};
+    // Define the CB configuration as a map: name -> tuple<CBIndex, DataFormat, tiles_per_cb>
+    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t>> cb_specs = {
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, 2},
+        {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Bfp8_b, 2},
+        {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Bfp8_b, 1},
+        {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Bfp8_b, 1},
+        {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Bfp8_b, 1},
+        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Bfp8_b, 2},
+        {"cb_c2w_mm2", tt::CBIndex::c_6, tt::DataFormat::Bfp8_b, 1}};
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles;
-    for (const auto& [name, index, dtype, bytes_per_tile, tiles_per_cb] : cb_specs) {
+    for (const auto& [name, index, dtype, tiles_per_cb] : cb_specs) {
+        uint32_t bytes_per_tile = tt::tile_size(dtype);
         auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, dtype}})
                              .set_page_size(index, bytes_per_tile);
 
@@ -117,13 +122,6 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
         }
-    }
-
-    auto all_worker_cores_ordered =
-        tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
-            tt::tt_metal::NOC::RISCV_0_default);
-    for (const auto& core : all_worker_cores_ordered) {
-        log_warning(tt::LogOp, "Worker core: {}", core.str());
     }
 
     return cached_program_t{std::move(program), MoESharedVariables{}};
