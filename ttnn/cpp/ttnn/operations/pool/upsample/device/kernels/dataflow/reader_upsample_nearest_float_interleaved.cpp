@@ -33,8 +33,7 @@ void kernel_main() {
     constexpr int32_t reciprocal_scale_h_fixed = get_compile_time_arg_val(7);  // input_h/output_h in Q16.16
     constexpr int32_t reciprocal_scale_w_fixed = get_compile_time_arg_val(8);  // input_w/output_w in Q16.16
 
-    // Suppress unused variable warnings
-    // Tensor accessor compile-time args start at index 10
+    // Tensor accessor compile-time args start at index 9
     constexpr auto src_args = TensorAccessorArgs<9>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_buffer_addr, aligned_stick_nbytes);
 

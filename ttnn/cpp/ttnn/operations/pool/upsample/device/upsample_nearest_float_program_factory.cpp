@@ -34,7 +34,6 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
     auto* const device = output_tensor.device();
 
     const auto& input_shape = input_tensor.logical_shape();
-    // const uint32_t input_batch = input_shape[0];
     const uint32_t input_height = input_shape[1];
     const uint32_t input_width = input_shape[2];
 

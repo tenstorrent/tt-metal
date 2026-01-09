@@ -555,32 +555,32 @@ def test_nearest_upsample_with_uneven_input_shards(
 @pytest.mark.parametrize(
     "input_shape, scale_factor_h, scale_factor_w",
     [
-        # Basic fractional upscaling
-        ((1, 8, 8, 64), 1.5, 1.5),
-        ((1, 16, 16, 128), 1.25, 1.25),
-        ((1, 8, 8, 32), 2.5, 2.5),
+        # Basic fractional upscaling (NCHW format: [N, C, H, W])
+        ([1, 64, 8, 8], 1.5, 1.5),
+        ([1, 128, 16, 16], 1.25, 1.25),
+        ([1, 32, 8, 8], 2.5, 2.5),
         # Asymmetric float scales
-        ((1, 8, 16, 64), 1.5, 2.0),
-        ((1, 16, 8, 128), 2.0, 1.5),
+        ([1, 64, 8, 16], 1.5, 2.0),
+        ([1, 128, 16, 8], 2.0, 1.5),
         # Downscaling
-        ((1, 16, 16, 64), 0.5, 0.5),
-        ((1, 32, 32, 128), 0.75, 0.75),
+        ([1, 64, 16, 16], 0.5, 0.5),
+        ([1, 128, 32, 32], 0.75, 0.75),
         # Mixed upscale/downscale
-        ((1, 8, 16, 64), 2.0, 0.5),
-        ((1, 16, 8, 128), 0.5, 2.0),
+        ([1, 64, 8, 16], 2.0, 0.5),
+        ([1, 128, 16, 8], 0.5, 2.0),
         # Typical ML shapes
-        ((1, 28, 28, 64), 2.0, 2.0),
+        ([1, 64, 28, 28], 2.0, 2.0),
     ],
 )
 def test_upsample_nearest_float_interleaved(device, input_shape, scale_factor_h, scale_factor_w):
     """Test upsample with float scale factors using interleaved memory."""
     torch.manual_seed(42)
 
-    batch, height, width, channels = input_shape
-    input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    # Input shape is NCHW, create tensor and permute to NHWC for ttnn
+    input_nchw = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_nhwc = input_nchw.permute(0, 2, 3, 1)
 
     # PyTorch reference (uses NCHW)
-    input_nchw = input_nhwc.permute(0, 3, 1, 2)
     torch_result_nchw = nn.functional.interpolate(
         input_nchw, scale_factor=(scale_factor_h, scale_factor_w), mode="nearest"
     )
