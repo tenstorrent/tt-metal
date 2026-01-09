@@ -14,7 +14,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
-#include <iostream>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -25,7 +24,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
-    std::cout << "START OF PROGRAM FACTORY\n";
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
@@ -58,7 +56,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     uint32_t num_shards_per_core;
     uint32_t num_cores_with_extra_shard;
     if (has_2d_shard_spec) {
-        std::cout << "Shard spec has value" << std::endl;
         const auto& shard_spec = a.shard_spec().value();
         shard_height = shard_spec.shape[0];
         shard_width = shard_spec.shape[1];
@@ -70,7 +67,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         num_shards_per_core = 1;
         num_cores_with_extra_shard = 0;
     } else {
-        std::cout << "ND shard spec has value" << std::endl;
         const auto& nd_shard_spec = a.nd_shard_spec().value();
         shard_height = nd_shard_spec.shard_shape[-2];
         shard_width = nd_shard_spec.shard_shape[-1];
@@ -93,10 +89,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         uint32_t num_cores = grid.num_cores();
         num_shards_per_core = total_shards / num_cores;
         num_cores_with_extra_shard = total_shards % num_cores;
-        std::cout << "total_shards: " << total_shards << std::endl;
-        std::cout << "num_cores: " << grid.num_cores() << std::endl;
-        std::cout << "num_shards_per_core: " << num_shards_per_core << std::endl;
-        std::cout << "num_cores_with_extra_shard: " << num_cores_with_extra_shard << std::endl;
         log_debug(
             tt::LogOp,
             "ND sharding: total_shards={}, cores={}, base_shards_per_core={}, extra={} (first extra cores get +1 "
