@@ -162,9 +162,9 @@ jobs:
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '-')
           export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-group.arch }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${{ matrix.test-group.arch }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          cat Models_Device_Perf_${{ matrix.test-group.arch }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
+          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${{ matrix.test-group.arch }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv || true
+          cat Models_Device_Perf_${{ matrix.test-group.arch }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv || true
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: Check device perf report exists
