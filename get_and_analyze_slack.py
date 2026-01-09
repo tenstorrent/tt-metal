@@ -188,6 +188,73 @@ def fetch_replies(client, channel_id, thread_ts):
     return replies
 
 
+def extract_failure_message_from_blocks(blocks: list) -> str:
+    """Extract FAILURE MESSAGE content from Slack blocks, including code blocks."""
+    failure_message_parts = []
+    found_failure_message_label = False
+    collecting_content = False
+
+    for block in blocks:
+        if block.get("type") == "rich_text":
+            elements = block.get("elements", [])
+            for element in elements:
+                if element.get("type") == "rich_text_section":
+                    sub_elements = element.get("elements", [])
+                    block_text = ""
+                    for sub_elem in sub_elements:
+                        if sub_elem.get("type") == "text":
+                            block_text += sub_elem.get("text", "")
+                        elif sub_elem.get("type") == "link":
+                            url = sub_elem.get("url", "")
+                            text = sub_elem.get("text", url)
+                            block_text += f"<{url}|{text}>"
+
+                    # Check if this block contains "FAILURE MESSAGE:"
+                    if "FAILURE MESSAGE:" in block_text.upper():
+                        found_failure_message_label = True
+                        collecting_content = True
+                        # Extract text after "FAILURE MESSAGE:" if any (not just dashes)
+                        parts = re.split(r"FAILURE MESSAGE:\s*", block_text, flags=re.IGNORECASE)
+                        if len(parts) > 1 and parts[1].strip() and parts[1].strip() not in ["---", "-"]:
+                            failure_message_parts.append(parts[1].strip())
+                    elif collecting_content:
+                        # We're collecting content after FAILURE MESSAGE label
+                        # Stop if we hit another field label
+                        if any(
+                            label in block_text.upper()
+                            for label in [
+                                "RELEVANT DEVELOPERS:",
+                                "RELEVANT FILES:",
+                                "NOTES:",
+                                "DISCLAIMER:",
+                                "COMMITS:",
+                            ]
+                        ):
+                            collecting_content = False
+                            break
+                        # Skip empty lines and dash-only lines
+                        if block_text.strip() and block_text.strip() not in ["---", "-", ""]:
+                            failure_message_parts.append(block_text.strip())
+                elif element.get("type") == "rich_text_preformatted":
+                    # Code block content - collect if we're in FAILURE MESSAGE section
+                    if found_failure_message_label and collecting_content:
+                        preformatted_elements = element.get("elements", [])
+                        code_content = ""
+                        for pre_elem in preformatted_elements:
+                            if pre_elem.get("type") == "text":
+                                code_content += pre_elem.get("text", "")
+                        if code_content.strip():
+                            failure_message_parts.append(code_content.strip())
+                            collecting_content = False  # Code block usually ends the section
+
+    if failure_message_parts:
+        # Join all parts with newlines
+        result = "\n".join(part for part in failure_message_parts if part.strip())
+        return result.strip()
+
+    return ""
+
+
 def extract_structured_info_from_reply(reply: dict) -> dict:
     """Extract structured information from any reply message."""
     reply_text = reply.get("text", "")
@@ -209,6 +276,12 @@ def extract_structured_info_from_reply(reply: dict) -> dict:
                                 url = sub_elem.get("url", "")
                                 text = sub_elem.get("text", url)
                                 full_text += f"<{url}|{text}>"
+                    elif element.get("type") == "rich_text_preformatted":
+                        # Handle code blocks (preformatted text)
+                        preformatted_elements = element.get("elements", [])
+                        for pre_elem in preformatted_elements:
+                            if pre_elem.get("type") == "text":
+                                full_text += pre_elem.get("text", "")
         if full_text:
             reply_text = full_text
 
@@ -221,10 +294,19 @@ def extract_structured_info_from_reply(reply: dict) -> dict:
         match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE | re.DOTALL)
         if match:
             value = match.group(1).strip()
+            # Remove leading/trailing dashes if the value is just dashes (empty code block)
+            if value.strip() == "---" or value.strip() == "-" * len(value.strip()):
+                # Look for actual content after the dashes or in code blocks
+                # Try to find content that follows the pattern but isn't just dashes
+                # This handles cases where FAILURE MESSAGE: is followed by dashes then actual content
+                pass  # Will return empty if it's just dashes
             # Preserve markdown links but convert to readable format: text (url)
             value = re.sub(r"<([^|>]+)\|([^>]+)>", r"\2 (\1)", value)
             # Also handle plain URLs
             value = re.sub(r"<([^>]+)>", r"\1", value)
+            # If result is just dashes, return empty string
+            if value.strip() in ["---", "-", "--"]:
+                return ""
             return value
         return ""
 
@@ -240,7 +322,16 @@ def extract_structured_info_from_reply(reply: dict) -> dict:
     failing_test = extract_field("FAILING TEST", reply_text)
     failing_run = extract_field("FAILING RUN", reply_text)
     scenario = extract_field("SCENARIO", reply_text)
-    failure_message = extract_field("FAILURE MESSAGE", reply_text)
+
+    # Special handling for FAILURE MESSAGE - extract from blocks if available to get code block content
+    failure_message = ""
+    if "blocks" in reply:
+        failure_message = extract_failure_message_from_blocks(reply.get("blocks", []))
+
+    # Fall back to regex extraction if blocks didn't yield a result
+    if not failure_message:
+        failure_message = extract_field("FAILURE MESSAGE", reply_text)
+
     relevant_developers = extract_field("RELEVANT DEVELOPERS", reply_text)
     relevant_files = extract_field("RELEVANT FILES", reply_text)
     notes = extract_field("NOTES", reply_text)
