@@ -405,14 +405,14 @@ def test_all_to_all_dispatch_trace(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 500000,
         }
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["mesh_device"]
+    "mesh_shape, mesh_device", [pytest.param((8, 2), (8, 2), id="8x2_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("batches_per_device", [32])
@@ -477,7 +477,7 @@ def test_decode_perf(
         warmup_iters,
         trace_mode,
         num_links=num_links,
-        scheme="random",
+        scheme="avg_perf",
         topology=topology,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,

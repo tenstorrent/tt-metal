@@ -51,7 +51,7 @@ def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random"
     factor = 1
     for _ in range(batch):
         for _ in range(seq_len):
-            if scheme == "random" or scheme == "worst_perf":
+            if scheme == "random" or scheme == "worst_perf" or scheme == "avg_perf":
                 tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=dtype))
             elif scheme == "sequential":
                 tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=dtype) * factor)
@@ -70,7 +70,7 @@ def gen_expert_mapping(experts, devices, scheme="random"):
     experts_per_devices = experts // devices
     device_expert_count = {d: 0 for d in range(devices)}
     for i in range(experts):
-        if scheme == "sequential" or scheme == "worst_perf":
+        if scheme == "sequential" or scheme == "worst_perf" or scheme == "avg_perf":
             if i > 0 and i % experts_per_devices == 0:
                 device_id += 1
             expert_mapping[0, 0, i, device_id] = 1
@@ -102,6 +102,14 @@ def get_metadata_tensor(expert_indices, expert_mapping, mesh_shape):
 def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, scheme="random"):
     expert_indices = torch.ones(batch, 1, seq_len, selected_experts_k, dtype=torch.int16) * -1
     current_expert = 0
+
+    # For avg_perf scheme, track how many tokens are assigned to each expert
+    if scheme == "avg_perf":
+        tokens = batch * seq_len
+        # Use ceiling division to ensure we have enough capacity, with minimum of 1
+        max_tokens_per_expert = max(1, (tokens * selected_experts_k + experts - 1) // experts)
+        expert_token_count = {e: 0 for e in range(experts)}
+
     for b in range(batch):
         for s in range(seq_len):
             for k in range(selected_experts_k):
@@ -114,6 +122,22 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
                     expert_indices[b, 0, s, k] = random.choice(
                         list(filter(lambda e: e not in current_indices, range(experts)))
                     )
+                elif scheme == "avg_perf":
+                    # Random selection but each expert is capped at max_tokens_per_expert
+                    # to simulate average performance case
+                    current_indices = expert_indices[b, 0, s, :].tolist()
+                    # First, try to find experts under the cap
+                    available_experts = [
+                        e
+                        for e in range(experts)
+                        if e not in current_indices and expert_token_count[e] < max_tokens_per_expert
+                    ]
+                    # Fallback: if all capped experts are used, pick any expert not in current token
+                    if not available_experts:
+                        available_experts = [e for e in range(experts) if e not in current_indices]
+                    chosen_expert = random.choice(available_experts)
+                    expert_indices[b, 0, s, k] = chosen_expert
+                    expert_token_count[chosen_expert] += 1
                 elif scheme == "worst_perf":  # worst perf is when the expert index is always on the last device
                     expert_indices[b, 0, s, k] = (
                         experts - 1
