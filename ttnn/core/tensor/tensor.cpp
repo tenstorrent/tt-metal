@@ -48,7 +48,7 @@ HostBuffer create_host_buffer_from_row_major_data(std::vector<T>&& data, const T
 
 }  // namespace
 
-static std::atomic<std::uint64_t> tensor_id_counter{0};
+std::atomic<std::uint64_t> Tensor::tensor_id_counter{0};
 
 Tensor::Tensor(
     HostBuffer buffer,
@@ -84,7 +84,8 @@ Tensor::Tensor(
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) : id_(next_id()) {
+Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    tensor_id(Tensor::next_tensor_id()) {
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
 }
 
@@ -102,19 +103,20 @@ Tensor& Tensor::operator=(const Tensor& other) {
     if (this == &other) {
         return *this;
     }
-    this->id_ = other.id_;
-    this->tensor_attributes = other.tensor_attributes;
+    this->tensor_id = other.tensor_id;
+    if (this->tensor_attributes != other.tensor_attributes) {
+        this->tensor_attributes = other.tensor_attributes;
+    }
     this->mesh_device_ = other.mesh_device_;
     return *this;
 }
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
-    if (this == &other) {
-        return *this;
+    this->tensor_id = other.tensor_id;
+    other.tensor_id = INVALID_TENSOR_ID;
+    if (this->tensor_attributes != other.tensor_attributes) {
+        this->tensor_attributes = std::move(other.tensor_attributes);
     }
-    this->id_ = other.id_;
-    other.id_ = INVALID_TENSOR_ID;
-    this->tensor_attributes = std::move(other.tensor_attributes);
     this->mesh_device_ = other.mesh_device_;
     return *this;
 }
@@ -148,9 +150,11 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_end();
 }
 
-std::uint64_t Tensor::get_id() const { return id_; }
+std::uint64_t Tensor::get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
 
-std::uint64_t Tensor::next_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
+void Tensor::set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id, std::memory_order_relaxed); }
+
+std::uint64_t Tensor::next_tensor_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
 
 template <typename T>
 Tensor Tensor::from_span(
@@ -486,6 +490,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
     output = allocate_tensor_on_device(tensor_spec, mesh_device);
+    output = tt::tt_metal::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
 
@@ -584,6 +589,16 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
     // TODO (#25340): Implement correct logic and add test for this
     return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, TensorTopology{});
 }
+
+// TODO #32045: Remove this function since IDs are assigned in the constructor.
+Tensor set_tensor_id(const Tensor& tensor) {
+    if (not GraphTracker::instance().is_enabled()) {
+        return tensor;
+    }
+    auto output = tensor;
+    output.tensor_id = Tensor::next_tensor_id();
+    return output;
+};
 
 Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
 

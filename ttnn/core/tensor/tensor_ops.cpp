@@ -45,6 +45,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, std::optional<Queue
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
     auto output = tensor_impl::to_host(input_tensor, blocking, cq_id);
+    output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -54,6 +55,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout) {
     TT_FATAL(
         input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
     Tensor output = tensor_impl::to_layout(input_tensor, target_layout);
+    output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -76,6 +78,7 @@ Tensor tensor_pad(
     }
 
     auto output = tensor_impl::pad(input_tensor, output_padded_shape, input_tensor_start, pad_value);
+    output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -88,6 +91,7 @@ Tensor tensor_unpad(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
     auto output = tensor_impl::unpad(input_tensor, output_tensor_start, output_tensor_end);
+    output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -114,6 +118,7 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
 
     auto output = input_tensor.pad(
         tt::tt_metal::Shape(std::move(padded_shape)), tt::tt_metal::Shape{std::move(input_tensor_start)}, pad_value);
+    output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -140,6 +145,7 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Sh
         output_tensor_end[index] = output_tensor_shape[index];
     }
     auto output = input_tensor.unpad(output_tensor_start, output_tensor_end);
+    output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -243,6 +249,7 @@ Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, c
             }
         },
         input_tensor.storage());
+    output = tt::tt_metal::set_tensor_id(output);
     tt::tt_metal::GraphTracker::instance().track_function_end(output);
     return output;
 }
