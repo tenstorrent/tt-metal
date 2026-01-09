@@ -28,6 +28,7 @@ on:
           - vovnet
           - ufld_v2
           - efficientnetb0
+          - gpt_oss_prepare_experts
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
