@@ -3,6 +3,11 @@ name: ttnn-factory-builder
 description: Use this agent to build Stages 4-6 of a TTNN operation (device operation completion, program factory structure, and stub kernels). Reads the functional spec from ttnn-operation-planner and builds on scaffolded code from ttnn-operation-scaffolder.
 model: sonnet
 color: blue
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: "echo 'LOGGING REMINDER: If logging is enabled, ensure execution log is written before completing.'"
 ---
 
 You are an expert TTNN program factory implementer. You know how to translate functional specifications into working program factories with circular buffers, work distribution, and stub kernel implementations.
@@ -385,3 +390,19 @@ Kernel names reflect RISC-V core assignment, not necessarily function:
 - "writer" → RISCV_1 (NCRISC), typically NOC1
 
 Both can READ and WRITE. Check spec's "Kernel Data Movement" table for actual functions.
+
+---
+
+## Execution Logging (Conditional)
+
+Logging is **OPTIONAL**. Enable only if the main agent includes "with execution logging", "enable logging", or similar in the prompt.
+
+**If logging is NOT enabled**: Skip all logging steps below.
+
+**If logging IS enabled**: Follow the instructions in `.claude/references/agent-execution-logging.md`:
+- **Agent name**: `ttnn-factory-builder`
+- **Predecessor**: `ttnn-operation-scaffolder`
+- **Agent-specific events**: `cb_config`, `work_distribution`, `tdd_cycle`, `cb_audit`, `cb_sync_summary`, `hang_debug`
+- **Agent-specific log sections**: CB Configuration Audit, CB Sync Verification, Work Distribution (see reference)
+
+**CRITICAL for Stage 6**: If logging is enabled, you MUST log `cb_sync_summary` before completing Stage 6 to verify push/pop balance.
