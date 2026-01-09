@@ -689,11 +689,11 @@ struct LowLatencyRoutingFieldsT {
     // Template-specific constants
     static constexpr uint32_t MAX_NUM_ENCODINGS = LowLatencyFields::BASE_HOPS * (1 + ExtensionWords);
 
-    // Block >32 hops until memory map is updated
+    // Block >64 hops until memory map is updated
     static_assert(
-        ExtensionWords <= 1,
-        "ERROR: 1D routing with >32 hops (ExtensionWords > 1) requires memory map updates.\n"
-        "Current L1 allocation (ROUTING_PATH_SIZE_1D = 256 bytes) supports max 32 hops.");
+        ExtensionWords <= 3,
+        "ERROR: 1D routing with >64 hops (ExtensionWords > 3) requires memory map updates.\n"
+        "Current L1 allocation (ROUTING_PATH_SIZE_1D = 1024 bytes) supports max 64 hops.");
 
     uint32_t value;                         // Active routing field (always read by router)
     uint32_t route_buffer[ExtensionWords];  // Extension storage
@@ -834,6 +834,8 @@ public:
 // Validate expected sizes with detailed checks
 static_assert(sizeof(LowLatencyPacketHeaderT<0>) == 48, "16-hop total must be 48B");
 static_assert(sizeof(LowLatencyPacketHeaderT<1>) == 64, "32-hop total must be 64B");
+static_assert(sizeof(LowLatencyPacketHeaderT<2>) == 64, "48-hop total must be 64B");  // NEW for 4×64
+static_assert(sizeof(LowLatencyPacketHeaderT<3>) == 64, "64-hop total must be 64B");  // NEW for 4×64
 
 // Conditional type selection based on injected define
 #ifndef FABRIC_1D_PKT_HDR_EXTENSION_WORDS
@@ -898,6 +900,12 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
 //              routing_fields:4 + dst_start:4 + mcast_params:8 + is_mcast_active:1)
 static_assert(sizeof(HybridMeshPacketHeaderT<19>) == 80, "19B buffer must result in 80B header (max capacity)");
 static_assert(sizeof(HybridMeshPacketHeaderT<35>) == 96, "35B buffer must result in 96B header (max capacity)");
+static_assert(
+    sizeof(HybridMeshPacketHeaderT<51>) == 112,
+    "51B buffer must result in 112B header (max capacity)");  // NEW for 4×64
+static_assert(
+    sizeof(HybridMeshPacketHeaderT<67>) == 128,
+    "67B buffer must result in 128B header (max capacity)");  // NEW for 4×64
 
 // Conditional type selection based on injected define
 #ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE

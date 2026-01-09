@@ -160,7 +160,7 @@ struct FabricHeaderConfig {
 #endif
 
     // Validation (Fail fast)
-    static_assert(LOW_LATENCY_EXTENSION_WORDS <= 1, "Only supports up to 1 extension word (32 hops)");
+    static_assert(LOW_LATENCY_EXTENSION_WORDS <= 3, "Only supports up to 3 extension words (64 hops)");
 };
 
 // Centralized routing field constants (single source of truth)
