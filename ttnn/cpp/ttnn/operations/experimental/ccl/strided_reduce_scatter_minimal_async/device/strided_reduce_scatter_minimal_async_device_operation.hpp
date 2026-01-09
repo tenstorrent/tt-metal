@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/operations/experimental/ccl/strided_reduce_scatter_minimal_async/device/strided_reduce_scatter_minimal_async_device_operation_types.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/strided_reduce_scatter_minimal_async/device/strided_reduce_scatter_ring_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
@@ -17,10 +17,9 @@ struct StridedReduceScatterMinimalAsyncDeviceOperation {
     using tensor_args_t = strided_reduce_scatter_minimal_async::detail::tensor_args_t;
     using spec_return_value_t = strided_reduce_scatter_minimal_async::detail::spec_return_value_t;
     using tensor_return_value_t = strided_reduce_scatter_minimal_async::detail::tensor_return_value_t;
-    // TODO: Create strided-specific program factory when implementing the actual strided logic
-    // For now, reuse the regular reduce scatter Ring factory (only Ring topology supported)
+    // Using strided-specific program factory (only Ring topology supported)
     // Note: Must be a variant even with single type for DeviceOperationConcept
-    using program_factory_t = std::variant<reduce_scatter_minimal_async::detail::RingReduceScatterMeshWorkloadFactory>;
+    using program_factory_t = std::variant<StridedRingReduceScatterMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

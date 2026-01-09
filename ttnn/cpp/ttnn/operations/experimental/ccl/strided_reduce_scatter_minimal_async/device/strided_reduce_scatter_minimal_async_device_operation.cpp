@@ -22,9 +22,8 @@ StridedReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
         "Strided reduce scatter only supports Ring topology, got {}",
         operation_attributes.topology);
 
-    // TODO: Create strided-specific program factory when implementing actual strided logic
-    // For now, use the regular Ring reduce scatter factory (wrapped in variant)
-    return program_factory_t{reduce_scatter_minimal_async::detail::RingReduceScatterMeshWorkloadFactory{}};
+    // Use the strided-specific Ring reduce scatter factory (wrapped in variant)
+    return program_factory_t{StridedRingReduceScatterMeshWorkloadFactory{}};
 }
 
 void StridedReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(

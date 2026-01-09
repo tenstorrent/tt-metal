@@ -51,6 +51,7 @@ target_sources(
             reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
             strided_reduce_scatter_minimal_async/device/strided_reduce_scatter_minimal_async_device_operation.hpp
             strided_reduce_scatter_minimal_async/device/strided_reduce_scatter_minimal_async_device_operation_types.hpp
+            strided_reduce_scatter_minimal_async/device/strided_reduce_scatter_ring_program_factory.hpp
             strided_reduce_scatter_minimal_async/strided_reduce_scatter_minimal_async.hpp
         FILE_SET kernels
         TYPE HEADERS
