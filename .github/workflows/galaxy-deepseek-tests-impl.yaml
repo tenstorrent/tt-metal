@@ -36,7 +36,8 @@ jobs:
         run: |
           all_tests=$(jq -n '[
             { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
-            { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" }
+            { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" },
+            { "name": "(Galaxy) DeepSeek codebase Q&A", "arch": "wormhole_b0", "model": "deepseek", "test-type": "codebase-qa", "timeout": 60, "owner_id": "U08H32XUS9W" }
           ]')
 
           # Filter matrix based on test-type selection
@@ -115,6 +116,33 @@ jobs:
         run: |
           pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
+      - name: Run DeepSeek codebase Q&A
+        if: ${{ matrix.test-group.test-type == 'codebase-qa' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+        run: |
+          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          
+          # Run DeepSeek demo with 3 codebase Q&A prompts directly
+          python models/demos/deepseek_v3/demo/demo.py \
+            --model-path "$DEEPSEEK_V3_HF_MODEL" \
+            --cache-dir "$DEEPSEEK_V3_CACHE" \
+            --max-new-tokens 256 \
+            --output-path generated/deepseek_codebase_qa_output.json \
+            --early_print_first_user \
+            "What is TT-Metal and what is its primary purpose?" \
+            "How does TT-Metal handle tensor operations on Tenstorrent hardware?" \
+            "What is the difference between TTNN and TT-Metal in the codebase?"
+          
+          # Display results summary
+          echo "=== Codebase Q&A Results Summary ==="
+          if [ -f generated/deepseek_codebase_qa_output.json ]; then
+            echo "Results saved to: generated/deepseek_codebase_qa_output.json"
+            python3 -c "import json; data = json.load(open('generated/deepseek_codebase_qa_output.json')); print(f'Total questions processed: {len(data.get(\"generations\", []))}'); [print(f'\nQ{i}: {g.get(\"prompt\", \"N/A\")}\nA{i}: {g.get(\"text\", \"N/A\")[:300]}...') for i, g in enumerate(data.get('generations', []), 1)]"
+          else
+            echo "Warning: Output file not found"
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
