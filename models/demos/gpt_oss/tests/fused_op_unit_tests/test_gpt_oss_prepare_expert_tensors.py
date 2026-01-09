@@ -901,3 +901,107 @@ def test_gpt_oss_prepare_expert_tensors_device_perf(mode, seq_len):
         batch_size=batch_size_per_device,
         input_sequence_length=seq_len,
     )
+
+
+@pytest.mark.parametrize(
+    "mode, seq_len",
+    [
+        ("decode", 1),
+    ],
+)
+def test_gpt_oss_prepare_expert_tensors_single_device_perf(mode, seq_len):
+    """Single-device performance test for gpt_oss_prepare_expert_tensors.
+
+    This test measures device kernel duration and op-to-op latency using Tracy profiler
+    on a single device. Since this op doesn't have CCL ops, it can run on single device.
+    """
+    assert mode == "decode", "This is a decode-only fused op"
+    assert seq_len == 1, "Decode mode always has seq_len=1"
+
+    # Batch size per device for decode_128 configuration
+    batch_size_per_device = 32
+
+    perf_profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = f"gpt_oss_prepare_expert_tensors_single_device_perf_{mode}_seq{seq_len}"
+    test_path = "models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_prepare_expert_tensors.py"
+    trace_filter = "trace" if mode == "decode" else "eager"
+    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
+    command = f'pytest {test_path}::test_gpt_oss_prepare_expert_tensors_single_device -k "{expr}"'
+
+    perf_profiler.start("run")
+    perf_profiler.start(step_name)
+    os.environ[DEVICE_PERF_ENV_VAR] = "1"
+    op_stats, total_kernel_ns, total_op_to_op_ns = _collect_device_perf(
+        command,
+        subdir="gpt_oss_fused_ops_device_perf",
+        warmup_iters=0,
+        use_signposts=True,
+    )
+    os.environ.pop(DEVICE_PERF_ENV_VAR, None)
+    perf_profiler.end(step_name)
+    perf_profiler.end("run")
+
+    assert op_stats, "No device perf stats captured."
+    total_kernel_us = total_kernel_ns / 1000.0
+    total_op_to_op_us = total_op_to_op_ns / 1000.0
+    avg_kernel_us = total_kernel_us / DEVICE_PERF_ITERS
+    avg_op_to_op_us = total_op_to_op_us / DEVICE_PERF_ITERS
+    logger.info(f"Device perf per-op averages (ns): {json.dumps(op_stats, indent=2)}")
+    logger.info(
+        f"Device perf totals ({DEVICE_PERF_ITERS} iterations): kernel={total_kernel_us:.3f} us, op_to_op={total_op_to_op_us:.3f} us"
+    )
+    logger.info(f"Device perf per-iteration averages: kernel={avg_kernel_us:.3f} us, op_to_op={avg_op_to_op_us:.3f} us")
+    assert total_kernel_ns > 0, "Total kernel duration must be positive."
+    assert total_op_to_op_ns >= 0, "Total op-to-op latency must be non-negative."
+
+    targets = DEVICE_PERF_TARGETS_US.get((mode, seq_len))
+    if targets is None:
+        logger.warning("No device perf targets configured; skipping perf assertions.")
+    else:
+        kernel_target_us = targets["kernel"]
+        op_to_op_target_us = targets["op_to_op"]
+        kernel_limit_us = kernel_target_us * (1 + DEVICE_PERF_MARGIN)
+        op_to_op_limit_us = op_to_op_target_us * (1 + DEVICE_PERF_MARGIN)
+        assert (
+            total_kernel_us <= kernel_limit_us
+        ), f"Kernel perf regression: {total_kernel_us:.3f}us exceeds {kernel_target_us:.3f}us (+{DEVICE_PERF_MARGIN:.0%})"
+        assert (
+            total_op_to_op_us <= op_to_op_limit_us
+        ), f"Op-to-op perf regression: {total_op_to_op_us:.3f}us exceeds {op_to_op_target_us:.3f}us (+{DEVICE_PERF_MARGIN:.0%})"
+
+    benchmark_data.add_measurement(
+        perf_profiler,
+        0,
+        step_name,
+        "total_kernel_duration_us",
+        total_kernel_us,
+    )
+    benchmark_data.add_measurement(
+        perf_profiler,
+        0,
+        step_name,
+        "total_op_to_op_latency_us",
+        total_op_to_op_us,
+    )
+    benchmark_data.add_measurement(
+        perf_profiler,
+        0,
+        step_name,
+        "avg_kernel_duration_us",
+        avg_kernel_us,
+    )
+    benchmark_data.add_measurement(
+        perf_profiler,
+        0,
+        step_name,
+        "avg_op_to_op_latency_us",
+        avg_op_to_op_us,
+    )
+    benchmark_data.save_partial_run_json(
+        perf_profiler,
+        run_type="gpt_oss_fused_ops_single_device_perf",
+        ml_model_name="gpt-oss",
+        batch_size=batch_size_per_device,
+        input_sequence_length=seq_len,
+    )

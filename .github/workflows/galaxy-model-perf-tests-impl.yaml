@@ -137,7 +137,18 @@ jobs:
               "timeout": 50,
               "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && export NO_PROMPT=1 && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 \"",
               "owner_id": "U09ELB03XRU"
-            } # Stephen Osborne
+            }, # Stephen Osborne
+            {
+              "name": "GPT-OSS op perf unit tests",
+              "model-type": "GPT-OSS",
+              "model-name": "gpt-oss",
+              "arch": "wormhole_b0",
+              "save-perf-data": true,
+              "timeout": 30,
+              "tracy": true,
+              "cmd": "HF_MODEL=/mnt/MLPerf/tt_dnn-models/gpt-oss/gpt-oss-20b/ TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/pytest models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_experts.py::test_gpt_oss_experts_device_perf -k \"decode\" && pytest models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_prepare_expert_tensors.py::test_gpt_oss_prepare_expert_tensors_device_perf -k \"decode\"",
+              "owner_id": "U08TJ70UFRT"
+            } # Harry Andrews
           ]' --compact-output)
 
           # Combine both arrays into full matrix
