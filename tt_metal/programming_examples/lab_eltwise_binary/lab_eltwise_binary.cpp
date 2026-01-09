@@ -22,7 +22,7 @@ using namespace tt::tt_metal;
 using namespace ttnn;
 
 // Define prefix path for kernel files to be an empty string if not set in the makefile.
-// this prefix enables overriding the default kernel path with a custom path, so that the
+// This prefix enables overriding the default kernel path with a custom path, so that the
 // example works in both development environment and when installed.
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -175,7 +175,7 @@ void eltwise_add_tensix(
     // Create ttnn::Tensor objects for the input and output data.
     // We use TILE layout as that's what the hardware natively operates on.
     // Tensors are allocated in device DRAM (i.e. DRAM that is directly attached to the Tensix processor,
-    // which is distinct from the the host DRAM).
+    // which is distinct from the host DRAM).
     TensorLayout tile_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig(BufferType::DRAM));
     TensorSpec t_spec(Shape({M, N}), tile_layout);
 
@@ -331,7 +331,7 @@ int main() {
         ProgramState prog_state = init_program();
         eltwise_add_tensix(src0_vec, src1_vec, result_vec, M, N, prog_state);
 
-        fmt::print("Output vector of size {}\n", result_vec.size());
+        log_info(tt::LogAlways, "Output vector of size {}", result_vec.size());
 
         // Validate results
         TT_FATAL(result_vec.size() == reference_result.size(), "Result vector size mismatch");
@@ -343,9 +343,8 @@ int main() {
 
             float relative_error = std::abs(actual - expected) / expected;
             if (relative_error > RELTOL) {
-                std::cerr << "Mismatch at index " << i << ": " << actual << " vs expected " << expected << std::endl;
-                std::cerr << "Expected relative tolerance: " << RELTOL << " actual relative error: " << relative_error
-                          << std::endl;
+                log_error(tt::LogAlways, "Mismatch at index {}: {} vs expected {}", i, actual, expected);
+                log_error(tt::LogAlways, "Expected relative tolerance: {} actual relative error: {}", RELTOL, relative_error);
                 pass = false;
             }
         }
@@ -353,14 +352,14 @@ int main() {
         pass &= prog_state.mesh_device->close();
 
     } catch (const std::exception& e) {
-        fmt::print(stderr, "Test failed with exception!\n");
-        fmt::print(stderr, "{}\n", e.what());
+        log_error(tt::LogAlways, "Test failed with exception!");
+        log_error(tt::LogAlways, "{}", e.what());
 
         throw;
     }
 
     if (pass) {
-        fmt::print("Test Passed\n");
+        log_info(tt::LogAlways, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }
