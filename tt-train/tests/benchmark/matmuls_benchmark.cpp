@@ -20,6 +20,7 @@
 #include <tt-metalium/device.hpp>
 #include <vector>
 
+#include "core/compute_kernel_config.hpp"
 #include "core/random.hpp"
 #include "impl/context/metal_context.hpp"
 #include "ttnn/device.hpp"
@@ -30,16 +31,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-
-// tt-train compute kernel config for matmul
-ttnn::WormholeComputeKernelConfig get_tt_train_matmul_config() {
-    ttnn::WormholeComputeKernelConfig config;
-    config.fp32_dest_acc_en = true;
-    config.math_approx_mode = false;
-    config.math_fidelity = MathFidelity::HiFi4;
-    config.packer_l1_acc = true;
-    return config;
-}
 
 struct CoreGridConfig {
     std::optional<ttnn::CoreGrid> core_grid;
@@ -161,7 +152,7 @@ BenchmarkResult RunSingleMatmulBenchmark(
     }
 
     // Get tt-train compute kernel config
-    auto compute_kernel_config = get_tt_train_matmul_config();
+    auto compute_kernel_config = ttml::core::ComputeKernelConfig::matmul();
 
     ttnn::Tensor output_tensor;
 
