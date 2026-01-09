@@ -62,7 +62,7 @@ std::vector<uint32_t> u32_from_u16_vector(const std::vector<uint16_t>& in) {
     std::vector<uint32_t> result(in.size() / 2);
     TT_ASSERT(in.size() % 2 == 0);
     for (size_t i = 0; i < in.size(); i += 2) {
-        auto val1 = std::bit_cast<bfloat16>(in.at(i));
+        auto val1 = std::bit_cast<bfloat16>(in[i]);
         auto val2 = std::bit_cast<bfloat16>(in.at(i + 1));
         auto packed = pack_two_bfloat16_into_uint32(std::make_pair(val1, val2));
         result[i / 2] = packed;
