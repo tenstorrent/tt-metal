@@ -72,8 +72,8 @@ jobs:
 
       - name: 'Tar build files'
         run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime"
-          tar --zstd -cvf ttm_any.tar.zst $ARTIFACT_PATHS
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools build/tt-train runtime data"
+          tar -I 'zstd --adapt=min=9 -T0' -cvhf ttm_any.tar.zst $ARTIFACT_PATHS
 
       - name: Set build artifact name
         id: set_build_artifact_name
