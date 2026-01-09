@@ -99,13 +99,13 @@ struct TileIterator {
         if (tile_idx_w < tile_end_w) {
             ++tile_idx_w;
             return true;
-        } else if (tile_idx_h < tile_end_h) {
+        }
+        if (tile_idx_h < tile_end_h) {
             tile_idx_w = 0;
             ++tile_idx_h;
             return true;
-        } else {
-            return false;
         }
+        return false;
     }
 
     auto operator*() { return std::make_tuple(this->h(), this->w()); }

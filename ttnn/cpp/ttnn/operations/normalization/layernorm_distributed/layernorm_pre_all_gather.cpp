@@ -34,15 +34,14 @@ ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
             std::nullopt,  // dtype
             LayerNormType::LAYERNORM,
             DistributedLayerNormStage::PRE_ALL_GATHER);
-    } else {
-        return ttnn::prim::layer_norm_pre_all_gather(
-            input_tensor,
-            LayerNormDistributedType::LAYERNORM,
-            dtype,
-            kernel_config_val,
-            program_config.value_or(LayerNormDefaultProgramConfig{}),
-            std::nullopt);  // use_2d_core_grid
     }
+    return ttnn::prim::layer_norm_pre_all_gather(
+        input_tensor,
+        LayerNormDistributedType::LAYERNORM,
+        dtype,
+        kernel_config_val,
+        program_config.value_or(LayerNormDefaultProgramConfig{}),
+        std::nullopt);  // use_2d_core_grid
 }
 
 }  // namespace ttnn::operations::normalization

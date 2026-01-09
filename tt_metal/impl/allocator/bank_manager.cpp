@@ -418,15 +418,21 @@ uint64_t BankManager::allocate_buffer(
     // vs. top-down allocation
     if (dependent_allocators.empty()) {
         auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
-        TT_FATAL(
-            address.has_value(),
-            "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
-            "store {} B, but bank size is only {} B",
-            size,
-            enchantum::to_string(buffer_type_),
-            num_banks,
-            size_per_bank,
-            bank_size());
+        if (!address.has_value()) {
+            auto mem_stats = alloc->get_statistics();
+            TT_FATAL(
+                false,
+                "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
+                "store {} B, but bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B)",
+                size,
+                enchantum::to_string(buffer_type_),
+                num_banks,
+                size_per_bank,
+                bank_size(),
+                mem_stats.total_allocated_bytes,
+                mem_stats.total_free_bytes,
+                mem_stats.largest_free_block_bytes);
+        }
         allocated_buffers_[allocator_id.get()].insert(address.value());
         // No neighbors, nothing to invalidate
         return address.value();
@@ -459,14 +465,21 @@ uint64_t BankManager::allocate_buffer(
         }
     }
 
-    TT_FATAL(
-        chosen.has_value(),
-        "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
-        "per bank)",
-        size,
-        enchantum::to_string(buffer_type_),
-        num_banks,
-        size_per_bank);
+    if (!chosen.has_value()) {
+        auto mem_stats = alloc->get_statistics();
+        TT_FATAL(
+            false,
+            "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
+            "per bank), bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B)",
+            size,
+            enchantum::to_string(buffer_type_),
+            num_banks,
+            size_per_bank,
+            bank_size(),
+            mem_stats.total_allocated_bytes,
+            mem_stats.total_free_bytes,
+            mem_stats.largest_free_block_bytes);
+    }
     TT_FATAL(
         chosen.value() % alignment_bytes_ == 0,
         "Chosen address {} is not aligned to {} B",
