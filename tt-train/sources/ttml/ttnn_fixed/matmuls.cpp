@@ -7,7 +7,6 @@
 #include "core/compute_kernel_config.hpp"
 
 namespace ttml::ttnn_fixed {
-
 tt::tt_metal::Tensor matmul(
     const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b, bool transpose_a, bool transpose_b) {
     const auto grid_size = a.device()->compute_with_storage_grid_size();
