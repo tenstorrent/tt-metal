@@ -734,6 +734,9 @@ jobs:
         run: |
           echo "::group::🔧 Database Setup"
 
+          # Install PostgreSQL client tools (pg_restore, pg_isready, psql)
+          apt-get update -qq && apt-get install -y -qq postgresql-client
+
           if ! python3 -c "import psycopg2" 2>/dev/null; then
             pip install -q psycopg2-binary
           fi
