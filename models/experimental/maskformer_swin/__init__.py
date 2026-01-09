@@ -31,21 +31,21 @@ __all__ = [
 
 
 _LAZY_IMPORTS = {
-    "MaskFormerSwinBackbone": ".backbone_swin",
-    "SwinBackboneConfig": ".backbone_swin",
-    "MaskFormerPixelDecoder": ".pixel_decoder",
-    "PixelDecoderConfig": ".pixel_decoder",
-    "MaskFormerTransformerDecoder": ".transformer_decoder",
-    "TransformerDecoderConfig": ".transformer_decoder",
-    "MaskFormerHeads": ".heads",
-    "MaskFormerHeadsConfig": ".heads",
-    "MaskFormerFallbackPipeline": ".fallback",
+    "MaskFormerSwinBackbone": ".tt.backbone_swin",
+    "SwinBackboneConfig": ".tt.backbone_swin",
+    "MaskFormerPixelDecoder": ".tt.pixel_decoder",
+    "PixelDecoderConfig": ".tt.pixel_decoder",
+    "MaskFormerTransformerDecoder": ".tt.transformer_decoder",
+    "TransformerDecoderConfig": ".tt.transformer_decoder",
+    "MaskFormerHeads": ".tt.heads",
+    "MaskFormerHeadsConfig": ".tt.heads",
+    "MaskFormerFallbackPipeline": ".tt.fallback",
 }
 
 
 def __getattr__(name: str) -> Any:  # pragma: no cover - exercised implicitly via imports
     if name == "parity":
-        module = import_module(".parity", __name__)
+        module = import_module(".tt.parity", __name__)
         globals()[name] = module
         return module
 
