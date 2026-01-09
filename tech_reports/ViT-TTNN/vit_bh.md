@@ -1026,43 +1026,11 @@ SDPA replaces the traditional multi-step attention computation with a single fus
 | Precision | Configurable per-op | HiFi4 with FP32 accumulation |
 | High-res scaling | O(seqL²) memory | O(seqL) memory with chunking |
 
+
 **Attention Flow with SDPA:**
 
-```
-Input: hidden_states [b, seqL, dim]
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  QKV Linear (Block Sharded)         │
-│  Output: [b, seqL, 3×dim]           │
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  nlp_create_qkv_heads               │
-│  Output: Q, K, V each [b, heads, seqL, head_size] │
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  Move to DRAM                       │
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  SDPA Kernel (Fused Attention)      │
-│  - Chunked Q×K^T computation        │
-│  - In-chunk softmax                 │
-│  - Chunked P×V accumulation         │
-│  Output: [b, heads, seqL, head_size]│
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  Concatenate Heads + Self-Output    │
-│  Output: [b, seqL, dim]             │
-└─────────────────────────────────────┘
-```
+![Multi-Head Attention in TT-NN](images_bh/mha_ttnn_1.png) 
+  ![](images_bh/sdpa_mha_ttnn_2.png)  
 
 #### 6.3.2 QKV Projection and Head Splitting
 
