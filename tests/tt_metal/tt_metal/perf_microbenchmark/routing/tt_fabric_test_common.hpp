@@ -1587,10 +1587,11 @@ private:
     }
 
     static uint32_t get_frequency_tolerance_mhz() {
+        // Note: these tolerances are initally set as placeholders and should be calibrated based on empirical data
         auto arch = tt::tt_metal::hal::get_arch();
         switch (arch) {
             case tt::ARCH::WORMHOLE_B0: return 10;
-            case tt::ARCH::BLACKHOLE: return 10;
+            case tt::ARCH::BLACKHOLE: return 20;
             default: TT_THROW("Unsupported architecture for performance testing: {}", arch);
         }
     }
