@@ -30,6 +30,7 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
@@ -56,7 +57,10 @@ jobs:
         timeout-minutes: 15
         env:
           TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
-          TT_METAL_KERNEL_PATH: /usr/share/${{ inputs.product }}/examples
+          # Make the repo root the runtime root so relative kernel paths like
+          # ttnn/examples/lab_eltwise_binary/kernels/dataflow/read_tiles.cpp resolve.
+          TT_METAL_RUNTIME_ROOT: ${{ github.workspace }}
+          TT_METAL_HOME: ${{ github.workspace }}
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
           CC: gcc-12
