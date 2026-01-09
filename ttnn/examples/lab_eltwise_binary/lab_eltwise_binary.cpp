@@ -160,10 +160,10 @@ void eltwise_add_tensix(
     const std::vector<bfloat16>& a,
     const std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
-    const size_t M,
-    const size_t N,
+    const uint32_t M,
+    const uint32_t N,
     ProgramState& prog_state) {
-    const size_t total_elements = M * N;
+    const uint32_t total_elements = M * N;
     TT_FATAL(a.size() == total_elements, "Input vectors must have size M * N");
     TT_FATAL(a.size() == b.size(), "Input vectors must have the same size");
     TT_FATAL(output.size() == a.size(), "Output vector must have the same size as input vectors");
@@ -300,8 +300,8 @@ int main() {
     try {
         // Define some constants that will be used throughout the program.
         // We will be adding two matrices of shape MxN
-        constexpr size_t M = 640;  // user-defined
-        constexpr size_t N = 640;  // user-defined
+        constexpr uint32_t M = 640;  // user-defined
+        constexpr uint32_t N = 640;  // user-defined
 
         // In C++, the matrices are represented as vectors, to emphasize that memory
         // space is one-dimensional in general.
