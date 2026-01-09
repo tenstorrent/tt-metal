@@ -244,28 +244,28 @@ string(REPLACE ${PROJECT_NAME} ${PROJECT_NAME_LOWER} CMAKE_INSTALL_DOCDIR ${CMAK
 # (some dependencies use CMAKE_INSTALL_LIBDIR which may be lib64 on Fedora/RHEL,
 # while our main libraries are forced to lib for CI tar artifacts)
 # This runs at configure time, before any libraries are built
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "lib")
-    # Create symlink lib64 -> lib so libraries in lib are accessible via lib64 path
-    # This allows install(TARGETS) and other tools to find libraries regardless of which path they check
-    # If lib64 already exists as a directory, the symlink creation will fail, which is acceptable
-    # (libraries will just be split between lib and lib64 in that case)
-    execute_process(
-        COMMAND
-            ${CMAKE_COMMAND} -E create_symlink lib lib64
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        RESULT_VARIABLE symlink_result
-        ERROR_QUIET
-        OUTPUT_QUIET
-    )
-    if(symlink_result EQUAL 0)
-        message(STATUS "Created symlink lib64 -> lib for unified library location")
-    else()
-        # lib64 may already exist as a directory (created by dependencies)
-        # This is fine - libraries will be split between lib and lib64
-        message(STATUS "lib64 already exists, libraries may be split between lib and lib64")
-    endif()
-endif()
+#file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+#if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "lib")
+#    # Create symlink lib64 -> lib so libraries in lib are accessible via lib64 path
+#    # This allows install(TARGETS) and other tools to find libraries regardless of which path they check
+#    # If lib64 already exists as a directory, the symlink creation will fail, which is acceptable
+#    # (libraries will just be split between lib and lib64 in that case)
+#    execute_process(
+#        COMMAND
+#            ${CMAKE_COMMAND} -E create_symlink lib lib64
+#        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+#        RESULT_VARIABLE symlink_result
+#        ERROR_QUIET
+#        OUTPUT_QUIET
+#    )
+#    if(symlink_result EQUAL 0)
+#        message(STATUS "Created symlink lib64 -> lib for unified library location")
+#    else()
+#        # lib64 may already exist as a directory (created by dependencies)
+#        # This is fine - libraries will be split between lib and lib64
+#        message(STATUS "lib64 already exists, libraries may be split between lib and lib64")
+#    endif()
+#endif()
 
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)

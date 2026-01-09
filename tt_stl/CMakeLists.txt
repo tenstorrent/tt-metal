@@ -56,9 +56,6 @@ target_precompile_headers(
 
 target_link_libraries(metal_common_pch PRIVATE tt_stl)
 
-# Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
-tt_set_library_rpath(tt_stl)
-
 # Output library directly to build/lib (not build/lib64) for CI tar artifacts.
 # This matches the pattern used by tt_metal and other core libraries.
 # On Fedora/AlmaLinux (where CMAKE_INSTALL_LIBDIR=lib64), the top-level symlink
@@ -74,22 +71,8 @@ set_target_properties(
             "${CMAKE_BINARY_DIR}/lib"
 )
 
-# Debug diagnostic - runs at install time to show what CMake thinks the target file is
-install(
-    CODE
-        "
-        message(STATUS \"tt_stl install diagnostic:\")
-        message(STATUS \"  CMAKE_BINARY_DIR: ${CMAKE_BINARY_DIR}\")
-        message(STATUS \"  CMAKE_INSTALL_LIBDIR: ${CMAKE_INSTALL_LIBDIR}\")
-        message(STATUS \"  Expected library path: ${CMAKE_BINARY_DIR}/lib/libtt_stl.so\")
-        execute_process(COMMAND ls -la \"${CMAKE_BINARY_DIR}/lib/\" RESULT_VARIABLE ls_result)
-        if(NOT ls_result EQUAL 0)
-            message(STATUS \"  Directory ${CMAKE_BINARY_DIR}/lib/ does not exist or is not accessible\")
-        endif()
-        "
-)
-
-# Standard install - matches tt_metal's pattern which works on both Ubuntu and Fedora
+# Install EXPORT and FILE_SET via install(TARGETS) - but NOT the library itself
+# because install(TARGETS) LIBRARY has path resolution issues when LIBRARY_OUTPUT_DIRECTORY is set
 install(
     TARGETS
         tt_stl
@@ -102,6 +85,24 @@ install(
         DESTINATION COMPONENT
         metalium-dev
 )
+
+# Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
+tt_set_library_rpath(tt_stl)
+
+# Install the library file manually using install(CODE) to work around CMake's
+# install(TARGETS) LIBRARY path resolution bug when LIBRARY_OUTPUT_DIRECTORY is set.
+# The diagnostic proves the file exists at build/lib/libtt_stl.so, but install(TARGETS) fails.
+#install(
+#    CODE
+#        "
+#        set(_src \"${CMAKE_BINARY_DIR}/lib/libtt_stl.so\")
+#        set(_dst \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
+#        message(STATUS \"Installing tt_stl library: \${_src} -> \${_dst}/libtt_stl.so\")
+#        file(INSTALL DESTINATION \"\${_dst}\" TYPE SHARED_LIBRARY FILES \"\${_src}\")
+#        "
+#    COMPONENT
+#        metalium-runtime
+#)
 
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(tests)
