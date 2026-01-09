@@ -440,7 +440,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                     virtual_core.y,                                                // out_ready_sem_noc0_y
                     multidevice_semaphores.at(dir).address(),                      // out_ready_fwd_semaphore
                     multidevice_semaphores.at(num_directions_per_link).address(),  // batch_ready_semaphore
-                    true,                                                          // use_barrier_sem
                     barrier_semaphore.address(),                                   // barrier_sem
                     dir,                                                           // direction
                     chunks_per_sync_val,                                           // chunks_per_sync
