@@ -310,14 +310,17 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         },
         storage);
 
-    std::uint64_t tensor_id = t.get_id();
-    if (tensor_id == Tensor::INVALID_TENSOR_ID) {
-        log_warning(
+    // TODO #32045: Remove the check for INVALID_TENSOR_ID since IDs are assigned in the constructor.
+    std::uint64_t tensor_id = t.tensor_id;
+    if (tensor_id == tt::tt_metal::Tensor::INVALID_TENSOR_ID) {
+        log_debug(
             tt::LogAlways,
-            "Tensor doesn't have a valid ID, this tensor must have been moved and should therefore not be tracked");
-        return -1;
+            "Tensor doesn't have tensor_id (sentinel value is INVALID_TENSOR_ID), generating new one. Ideally this "
+            "should not happen. "
+            "Please set tensor_id "
+            "for this tensor ahead of time.");
+        tensor_id = tt::tt_metal::Tensor::next_tensor_id();
     }
-
     node_id tensor_counter = tensor_id_to_counter.contains(tensor_id) ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.logical_shape();
 
