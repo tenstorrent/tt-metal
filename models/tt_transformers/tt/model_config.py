@@ -1779,6 +1779,9 @@ class ModelArgs:
                     # Merge vision config (merge_vision_config is safe for all models - it only adds missing keys)
                     merged_vision_config = merge_vision_config(config)
                     self._set_vision_params({"vision_config": merged_vision_config})
+
+                # Set is_multimodal using original config that has vision_config
+                self.is_multimodal = "vision_config" in config or self.is_vision()
             else:
                 self._set_params_from_dict(config)
         else:
@@ -1945,23 +1948,7 @@ class ModelArgs:
         else:
             # Always HuggingFace since we only support HF_MODEL now
             if self.from_hf_url:
-                # Use get_hf_model_cls() from main branch, but handle special cases
-                # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-                if "Qwen2.5-VL" in self.model_name:
-                    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                        Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                    )
-
-                    model_cls = AutoModelForCausalLM
-                    print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
-                elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                    # Special case Mistral-Small-3.1-24B-Instruct-2503: HF's AutoModel doesn't work,
-                    # similar to Qwen2.5-VL, until fully integrated into a HF release
-                    from transformers import Mistral3ForConditionalGeneration
-
-                    model_cls = Mistral3ForConditionalGeneration
-                else:
-                    model_cls = self.get_hf_model_cls()
+                model_cls = self.get_hf_model_cls()
                 model = model_cls.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto",
@@ -2526,23 +2513,7 @@ class ModelArgs:
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
-            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-            if "Qwen/Qwen2.5-VL" in self.model_name:
-                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                )
-
-                model_cls = AutoModelForCausalLM
-            elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                from transformers import AutoConfig
-                from transformers import Mistral3ForConditionalGeneration as AutoModelForCausalLM
-
-                model_cls = AutoModelForCausalLM
-            else:
-                from transformers import AutoConfig, AutoModelForCausalLM
-
-                model_cls = AutoModelForCausalLM  # Conservative: Use AutoModelForCausalLM for standard models
+            model_cls = self.get_hf_model_cls()
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
@@ -2659,15 +2630,9 @@ class ModelArgs:
                 from transformers import Gemma3ForConditionalGeneration
 
                 model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
-            elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:  # Minimal addition
-                from transformers import Mistral3ForConditionalGeneration
-
-                model = Mistral3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, torch_dtype=torch.bfloat16)
             else:
-                from transformers import AutoModelForCausalLM
-
                 if self.cached_hf_model is None:
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
                     self.cached_hf_model = model
                 else:
                     model = self.cached_hf_model
