@@ -47,7 +47,9 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
-# Import helper functions for proper cos/sin generation and transformation matrix
+# Import helper functions for proper cos/sin generation and transformation matrix.
+# Cos/sin caches in this test are generated using the production code path via
+# `compute_gather_cos_sin`, ensuring alignment with model runtime behavior.
 from models.tt_transformers.tt.common import (
     get_rot_transformation_mat,
     RopeScalingLlama3,
