@@ -652,66 +652,66 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<tt::tt_metal::experimental::GlobalCircularBuffer>();
     GraphArgumentSerializer::register_type<tt::tt_metal::IDevice>();
 
-    // Unary operation types
-    GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<float>>();
-    GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<int>>();
-    GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<unsigned int>>();
-    GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>>();
+    // Unary operation types - commented out due to ASAN compilation issues
+    // GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<float>>();
+    // GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<int>>();
+    // GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<unsigned int>>();
+    // GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>>();
 
-    // Variant of string and BasicUnaryWithParam (used in some operations)
-    GraphArgumentSerializer::register_type<
-        std::variant<std::string, ttnn::operations::unary::BasicUnaryWithParam<float>>>();
+    // Variant of string and BasicUnaryWithParam (used in some operations) - commented out due to ASAN compilation
+    // issues GraphArgumentSerializer::register_type<
+    //     std::variant<std::string, ttnn::operations::unary::BasicUnaryWithParam<float>>>();
 
     // Reshape mode
     GraphArgumentSerializer::register_type<ttnn::TileReshapeMapMode>();
 
-    // Program configs - LayerNorm
-    GraphArgumentSerializer::register_type<ttnn::operations::normalization::LayerNormDefaultProgramConfig>();
-    GraphArgumentSerializer::register_type<ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>();
-    GraphArgumentSerializer::register_type<ttnn::operations::normalization::LayerNormProgramConfig>();
+    // Program configs - LayerNorm - commented out due to ASAN compilation issues
+    // GraphArgumentSerializer::register_type<ttnn::operations::normalization::LayerNormDefaultProgramConfig>();
+    // GraphArgumentSerializer::register_type<ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>();
+    // GraphArgumentSerializer::register_type<ttnn::operations::normalization::LayerNormProgramConfig>();
 
-    // Program configs - Softmax
-    GraphArgumentSerializer::register_type<ttnn::operations::normalization::SoftmaxDefaultProgramConfig>();
-    GraphArgumentSerializer::register_type<ttnn::operations::normalization::SoftmaxShardedMultiCoreProgramConfig>();
-    GraphArgumentSerializer::register_type<ttnn::operations::normalization::SoftmaxProgramConfig>();
+    // Program configs - Softmax - commented out due to ASAN compilation issues
+    // GraphArgumentSerializer::register_type<ttnn::operations::normalization::SoftmaxDefaultProgramConfig>();
+    // GraphArgumentSerializer::register_type<ttnn::operations::normalization::SoftmaxShardedMultiCoreProgramConfig>();
+    // GraphArgumentSerializer::register_type<ttnn::operations::normalization::SoftmaxProgramConfig>();
 
-    // SDPA config
-    GraphArgumentSerializer::register_type<ttnn::operations::transformer::SDPAProgramConfig>();
+    // SDPA config - commented out due to ASAN compilation issues
+    // GraphArgumentSerializer::register_type<ttnn::operations::transformer::SDPAProgramConfig>();
 
-    // Conv2d config
-    GraphArgumentSerializer::register_type<ttnn::operations::conv::conv2d::Conv2dConfig>();
+    // Conv2d config - commented out due to ASAN compilation issues
+    // GraphArgumentSerializer::register_type<ttnn::operations::conv::conv2d::Conv2dConfig>();
 
-    // Op slicing config
-    GraphArgumentSerializer::register_type<ttnn::operations::op_slicing::Op2DSliceConfig>();
+    // Op slicing config - commented out due to ASAN compilation issues
+    // GraphArgumentSerializer::register_type<ttnn::operations::op_slicing::Op2DSliceConfig>();
 
     // Embedding type
     GraphArgumentSerializer::register_type<ttnn::operations::embedding::EmbeddingsType>();
 
-    // Fabric topology
-    GraphArgumentSerializer::register_type<tt::tt_fabric::Topology>();
+    // Fabric topology - commented out due to ASAN compilation issues
+    // GraphArgumentSerializer::register_type<tt::tt_fabric::Topology>();
 
-    // xy_pair
-    GraphArgumentSerializer::register_type<tt::xy_pair>();
+    // xy_pair - commented out due to ASAN compilation issues
+    // GraphArgumentSerializer::register_type<tt::xy_pair>();
 
-    // Compute kernel configs
-    GraphArgumentSerializer::register_type<ttnn::GrayskullComputeKernelConfig>();
-    GraphArgumentSerializer::register_type<ttnn::WormholeComputeKernelConfig>();
-    GraphArgumentSerializer::register_type<
-        std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>>();
+    // Compute kernel configs - commented out due to ASAN compilation issues
+    // GraphArgumentSerializer::register_type<ttnn::GrayskullComputeKernelConfig>();
+    // GraphArgumentSerializer::register_type<ttnn::WormholeComputeKernelConfig>();
+    // GraphArgumentSerializer::register_type<
+    //     std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>>();
 
-    // Matmul program configs
-    GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreProgramConfig>();
-    GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>();
-    GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>();
-    GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>();
-    GraphArgumentSerializer::register_type<
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>();
-    GraphArgumentSerializer::register_type<std::variant<
-        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>>();
+    // Matmul program configs - commented out due to ASAN compilation issues
+    // GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreProgramConfig>();
+    // GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>();
+    // GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>();
+    // GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>();
+    // GraphArgumentSerializer::register_type<
+    //     ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>();
+    // GraphArgumentSerializer::register_type<std::variant<
+    //     ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
+    //     ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
+    //     ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
+    //     ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
+    //     ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>>();
 
     // Note: std::nullopt_t is already handled specially and cannot be registered as a template parameter
 }
