@@ -159,10 +159,9 @@ Tensor create_typed_tt_tensor_from_py_data(
             output = output.to_device(device, tensor_spec.memory_config(), cq_id);
         }
         return output;
-    } else {
-        return Tensor::from_span(
-            tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
     }
+    return Tensor::from_span(
+        tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
 }
 
 // Preprocess the python tensor, optionally performing dtype conversion.
