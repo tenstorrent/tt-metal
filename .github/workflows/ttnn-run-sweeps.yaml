@@ -734,8 +734,12 @@ jobs:
         run: |
           echo "::group::🔧 Database Setup"
 
-          # Install PostgreSQL client tools (pg_restore, pg_isready, psql)
-          apt-get update -qq && apt-get install -y -qq postgresql-client
+          # Install PostgreSQL 18 client tools (pg_restore, pg_isready, psql)
+          # Need v18 to match the postgres:18 service container
+          apt-get update -qq && apt-get install -y -qq gnupg lsb-release
+          echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+          apt-get update -qq && apt-get install -y -qq postgresql-client-18
 
           if ! python3 -c "import psycopg2" 2>/dev/null; then
             pip install -q psycopg2-binary
