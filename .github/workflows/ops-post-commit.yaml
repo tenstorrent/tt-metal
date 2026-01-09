@@ -110,7 +110,7 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
     container:
-      image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -151,6 +151,41 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U08VC9954CE # David Popov
+
+      # Create perf report
+      - name: Merge test reports
+        id: generate-device-perf-report
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          TRACY_NO_INVARIANT_CHECK: 1
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '-')
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-group.arch }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${{ matrix.test-group.arch }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_${{ matrix.test-group.arch }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
+          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+
+      - name: Check device perf report exists
+        id: check-device-perf-report
+        if: ${{ !cancelled() }}
+        run: |
+          test -f ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
+
+      - name: Clean test name for artifact
+        if: ${{ !cancelled() }}
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '-')
+          echo "ARTIFACT_NAME=device-perf-report-csv-${{ matrix.test-group.arch }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
+
+      - name: Upload device perf report
+        timeout-minutes: 5
+        if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

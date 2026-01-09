@@ -495,6 +495,7 @@ jobs:
           test -f ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - name: Clean test name for artifact
+        if: ${{ !cancelled() }}
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
           echo "ARTIFACT_NAME=device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
