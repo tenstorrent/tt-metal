@@ -140,7 +140,9 @@ jobs:
           done
 
           # Process standalone models with single demo test each
-          for standalone in $(echo "$standalone_models" | jq -c '.[]'); do
+          standalone_count=$(echo "$standalone_models" | jq 'length')
+          for ((i=0; i<standalone_count; i++)); do
+            standalone=$(echo "$standalone_models" | jq -c ".[$i]")
             model_name=$(echo "$standalone" | jq -r '.name')
             test_path=$(echo "$standalone" | jq -r '.test_path')
             test_args=$(echo "$standalone" | jq -r '.test_args')
@@ -153,14 +155,14 @@ jobs:
               CACHE_PATH="/mnt/MLPerf/huggingface/tt_cache"
             fi
 
-            # Add standalone model test to matrix
-            standalone_test=$(jq -n \
+            # Add standalone model test to matrix using proper JSON construction
+            matrix=$(echo "$matrix" | jq -c \
               --arg model "$model_name" \
               --arg test_path "$test_path" \
               --arg test_args "$test_args" \
               --arg cache "$CACHE_PATH" \
               --argjson timeout "$timeout" \
-              '{
+              '. + [{
                 "model": $model,
                 "name": "Demo Test",
                 "test_path": $test_path,
@@ -168,9 +170,7 @@ jobs:
                 "cache_path": $cache,
                 "timeout": $timeout,
                 "model_type": "standalone"
-              }')
-
-            matrix=$(echo "$matrix" | jq -c --argjson new "[$standalone_test]" '. + $new')
+              }]')
           done
 
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
