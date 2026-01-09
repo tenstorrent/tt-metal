@@ -10,7 +10,7 @@ on:
         description: "T3K profiler"
         required: false
         type: boolean
-        default: false
+        default: true
       run_galaxy_profiler:
         description: "Galaxy profiler"
         required: false
@@ -20,17 +20,17 @@ on:
         description: "Blackhole profiler"
         required: false
         type: boolean
-        default: false
+        default: true
       run_n300_profiler:
         description: "N300 profiler"
         required: false
         type: boolean
-        default: false
+        default: true
       run_n150_profiler:
         description: "N150 profiler"
         required: false
         type: boolean
-        default: false
+        default: true
       debug_build:
         description: "Use RelWithDebInfo build (instead of Release)."
         required: false
