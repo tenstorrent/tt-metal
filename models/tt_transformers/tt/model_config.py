@@ -2626,17 +2626,12 @@ class ModelArgs:
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
-            if "gemma-3" in self.model_name:
-                from transformers import Gemma3ForConditionalGeneration
-
-                model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
+            if self.cached_hf_model is None:
+                model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+                self.cached_hf_model = model
             else:
-                if self.cached_hf_model is None:
-                    model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
-                    self.cached_hf_model = model
-                else:
-                    model = self.cached_hf_model
-                model.model.layers = model.model.layers[: self.n_layers]
+                model = self.cached_hf_model
+            model.model.layers = model.model.layers[: self.n_layers]
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim)
             return wrapper
