@@ -174,7 +174,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                     dim=3,
                     memory_config=input_output_memory_config,
                     topology=ttnn.Topology.Linear,
-                    num_links=3,
+                    num_links=1,
                 ),
                 "revert_tp": AllGatherAsyncConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -218,7 +218,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                     dim=3,
                     memory_config=memory_config,
                     topology=ttnn.Topology.Linear,
-                    num_links=3,
+                    num_links=1,
                 ),
                 "revert_tp": AllGatherAsyncConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
