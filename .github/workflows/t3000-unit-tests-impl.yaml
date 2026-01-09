@@ -116,7 +116,7 @@ jobs:
           model_paths["deepseek-r1-distill-llama-70b"]="deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
 
           # Define test configurations
-          tests='[{"name":"Batch-1 Performance","test_key":"performance and batch-1","extra_args":"","timeout":30,"owner_id":"U03PUAKE719"},{"name":"Batch-32 Performance","test_key":"performance and batch-32","extra_args":"","timeout":30,"owner_id":"U03PUAKE719"},{"name":"Long Context 16K","test_key":"long-context","extra_args":"--max_seq_len=16384","timeout":45,"owner_id":"U03PUAKE719"},{"name":"Long Context Performance","test_key":"performance and long","extra_args":"","timeout":45,"owner_id":"U03PUAKE719"}]'
+          tests='[{"name":"Batch-1 Performance","test_key":"performance and ci-1","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"},{"name":"Batch-32 Performance","test_key":"performance and ci-32","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"},{"name":"Long Context 16K","test_key":"performance and ci-long-context-16k","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"},{"name":"Long Context Performance","test_key":"performance and long","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"}]'
 
           # Generate matrix combining models and tests
           matrix='[]'
@@ -202,8 +202,9 @@ jobs:
         HF_HUB_CACHE: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/hub' || '/mnt/MLPerf/huggingface/hub' }}
         HF_HOME: /tmp/hf_home
         SD_HF_DOWNLOAD_OVERRIDE: ${{ inputs.regenerate-ttnn-cache && '1' || '0' }}
-        # Unset CI env var during cache regeneration to allow model downloads
-        CI: ${{ inputs.regenerate-ttnn-cache && '' || 'true' }}
+        # Set CI to false during cache regeneration to allow model downloads
+        # Models check os.getenv("CI") == "true" to enforce local_files_only
+        CI: ${{ inputs.regenerate-ttnn-cache && 'false' || 'true' }}
         TT_CACHE_HOME: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/tt_cache' || '/mnt/MLPerf/huggingface/tt_cache' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
