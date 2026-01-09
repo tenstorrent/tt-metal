@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include <iostream>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -93,6 +92,7 @@ void CompareKernelVsReference(
 
     // Forward pass - reference implementation
     auto result_reference = swiglu_forward_reference(input_data, w1_data, w2_data, w3_data);
+
     // Verify shapes match
     EXPECT_EQ(result_kernel_xtensor.shape(), result_reference.shape())
         << "Shape mismatch between kernel and reference results";
@@ -210,8 +210,6 @@ TEST_F(SwiGLUOpTest, SwiGLU_RepeatedRuns_NoHang) {
     using namespace ttml;
 
     auto& device = autograd::ctx().get_device();
-    const auto grid = device.compute_with_storage_grid_size();
-    const uint32_t num_columns = grid.x;
 
     // Create a batch size that will force row imbalance:
     // Use enough rows to fill multiple grid rows with uneven distribution

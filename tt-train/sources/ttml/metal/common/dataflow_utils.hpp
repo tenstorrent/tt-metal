@@ -52,7 +52,8 @@ inline std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uin
 
 // Generator the mask tile with horizontal masking.
 // Each tile face is 16x16, and there are 4 faces per tile.
-void generate_mask_tile(uint32_t cb_id, uint16_t fill_value, uint16_t mask_fill_value, uint32_t mask_width) {
+void generate_mask_tile(
+    const uint32_t cb_id, const uint16_t fill_value, const uint16_t mask_fill_value, const uint32_t mask_width) {
     cb_reserve_back(cb_id, onetile);
 
     uint16_t* tile_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
@@ -73,7 +74,7 @@ void generate_mask_tile(uint32_t cb_id, uint16_t fill_value, uint16_t mask_fill_
 // where each 32-bit word contains two identical bfloat16 values.
 // This improves performance by writing 512 uint32_t values instead of 1024 uint16_t values.
 // The packed data is written into the circular buffer `cb_id`.
-void generate_tile_with_packed_bfloat16_value(uint32_t cb_id, uint32_t packed_bf16_value) {
+void generate_tile_with_packed_bfloat16_value(const uint32_t cb_id, const uint32_t packed_bf16_value) {
     cb_reserve_back(cb_id, onetile);
     uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
     // 512 = 32x16
@@ -86,7 +87,7 @@ void generate_tile_with_packed_bfloat16_value(uint32_t cb_id, uint32_t packed_bf
 // Generates a tile for broadcasting a scalar bfloat16 value.
 // Only the first element of the tile is set to the scalar value (upper 16 bits of packed_scalar).
 // This is used for efficient broadcast operations where only the first value is needed.
-void generate_bcast_scalar_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
+void generate_bcast_scalar_bfloat16(const uint32_t cb_id, const uint32_t packed_scalar) {
     cb_reserve_back(cb_id, onetile);
     uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
     ptr[0] = packed_scalar >> 16;
@@ -95,7 +96,7 @@ void generate_bcast_scalar_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
 
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.
 // This avoids writing 1024 individual 16-bit values by packing them into 512 32-bit writes.
-void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
+void generate_tile_with_bfloat16_value(const uint32_t cb_id, const uint16_t bf16_value) {
     // Pack the same bfloat16 value into both halves of a 32-bit word
     uint32_t packed_value = (static_cast<uint32_t>(bf16_value) << 16) | bf16_value;
 
@@ -198,7 +199,7 @@ inline void generate_causal_mask_tile(uint32_t cb_id) {
 // Converts a bfloat16 (stored in the lower 16 bits) to a float.
 // This is done by shifting the bfloat16 to the upper 16 bits of a 32-bit integer
 // and reinterpreting it as a float using memcpy.
-inline float bfloat16_to_float(uint16_t bf16) {
+inline float bfloat16_to_float(const uint16_t bf16) {
     uint32_t tmp = static_cast<uint32_t>(bf16) << 16;
     float result;
     std::memcpy(&result, &tmp, sizeof(result));
@@ -207,14 +208,14 @@ inline float bfloat16_to_float(uint16_t bf16) {
 
 // Converts a float to bfloat16 by extracting the upper 16 bits
 // of the float's 32-bit binary representation.
-inline uint16_t float_to_bfloat16(float value) {
+inline uint16_t float_to_bfloat16(const float value) {
     uint32_t tmp;
     std::memcpy(&tmp, &value, sizeof(tmp));
     return static_cast<uint16_t>(tmp >> 16);
 }
 
 // Converts a uint32_t bit pattern to a float (bitwise reinterpretation)
-inline float uint32_to_float(uint32_t bits) {
+inline float uint32_to_float(const uint32_t bits) {
     float value;
     std::memcpy(&value, &bits, sizeof(float));
     return value;
@@ -374,7 +375,7 @@ inline void write_full_row_tiles(
 
 // ----- Printing helper functions -----
 
-void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
+void print_tile(const uint32_t cb_idx, const uint32_t tile_idx, const bool untilize = false) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
     DPRINT << "======" << ENDL();
     for (uint16_t r = 0; r < 32; ++r) {

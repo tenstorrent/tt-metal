@@ -73,15 +73,15 @@ constexpr uint32_t onetile = 1U;
 // waiting for and popping A.
 // ============================================================================
 inline void mul_AxB_accumulate_C(
-    tt::CBIndex cb_a_idx,
-    tt::CBIndex cb_b_idx,
-    tt::CBIndex cb_c_partial_idx,
-    tt::CBIndex cb_c_final_idx,
-    uint32_t a_start_idx,
-    uint32_t ab_block_size,
-    uint32_t c_block_size,
-    bool first_ab_block,
-    bool last_ab_block) {
+    const tt::CBIndex cb_a_idx,
+    const tt::CBIndex cb_b_idx,
+    const tt::CBIndex cb_c_partial_idx,
+    const tt::CBIndex cb_c_final_idx,
+    const uint32_t a_start_idx,
+    const uint32_t ab_block_size,
+    const uint32_t c_block_size,
+    const bool first_ab_block,
+    const bool last_ab_block) {
     tile_regs_acquire();
 
     // Initialize or load C accumulators
@@ -122,14 +122,14 @@ inline void mul_AxB_accumulate_C(
 // avoiding re-reading X for each k_block
 // ============================================================================
 inline void mul_XW_accumulate_k_block(
-    tt::CBIndex cb_x_idx,        // X[r, p_block]
-    tt::CBIndex cb_w_idx,        // W[p_block, k_block] (W1 or W3)
-    tt::CBIndex cb_partial_idx,  // Partial results buffer (cb_xw1_partial or cb_xw3_partial)
-    tt::CBIndex cb_final_idx,    // Final results buffer (cb_xw1 or cb_xw3)
-    uint32_t p_block_size,
-    uint32_t k_block_size,
-    bool first_p_block,
-    bool last_p_block) {
+    const tt::CBIndex cb_x_idx,        // X[r, p_block]
+    const tt::CBIndex cb_w_idx,        // W[p_block, k_block] (W1 or W3)
+    const tt::CBIndex cb_partial_idx,  // Partial results buffer (cb_xw1_partial or cb_xw3_partial)
+    const tt::CBIndex cb_final_idx,    // Final results buffer (cb_xw1 or cb_xw3)
+    const uint32_t p_block_size,
+    const uint32_t k_block_size,
+    const bool first_p_block,
+    const bool last_p_block) {
     tile_regs_acquire();
 
     // Initialize or load previous partial results for this k_block
@@ -237,10 +237,10 @@ inline void compute_M_for_r() {
         // and we have limited number of registers. Processing all k in the block in parallel would require
         // additional temporary CBs and packing/unpacking. I don't expect this to be a performance bottleneck.
         for (uint32_t k = 0; k < k_block_size; ++k) {
-            const uint32_t xw1_reg = 0U;   // REG0 will hold (X @ W1)[r, k]
-            const uint32_t xw3_reg = 1U;   // REG1 will hold (X @ W3)[r, k]
-            const uint32_t silu_reg = 2U;  // REG2 will hold SiLU(X @ W1)[r, k]
-            const uint32_t m_reg = 3U;     // REG3 will hold M
+            constexpr uint32_t xw1_reg = 0U;   // REG0 will hold (X @ W1)[r, k]
+            constexpr uint32_t xw3_reg = 1U;   // REG1 will hold (X @ W3)[r, k]
+            constexpr uint32_t silu_reg = 2U;  // REG2 will hold SiLU(X @ W1)[r, k]
+            constexpr uint32_t m_reg = 3U;     // REG3 will hold M
 
             const uint32_t tile_offset = k_block_start + k;
 

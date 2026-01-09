@@ -14,14 +14,11 @@ namespace {
 constexpr auto kWriterKernelPath =
     "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/writer_swiglu_fw_interleaved_start_id.cpp";
 
-constexpr auto kReaderKernelPath =
-    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/reader_swiglu_fw_interleaved_start_id.cpp";
-
 constexpr auto kReaderW1SenderKernelPath =
-    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/reader_swiglu_fw_w1_sender.cpp";
+    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/reader_swiglu_fw_sender.cpp";
 
 constexpr auto kReaderW1ReceiverKernelPath =
-    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/reader_swiglu_fw_w1_receiver.cpp";
+    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/reader_swiglu_fw_receiver.cpp";
 
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/compute/swiglu_fw_kernel.cpp";
@@ -80,21 +77,18 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* w2,
     const tt::tt_metal::Buffer* w3,
     const tt::tt_metal::Buffer* swiglu_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_x,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
+    const uint32_t num_cores,
+    const uint32_t num_cores_x,
+    const uint32_t num_cores_y,
+    const uint32_t num_rows_per_core_group_1,
+    const uint32_t num_rows_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2,
     ttnn::IDevice* device,
-    uint32_t mcast_sender_semaphore_id,
-    uint32_t mcast_receiver_semaphore_id,
-    bool use_multicast,
+    const uint32_t mcast_sender_semaphore_id,
+    const uint32_t mcast_receiver_semaphore_id,
+    const bool use_multicast,
     const std::map<uint32_t, uint32_t>& max_rows_per_grid_row) {
-    uint32_t num_senders = 0;
-    uint32_t num_receivers = 0;
-
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
         // With row_wise=true, split_work_to_cores allocates horizontally: (0,0), (1,0), (2,0), ...
         tt::tt_metal::CoreCoord core = {i % num_cores_x, i / num_cores_x};
@@ -141,9 +135,6 @@ void assign_per_core_runtime_args(
                 }
             }
 
-            // Always count this core as a sender (even if it has 0 receivers)
-            num_senders++;
-
             uint32_t mcast_start_physical_x = 0;
             uint32_t mcast_start_physical_y = 0;
             uint32_t mcast_end_physical_x = 0;
@@ -183,7 +174,6 @@ void assign_per_core_runtime_args(
         } else if (use_multicast && core.x > 0) {
             // Receiver core: only used when multicast is enabled
             // Receives W1/W2/W3 via multicast, reads only X from DRAM
-            num_receivers++;
             tt::tt_metal::CoreCoord sender_core = {0, core.y};  // Sender is in left column
             auto sender_physical = device->worker_core_from_logical_core(sender_core);
 
@@ -596,7 +586,6 @@ void SwiGLUForwardProgramFactory::override_runtime_arguments(
 
     uint32_t num_cores = shared_variables.num_cores;
     uint32_t num_cores_x = shared_variables.num_cores_x;
-    uint32_t num_cores_y = shared_variables.num_cores_y;
 
     auto* input_buffer = tensor_args.input.buffer();
     auto* w1_buffer = tensor_args.w1.buffer();
