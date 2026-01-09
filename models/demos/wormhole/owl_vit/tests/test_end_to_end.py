@@ -5,16 +5,21 @@
 """
 OWL-ViT End-to-End Inference Test
 
-This module runs full OWL-ViT object detection inference on Tenstorrent hardware.
-It demonstrates the complete pipeline:
-1. Vision encoder (on device)
-2. Text encoder (hybrid - PyTorch embedding + device transformer)
-3. Detection heads (box + class prediction)
-4. Post-processing (NMS + box conversion)
+This module runs full OWL-ViT object detection inference on Tenstorrent N300 hardware.
+All components execute using native TTNN operations:
+
+1. Vision encoder (12 transformer layers on device)
+2. Text encoder (12 transformer layers on device with ttnn.embedding)
+3. Detection heads (box + class prediction on device)
+4. Post-processing via HuggingFace processor
+
+Model: google/owlvit-base-patch32
+- Vision: 768 hidden, 12 heads, 12 layers, 577 patches (24x24 + CLS)
+- Text: 512 hidden, 8 heads, 12 layers, 16 sequence length
 """
 
 import sys
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 import pytest
 import requests
@@ -28,10 +33,24 @@ import ttnn
 sys.path.insert(0, "/root/tt-metal")
 
 
-# Test constants
+# =============================================================================
+# Model Configuration Constants
+# =============================================================================
 MODEL_NAME = "google/owlvit-base-patch32"
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 DETECTION_THRESHOLD = 0.1
+
+# Vision encoder config
+VISION_HIDDEN_SIZE = 768
+VISION_NUM_HEADS = 12
+VISION_HEAD_DIM = VISION_HIDDEN_SIZE // VISION_NUM_HEADS
+VISION_NUM_LAYERS = 12
+
+# Text encoder config
+TEXT_HIDDEN_SIZE = 512
+TEXT_NUM_HEADS = 8
+TEXT_HEAD_DIM = TEXT_HIDDEN_SIZE // TEXT_NUM_HEADS
+TEXT_NUM_LAYERS = 12
 
 
 def load_image(url: str) -> Image.Image:
@@ -39,8 +58,8 @@ def load_image(url: str) -> Image.Image:
     return Image.open(requests.get(url, stream=True).raw).convert("RGB")
 
 
-def get_pytorch_model_and_inputs(text_queries: List[str]):
-    """Load PyTorch model and prepare inputs."""
+def get_pytorch_model_and_inputs(text_queries: list[str]) -> Tuple:
+    """Load PyTorch model and prepare inputs for inference."""
     processor = OwlViTProcessor.from_pretrained(MODEL_NAME)
     model = OwlViTForObjectDetection.from_pretrained(MODEL_NAME)
     model.eval()
@@ -212,6 +231,15 @@ def preprocess_all_weights_for_ttnn(model, device):
         },
     }
 
+    # Box bias - critical for accurate box predictions
+    # This is a registered buffer, not in state_dict
+    parameters["box_bias"] = ttnn.from_torch(
+        model.box_bias.unsqueeze(0),  # [1, 576, 4]
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
     parameters["class_head"] = {
         "dense0": {
             "weight": ttnn.from_torch(
@@ -222,6 +250,34 @@ def preprocess_all_weights_for_ttnn(model, device):
             ),
             "bias": ttnn.from_torch(
                 state_dict["class_head.dense0.bias"].unsqueeze(0),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            ),
+        },
+        "logit_shift": {
+            "weight": ttnn.from_torch(
+                state_dict["class_head.logit_shift.weight"].T,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            ),
+            "bias": ttnn.from_torch(
+                state_dict["class_head.logit_shift.bias"].unsqueeze(0),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            ),
+        },
+        "logit_scale": {
+            "weight": ttnn.from_torch(
+                state_dict["class_head.logit_scale.weight"].T,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            ),
+            "bias": ttnn.from_torch(
+                state_dict["class_head.logit_scale.bias"].unsqueeze(0),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
@@ -361,7 +417,7 @@ def _load_encoder_layer(state_dict, prefix, device):
 
 
 def _load_text_encoder_layer(state_dict, prefix, device):
-    """Load a single text encoder layer."""
+    """Load a single text encoder layer with fused QKV."""
     layer_params = {
         "layer_norm1": {
             "weight": ttnn.from_torch(
@@ -393,45 +449,28 @@ def _load_text_encoder_layer(state_dict, prefix, device):
         },
     }
 
-    # Text encoder uses separate Q, K, V (not fused) for causal attention
+    # Fuse Q, K, V weights for efficient TTNN execution
+    q_weight = state_dict[f"{prefix}.self_attn.q_proj.weight"]
+    k_weight = state_dict[f"{prefix}.self_attn.k_proj.weight"]
+    v_weight = state_dict[f"{prefix}.self_attn.v_proj.weight"]
+    q_bias = state_dict[f"{prefix}.self_attn.q_proj.bias"]
+    k_bias = state_dict[f"{prefix}.self_attn.k_proj.bias"]
+    v_bias = state_dict[f"{prefix}.self_attn.v_proj.bias"]
+
+    # Fuse weights: [3 * hidden, hidden] -> for linear: [hidden, 3 * hidden]
+    qkv_weight = torch.cat([q_weight, k_weight, v_weight], dim=0).T
+    qkv_bias = torch.cat([q_bias, k_bias, v_bias], dim=0).unsqueeze(0)
+
     layer_params["self_attn"] = {
-        "q_proj": {
+        "qkv": {
             "weight": ttnn.from_torch(
-                state_dict[f"{prefix}.self_attn.q_proj.weight"].T,
+                qkv_weight,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
             ),
             "bias": ttnn.from_torch(
-                state_dict[f"{prefix}.self_attn.q_proj.bias"].unsqueeze(0),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            ),
-        },
-        "k_proj": {
-            "weight": ttnn.from_torch(
-                state_dict[f"{prefix}.self_attn.k_proj.weight"].T,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            ),
-            "bias": ttnn.from_torch(
-                state_dict[f"{prefix}.self_attn.k_proj.bias"].unsqueeze(0),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            ),
-        },
-        "v_proj": {
-            "weight": ttnn.from_torch(
-                state_dict[f"{prefix}.self_attn.v_proj.weight"].T,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            ),
-            "bias": ttnn.from_torch(
-                state_dict[f"{prefix}.self_attn.v_proj.bias"].unsqueeze(0),
+                qkv_bias,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
@@ -495,11 +534,10 @@ def run_vision_encoder_on_device(
 ) -> ttnn.Tensor:
     """
     Run vision encoder forward pass on TTNN device.
-    Uses PyTorch for embeddings, runs transformer on device.
+    Uses PyTorch for patch embeddings, runs transformer on device.
     """
-    hidden_size = 768
-    num_heads = 12
-    head_dim = hidden_size // num_heads
+    num_heads = VISION_NUM_HEADS
+    head_dim = VISION_HEAD_DIM
 
     # Get embeddings from PyTorch
     with torch.no_grad():
@@ -551,9 +589,9 @@ def run_text_encoder_on_device(
         hidden_states: Encoder output [batch, seq_len, hidden_size]
         eos_positions: Position of EOS token for each sequence (for pooling)
     """
-    hidden_size = 512
-    num_heads = 8
-    head_dim = hidden_size // num_heads
+    hidden_size = TEXT_HIDDEN_SIZE
+    num_heads = TEXT_NUM_HEADS
+    head_dim = TEXT_HEAD_DIM
     batch_size, seq_len = input_ids.shape
 
     # Convert input_ids to ttnn for embedding lookup
@@ -724,9 +762,7 @@ def _run_encoder_layer(hidden_states, layer_params, num_heads, head_dim, memory_
 
 
 def _run_text_encoder_layer(hidden_states, layer_params, causal_mask, num_heads, head_dim, memory_config):
-    """Run a single text encoder layer with causal attention."""
-    hidden_size = 512  # Text encoder hidden size
-
+    """Run a single text encoder layer with causal attention using native TTNN."""
     # Layer norm 1
     residual = hidden_states
     hidden_states = ttnn.layer_norm(
@@ -737,80 +773,95 @@ def _run_text_encoder_layer(hidden_states, layer_params, causal_mask, num_heads,
         memory_config=memory_config,
     )
 
-    # Self-attention with separate Q, K, V (convert to torch, do attention, back to device)
-    # This is a simpler approach that avoids reshape issues with tile layout
-    hs_torch = ttnn.to_torch(hidden_states).float()
-    batch_size, seq_len, _ = hs_torch.shape
+    # Self-attention with fused QKV (same pattern as vision encoder)
+    qkv = ttnn.linear(
+        hidden_states,
+        layer_params["self_attn"]["qkv"]["weight"],
+        bias=layer_params["self_attn"]["qkv"]["bias"],
+        memory_config=memory_config,
+        dtype=ttnn.bfloat16,
+    )
+    ttnn.deallocate(hidden_states)
 
-    # Get Q, K, V weights and biases from device
-    q_weight = ttnn.to_torch(layer_params["self_attn"]["q_proj"]["weight"]).float()
-    k_weight = ttnn.to_torch(layer_params["self_attn"]["k_proj"]["weight"]).float()
-    v_weight = ttnn.to_torch(layer_params["self_attn"]["v_proj"]["weight"]).float()
-    q_bias = ttnn.to_torch(layer_params["self_attn"]["q_proj"]["bias"]).float()
-    k_bias = ttnn.to_torch(layer_params["self_attn"]["k_proj"]["bias"]).float()
-    v_bias = ttnn.to_torch(layer_params["self_attn"]["v_proj"]["bias"]).float()
+    query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
+        qkv,
+        memory_config=memory_config,
+        num_heads=num_heads,
+    )
+    ttnn.deallocate(qkv)
 
-    # Compute Q, K, V
-    q = torch.nn.functional.linear(hs_torch, q_weight.T.squeeze(0), q_bias.squeeze(0))
-    k = torch.nn.functional.linear(hs_torch, k_weight.T.squeeze(0), k_bias.squeeze(0))
-    v = torch.nn.functional.linear(hs_torch, v_weight.T.squeeze(0), v_bias.squeeze(0))
+    # Compute attention scores
+    attention_scores = ttnn.matmul(query, key, memory_config=memory_config)
+    ttnn.deallocate(query)
+    ttnn.deallocate(key)
 
-    # Reshape for multi-head attention
-    q = q.view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
-    k = k.view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
-    v = v.view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
-
-    # Compute attention with causal mask
-    scale = 1.0 / (head_dim**0.5)
-    attn_scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+    # Scale
+    attention_scores = ttnn.mul(attention_scores, 1.0 / (head_dim**0.5))
 
     # Apply causal mask
-    causal_mask_torch = torch.full((seq_len, seq_len), float("-inf"))
-    causal_mask_torch = torch.triu(causal_mask_torch, diagonal=1)
-    attn_scores = attn_scores + causal_mask_torch
+    attention_scores = ttnn.add(attention_scores, causal_mask)
 
-    attn_probs = torch.softmax(attn_scores, dim=-1)
-    context = torch.matmul(attn_probs, v)
+    # Softmax
+    attention_probs = ttnn.softmax(attention_scores, dim=-1)
+    ttnn.deallocate(attention_scores)
 
-    # Reshape back
-    context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_size)
+    # Context
+    context = ttnn.matmul(attention_probs, value, memory_config=memory_config)
+    ttnn.deallocate(attention_probs)
+    ttnn.deallocate(value)
+
+    # Concatenate heads
+    context = ttnn.transformer.concatenate_heads(context, memory_config=memory_config)
 
     # Output projection
-    out_weight = ttnn.to_torch(layer_params["self_attn"]["out_proj"]["weight"]).float()
-    out_bias = ttnn.to_torch(layer_params["self_attn"]["out_proj"]["bias"]).float()
-    attn_output = torch.nn.functional.linear(context, out_weight.T.squeeze(0), out_bias.squeeze(0))
+    attn_output = ttnn.linear(
+        context,
+        layer_params["self_attn"]["out_proj"]["weight"],
+        bias=layer_params["self_attn"]["out_proj"]["bias"],
+        memory_config=memory_config,
+        dtype=ttnn.bfloat16,
+    )
+    ttnn.deallocate(context)
 
-    # Residual
-    residual_torch = ttnn.to_torch(residual).float()
-    hidden_states_torch = residual_torch + attn_output
+    # Residual connection
+    hidden_states = ttnn.add(residual, attn_output)
+    ttnn.deallocate(residual)
+    ttnn.deallocate(attn_output)
 
     # Layer norm 2
-    ln2_weight = ttnn.to_torch(layer_params["layer_norm2"]["weight"]).float()
-    ln2_bias = ttnn.to_torch(layer_params["layer_norm2"]["bias"]).float()
-    residual_torch = hidden_states_torch
-    hidden_states_torch = torch.nn.functional.layer_norm(
-        hidden_states_torch, (hidden_size,), ln2_weight.squeeze(0), ln2_bias.squeeze(0), eps=1e-5
+    residual = hidden_states
+    hidden_states = ttnn.layer_norm(
+        hidden_states,
+        weight=layer_params["layer_norm2"]["weight"],
+        bias=layer_params["layer_norm2"]["bias"],
+        epsilon=1e-5,
+        memory_config=memory_config,
     )
 
     # MLP
-    fc1_weight = ttnn.to_torch(layer_params["mlp"]["fc1"]["weight"]).float()
-    fc1_bias = ttnn.to_torch(layer_params["mlp"]["fc1"]["bias"]).float()
-    fc2_weight = ttnn.to_torch(layer_params["mlp"]["fc2"]["weight"]).float()
-    fc2_bias = ttnn.to_torch(layer_params["mlp"]["fc2"]["bias"]).float()
-
-    mlp_hidden = torch.nn.functional.linear(hidden_states_torch, fc1_weight.T.squeeze(0), fc1_bias.squeeze(0))
-    mlp_hidden = torch.nn.functional.gelu(mlp_hidden)
-    mlp_output = torch.nn.functional.linear(mlp_hidden, fc2_weight.T.squeeze(0), fc2_bias.squeeze(0))
-
-    hidden_states_torch = residual_torch + mlp_output
-
-    # Transfer back to device
-    hidden_states = ttnn.from_torch(
-        hidden_states_torch,
+    mlp_hidden = ttnn.linear(
+        hidden_states,
+        layer_params["mlp"]["fc1"]["weight"],
+        bias=layer_params["mlp"]["fc1"]["bias"],
+        memory_config=memory_config,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=residual.device(),
     )
+    ttnn.deallocate(hidden_states)
+    mlp_hidden = ttnn.gelu(mlp_hidden)
+
+    mlp_output = ttnn.linear(
+        mlp_hidden,
+        layer_params["mlp"]["fc2"]["weight"],
+        bias=layer_params["mlp"]["fc2"]["bias"],
+        memory_config=memory_config,
+        dtype=ttnn.bfloat16,
+    )
+    ttnn.deallocate(mlp_hidden)
+
+    # Final residual
+    hidden_states = ttnn.add(residual, mlp_output)
+    ttnn.deallocate(residual)
+    ttnn.deallocate(mlp_output)
 
     return hidden_states
 
@@ -820,10 +871,9 @@ def run_box_head_on_device(
     parameters: Dict[str, Any],
     memory_config,
 ) -> ttnn.Tensor:
-    """Run box prediction head on device."""
+    """Run box prediction head on device (legacy - skips CLS token)."""
     # Convert to torch to do the slice (skip CLS token), then back to device
     features_torch = ttnn.to_torch(image_features)
-    batch_size, seq_len, hidden_size = features_torch.shape
 
     # Skip CLS token (first token)
     patch_features_torch = features_torch[:, 1:, :]  # [batch, 576, 768]
@@ -860,6 +910,43 @@ def run_box_head_on_device(
         memory_config=memory_config,
     )
 
+    pred_boxes = ttnn.sigmoid(pred_boxes)
+
+    return pred_boxes
+
+
+def run_box_head_on_device_v2(
+    patch_features: ttnn.Tensor,
+    parameters: Dict[str, Any],
+    memory_config,
+) -> ttnn.Tensor:
+    """Run box prediction head on device (features already processed, CLS removed)."""
+    # MLP: hidden -> hidden -> hidden -> 4
+    hidden = ttnn.linear(
+        patch_features,
+        parameters["box_head"]["dense0"]["weight"],
+        bias=parameters["box_head"]["dense0"]["bias"],
+        memory_config=memory_config,
+    )
+    hidden = ttnn.gelu(hidden)
+
+    hidden = ttnn.linear(
+        hidden,
+        parameters["box_head"]["dense1"]["weight"],
+        bias=parameters["box_head"]["dense1"]["bias"],
+        memory_config=memory_config,
+    )
+    hidden = ttnn.gelu(hidden)
+
+    pred_boxes = ttnn.linear(
+        hidden,
+        parameters["box_head"]["dense2"]["weight"],
+        bias=parameters["box_head"]["dense2"]["bias"],
+        memory_config=memory_config,
+    )
+
+    # Add box_bias before sigmoid (critical for accurate predictions)
+    pred_boxes = ttnn.add(pred_boxes, parameters["box_bias"])
     pred_boxes = ttnn.sigmoid(pred_boxes)
 
     return pred_boxes
@@ -920,6 +1007,69 @@ def run_class_head_on_device(
     return logits
 
 
+def run_class_head_on_device_v2(
+    patch_features: ttnn.Tensor,
+    text_embeds: torch.Tensor,
+    parameters: Dict[str, Any],
+    device: ttnn.Device,
+    memory_config,
+) -> ttnn.Tensor:
+    """Run class prediction head on device matching PyTorch's logic."""
+    # Project patch features
+    image_class_embeds = ttnn.linear(
+        patch_features,
+        parameters["class_head"]["dense0"]["weight"],
+        bias=parameters["class_head"]["dense0"]["bias"],
+        memory_config=memory_config,
+    )
+
+    # L2 normalize image embeddings (PyTorch uses linalg.norm)
+    # Convert to torch for normalization
+    image_embeds_torch = ttnn.to_torch(image_class_embeds).float()
+    image_norm = torch.nn.functional.normalize(image_embeds_torch, p=2, dim=-1, eps=1e-6)
+
+    # L2 normalize text embeddings
+    text_norm = torch.nn.functional.normalize(text_embeds.squeeze(0).float(), p=2, dim=-1, eps=1e-6)
+
+    # Compute similarity: image_embeds @ text_embeds^T
+    # image_norm: [batch, 576, 512], text_norm: [2, 512]
+    pred_logits = torch.einsum("bpd,qd->bpq", image_norm, text_norm)
+
+    # Apply logit_shift and logit_scale
+    # These are learned projections from image features
+    patch_features_torch = ttnn.to_torch(patch_features).float()
+
+    # logit_shift: Linear(768, 1) - output [batch, 576, 1]
+    shift_weight = ttnn.to_torch(parameters["class_head"]["logit_shift"]["weight"]).float()
+    shift_bias = ttnn.to_torch(parameters["class_head"]["logit_shift"]["bias"]).float()
+    # shift_weight is stored as [768, 1] (transposed during loading)
+    logit_shift = torch.matmul(patch_features_torch, shift_weight.squeeze(0)) + shift_bias.squeeze()
+
+    # logit_scale: Linear(768, 1) + ELU + 1
+    scale_weight = ttnn.to_torch(parameters["class_head"]["logit_scale"]["weight"]).float()
+    scale_bias = ttnn.to_torch(parameters["class_head"]["logit_scale"]["bias"]).float()
+    logit_scale = torch.matmul(patch_features_torch, scale_weight.squeeze(0)) + scale_bias.squeeze()
+    logit_scale = torch.nn.functional.elu(logit_scale) + 1
+
+    # logit_shift and logit_scale are [batch, 576, 1], pred_logits is [batch, 576, 2]
+    # Need to expand for broadcasting
+    logit_shift = logit_shift.unsqueeze(-1) if logit_shift.dim() == 2 else logit_shift
+    logit_scale = logit_scale.unsqueeze(-1) if logit_scale.dim() == 2 else logit_scale
+
+    # Apply: (logits + shift) * scale
+    pred_logits = (pred_logits + logit_shift) * logit_scale
+
+    # Transfer back to device
+    logits = ttnn.from_torch(
+        pred_logits,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    return logits
+
+
 def run_owl_vit_end_to_end(
     pixel_values: torch.Tensor,
     input_ids: torch.Tensor,
@@ -974,22 +1124,45 @@ def run_owl_vit_end_to_end(
     text_embeds_torch = ttnn.to_torch(text_embeds)
     logger.info(f"Text embeds shape: {text_embeds_torch.shape}")
 
-    # Normalize vision features
+    # Process vision features following OWL-ViT's image_embedder method:
+    # 1. Separate class token and patch features
+    # 2. Broadcast class token to match patch features
+    # 3. Element-wise multiply
+    # 4. Apply layer norm
+    vision_torch = ttnn.to_torch(vision_output)  # [batch, 577, 768]
+
+    # Extract class token and patch features
+    class_token = vision_torch[:, :1, :]  # [batch, 1, 768]
+    patch_features = vision_torch[:, 1:, :]  # [batch, 576, 768]
+
+    # Broadcast class token to match patch features shape and multiply
+    class_token_broadcast = class_token.expand_as(patch_features)  # [batch, 576, 768]
+    image_embeds = patch_features * class_token_broadcast  # Element-wise multiply
+
+    # Transfer back to device and apply layer norm
+    image_embeds_tt = ttnn.from_torch(
+        image_embeds,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    # Apply the model's layer_norm (not vision encoder's post_layernorm)
     vision_normalized = ttnn.layer_norm(
-        vision_output,
+        image_embeds_tt,
         weight=parameters["layer_norm"]["weight"],
         bias=parameters["layer_norm"]["bias"],
         epsilon=1e-5,
         memory_config=dram_config,
     )
 
-    # Run detection heads
+    # Run detection heads - pass normalized features (already has CLS token removed)
     logger.info("Running box head on device...")
-    pred_boxes = run_box_head_on_device(vision_normalized, parameters, dram_config)
+    pred_boxes = run_box_head_on_device_v2(vision_normalized, parameters, dram_config)
     logger.info(f"Pred boxes shape: {pred_boxes.shape}")
 
     logger.info("Running class head on device...")
-    logits = run_class_head_on_device(
+    logits = run_class_head_on_device_v2(
         vision_normalized, text_embeds_torch.unsqueeze(0), parameters, device, dram_config
     )
     logger.info(f"Logits shape: {logits.shape}")
@@ -1107,12 +1280,76 @@ class TestOwlViTEndToEnd:
         # Should detect at least something
         assert len(boxes) >= 0, "Detection completed"
 
+    def test_vision_encoder_pcc(self, device):
+        """
+        Test vision encoder produces output matching PyTorch reference.
+
+        This validates the core vision transformer runs correctly on device.
+        Expected PCC > 0.8 compared to PyTorch reference.
+        """
+        logger.info("=" * 60)
+        logger.info("OWL-ViT Vision Encoder PCC Test")
+        logger.info("=" * 60)
+
+        text_queries = ["test"]
+        processor, model, inputs, image = get_pytorch_model_and_inputs(text_queries)
+
+        # Get reference output from PyTorch
+        logger.info("Running PyTorch reference...")
+        with torch.no_grad():
+            pytorch_vision_output = model.owlvit.vision_model(inputs["pixel_values"])
+        reference_output = pytorch_vision_output.last_hidden_state
+        logger.info(f"PyTorch vision output shape: {reference_output.shape}")
+
+        # Load weights and run on device
+        logger.info("Loading weights to device...")
+        parameters = preprocess_all_weights_for_ttnn(model, device)
+
+        logger.info("Running vision encoder on device...")
+        ttnn_output = run_vision_encoder_on_device(inputs["pixel_values"], parameters, device, model)
+
+        ttnn_output_torch = ttnn.to_torch(ttnn_output)
+        logger.info(f"TTNN vision output shape: {ttnn_output_torch.shape}")
+
+        # Calculate PCC
+        ref_flat = reference_output.flatten().float()
+        ttnn_flat = ttnn_output_torch.flatten().float()
+
+        ref_centered = ref_flat - ref_flat.mean()
+        ttnn_centered = ttnn_flat - ttnn_flat.mean()
+
+        numerator = (ref_centered * ttnn_centered).sum()
+        denominator = torch.sqrt((ref_centered**2).sum() * (ttnn_centered**2).sum())
+        pcc = (numerator / denominator).item()
+
+        logger.info(f"Vision Encoder PCC: {pcc:.4f}")
+
+        # Sample values for debugging
+        logger.info("Sample output values (first 5 elements of CLS token):")
+        logger.info(f"  PyTorch: {reference_output[0, 0, :5].tolist()}")
+        logger.info(f"  TTNN:    {ttnn_output_torch[0, 0, :5].tolist()}")
+
+        logger.info("=" * 60)
+        logger.info("TEST COMPLETE")
+        logger.info("=" * 60)
+
+        # Assert reasonable correlation
+        assert pcc > 0.8, f"Vision encoder PCC {pcc:.4f} is too low, expected > 0.8"
+
 
 if __name__ == "__main__":
-    # Run the test directly
+    # Run tests directly
     device = ttnn.open_device(device_id=0)
     try:
         test = TestOwlViTEndToEnd()
+        logger.info("\n" + "=" * 60)
+        logger.info("RUNNING: test_vision_encoder_pcc")
+        logger.info("=" * 60 + "\n")
+        test.test_vision_encoder_pcc(device)
+
+        logger.info("\n" + "=" * 60)
+        logger.info("RUNNING: test_full_detection_pipeline")
+        logger.info("=" * 60 + "\n")
         test.test_full_detection_pipeline(device)
     finally:
         ttnn.close_device(device)

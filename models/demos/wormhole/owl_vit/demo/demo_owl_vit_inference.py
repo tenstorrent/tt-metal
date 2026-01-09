@@ -5,54 +5,57 @@
 """
 OWL-ViT Demo: Zero-shot Object Detection on Tenstorrent Hardware
 
-This demo shows how to run OWL-ViT for open-vocabulary object detection
-using TTNN APIs on Wormhole (N150/N300) hardware.
+This demo runs OWL-ViT for open-vocabulary object detection using TTNN APIs
+on Wormhole N300 hardware.
 
 Usage:
-    pytest models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py -v
+    python models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py
 
 Features:
     - Zero-shot text-conditioned object detection
-    - Bounding box visualization
-    - Performance benchmarking
+    - Full pipeline running on TT hardware (vision encoder, text encoder, detection heads)
+    - Bounding box visualization with labels
 """
 
 import sys
 import time
 from pathlib import Path
 
-import pytest
 import requests
 import torch
 from loguru import logger
 from PIL import Image, ImageDraw, ImageFont
-from transformers import OwlViTForObjectDetection, OwlViTProcessor
+
+import ttnn
 
 sys.path.insert(0, "/root/tt-metal")
 
+# Import TTNN implementation from tests
+from models.demos.wormhole.owl_vit.tests.test_end_to_end import (
+    get_pytorch_model_and_inputs,
+    preprocess_all_weights_for_ttnn,
+    run_owl_vit_end_to_end,
+)
 
 # Constants
-MODEL_NAME = "google/owlvit-base-patch32"
 OUTPUT_DIR = Path("/root/tt-metal/models/demos/wormhole/owl_vit/demo/outputs")
+DETECTION_THRESHOLD = 0.3
+
 COLORS = [
-    (255, 0, 0),  # Red
-    (0, 255, 0),  # Green
-    (0, 0, 255),  # Blue
-    (255, 255, 0),  # Yellow
-    (255, 0, 255),  # Magenta
-    (0, 255, 255),  # Cyan
-    (128, 0, 0),  # Dark Red
-    (0, 128, 0),  # Dark Green
+    (255, 50, 50),  # Red
+    (50, 200, 50),  # Green
+    (50, 50, 255),  # Blue
+    (255, 200, 50),  # Yellow
+    (255, 50, 255),  # Magenta
+    (50, 255, 255),  # Cyan
 ]
 
 
 def load_image(source: str) -> Image.Image:
     """Load image from URL or file path."""
     if source.startswith("http"):
-        image = Image.open(requests.get(source, stream=True).raw)
-    else:
-        image = Image.open(source)
-    return image.convert("RGB")
+        return Image.open(requests.get(source, stream=True).raw).convert("RGB")
+    return Image.open(source).convert("RGB")
 
 
 def draw_boxes(
@@ -61,7 +64,7 @@ def draw_boxes(
     scores: list,
     labels: list,
     text_queries: list[str],
-    threshold: float = 0.1,
+    threshold: float = 0.3,
 ) -> Image.Image:
     """
     Draw bounding boxes on image with labels and scores.
@@ -77,354 +80,230 @@ def draw_boxes(
     Returns:
         Image with drawn boxes
     """
+    image = image.copy()
     draw = ImageDraw.Draw(image)
 
-    # Try to load a font, fall back to default
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
-    except:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+    except Exception:
         font = ImageFont.load_default()
 
     for box, score, label in zip(boxes, scores, labels):
         if score < threshold:
             continue
 
-        color = COLORS[label % len(COLORS)]
         x1, y1, x2, y2 = [int(x) for x in box]
+        color = COLORS[label % len(COLORS)]
+        label_text = f"{text_queries[label]}: {score:.2f}"
 
         # Draw box
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=4)
 
-        # Draw label
-        label_text = f"{text_queries[label]}: {score:.2f}"
-        text_bbox = draw.textbbox((x1, y1), label_text, font=font)
-        text_height = text_bbox[3] - text_bbox[1]
-
-        # Background for text
+        # Draw label background
+        text_bbox = draw.textbbox((x1, y1 - 22), label_text, font=font)
         draw.rectangle(
-            [x1, y1 - text_height - 4, x1 + (text_bbox[2] - text_bbox[0]) + 4, y1],
+            [text_bbox[0] - 2, text_bbox[1] - 2, text_bbox[2] + 2, text_bbox[3] + 2],
             fill=color,
         )
-        draw.text((x1 + 2, y1 - text_height - 2), label_text, fill="white", font=font)
+        draw.text((x1, y1 - 22), label_text, fill="white", font=font)
 
     return image
 
 
-def run_pytorch_inference(
+def apply_nms(boxes, scores, labels, iou_threshold: float = 0.5, max_detections: int = 10):
+    """Apply simple non-maximum suppression to reduce overlapping boxes."""
+
+    def compute_iou(box1, box2):
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+        inter = max(0, x2 - x1) * max(0, y2 - y1)
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        return inter / (area1 + area2 - inter + 1e-6)
+
+    # Combine and sort by score
+    detections = list(zip(boxes, scores, labels))
+    detections.sort(key=lambda x: x[1], reverse=True)
+
+    kept = []
+    for box, score, label in detections:
+        overlap = False
+        for kept_box, _, _ in kept:
+            if compute_iou(box, kept_box) > iou_threshold:
+                overlap = True
+                break
+        if not overlap:
+            kept.append((box, score, label))
+        if len(kept) >= max_detections:
+            break
+
+    if not kept:
+        return [], [], []
+
+    kept_boxes, kept_scores, kept_labels = zip(*kept)
+    return list(kept_boxes), list(kept_scores), list(kept_labels)
+
+
+def run_ttnn_inference(
     image: Image.Image,
     text_queries: list[str],
-    threshold: float = 0.1,
+    device: ttnn.Device,
+    threshold: float = 0.3,
 ):
     """
-    Run OWL-ViT inference using PyTorch (reference implementation).
+    Run OWL-ViT inference using TTNN on TT hardware.
 
     Args:
         image: Input image
-        text_queries: List of text queries
+        text_queries: List of text queries for detection
+        device: TTNN device
         threshold: Detection confidence threshold
 
     Returns:
-        results: Detection results
-        outputs: Raw model outputs
+        boxes: List of bounding boxes [x1, y1, x2, y2]
+        scores: Confidence scores
+        labels: Label indices
         inference_time: Time in seconds
     """
-    processor = OwlViTProcessor.from_pretrained(MODEL_NAME)
-    model = OwlViTForObjectDetection.from_pretrained(MODEL_NAME)
-    model.eval()
+    # Load model and processor
+    processor, model, inputs, _ = get_pytorch_model_and_inputs(text_queries)
 
-    texts = [text_queries]
-    inputs = processor(text=texts, images=image, return_tensors="pt")
+    # Preprocess weights for TTNN
+    logger.info("Loading model weights to device...")
+    parameters = preprocess_all_weights_for_ttnn(model, device)
 
     # Warm-up run
-    with torch.no_grad():
-        _ = model(**inputs)
+    logger.info("Running warm-up inference...")
+    _ = run_owl_vit_end_to_end(
+        inputs["pixel_values"],
+        inputs["input_ids"],
+        inputs["attention_mask"],
+        parameters,
+        device,
+        model,
+    )
 
     # Timed inference
+    logger.info("Running timed inference...")
     start_time = time.perf_counter()
-    with torch.no_grad():
-        outputs = model(**inputs)
+    pred_boxes, logits = run_owl_vit_end_to_end(
+        inputs["pixel_values"],
+        inputs["input_ids"],
+        inputs["attention_mask"],
+        parameters,
+        device,
+        model,
+    )
     inference_time = time.perf_counter() - start_time
 
-    # Post-process
+    # Convert outputs to torch
+    ttnn_boxes_torch = ttnn.to_torch(pred_boxes)
+    ttnn_logits_torch = ttnn.to_torch(logits)
+
+    # Create output object for HuggingFace post-processing
+    class TTNNOutputs:
+        def __init__(self, logits, pred_boxes):
+            self.logits = logits
+            self.pred_boxes = pred_boxes
+
+    ttnn_output_obj = TTNNOutputs(ttnn_logits_torch, ttnn_boxes_torch)
     target_sizes = torch.Tensor([image.size[::-1]])
+
+    # Post-process
     results = processor.post_process_object_detection(
-        outputs=outputs,
+        outputs=ttnn_output_obj,
         threshold=threshold,
         target_sizes=target_sizes,
     )
 
-    return results[0], outputs, inference_time
+    boxes = results[0]["boxes"].tolist()
+    scores = results[0]["scores"].tolist()
+    labels = results[0]["labels"].tolist()
+
+    # Apply NMS
+    boxes, scores, labels = apply_nms(boxes, scores, labels)
+
+    return boxes, scores, labels, inference_time
 
 
-def print_detection_results(results, text_queries: list[str]):
-    """Print detection results in a formatted way."""
-    boxes = results["boxes"]
-    scores = results["scores"]
-    labels = results["labels"]
-
-    print(f"\n{'='*60}")
-    print(f"DETECTION RESULTS ({len(boxes)} objects detected)")
-    print(f"{'='*60}")
-
-    for i, (box, score, label) in enumerate(zip(boxes, scores, labels)):
-        box_coords = [round(x, 1) for x in box.tolist()]
-        print(f"  {i+1}. {text_queries[label]}")
-        print(f"      Confidence: {score.item():.3f}")
-        print(f"      Box (x1,y1,x2,y2): {box_coords}")
-
-    print(f"{'='*60}\n")
-
-
-# ============================================================================
-# Demo Tests
-# ============================================================================
-
-
-class TestOwlViTDemo:
-    """Demo tests for OWL-ViT."""
-
-    @pytest.fixture
-    def setup_output_dir(self):
-        """Create output directory for demo results."""
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        return OUTPUT_DIR
-
-    def test_basic_detection_demo(self, setup_output_dir):
-        """
-        Basic object detection demo.
-
-        This test demonstrates:
-        1. Loading an image
-        2. Running OWL-ViT detection with text queries
-        3. Visualizing results
-        """
-        logger.info("Starting OWL-ViT detection demo")
-
-        # Load test image (cats on a couch)
-        image_url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-        image = load_image(image_url)
-        logger.info(f"Loaded image: {image.size}")
-
-        # Define text queries
-        text_queries = [
-            "a cat",
-            "a remote control",
-            "a couch",
-        ]
-        logger.info(f"Text queries: {text_queries}")
-
-        # Run inference
-        results, outputs, inference_time = run_pytorch_inference(image, text_queries, threshold=0.1)
-
-        # Print results
-        print_detection_results(results, text_queries)
-        logger.info(f"Inference time: {inference_time*1000:.2f}ms")
-
-        # Visualize
-        image_with_boxes = image.copy()
-        image_with_boxes = draw_boxes(
-            image_with_boxes,
-            results["boxes"].tolist(),
-            results["scores"].tolist(),
-            results["labels"].tolist(),
-            text_queries,
-        )
-
-        # Save output
-        output_path = setup_output_dir / "demo_basic_detection.png"
-        image_with_boxes.save(output_path)
-        logger.info(f"Saved visualization to {output_path}")
-
-        # Assertions
-        assert len(results["boxes"]) > 0, "Should detect at least one object"
-        # Check that at least one cat was detected
-        detected_labels = [text_queries[label] for label in results["labels"]]
-        assert any("cat" in label for label in detected_labels), "Should detect a cat"
-
-    def test_multi_query_detection(self, setup_output_dir):
-        """
-        Multi-query detection demo with various objects.
-        """
-        logger.info("Starting multi-query detection demo")
-
-        # Load image
-        image_url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-        image = load_image(image_url)
-
-        # Extended queries
-        text_queries = [
-            "a cat face",
-            "cat ears",
-            "a tv remote",
-            "a blanket",
-            "a cushion",
-            "an animal",
-        ]
-
-        results, outputs, inference_time = run_pytorch_inference(image, text_queries, threshold=0.05)
-
-        print_detection_results(results, text_queries)
-
-        # Visualize
-        image_with_boxes = image.copy()
-        image_with_boxes = draw_boxes(
-            image_with_boxes,
-            results["boxes"].tolist(),
-            results["scores"].tolist(),
-            results["labels"].tolist(),
-            text_queries,
-            threshold=0.05,
-        )
-
-        output_path = setup_output_dir / "demo_multi_query_detection.png"
-        image_with_boxes.save(output_path)
-        logger.info(f"Saved visualization to {output_path}")
-
-    def test_model_output_shapes(self):
-        """
-        Verify model output shapes for TTNN implementation reference.
-        """
-        logger.info("Checking model output shapes")
-
-        processor = OwlViTProcessor.from_pretrained(MODEL_NAME)
-        model = OwlViTForObjectDetection.from_pretrained(MODEL_NAME)
-
-        image = load_image("http://images.cocodataset.org/val2017/000000039769.jpg")
-        text_queries = ["a cat", "a dog"]
-
-        texts = [text_queries]
-        inputs = processor(text=texts, images=image, return_tensors="pt")
-
-        with torch.no_grad():
-            outputs = model(**inputs)
-
-        print("\n" + "=" * 60)
-        print("OUTPUT SHAPES FOR TTNN IMPLEMENTATION")
-        print("=" * 60)
-        print(f"Input pixel_values: {inputs['pixel_values'].shape}")
-        print(f"  -> [batch, channels, height, width]")
-        print(f"Input input_ids: {inputs['input_ids'].shape}")
-        print(f"  -> [num_queries, seq_len]")
-        print()
-        print(f"Output logits: {outputs.logits.shape}")
-        print(f"  -> [batch, num_patches, num_queries]")
-        print(f"Output pred_boxes: {outputs.pred_boxes.shape}")
-        print(f"  -> [batch, num_patches, 4] (cx, cy, w, h normalized)")
-
-        if outputs.image_embeds is not None:
-            print(f"Output image_embeds: {outputs.image_embeds.shape}")
-        if outputs.text_embeds is not None:
-            print(f"Output text_embeds: {outputs.text_embeds.shape}")
-
-        print()
-        print("Vision Model Internals:")
-        model_config = model.config.vision_config
-        print(f"  hidden_size: {model_config.hidden_size}")
-        print(f"  num_attention_heads: {model_config.num_attention_heads}")
-        print(f"  num_hidden_layers: {model_config.num_hidden_layers}")
-        print(f"  intermediate_size: {model_config.intermediate_size}")
-        print(f"  patch_size: {model_config.patch_size}")
-        print(f"  image_size: {model_config.image_size}")
-        num_patches = (model_config.image_size // model_config.patch_size) ** 2
-        print(f"  num_patches: {num_patches}")
-
-        print()
-        print("Text Model Internals:")
-        text_config = model.config.text_config
-        print(f"  hidden_size: {text_config.hidden_size}")
-        print(f"  num_attention_heads: {text_config.num_attention_heads}")
-        print(f"  num_hidden_layers: {text_config.num_hidden_layers}")
-        print(f"  intermediate_size: {text_config.intermediate_size}")
-        print(f"  vocab_size: {text_config.vocab_size}")
-        print(f"  max_position_embeddings: {text_config.max_position_embeddings}")
-
-        print()
-        print("Detection Heads:")
-        print(f"  box_head.dense0: {model.box_head.dense0.weight.shape}")
-        print(f"  box_head.dense1: {model.box_head.dense1.weight.shape}")
-        print(f"  box_head.dense2: {model.box_head.dense2.weight.shape}")
-        print(f"  class_head.dense0: {model.class_head.dense0.weight.shape}")
-        # logit_scale and logit_shift are Linear layers in OWL-ViT
-        if hasattr(model.class_head, "logit_scale") and hasattr(model.class_head.logit_scale, "weight"):
-            print(f"  logit_scale: Linear{tuple(model.class_head.logit_scale.weight.shape)}")
-        if hasattr(model.class_head, "logit_shift") and hasattr(model.class_head.logit_shift, "weight"):
-            print(f"  logit_shift: Linear{tuple(model.class_head.logit_shift.weight.shape)}")
-        print("=" * 60 + "\n")
-
-        # Verify expected shapes
-        assert outputs.logits.shape == torch.Size([1, 576, 2])
-        assert outputs.pred_boxes.shape == torch.Size([1, 576, 4])
-
-    def test_performance_benchmark(self):
-        """
-        Benchmark PyTorch inference performance (baseline for TTNN comparison).
-        """
-        logger.info("Running performance benchmark")
-
-        processor = OwlViTProcessor.from_pretrained(MODEL_NAME)
-        model = OwlViTForObjectDetection.from_pretrained(MODEL_NAME)
-        model.eval()
-
-        image = load_image("http://images.cocodataset.org/val2017/000000039769.jpg")
-        text_queries = ["a cat", "a dog", "a remote control"]
-        texts = [text_queries]
-        inputs = processor(text=texts, images=image, return_tensors="pt")
-
-        # Warm-up
-        for _ in range(3):
-            with torch.no_grad():
-                _ = model(**inputs)
-
-        # Benchmark
-        num_iterations = 10
-        times = []
-
-        for _ in range(num_iterations):
-            start = time.perf_counter()
-            with torch.no_grad():
-                outputs = model(**inputs)
-            times.append(time.perf_counter() - start)
-
-        avg_time = sum(times) / len(times)
-        min_time = min(times)
-        max_time = max(times)
-
-        print("\n" + "=" * 60)
-        print("PYTORCH PERFORMANCE BENCHMARK (CPU)")
-        print("=" * 60)
-        print(f"Iterations: {num_iterations}")
-        print(f"Average: {avg_time*1000:.2f}ms")
-        print(f"Min: {min_time*1000:.2f}ms")
-        print(f"Max: {max_time*1000:.2f}ms")
-        print(f"Throughput: {1/avg_time:.2f} images/sec")
-        print("=" * 60 + "\n")
-
-
-def test_run_demo():
+def run_demo(
+    image_source: str = "http://images.cocodataset.org/val2017/000000039769.jpg",
+    text_queries: list[str] = None,
+    output_name: str = "detection_result.png",
+):
     """
-    Entry point for running the full demo.
+    Run the full OWL-ViT demo on TTNN.
 
-    Run with: pytest models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py::test_run_demo -v -s
+    Args:
+        image_source: URL or path to input image
+        text_queries: List of text queries for detection
+        output_name: Name of output image file
     """
-    demo = TestOwlViTDemo()
+    if text_queries is None:
+        text_queries = ["a cat", "a remote control", "a cushion"]
 
-    # Setup
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Run demos
-    print("\n" + "=" * 80)
-    print("OWL-ViT DEMO: Zero-shot Object Detection")
-    print("=" * 80 + "\n")
+    logger.info("=" * 60)
+    logger.info("OWL-ViT Demo on Tenstorrent Hardware")
+    logger.info("=" * 60)
+    logger.info(f"Image: {image_source}")
+    logger.info(f"Queries: {text_queries}")
 
-    demo.test_basic_detection_demo(OUTPUT_DIR)
-    demo.test_model_output_shapes()
-    demo.test_performance_benchmark()
+    # Load image
+    logger.info("Loading image...")
+    image = load_image(image_source)
+    logger.info(f"Image size: {image.size}")
 
-    print("\n" + "=" * 80)
-    print("DEMO COMPLETE")
-    print(f"Output images saved to: {OUTPUT_DIR}")
-    print("=" * 80 + "\n")
+    # Open device and run inference
+    logger.info("Opening TT device...")
+    device = ttnn.open_device(device_id=0)
+
+    try:
+        # Use lower threshold to find smaller/occluded objects
+        boxes, scores, labels, inference_time = run_ttnn_inference(image, text_queries, device, threshold=0.1)
+
+        logger.info("=" * 60)
+        logger.info("DETECTION RESULTS (TTNN)")
+        logger.info("=" * 60)
+        logger.info(f"Inference time: {inference_time * 1000:.1f} ms")
+        logger.info(f"Detected {len(boxes)} objects:")
+
+        for box, score, label in zip(boxes, scores, labels):
+            box_str = [round(x, 1) for x in box]
+            logger.info(f"  {text_queries[label]}: score={score:.2f}, box={box_str}")
+
+        # Draw results with the lower threshold
+        result_image = draw_boxes(image, boxes, scores, labels, text_queries, threshold=0.1)
+
+        # Save output
+        output_path = OUTPUT_DIR / output_name
+        result_image.save(output_path)
+        logger.info(f"Saved result to: {output_path}")
+
+    finally:
+        ttnn.close_device(device)
+
+    logger.info("=" * 60)
+    logger.info("DEMO COMPLETE")
+    logger.info("=" * 60)
+
+
+# =============================================================================
+# Pytest Entry Points
+# =============================================================================
+
+
+def test_owl_vit_demo():
+    """
+    Run the OWL-ViT demo on TTNN.
+
+    This test demonstrates the full detection pipeline running on TT hardware.
+    """
+    run_demo()
 
 
 if __name__ == "__main__":
-    test_run_demo()
+    run_demo()

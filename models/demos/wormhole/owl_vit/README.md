@@ -78,16 +78,30 @@ pytest models/demos/wormhole/owl_vit/tests/test_ttnn_owl_vit.py::TestOwlViTBasic
 pytest models/demos/wormhole/owl_vit/tests/test_ttnn_owl_vit.py::TestOwlViTEndToEnd -v
 ```
 
-### 3. Run Demo
+### 3. Run Demo (on TT Hardware)
 ```bash
+# Run the TTNN demo via pytest
 pytest models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py -v -s
+
+# Or run directly
+python models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py
 ```
 
-### 4. Run on TT Hardware
+### 4. Run PyTorch Reference Demo (CPU)
+To compare results with the reference implementation:
 ```bash
-pytest models/demos/wormhole/owl_vit/tests/test_device_inference.py -v
+python models/demos/wormhole/owl_vit/demo/demo_owl_vit_pytorch.py
 ```
+Output saved to `demo/outputs/detection_result_pytorch.png`.
 
+### 5. Run Tests (on TT Hardware)
+```bash
+# Run end-to-end detection test (includes vision encoder PCC validation)
+pytest models/demos/wormhole/owl_vit/tests/test_end_to_end.py -v
+
+# Or run directly
+python models/demos/wormhole/owl_vit/tests/test_end_to_end.py
+```
 
 ## Directory Structure
 

@@ -5,7 +5,7 @@
 """
 OWL-ViT Device Inference Test
 
-This module runs actual OWL-ViT inference on Tenstorrent N150/N300 hardware.
+This module runs actual OWL-ViT inference on Tenstorrent N300 hardware.
 It loads model weights, preprocesses them for TTNN, and executes the model.
 """
 
