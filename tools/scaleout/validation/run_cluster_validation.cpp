@@ -329,6 +329,10 @@ void set_config_vars() {
     if (getenv("TT_MESH_ID") == nullptr) {
         setenv("TT_MESH_ID", "0", 1);
     }
+    // Disable 2-ERISC mode for Blackhole
+    if (getenv("TT_METAL_DISABLE_MULTI_AERISC") == nullptr) {
+        setenv("TT_METAL_DISABLE_MULTI_AERISC", "1", 1);
+    }
 }
 
 }  // namespace tt::scaleout_tools
@@ -343,7 +347,6 @@ int main(int argc, char* argv[]) {
         print_usage_info(input_args.mode);
         return 0;
     }
-
     bool eth_connections_healthy = true;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
