@@ -9,7 +9,7 @@ from typing import Iterable, List, Tuple
 
 import torch
 from loguru import logger
-from tracy import signpost
+from tracy import Profiler, signpost
 from transformers import AutoConfig
 
 import ttnn
@@ -85,6 +85,7 @@ class DeepseekGenerator:
         enable_trace: bool = False,
         signpost: bool = False,
         prefill_max_tokens: int | None = None,
+        profile: str = "all",
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -141,7 +142,10 @@ class DeepseekGenerator:
         self.enable_trace = enable_trace
         self.signpost = signpost
         self.prefill_max_tokens = prefill_max_tokens
+        self.profile = profile
+        self.tracy_profiler = Profiler()
         logger.info(f"Enable trace: {self.enable_trace}")
+        logger.info(f"Profile mode: {self.profile}")
 
         # Initialize rope_setup once
         self.rope_setup = RotarySetup(
@@ -538,8 +542,11 @@ class DeepseekGenerator:
         # Run one or more prefill+decode batches
         for _ in range(repeat_batches):
             # Prefill
-            if self.signpost:
-                signpost(header="prefill")
+            if self.profile in ("all", "prefill"):
+                self.tracy_profiler.enable()
+            else:
+                self.tracy_profiler.disable()
+            signpost(header="prefill")
             profiler.start("inference_prefill")
             num_of_users = tokens_batched.shape[0]
             last_logits = []
@@ -558,8 +565,7 @@ class DeepseekGenerator:
                 self.ccl.reset_sem_counters()
             last_logits = torch.stack(last_logits)
             profiler.end("inference_prefill")
-            if self.signpost:
-                signpost(header="prefill")
+            signpost(header="prefill")
 
             assert len(last_logits) == num_of_users
 
@@ -844,8 +850,11 @@ class DeepseekGenerator:
             )
             torch_input = tokens.view(1, 1, -1).to(torch.int32)
 
-            if self.signpost:
-                signpost(header="decode_execute_trace")
+            if self.profile in ("all", "decode"):
+                self.tracy_profiler.enable()
+            else:
+                self.tracy_profiler.disable()
+            signpost(header="decode_execute_trace")
 
             host_tokens = ttnn.from_torch(
                 torch_input,
@@ -884,8 +893,7 @@ class DeepseekGenerator:
                     self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
                 ),
             )
-            if self.signpost:
-                signpost(header="decode_execute_trace")
+            signpost(header="decode_execute_trace")
             return logits.squeeze(0).squeeze(0)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
