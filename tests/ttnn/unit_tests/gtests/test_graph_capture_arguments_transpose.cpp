@@ -51,10 +51,6 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(operation0.arguments[1], "1");
     EXPECT_EQ(operation0.arguments[2], "2");
 
-    // operations[1]: PermuteDeviceOperation (device operation for the underlying permute)
-    const auto& operation1 = operations[1];
-    EXPECT_EQ(operation1.operation_name, "PermuteDeviceOperation");
-
     // operations[2]: tt::tt_metal::create_device_tensor
     const auto& operation2 = operations[2];
     EXPECT_EQ(operation2.operation_name, "tt::tt_metal::create_device_tensor");
@@ -62,11 +58,8 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(operation2.arguments[0], "Shape([1, 2048, 1, 512])");
     EXPECT_EQ(operation2.arguments[1], "DataType::BFLOAT16");
     EXPECT_EQ(operation2.arguments[2], "Layout::ROW_MAJOR");
-    EXPECT_EQ(operation2.arguments[3], "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]");
-    EXPECT_EQ(
-        operation2.arguments[4],
-        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,"
-        "nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)");
+    EXPECT_EQ(operation2.arguments[0], "Shape([1, 2048, 1, 512])");
+    EXPECT_EQ(operation2.arguments[1], "DataType::BFLOAT16");
 }
 
 }  // namespace

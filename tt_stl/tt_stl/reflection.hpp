@@ -1241,9 +1241,9 @@ inline hash_t hash_object(const T& object) noexcept {
         }
         if (object.has_value()) {
             return hash_object(object.value());
-        } else {
-            return 0;
         }
+        return 0;
+
     } else if constexpr (ttsl::concepts::Reflectable<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
@@ -1325,9 +1325,8 @@ struct to_json_t<T> {
     nlohmann::json operator()(const T& object) noexcept {
         if (object) {
             return to_json(*object);
-        } else {
-            return nullptr;
         }
+        return nullptr;
     }
 };
 
@@ -1337,9 +1336,8 @@ struct from_json_t<T> {
     T operator()(const nlohmann::json& json_object) noexcept {
         if (json_object.is_null()) {
             return nullptr;
-        } else {
-            throw std::runtime_error("Cannot load pointer from JSON");
         }
+        throw std::runtime_error("Cannot load pointer from JSON");
     }
 };
 
@@ -1417,9 +1415,8 @@ struct to_json_t<std::optional<T>> {
     nlohmann::json operator()(const std::optional<T>& optional) noexcept {
         if (optional.has_value()) {
             return to_json(optional.value());
-        } else {
-            return nullptr;
         }
+        return nullptr;
     }
 };
 
@@ -1428,9 +1425,8 @@ struct from_json_t<std::optional<T>> {
     std::optional<T> operator()(const nlohmann::json& json_object) noexcept {
         if (json_object.is_null()) {
             return std::nullopt;
-        } else {
-            return from_json<T>(json_object);
         }
+        return from_json<T>(json_object);
     }
 };
 

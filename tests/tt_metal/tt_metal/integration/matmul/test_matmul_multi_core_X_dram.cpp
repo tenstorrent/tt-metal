@@ -606,7 +606,8 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
-    } else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
+    }
+    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
         log_info(tt::LogTest, "This test is disabled in WH B0");
         GTEST_SKIP();
     }
