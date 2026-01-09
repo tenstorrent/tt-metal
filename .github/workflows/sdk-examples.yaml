@@ -60,7 +60,6 @@ jobs:
           # Make the repo root the runtime root so relative kernel paths like
           # ttnn/examples/lab_eltwise_binary/kernels/dataflow/read_tiles.cpp resolve.
           TT_METAL_RUNTIME_ROOT: ${{ github.workspace }}
-          TT_METAL_HOME: ${{ github.workspace }}
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
           CC: gcc-12
