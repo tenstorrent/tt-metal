@@ -22,6 +22,9 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 
+# Import tensor logging utility
+from models.demos.deepseek_v3.utils.tensor_logger import log_tensor
+
 
 class MoEDecoderBlock2D(DecoderBlock2DBase):
     @classmethod
@@ -102,6 +105,19 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
     @classmethod
     @abstractmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        mlp_out = MoE.forward_decode(x, cfg["moe"])
-        mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"])
+        # Log input to MoE forward
+        log_tensor(x, "moe_forward_input", "x")
+
+        # MoE forward
+        moe_output = MoE.forward_decode(x, cfg["moe"])
+        log_tensor(moe_output, "moe_forward", "moe_output")
+
+        # SharedExpert forward
+        shared_expert_out = SharedExpert.forward_decode(x, cfg["shared_expert"])
+        log_tensor(shared_expert_out, "shared_expert", "shared_expert_out")
+
+        # Combine MoE and SharedExpert outputs
+        mlp_out = moe_output + shared_expert_out
+        log_tensor(mlp_out, "moe_combined", "moe_plus_shared_expert", {"operation": "mlp_out += shared_expert_out"})
+
         return mlp_out

@@ -22,6 +22,9 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+
+# Import tensor logging utility
+from models.demos.deepseek_v3.utils.tensor_logger import log_tensor
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -119,33 +122,61 @@ class DecoderBlock2DBase(DecoderBlockBase):
         rope_tensors: dict,
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        # MLA norm
+        # Log initial input
+        log_tensor(x, "decoder_block_input", "x")
+        log_tensor(position_idxs, "decoder_block_input", "position_idxs")
+
+        # MLA norm resharding
         mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
+        log_tensor(mla_norm_in, "mla_norm_reshard", "mla_norm_in", {"config": cfg["mla_norm_reshard"]})
+
+        # MLA norm
         mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
+        log_tensor(mla_norm_out, "mla_norm", "mla_norm_out")
         ttnn.deallocate(mla_norm_in)
 
-        # MLA
+        # MLA resharding
         mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
+        log_tensor(mla_norm_out, "mla_reshard", "mla_norm_out_resharded", {"config": cfg["mla_reshard"]})
+
+        # MLA forward
         mla_out = MLA2D.forward_decode(mla_norm_out, position_idxs, cfg["mla"], rope_tensors, page_table)
+        log_tensor(mla_out, "mla", "mla_out")
+        log_tensor(mla_out, "mla", "mla_out")  # Log twice to match 1D pattern
         ttnn.deallocate(mla_norm_out)
 
         # MLA Residual
+        log_tensor(x, "mla_residual", "x_after_mla_residual", {"operation": "x += mla_out"})
         x += mla_out
+        log_tensor(x, "mla_residual", "x_after_mla_residual", {"operation": "x += mla_out"})
         ttnn.deallocate(mla_out)
 
-        # MLP norm
+        # MLP norm resharding
         mlp_norm_in = ttnn.to_memory_config(x, **cfg["mlp_norm_reshard"])
+        log_tensor(mlp_norm_in, "mlp_norm_reshard", "mlp_norm_in", {"config": cfg["mlp_norm_reshard"]})
+
+        # MLP norm
         mlp_norm_out = DistributedRMSNorm.forward_decode(mlp_norm_in, cfg["mlp_norm"])
+        log_tensor(mlp_norm_out, "mlp_norm", "mlp_norm_out")
         ttnn.deallocate(mlp_norm_in)
 
-        # MLP
+        # MLP resharding
         mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
+        log_tensor(mlp_norm_out, "mlp_reshard", "mlp_norm_out_resharded", {"config": cfg["mlp_reshard"]})
+
+        # MLP forward
         mlp_out = cls.forward_mlp_decode(mlp_norm_out, cfg["mlp"])
+        log_tensor(mlp_out, "mlp", "mlp_out")
         ttnn.deallocate(mlp_norm_out)
 
         # MLP Residual
+        log_tensor(x, "mlp_residual", "x_after_mlp_residual", {"operation": "x += mlp_out"})
         x += mlp_out
+        log_tensor(x, "mlp_residual", "x_after_mlp_residual", {"operation": "x += mlp_out"})
         ttnn.deallocate(mlp_out)
+
+        # Log final output
+        log_tensor(x, "decoder_block_output", "final_output")
 
         return x
 
