@@ -303,6 +303,39 @@ def test_distributed_dit_layernorm_wan_configs(
     )
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
+@pytest.mark.parametrize(
+    "weight_bias_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile_layout", "row_major_layout"],
+)
+def test_distributed_dit_layernorm_affine_layouts_and_dtypes(
+    device,
+    dtype,
+    stats_dtype,
+    weight_bias_layout,
+    reset_seeds,
+):
+    """
+    Test weight/bias with different layouts (tile vs row-major) and dtypes (bf16 vs fp32).
+    Uses a single reasonable configuration: dim=2048, seqlen=512, num_devices=2.
+    """
+    num_simulated_devices = 2
+    hidden_dim = 2048
+    seqlen = 512
+    inp_shape = (1, 1, seqlen, hidden_dim)
+    run_distributed_dit_layernorm(
+        device,
+        num_simulated_devices,
+        inp_shape,
+        dtype,
+        stats_dtype,
+        use_affine=True,
+        weight_bias_layout=weight_bias_layout,
+    )
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
 @pytest.mark.parametrize("seqlen", [2048])

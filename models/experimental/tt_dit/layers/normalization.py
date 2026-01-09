@@ -224,8 +224,6 @@ class DistributedRMSNorm(Module):
 class DistributedLayerNorm(Module):
     """
     Implements LayerNorm on an activation sharded on the reduction dimension.
-
-    Requires gamma and beta, which will be created if not provided.
     """
 
     def __init__(
@@ -258,12 +256,6 @@ class DistributedLayerNorm(Module):
             packer_l1_acc=False,
         )
 
-        self.program_config = ttnn.LayerNormDefaultProgramConfig(
-            legacy_reduction=False,
-            legacy_rsqrt=False,
-            use_welford=True,
-        )
-
         n = self.TILE_SIZE * self.mesh_width
         shape = [embedding_dim // n, n]
 
@@ -271,12 +263,12 @@ class DistributedLayerNorm(Module):
 
         self.weight = (
             Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
-            if norm_elementwise_affine
+            if self.norm_elementwise_affine
             else None
         )
         self.bias = (
             Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
-            if (norm_elementwise_affine and bias)
+            if self.use_bias
             else None
         )
 
@@ -284,16 +276,16 @@ class DistributedLayerNorm(Module):
         weight = state.pop("weight", None)
         bias = state.pop("bias", None)
         assert (weight is not None) == self.norm_elementwise_affine
-        assert (bias is not None) == (self.use_bias)
+        assert (bias is not None) == self.use_bias
 
-        if weight is not None:
+        if self.norm_elementwise_affine:
             state["weight"] = (
                 weight.reshape(self.mesh_width, -1, self.TILE_SIZE)
                 .permute(1, 0, 2)
                 .reshape(-1, self.TILE_SIZE * self.mesh_width)
             )
 
-        if bias is not None:
+        if self.use_bias:
             state["bias"] = (
                 bias.reshape(self.mesh_width, -1, self.TILE_SIZE)
                 .permute(1, 0, 2)
@@ -303,10 +295,13 @@ class DistributedLayerNorm(Module):
     def forward(
         self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None
     ) -> ttnn.Tensor:
-        if (dynamic_weight is not None) or (dynamic_bias is not None):
+        assert (dynamic_weight is None) == (
+            dynamic_bias is None
+        ), "dynamic_weight and dynamic_bias must be either both provided or both None"
+        if dynamic_weight is not None:
             assert (
-                self.weight is None and self.bias is None
-            ), "weight and bias must be None when dynamic_weight and dynamic_bias are provided"
+                not self.norm_elementwise_affine
+            ), "Module must not have weight and bias parameters when dynamic_weight and dynamic_bias are provided"
 
             weight = dynamic_weight
             bias = dynamic_bias
@@ -317,22 +312,13 @@ class DistributedLayerNorm(Module):
         stats = ttnn.experimental.dit_layernorm_pre_allgather(
             x,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-            # program_config=self.program_config,
         )
 
-        if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
-            stats = ttnn.experimental.all_gather_async(
-                stats,
-                dim=len(x.shape) - 1,
-                cluster_axis=self.mesh_axis,
-                mesh_device=x.device(),
-                topology=self.ccl_manager.topology,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
-                persistent_output_tensor=self.ccl_manager.get_ag_ping_pong_buffer(
-                    stats.shape, len(stats.shape) - 1, self.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-            )
+        stats = self.ccl_manager.all_gather_persistent_buffer(
+            stats,
+            dim=len(x.shape) - 1,
+            mesh_axis=self.mesh_axis,
+        )
 
         x = ttnn.experimental.dit_layernorm_post_allgather(
             x,
@@ -341,7 +327,6 @@ class DistributedLayerNorm(Module):
             bias=bias,
             epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-            # program_config=self.program_config,
         )
         return x
 
