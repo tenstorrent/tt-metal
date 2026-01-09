@@ -24,7 +24,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
 
     // Get the cores for the program
     std::vector<tt::tt_metal::CoreCoord> cores_vec = {
-        tt::tt_metal::CoreCoord({0, 9}),
+        tt::tt_metal::CoreCoord({0, 0}),
         // tt::tt_metal::CoreCoord({4, 0}),
     };
     auto cores = tt::tt_metal::CoreRangeSet(cores_vec);
