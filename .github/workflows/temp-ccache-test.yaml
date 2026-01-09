@@ -27,6 +27,7 @@ jobs:
         TT_METAL_HOME: /work
         TT_METAL_RUNTIME_ROOT: /work
         LD_LIBRARY_PATH: /work/build/lib
+        PYTHONPATH: /work
         ARCH_NAME: wormhole_b0
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
