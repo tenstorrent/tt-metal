@@ -734,39 +734,48 @@ jobs:
         run: |
           echo "::group::🔧 Database Setup"
 
-          # Install PostgreSQL 18 client (need matching version for pg_restore)
-          apt-get update -qq
-          apt-get install -y -qq wget ca-certificates gnupg lsb-release
-          # Try multiple key sources in case one fails
-          mkdir -p /usr/share/keyrings
-          wget -qO- https://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg || \
-            gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys ACCC4CF8 && gpg --export ACCC4CF8 > /usr/share/keyrings/postgresql-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
-          apt-get update -qq
-          apt-get install -y -qq postgresql-client-18
-
           if ! python3 -c "import psycopg2" 2>/dev/null; then
             pip install -q psycopg2-binary
           fi
 
           echo "⏳ Waiting for postgres service..."
           for i in {1..30}; do
-            if pg_isready -h postgres -p 5432 -U tt-sweeps >/dev/null 2>&1; then
+            if python3 -c "import psycopg2; psycopg2.connect('postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces')" 2>/dev/null; then
               echo "✅ Postgres ready"
               break
             fi
             sleep 2
           done
 
-          echo "♻ Restoring database..."
-          pg_restore \
-            -h postgres -p 5432 -U tt-sweeps -d tt-model-traces \
-            --clean --if-exists --no-owner --no-privileges \
-            model_tracer/ttnn_operations_db.sql
+          echo "♻ Restoring database from compressed SQL dump..."
+          python3 << 'EOF'
+          import gzip
+          import psycopg2
+
+          # Decompress and read the SQL dump
+          with gzip.open("model_tracer/ttnn_operations_db.sql.gz", "rt", encoding="utf-8") as f:
+              sql_content = f.read()
+
+          # Connect and execute
+          conn = psycopg2.connect("postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces")
+          conn.autocommit = True
+          cur = conn.cursor()
+          cur.execute(sql_content)
+          conn.close()
+          print("✅ Database restored successfully")
+          EOF
 
           echo "🔍 Verifying schema..."
-          psql -h postgres -U tt-sweeps -d tt-model-traces -c "SELECT COUNT(*) FROM operations;"
-          psql -h postgres -U tt-sweeps -d tt-model-traces -c "SELECT COUNT(*) FROM configurations;"
+          python3 << 'EOF'
+          import psycopg2
+          conn = psycopg2.connect("postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces")
+          cur = conn.cursor()
+          cur.execute("SELECT COUNT(*) FROM operations")
+          print(f"Operations: {cur.fetchone()[0]}")
+          cur.execute("SELECT COUNT(*) FROM configurations")
+          print(f"Configurations: {cur.fetchone()[0]}")
+          conn.close()
+          EOF
 
           echo "✅ Database ready"
           echo "::endgroup::"
