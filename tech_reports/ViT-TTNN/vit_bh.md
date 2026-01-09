@@ -81,7 +81,7 @@ def update_model_config(config, batch_size):
         batch_size = grid_y * batch_per_y_core
         grid_x = 12  # Use full x-dimension for Blackhole
         should_reallocate_in_attention = True
-    
+
     core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     core_grid_10x12 = ttnn.CoreGrid(y=10, x=12)  # Fixed full grid for Blackhole
 ```
@@ -111,24 +111,24 @@ Blackhole uses `WormholeComputeKernelConfig` which provides additional optimizat
 The implemented optimization techniques in TT-NN compared to the conventional flow are:
 
 ### 3.1 Sharding on all relevant OPs
-  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by eliminating the need for data movement inter-tensix-cores between the consecutive OPs. 
-  - For more details, please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
+  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by eliminating the need for data movement inter-tensix-cores between the consecutive OPs.
+  - For more details, please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding)
   - Sharding Concepts
-![Sharding Concept](images_bh/sharding_concept.png) 
-  - Illustrative example 
-![Sharding Example](images_bh/sharding_example.png)   
+![Sharding Concept](images_bh/sharding_concept.png)
+  - Illustrative example
+![Sharding Example](images_bh/sharding_example.png)
 
 ### 3.2 Matmul sharding variants in ViT
 
 #### 3.2.1 Matmul Reuse (BMM)
 The batch Matmul(BMM) Reuse case used in ViT model is in the Multi-head Self Attention module, where both inputs (in0 and in1) as well as the output are height sharded. There no multi-cast (mcast) technique applied on the inputs here. Each core will be responsible for the Matmul of single head of one image of the batch.
 
-![BMM Height](images_bh/bmm_height.png) 
+![BMM Height](images_bh/bmm_height.png)
 
 #### 3.2.2 Matmul Reuse Mcast (2D)
 The Reuse Mcast case used in ViT model is the block sharded Matmul cases in QKV generation as well as the Feed-Forward Network.
   - The implemented config is Block sharded orientation is Row_Major, where the in0 outer dimension (M) is sharded along the y-axis of the core grid. On the inner dimension of in0, the sharded slices are mcasted along the x-direction of the core grid. The mcast process is done in turn from one core to all other cores in the row, so the whole inner dimension of in0 exists per each core during its Matmul operation.
-  - Please note that the Row_Major term mentioned here is referring to the sharded blocks placement on the core grid. It's different than the Row_Major data layout that is compared to the Tile layout in the report [tensor_layouts](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md)  
+  - Please note that the Row_Major term mentioned here is referring to the sharded blocks placement on the core grid. It's different than the Row_Major data layout that is compared to the Tile layout in the report [tensor_layouts](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md)
   - The in1 is interleaved (on L1 or DRAM) and its slices along the N (outer) dimension are mcasted along the cores in the same column, where each slide has the full inner dimension (K). This is aligned with the previously mentioned mcast of in0 slices.
   - Worth to mention that in some cases it may be better to implement the Column_Major (and mcast transposed = True) config, where the in0 M dimension is sharded along the x-axis of the core as shown in the figure. All the mcast techniques in the Column_Major will be transposed with respect to the Row_Major config mentioned in the previous paragraph.
 
@@ -156,12 +156,12 @@ The other Reuse Mcast case (not used in ViT) is the height sharded on in0, while
   - Pre-processing of model weights, to apply the data format conversion as well as merging and transposing to match the OP configuration.
   - Fusing GeLU OP with its preceding Linear OP
 
-    ![Multi-Head Attention in TT-NN](images_bh/mha_ttnn_1.png) 
-  ![](images_bh/mha_ttnn_2.png)  
+    ![Multi-Head Attention in TT-NN](images_bh/mha_ttnn_1.png)
+  ![](images_bh/mha_ttnn_2.png)
 
 ## 4. ViT TT-NN Code Structure
 
-This section outlines the code organization of the TT-NN Blackhole ViT implementation. 
+This section outlines the code organization of the TT-NN Blackhole ViT implementation.
 
 ### 4.1 Top-level modules
 ViT model has 3 main modules: Embeddings, Encoder (12 Layers), and Classification head.
@@ -260,7 +260,7 @@ def vit_embeddings(
 ):
     parameters = parameters.vit.embeddings
     l1_memory_config = ttnn.L1_MEMORY_CONFIG
-    
+
     # Patch embedding
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters=parameters.patch_embeddings)
     # Concatenating Position Embeddings
@@ -284,7 +284,7 @@ def vit_encoder(
     TILE_HEIGHT = 32
     emb_N, emb_S, emb_D = embeddings.shape
     emb_S = (((emb_S - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT
-    
+
     # Sharding config using Blackhole's 10x12 grid
     encoder_input = ttnn.to_memory_config(
         embeddings,
@@ -370,7 +370,7 @@ This diagram is representing the TT-NN module `vit_layer()`
 The graph legend:
 ![legend](images_bh/legend.jpeg)
 
-### 5.1 Input 
+### 5.1 Input
 The input to the Vision Transformer consists of image patches that are flattened and embedded into a higher-dimensional space. The input is represented as:
 
 `b × seqL × dim`
@@ -380,7 +380,7 @@ Where:
 - `seqL` is the sequence length (224 padded, corresponding to 196 patches + 1 CLS token)
 - `dim` is the embedding dimension (768)
 
-### 5.2 Sharding parametrization 
+### 5.2 Sharding parametrization
 The input and output of each OP is either sharded or interleaved, and there is a sharding config for each OP. Optimally, the consecutive OPs will have the same sharding scheme, so the intermediate results are stored in the local Tensix L1 to minimize the data movement between OPs.
 
 **Blackhole sharding parameters (10×12 grid):**
@@ -479,7 +479,7 @@ This matmul uses a **block-sharded, reuse+mcast** program config sized for the f
 - The input block width (in0_block_w) = input shape[1] / core_grid.x = dim / core_grid.x
 - The input block (dim/x) is multi-casted, in turn, from one tensix core to other cores in the same row. The block matmul inner dimension will be the full (dim)
 - The output block width (per_core_N) = output shape[1] / core_grid.x = 3*dim / core_grid.x
-  
+
 ```python
 "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),  # (12, 10)
@@ -527,7 +527,7 @@ The output tensors are placed in **height-sharded** L1 memory, which matches the
 
 `b × head_count × seqL × head_size`
 
-where 
+where
 - `b` is the batch size (10 for Blackhole)
 - `head_count` is the number of attention heads (12)
 - `seqL` is the sequence length (224 padded)
@@ -1029,8 +1029,8 @@ SDPA replaces the traditional multi-step attention computation with a single fus
 
 **Attention Flow with SDPA:**
 
-![Multi-Head Attention in TT-NN](images_bh/mha_ttnn_1.png) 
-  ![](images_bh/sdpa_mha_ttnn_2.png)  
+![Multi-Head Attention in TT-NN](images_bh/mha_ttnn_1.png)
+  ![](images_bh/sdpa_mha_ttnn_2.png)
 
 #### 6.3.2 QKV Projection and Head Splitting
 
@@ -1082,7 +1082,7 @@ Unlike the standard 224×224 implementation which uses `ttnn.transformer.split_q
 ```python
     ttnn.deallocate(query_key_value)
     ttnn.deallocate(hidden_states)
-    
+
     # Optional reallocation for memory defragmentation
     if config.should_reallocate_in_attention:
         value = ttnn.reallocate(value)
@@ -1186,7 +1186,7 @@ The context tensor must be resharded to the block-sharded configuration used by 
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
-    
+
     # Two-step resharding: interleaved → DRAM → block sharded
     context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
     context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)
@@ -1207,7 +1207,7 @@ The context tensor must be resharded to the block-sharded configuration used by 
         program_config=config.program_configs["self_output_matmul_program_config"],
     )
     ttnn.deallocate(context_layer)
-    
+
     # Optional defragmentation
     if config.should_reallocate_in_attention:
         self_output = ttnn.reallocate(self_output)
@@ -1264,4 +1264,3 @@ From patch embedding to self-attention and feed-forward networks, the ViT model 
   - Allocator / memory banks: `tech_reports/memory/allocator.md`
   - Matrix engine / fidelity notes: `tech_reports/matrix_engine/matrix_engine.md`
   - GEMM FLOPS and BH grid reference: `tech_reports/GEMM_FLOPS/GEMM_FLOPS.md`
-
