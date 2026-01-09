@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -190,7 +191,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
 
         t1 = t1 * t0;
 
-        v_if(sfpi::abs(val) > 1) { t1 = 1.570796327f - t1; }
+        v_if(sfpi::abs(val) > 1) { t1 = PI_2 - t1; }
         v_endif;
 
         result = sfpi::setsgn(t1, val);

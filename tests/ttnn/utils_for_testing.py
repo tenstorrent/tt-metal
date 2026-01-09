@@ -462,8 +462,6 @@ def flush_subnormal_values_to_zero(tensor):
         - This function only works for float32 and bfloat16 as they share the same exponent range.
         - For float32 and bfloat16, subnormal values are those where the exponent bits are all zero,
           which corresponds to absolute values less than 2^(-126).
-        - The sign of zero is preserved (i.e., -0.0 remains -0.0, though the mask will convert both
-          +/-subnormals to +0.0).
     """
     # Float32 and bfloat16 numbers are subnormal if exponent == 0
     # This corresponds to absolute values < 2^(-126)
