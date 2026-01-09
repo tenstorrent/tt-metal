@@ -212,9 +212,9 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
     uint32_t MAX_EFFECTIVE_TILES = (kernel_h * kernel_w * in_ntiles_c * TILE_WIDTH + 1023) / 1024;
-    if (MAX_EFFECTIVE_TILES > 3) {
-        MAX_EFFECTIVE_TILES = 3;
-    }
+    // if (MAX_EFFECTIVE_TILES > 3) {
+    //     MAX_EFFECTIVE_TILES = 3;
+    // }
     constexpr uint32_t effective_tiles = (kernel_h * kernel_w * in_ntiles_c * 32 + 1023) / 1024;
     if constexpr (return_indices) {
         static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");

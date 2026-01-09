@@ -140,13 +140,13 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     // Input CB - using same logic as pool factory with effective_tiles
     const uint32_t in_cb_id = next_cb_index++;
     const uint32_t in_cb_pagesize = tt::tile_size(params.data_format);
-    const uint32_t in_cb_npages = params.multi_buffering_factor * std::min(effective_tiles, 3u);
+    const uint32_t in_cb_npages = params.multi_buffering_factor * effective_tiles;
     tt::tt_metal::create_cb(in_cb_id, program, parallel_config.grid, in_cb_pagesize, in_cb_npages, params.data_format);
 
     // mul_cb - stores results of element-wise multiplication (using effective_tiles logic)
     const uint32_t mul_cb_id = next_cb_index++;
     const uint32_t mul_cb_pagesize = tt::tile_size(params.data_format);
-    const uint32_t mul_cb_npages = std::min(effective_tiles, 3u) * params.multi_buffering_factor;
+    const uint32_t mul_cb_npages = effective_tiles * params.multi_buffering_factor;
     tt::tt_metal::create_cb(
         mul_cb_id, program, parallel_config.grid, mul_cb_pagesize, mul_cb_npages, params.data_format);
 
@@ -198,23 +198,24 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         params.output_data_format,
         output.buffer());
 
-    // Scalar CB - stores scalar values for pool operations (match pool factory sizing)
+    // Scalar CB - stores scalar values for pool operations
+    // IMPORTANT: Always use bf16 format for scalar CB because:
+    // 1. The scalar values (bf16_scalar, bf16_init_value) are always bf16 format
+    // 2. The fill_with_val function packs uint16_t values into uint32_t (bf16 format)
+    // 3. This matches how pool2d handles scalar CBs - the scalar precision doesn't need to match input precision
     const uint32_t in_scalar_cb_id_0 = next_cb_index++;
-    const uint32_t in_scalar_cb_pagesize = tt::tile_size(params.data_format);
+    const tt::DataFormat scalar_cb_format = tt::DataFormat::Float16_b;  // Always bf16 for scalar values
+    const uint32_t in_scalar_cb_pagesize = tt::tile_size(scalar_cb_format);
     const uint32_t in_scalar_cb_npages = params.multi_buffering_factor;
     TT_FATAL(in_scalar_cb_npages <= 2, "Kernel logic relies on scalar cb page number being <= 2");
     tt::tt_metal::create_cb(
-        in_scalar_cb_id_0,
-        program,
-        parallel_config.grid,
-        in_scalar_cb_pagesize,
-        in_scalar_cb_npages,
-        params.data_format);
+        in_scalar_cb_id_0, program, parallel_config.grid, in_scalar_cb_pagesize, in_scalar_cb_npages, scalar_cb_format);
 
     // Clear value CB - stores "clear value" (-inf for maxpool, 0 for avgpool)
+    // IMPORTANT: Always use bf16 format because bf16_init_value is written via fill_with_val (bf16 packing)
     const uint32_t clear_value_cb_id = next_cb_index++;
     tt::tt_metal::create_cb(
-        clear_value_cb_id, program, parallel_config.grid, tt::tile_size(params.data_format), 1, params.data_format);
+        clear_value_cb_id, program, parallel_config.grid, tt::tile_size(scalar_cb_format), 1, scalar_cb_format);
 
     // Bias CB - only allocated if has_bias is true
     uint32_t bias_cb_id = 32;  // Invalid CB ID by default

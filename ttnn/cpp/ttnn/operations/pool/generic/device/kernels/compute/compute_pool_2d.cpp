@@ -18,7 +18,7 @@
 #include "tt-metalium/constants.hpp"
 // #include "tt-metalium/tt_backend_api_types.hpp"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -175,6 +175,10 @@ void MAIN {
 
     // Wait for all weight tiles to be available before starting computation
     cb_wait_front(weight_cb_id, weight_ntiles);
+    // DPRINT << "Weight tiles:" << ENDL();
+    // for (uint32_t i = 0; i < weight_ntiles; i++) {
+    //     UNPACK((tt::compute::common::print_full_tile(weight_cb_id, i)));
+    // }
 
     // Wait for bias tiles to be available (read by reader kernel)
     if constexpr (has_bias) {
@@ -198,9 +202,9 @@ void MAIN {
     uint32_t n = 0;
     uint32_t curr_in_cb_id = in_cb_id_0;
     uint32_t MAX_EFFECTIVE_TILES = (window_size_hw * in_ntiles_c * TILE_WIDTH + 1023) / 1024;
-    if (MAX_EFFECTIVE_TILES > 3) {
-        MAX_EFFECTIVE_TILES = 3;
-    }
+    // if (MAX_EFFECTIVE_TILES > 3) {
+    //     MAX_EFFECTIVE_TILES = 3;
+    // }
 
     while (sticks_left) {
         const bool reader0 = !(split_reader && (n & 0x1));
@@ -222,7 +226,7 @@ void MAIN {
                 num_pages_to_8 = 1;
             }
             num_pages_to_8 = 1;
-            const uint32_t effective_tiles = (window_size_hw * tiles_to_reduce * 32 + 1023) / 1024;
+            // const uint32_t effective_tiles = (window_size_hw * tiles_to_reduce * 32 + 1023) / 1024;
             const uint32_t number_of_tiles = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
             const uint32_t output_faces =
                 (last_tile_is_partial && last_c_block)
@@ -300,8 +304,12 @@ void MAIN {
 
                     for (uint32_t j = 0; j < num_pages_to_8; j++) {
                         cb_wait_front(curr_in_cb_id, MAX_EFFECTIVE_TILES);
+                        // for (uint32_t i = 0; i < MAX_EFFECTIVE_TILES; ++i) {
+                        //     UNPACK (DPRINT << "Input tile (cb_id=" << curr_in_cb_id << ", tile_idx=" << i << "):" <<
+                        //     ENDL()); UNPACK((tt::compute::common::print_full_tile(curr_in_cb_id, i)));
+                        // }
                         // UNPACK((tt::compute::common::print_full_tile(weight_cb_id, 0)));
-                        for (uint32_t i = 0; i < effective_tiles; ++i) {
+                        for (uint32_t i = 0; i < MAX_EFFECTIVE_TILES; ++i) {
                             // Calculate weight tile index based on current channel block
                             // For depthwise conv, each channel tile (c_i * max_tiles_per_iter + i)
                             // corresponds to its weight tile at the same index
@@ -323,8 +331,10 @@ void MAIN {
                     tile_regs_wait();
                     for (uint32_t j = 0; j < num_pages_to_8; j++) {
                         cb_reserve_back(mul_cb_id, MAX_EFFECTIVE_TILES);
-                        for (uint32_t i = 0; i < effective_tiles; ++i) {
+                        for (uint32_t i = 0; i < MAX_EFFECTIVE_TILES; ++i) {
                             pack_tile(j * tiles_to_reduce + i, mul_cb_id, i);
+                            // PACK (DPRINT << "mul_cb_id=" << mul_cb_id << ", i=" << i);
+                            // PACK((tt::compute::common::print_full_tile(mul_cb_id, i)));
                         }
                         cb_push_back(mul_cb_id, MAX_EFFECTIVE_TILES);
                     }
@@ -379,6 +389,7 @@ void MAIN {
                     }
                 }
             }
+            // MATH(DPRINT << "Before bias addition" << ENDL());
             // dprint_tensix_dest_reg<true>(0);
             // dprint_tensix_dest_reg<true>(1);
 
@@ -401,6 +412,7 @@ void MAIN {
                     // DST[dst_idx] = 0 + bias_cb[bias_tile_idx] + DST[dst_idx]
                     add_tiles(clear_value_cb_id, bias_cb_id, 0, bias_tile_idx, dst_idx);
                 }
+                // reconfig_data_format(mul_cb_id, curr_scalar_cb_id);
             }
 
             // Apply activation (now for ALL cases, bias or not - bias was added above)
@@ -415,6 +427,9 @@ void MAIN {
                 }
             }
 #endif
+
+            // MATH(DPRINT << "After bias addition" << ENDL());
+            // dprint_tensix_dest_reg<true>(0);
             // dprint_tensix_dest_reg<true>(1);
             tile_regs_commit();
             tile_regs_wait();
@@ -456,9 +471,11 @@ void MAIN {
                         // With bias added before pack_untilize_dest, both paths are identical
                         // Tilize directly to out_cb for both bias and no-bias cases
                         pack_reconfig_data_format(out_cb_id);
-                        fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        // PACK((tt::compute::common::print_full_tile(pre_tilize_cb_id, 0)));
+                        fast_tilize_init_with_dt(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+                        // PACK((tt::compute::common::print_full_tile(out_cb_id, 0, true)));
                         cb_push_back(out_cb_id, in_ntiles_c);
                         // ============ END TILIZATION ============
 
