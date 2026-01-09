@@ -30,7 +30,8 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
     ),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, seq_len):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral_decoder_inference(mesh_device, reset_seeds, seq_len):
     """
     b: batch
     s: sequence length
@@ -40,7 +41,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, seq_len):
     pcc = 0.99
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device)
+    model_args = TtModelArgs(mesh_device)
     model_args = set_model_args(model_args, seq_len)
     batch = 1
     state_dict = model_args.load_state_dict()
@@ -48,22 +49,22 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, seq_len):
     reference_model = TransformerBlock(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
-    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, t3k_mesh_device, seq_len=seq_len)
+    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len)
     head_dim = model_args.dim // model_args.n_heads
     transformation_mat_torch = get_rot_transformation_mat(head_dim)
     transformation_mats = ttnn.as_tensor(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
+        device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     # Initialize TT model
-    tt_ccl = TT_CCL(t3k_mesh_device)
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtTransformerBlock(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         tt_ccl=tt_ccl,
         state_dict=state_dict,
         args=model_args,
@@ -101,7 +102,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, seq_len):
         )
 
         tt_output_torch_b1h = (
-            ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+            ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
             .squeeze(1)
             .view(batch, seq_len, -1)
         )

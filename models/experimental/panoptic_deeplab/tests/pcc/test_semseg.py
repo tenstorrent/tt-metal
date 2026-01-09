@@ -105,6 +105,7 @@ def test_ttnn_semseg(device, pcc_values, skip_check, model_location_generator):
 
         # Create centralized configuration
         model_configs = ModelOptimisations(
+            device=device,
             conv_act_dtype=ttnn.bfloat8_b,
             conv_w_dtype=ttnn.bfloat8_b,
         )

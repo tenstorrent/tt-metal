@@ -182,12 +182,12 @@ public:
     std::vector<chan_id_t> get_intramesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
 
     // The following apis should probably be private, and exposed only to some Metal runtime objects
-    void set_routing_mode(uint16_t mode);
-    uint16_t get_routing_mode() const;
-
     void initialize_fabric_context(tt_fabric::FabricConfig fabric_config);
 
     FabricContext& get_fabric_context() const;
+
+    // Get all fabric defines for kernel compilation (used by tt_metal.cpp)
+    std::map<std::string, std::string> get_fabric_kernel_defines() const;
 
     void clear_fabric_context();
 
@@ -239,7 +239,6 @@ private:
 
     void init_control_plane_auto_discovery();
 
-    uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
