@@ -31,11 +31,11 @@ runs:
         if [ -z "$TRIGGERER" ]; then
           TRIGGERER="scheduled run"
         fi
-        MESSAGE=":alert: *${{ inputs.test_name }}* have failed :alert:"
-        MESSAGE="$MESSAGE\n\nLooks like something broke! Something broke in the scheduled run."
+        MESSAGE=":alert: *${{ inputs.test_name }} failed* :alert:"
+        MESSAGE="$MESSAGE\n\nThe scheduled run hit some test failures."
         MESSAGE="$MESSAGE\n\nTriggered by: \`$TRIGGERER\`"
         MESSAGE="$MESSAGE\nCommit: <$COMMIT_URL|$COMMIT_SHA>"
-        MESSAGE="$MESSAGE\n<${RUN_URL}|Take a a look at the logs to investigate.>"
+        MESSAGE="$MESSAGE\n<${RUN_URL}|Please check the logs to see what went wrong.>"
         {
           echo 'text<<EOF'
           echo "$MESSAGE"
