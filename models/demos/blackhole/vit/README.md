@@ -75,6 +75,13 @@ pytest --disable-warnings models/demos/blackhole/vit/tests/test_ttnn_optimized_s
 
 This runs a sweep over sequence sizes (1024, 2048, 3072) and hidden dimensions (512, 1024, 1536, 2304) at batch=1.
 
-The current high-res test is meant for device profiling only. The trace-enabled test will be coming soon for optimized end to end performance.
+### Demo (2CQ Trace Performance)
+
+This Performance test measures e2e model runtime,  measures samples/sec for all 12 configurations:
+
+```sh
+pytest --disable-warnings models/demos/blackhole/vit/tests/test_demo_vit_hiRes_ttnn_inference_perf_e2e_2cq_trace.py
+```
+
 
 For a deeper dive into ViT implementation details (sharding strategies, matmul configs, encoder layer breakdown), see the [ViT Tech Report](../../../../tech_reports/ViT-TTNN/vit.md).
