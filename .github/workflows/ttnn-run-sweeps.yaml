@@ -679,20 +679,6 @@ jobs:
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: n300-llmbox
             generate_mode: ccl_only
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_USER: tt-sweeps
-          POSTGRES_PASSWORD: tt.sweeps
-          POSTGRES_DB: tt-model-traces
-        volumes:
-          - ${{ github.workspace }}/docker-job:/work
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -706,7 +692,6 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /var/run/docker.sock:/var/run/docker.sock
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -731,6 +716,9 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: 🔌 Setup Local Database
+        if: |
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') ||
+          (github.event_name == 'schedule' && github.event.schedule == '0 4 * * *')
         timeout-minutes: 5
         env:
           PGPASSWORD: tt.sweeps
@@ -793,19 +781,6 @@ jobs:
 
           echo "✅ Database ready"
           echo "::endgroup::"
-
-      - name: Verify DB
-        run: |
-          python3 - << 'EOF'
-          import psycopg2
-          conn = psycopg2.connect("postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces")
-          cur = conn.cursor()
-          cur.execute("SELECT COUNT(*) FROM operations")
-          print("Operations:", cur.fetchone()[0])
-          cur.execute("SELECT COUNT(*) FROM configurations")
-          print("Configurations:", cur.fetchone()[0])
-          conn.close()
-          EOF
       - name: Run ttnn sweeps generation (single sweep)
         if: |
           github.event_name == 'workflow_dispatch' &&

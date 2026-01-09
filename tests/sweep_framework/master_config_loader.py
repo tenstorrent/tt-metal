@@ -84,7 +84,7 @@ def _get_default_db_config():
         return "postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces"
     else:
         # Local dev: Use cloudflared tunnel
-        return "postgresql://tt-sweeps:tt.sweeps@localhost:15432/tt-model-traces"
+        return "postgresql://tt-sweeps:tt.sweeps@localhost:25432/tt-model-traces"
 
 
 DEFAULT_DB_CONFIG = _get_default_db_config()
@@ -3795,6 +3795,8 @@ class MasterConfigLoader:
             return None
 
         tensor_data = arg_data["Tensor"]
+        if tensor_data is None:
+            return None
         tensor_spec = tensor_data.get("tensor_spec", {})
         tensor_layout = tensor_spec.get("tensor_layout", {})
 
