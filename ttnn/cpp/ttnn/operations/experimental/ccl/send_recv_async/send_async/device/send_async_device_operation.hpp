@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "send_async_op_device_operation_types.hpp"
-#include "send_async_op_program_factory.hpp"
+#include "send_async_device_operation_types.hpp"
+#include "send_async_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"

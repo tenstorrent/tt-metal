@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "recv_async_op_device_operation_types.hpp"
-#include "recv_async_op_device_operation.hpp"
+#include "recv_async_device_operation_types.hpp"
+#include "recv_async_device_operation.hpp"
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
