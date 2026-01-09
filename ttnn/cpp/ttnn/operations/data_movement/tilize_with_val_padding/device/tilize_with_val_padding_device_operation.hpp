@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_interleaved_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_sharded_program_factory.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -28,7 +29,8 @@ struct TilizeWithValPaddingDeviceOperation {
         tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreFactory,
         tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory,
         tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory>;
+        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory,
+        tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreShardedFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

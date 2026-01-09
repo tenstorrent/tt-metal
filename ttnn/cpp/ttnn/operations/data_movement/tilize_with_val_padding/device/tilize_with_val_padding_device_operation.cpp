@@ -21,7 +21,14 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded tilize does not support sub core grid specification");
-        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory{};
+        auto memory_layout = input_tensor.memory_config().memory_layout();
+        if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory{};
+        } else {
+            // HEIGHT_SHARDED or BLOCK_SHARDED: use ShardedAddrGen approach
+            return tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreShardedFactory{};
+        }
+        if ()
     }
     if (!operation_attributes.enough_space_height) {
         return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
@@ -109,21 +116,33 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_HEIGHT);
 
     if (input_tensor.memory_config().is_sharded()) {
+        auto layout = input_tensor.memory_config().memory_layout();
         TT_FATAL(
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+            layout == TensorMemoryLayout::WIDTH_SHARDED || layout == TensorMemoryLayout::HEIGHT_SHARDED,
             "Input tensor must be width sharded");
         TT_FATAL(
             operation_attributes.output_mem_config.memory_layout() == input_tensor.memory_config().memory_layout(),
             "Output tensor must have the same memory layout as input tensor");
+
+        // Only height height dimension can change for HEIGHT_SHARDED
         for (uint32_t i = 0; i < input_tensor.padded_shape().rank(); i++) {
-            if (i != input_shape.rank() - 2) {
+            if (layout == TensorMemoryLayout::HEIGHT_SHARDED && i == input_shape.rank() - 2) {
+                continue;
+            }
+            if (layout == TensorMemoryLayout::WIDTH_SHARDED && i != input_shape.rank() - 2) {
                 TT_FATAL(
                     input_shape[i] == operation_attributes.output_padded_shape[i],
-                    "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
-                    i,
-                    input_shape[i],
-                    i,
-                    operation_attributes.output_padded_shape[i]);
+                    "For WIDTH_SHARDED, only height can be padded"
+
+                );
+            }
+            // Get rid of this ? below ?
+            TT_FATAL(
+                "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
+                i,
+                input_shape[i],
+                i,
+                operation_attributes.output_padded_shape[i]);
             }
         }
     }
