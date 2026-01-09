@@ -61,10 +61,10 @@ constexpr uint32_t onetile = 1U;
 //   M[r, k] = SiLU(sum_p( X[r, p] * W1[p, k] )) * sum_p( X[r, p] * W3[p, k] )
 // ============================================================================
 inline void compute_M_for_k() {
-    const uint32_t xw1_accum_reg = 0U;  // REG0 will hold the accumulated (X @ W1)[r, k]
-    const uint32_t xw3_accum_reg = 1U;  // REG1 will hold the accumulated (X @ W3)[r, k]
-    const uint32_t silu_xw1_reg = 2U;   // REG2 will hold the SiLU(X @ W1)[r, k]
-    const uint32_t m_reg = 3U;          // REG3 will hold M[r, k] = SiLU(X @ W1) * (X @ W3)
+    constexpr uint32_t xw1_accum_reg = 0U;  // REG0 will hold the accumulated (X @ W1)[r, k]
+    constexpr uint32_t xw3_accum_reg = 1U;  // REG1 will hold the accumulated (X @ W3)[r, k]
+    constexpr uint32_t silu_xw1_reg = 2U;   // REG2 will hold the SiLU(X @ W1)[r, k]
+    constexpr uint32_t m_reg = 3U;          // REG3 will hold M[r, k] = SiLU(X @ W1) * (X @ W3)
 
     tile_regs_acquire();  // acquire working regs
 
@@ -111,7 +111,8 @@ inline void compute_M_for_k() {
 //   Y[r, c] += sum_k( M[r, k] * W2[k, c] )
 //   Stores result to output_cb_idx (either Y_partial or Y_final CB)
 // ============================================================================
-inline void mul_MxW2_accumulate_Y(uint32_t k_block_size, uint32_t c_block_size, bool first_k_block, bool last_k_block) {
+inline void mul_MxW2_accumulate_Y(
+    const uint32_t k_block_size, const uint32_t c_block_size, const bool first_k_block, const bool last_k_block) {
     tile_regs_acquire();
     // Initialize or load Y accumulators
     if (!first_k_block) {
