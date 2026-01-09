@@ -73,7 +73,7 @@ except ImportError:
 
 BASE_DIR = get_base_dir()
 
-DEFAULT_DB_CONFIG = "postgresql://sweep_reader:sweep_readonly_pw@ep-blue-credit-ah8iebt7-pooler.c-3.us-east-1.aws.neon.tech/tt-sweeps?sslmode=require&channel_binding=require"
+DEFAULT_DB_CONFIG = "postgresql://sweep_reader:sweep_readonly_pw@ep-blue-credit-ah8iebt7-pooler.c-3.us-east-1.aws.neon.tech:6543/tt-sweeps?sslmode=require&channel_binding=require"
 
 
 @dataclass
