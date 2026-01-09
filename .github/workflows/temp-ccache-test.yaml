@@ -169,7 +169,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         PYTHONPATH: /work
         ARCH_NAME: wormhole_b0
-        CCACHE_REMOTE_ONLY: "false"
         CCACHE_TEMPDIR: /tmp/ccache
         TT_METAL_CCACHE_KERNEL_SUPPORT: 1
         TT_METAL_LOGGER_LEVEL: Debug
@@ -592,7 +591,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
-        CCACHE_REMOTE_ONLY: "false"
         CCACHE_TEMPDIR: /tmp/ccache
         TT_METAL_CCACHE_KERNEL_SUPPORT: 1
         TT_METAL_LOGGER_LEVEL: Debug
