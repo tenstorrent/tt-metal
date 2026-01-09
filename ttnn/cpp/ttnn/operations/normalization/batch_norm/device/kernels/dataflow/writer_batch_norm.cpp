@@ -108,9 +108,10 @@ void kernel_main() {
                 cb_wait_front(cb_id_dst, onetile);
                 uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
                 noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
                 cb_pop_front(cb_id_dst, onetile);
             }
+            noc_async_write_barrier();
             tile_offset += c_stride;
         }
         tile_offset += next_batch_shift;

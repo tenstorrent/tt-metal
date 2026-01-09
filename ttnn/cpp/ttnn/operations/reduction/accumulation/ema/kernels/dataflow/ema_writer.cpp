@@ -36,7 +36,8 @@ void kernel_main() {
         const uint32_t l1_read_addr = get_read_ptr(dst_cb);
         const uint64_t dst_noc_addr = dst_accessor.get_noc_addr(tile_id);
         noc_async_write(l1_read_addr, dst_noc_addr, dst_tile_size);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(dst_cb, 1);
     }
+    noc_async_write_barrier();
 }

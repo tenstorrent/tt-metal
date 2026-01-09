@@ -34,17 +34,19 @@ void kernel_main() {
             cb_wait_front(values_cb_index, onetile);
             uint32_t l1_read_addr = get_read_ptr(values_cb_index);
             noc_async_write_tile(j * Kt + i, interleaved_accessor0, l1_read_addr);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(values_cb_index, onetile);
         }
+        noc_async_write_barrier();
 
         // topk indices
         for (uint32_t i = 0; i < Kt; ++i) {
             cb_wait_front(output_ind_cb_index, onetile);
             uint32_t l1_read_addr = get_read_ptr(output_ind_cb_index);
             noc_async_write_tile(j * Kt + i, interleaved_accessor1, l1_read_addr);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(output_ind_cb_index, onetile);
         }
+        noc_async_write_barrier();
     }
 }

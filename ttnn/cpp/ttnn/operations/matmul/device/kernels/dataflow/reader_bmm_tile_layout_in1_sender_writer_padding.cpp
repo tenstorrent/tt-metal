@@ -530,10 +530,11 @@ void kernel_main() {
                                 out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
                             }
 
-                            noc_async_write_barrier();
+                            noc_async_writes_flushed();
                             cb_pop_front(cb_id_out0, out_subblock_tile_count);
                             out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
                         }
+                        noc_async_write_barrier();
                         // Pop fully padded subblocks along the row
                         if (bw == num_blocks_w_dim_ - 1) {
                             cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);

@@ -35,9 +35,10 @@ void kernel_main() {
             cb_wait_front(cb_out, ONE_TILE);
             uint32_t l1_read_addr = get_read_ptr(cb_out);
             noc_async_write_tile(write_tile_id, output_addrg, l1_read_addr);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_out, ONE_TILE);
         }
+        noc_async_write_barrier();
         ++high_rank_offset;
         if (high_rank_offset >= input_tile_offset) {
             high_rank_offset = 0;

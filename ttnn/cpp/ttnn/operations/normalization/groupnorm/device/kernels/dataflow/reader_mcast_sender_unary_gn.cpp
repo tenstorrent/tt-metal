@@ -466,9 +466,10 @@ void kernel_main() {
                                     num_mcast_cores_last_group,
                                     false);
                             }
-                            noc_async_write_barrier();
+                            noc_async_writes_flushed();
                             cb_pop_front(cb_mcast, 1);
                         }
+                        noc_async_write_barrier();
                     }
                 }
                 if constexpr (GROUP_SIZE_IS_POWER_OF_2) {

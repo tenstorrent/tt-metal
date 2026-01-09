@@ -31,7 +31,8 @@ void kernel_main() {
             tile_id++;
             l1_read_addr += tile_bytes;
         }
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_out, blk);
     }
+    noc_async_write_barrier();
 }
