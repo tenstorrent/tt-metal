@@ -622,6 +622,18 @@ run_t3000_tt_dit_tests() {
 
 }
 
+run_t3000_tttv2_modules_tests() {
+  # Run MLP1D tests
+  export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct # Only used for test_mlp_1d_vs_reference_from_model_args, which will retire with TTTv1
+  export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d
+  pytest models/common/tests/modules/mlp/test_mlp_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --cov=models.common.modules.mlp.mlp_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg
+}
+
 run_t3000_gpt_oss_unit_tests() {
   # Record the start time
   fail=0
@@ -698,6 +710,9 @@ run_t3000_tests() {
 
   # Run tt_dit tests
   run_t3000_tt_dit_tests
+
+  # Run tttv2 modules tests
+  run_t3000_tttv2_modules_tests
 
   # Run gpt-oss unit tests
   run_t3000_gpt_oss_unit_tests
