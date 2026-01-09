@@ -181,9 +181,6 @@ public:
     template <typename T>
     [[nodiscard]] std::vector<T> to_vector(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
-    template <typename T>
-    [[nodiscard]] T item(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
-
     [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
         ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
@@ -304,14 +301,6 @@ private:
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
-[[deprecated]] Tensor create_device_tensor(
-    const tt::tt_metal::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config = MemoryConfig{},
-    const std::optional<Tile>& tile = std::nullopt);
-
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
 void memcpy(
     distributed::MeshCommandQueue& queue,
@@ -339,16 +328,9 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
-// Allocates a tensor on device.
-Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-
 // Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
 // shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-
-// Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
-void write_tensor(
-    const Tensor& src, Tensor& dst, bool blocking = true, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
 
 Tensor convert_python_tensor_to_tt_tensor(
     const ttnn::Shape& tensor_shape,
@@ -371,6 +353,8 @@ Tensor to_dtype(const Tensor& tensor, DataType dtype);
 }  // namespace ops
 
 }  // namespace tt::tt_metal
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor);
 
 namespace ttnn {
 

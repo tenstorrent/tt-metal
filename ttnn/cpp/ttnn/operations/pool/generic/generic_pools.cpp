@@ -336,10 +336,9 @@ static std::vector<Tensor> pool2d_L1(
             "Expected two output tensors when return_indices is true, but got {}.",
             output_tensors.size());
         return output_tensors;
-    } else {
-        TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
-        return output_tensors;
     }
+    TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
+    return output_tensors;
 }
 
 class Pool2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
@@ -384,27 +383,190 @@ public:
         Layout input_layout,
         Layout output_layout,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-        MeshDevice* device);
+        MeshDevice* device) :
+        batch_size(batch_size),
+        input_shape(input_shape),
+        channels(channels),
+        kernel_size(kernel_size),
+        stride(stride),
+        padding_n4(padding_n4),
+        dilation(dilation),
+        ceil_mode(ceil_mode),
+        count_include_pad(count_include_pad),
+        divisor_override(divisor_override),
+        return_indices(return_indices),
+        pool_type(pool_type),
+        dtype(dtype),
+        input_layout(input_layout),
+        output_layout(output_layout),
+        compute_kernel_config(compute_kernel_config),
+        device(device) {
+        shard_layout = applied_shard_scheme.value_or(TensorMemoryLayout::HEIGHT_SHARDED);
+        sliding_window_config = sliding_window::SlidingWindowConfig{
+            .batch_size = batch_size,
+            .channels = channels,
+            .input_hw = {std::get<0>(input_shape), std::get<1>(input_shape)},
+            .window_hw = {kernel_size.at(0), kernel_size.at(1)},
+            .stride_hw = {stride.at(0), stride.at(1)},
+            .padding = padding_n4,
+            .dilation_hw = {dilation.at(0), dilation.at(1)},
+            .ceil_mode = ceil_mode,
+        };
+        auto full_output_shape = sliding_window_config.get_output_shape();
+        this->output_shape = IOShape{full_output_shape[1], full_output_shape[2]};
+        this->ceil_pad = {
+            sliding_window_config.get_ceil_pad_hw().first, sliding_window_config.get_ceil_pad_hw().second};
+    }
 
-    std::tuple<
-        std::tuple<Pool2dSliceAttr::IOShape, Pool2dSliceAttr::IOShape>,
-        std::array<uint32_t, 4>,
-        std::array<uint32_t, 2>,
-        uint32_t>
-    get_input_slice_and_padding(const IOShape& output_slice_start, const IOShape& output_slice_end) const;
+    std::tuple<std::tuple<IOShape, IOShape>, std::array<uint32_t, 4>, std::array<uint32_t, 2>, uint32_t>
+    get_input_slice_and_padding(const IOShape& output_slice_start, const IOShape& output_slice_end) const {
+        auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
+        auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
+        int input_slice_height_start = (output_slice_height_start * stride[0]) - padding_n4[0];
+        int input_slice_height_end = ((output_slice_height_end - 1) * stride[0]) - padding_n4[0] +
+                                     ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
+        int input_slice_width_start = (output_slice_width_start * stride[1]) - padding_n4[2];
+        int input_slice_width_end = ((output_slice_width_end - 1) * stride[1]) - padding_n4[2] +
+                                    ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
+
+        int pad_top = std::max<int>(0, -input_slice_height_start);
+        int pad_bottom = std::max<int>(0, input_slice_height_end - std::get<0>(input_shape));
+        int pad_left = std::max<int>(0, -input_slice_width_start);
+        int pad_right = std::max<int>(0, input_slice_width_end - std::get<1>(input_shape));
+
+        input_slice_height_start = std::max<int>(0, input_slice_height_start);
+        input_slice_height_end = std::min<int>(std::get<0>(input_shape), input_slice_height_end);
+        input_slice_width_start = std::max<int>(0, input_slice_width_start);
+        input_slice_width_end = std::min<int>(std::get<1>(input_shape), input_slice_width_end);
+
+        std::array<uint32_t, 2> this_ceil_pad = {0, 0};
+        auto [output_height, output_width] = output_shape;
+        if (output_slice_height_start == 0) {
+            pad_top = padding_n4[0];
+            input_slice_height_start = 0;
+        }
+        if (output_slice_height_end == output_height) {
+            pad_bottom = padding_n4[1];
+            input_slice_height_end = std::get<0>(input_shape);
+            this_ceil_pad[0] = ceil_pad[0];
+        }
+        if (output_slice_width_start == 0) {
+            pad_left = padding_n4[2];
+            input_slice_width_start = 0;
+        }
+        if (output_slice_width_end == output_width) {
+            pad_right = padding_n4[3];
+            input_slice_width_end = std::get<1>(input_shape);
+            this_ceil_pad[1] = ceil_pad[1];
+        }
+        uint32_t width_rounding_value = (output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
+        uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+        uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
+        if (output_slice_width % width_rounding_value != 0) {
+            uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
+            log_trace(
+                tt::LogOp,
+                "Pool2d Slicing: Additional output width of {} added to the right side.",
+                additional_padded_width);
+
+            output_slice_width += additional_padded_width;
+            pad_right = (output_slice_width - 1) * stride[1] - input_slice_width +
+                        ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
+        }
+        return {
+            {{input_slice_height_start, input_slice_width_start}, {input_slice_height_end, input_slice_width_end}},
+            {pad_top, pad_bottom, pad_left, pad_right},
+            this_ceil_pad,
+            output_slice_width};
+    }
+
     std::tuple<IOShape, IOShape> get_input_slice(
-        const IOShape& output_slice_start, const IOShape& output_slice_end) const override;
+        const IOShape& output_slice_start, const IOShape& output_slice_end) const override {
+        return std::get<0>(get_input_slice_and_padding(output_slice_start, output_slice_end));
+    }
+
     uint32_t get_L1_usage(
         const IOShape& output_slice_start,
         const IOShape& output_slice_end,
-        const op_slicing::Op2DSliceConfig& slice_config) const override;
+        const op_slicing::Op2DSliceConfig& slice_config) const override {
+        return 0;
+    }
+
     tt::tt_metal::MemoryConfig get_input_memory_config(
-        const IOShape& output_slice_start, const IOShape& output_slice_end) const override;
+        const IOShape& output_slice_start, const IOShape& output_slice_end) const override {
+        auto [input_slice, this_slice_padding, this_ceil_pad, this_output_width] =
+            get_input_slice_and_padding(output_slice_start, output_slice_end);
+        auto [input_slice_start, input_slice_end] = input_slice;
+        uint32_t input_slice_height = std::get<0>(input_slice_end) - std::get<0>(input_slice_start);
+        uint32_t input_slice_width = std::get<1>(input_slice_end) - std::get<1>(input_slice_start);
+        uint32_t output_slice_height = std::get<0>(output_slice_end) - std::get<0>(output_slice_start);
+
+        uint32_t input_nhw_rounding_value =
+            (input_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
+        uint32_t input_slice_nhw =
+            tt::round_up(batch_size * input_slice_height * input_slice_width, input_nhw_rounding_value);
+        auto sliced_input_tensor_memory_config = std::get<0>(get_pool_input_memory_config(
+            sliding_window_config,
+            shard_layout,
+            batch_size,
+            channels,
+            ttnn::Shape({1, 1, input_slice_nhw, channels}),
+            ttnn::Shape({batch_size, output_slice_height, this_output_width, channels}),
+            device->compute_with_storage_grid_size(),
+            dtype,
+            input_layout,
+            dtype,
+            output_layout,
+            pool_type,
+            count_include_pad,
+            divisor_override,
+            return_indices));
+
+        return sliced_input_tensor_memory_config;
+    }
+
     std::vector<ttnn::Tensor> run_L1_op(
         const ttnn::Tensor& sliced_input_tensor,
         const IOShape& output_slice_start,
-        const IOShape& output_slice_end) override;
-    std::string name() const override;
+        const IOShape& output_slice_end) override {
+        auto [input_slice, this_slice_padding, this_ceil_pad, this_output_width] =
+            get_input_slice_and_padding(output_slice_start, output_slice_end);
+        auto [input_slice_start, input_slice_end] = input_slice;
+        auto [input_slice_height_start, input_slice_width_start] = input_slice_start;
+        auto [input_slice_height_end, input_slice_width_end] = input_slice_end;
+
+        int input_slice_height = input_slice_height_end - input_slice_height_start;
+        int input_slice_width = input_slice_width_end - input_slice_width_start;
+        auto this_ceil_mode = ceil_mode;
+        if (this_ceil_pad[0] > 0 || this_ceil_pad[1] > 0) {
+            this_ceil_mode = true;
+        }
+        return pool2d_L1(
+            sliced_input_tensor,
+            pool_type,
+            batch_size,
+            input_slice_height,
+            input_slice_width,
+            channels,
+            kernel_size,
+            stride,
+            this_slice_padding,
+            dilation,
+            this_ceil_mode,
+            count_include_pad,
+            divisor_override,
+            std::nullopt,
+            std::nullopt,
+            compute_kernel_config,
+            true, /* deallocate_input to save L1 */
+            true, /* reallocate_halo_output to save L1 */
+            return_indices,
+            dtype,
+            output_layout,
+            this_ceil_pad);
+    }
+
+    std::string name() const override { return "Pool2D"; }
 };
 
 static std::vector<Tensor> pool2d_DRAM(
@@ -546,9 +708,8 @@ static std::vector<Tensor> pool2d_DRAM(
     }
     if (return_indices) {
         return {dram_output_tensor, dram_output_indices_tensor};
-    } else {
-        return {dram_output_tensor};
     }
+    return {dram_output_tensor};
 }
 
 // Enum to represent the execution path for pool2d operations
@@ -616,31 +777,30 @@ static std::vector<Tensor> pool2d(
             return_indices,
             dtype,
             output_layout);
-    } else {
-        return pool2d_DRAM(
-            input_tensor,
-            pool_type,
-            batch_size,
-            input_h,
-            input_w,
-            channels,
-            kernel_size,
-            stride,
-            padding,
-            dilation,
-            ceil_mode,
-            count_include_pad,
-            divisor_override,
-            memory_config,
-            dram_slice_config,
-            applied_shard_scheme,
-            compute_kernel_config,
-            deallocate_input,
-            reallocate_halo_output,
-            return_indices,
-            dtype,
-            output_layout);
     }
+    return pool2d_DRAM(
+        input_tensor,
+        pool_type,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        ceil_mode,
+        count_include_pad,
+        divisor_override,
+        memory_config,
+        dram_slice_config,
+        applied_shard_scheme,
+        compute_kernel_config,
+        deallocate_input,
+        reallocate_halo_output,
+        return_indices,
+        dtype,
+        output_layout);
 }
 
 std::vector<Tensor> MaxPool2DOp::invoke(
@@ -734,204 +894,5 @@ Tensor AvgPool2DOp::invoke(
     // Average pool always returns just the tensor, never indices
     return result.at(0);
 }
-
-Pool2dSliceAttr::Pool2dSliceAttr(
-    uint32_t batch_size,
-    IOShape input_shape,
-    uint32_t channels,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 4> padding_n4,
-    std::array<uint32_t, 2> dilation,
-    bool ceil_mode,
-    bool count_include_pad,
-    std::optional<int32_t> divisor_override,
-    std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool return_indices,
-    Pool2DType pool_type,
-    DataType dtype,
-    Layout input_layout,
-    Layout output_layout,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    MeshDevice* device) :
-    batch_size(batch_size),
-    input_shape(input_shape),
-    channels(channels),
-    kernel_size(kernel_size),
-    stride(stride),
-    padding_n4(padding_n4),
-    dilation(dilation),
-    ceil_mode(ceil_mode),
-    count_include_pad(count_include_pad),
-    divisor_override(divisor_override),
-    return_indices(return_indices),
-    pool_type(pool_type),
-    dtype(dtype),
-    input_layout(input_layout),
-    output_layout(output_layout),
-    compute_kernel_config(compute_kernel_config),
-    device(device) {
-    shard_layout = applied_shard_scheme.value_or(TensorMemoryLayout::HEIGHT_SHARDED);
-    sliding_window_config = sliding_window::SlidingWindowConfig{
-        .batch_size = batch_size,
-        .channels = channels,
-        .input_hw = {std::get<0>(input_shape), std::get<1>(input_shape)},
-        .window_hw = {kernel_size.at(0), kernel_size.at(1)},
-        .stride_hw = {stride.at(0), stride.at(1)},
-        .padding = padding_n4,
-        .dilation_hw = {dilation.at(0), dilation.at(1)},
-        .ceil_mode = ceil_mode,
-    };
-    auto full_output_shape = sliding_window_config.get_output_shape();
-    this->output_shape = IOShape{full_output_shape[1], full_output_shape[2]};
-    this->ceil_pad = {sliding_window_config.get_ceil_pad_hw().first, sliding_window_config.get_ceil_pad_hw().second};
-}
-
-std::tuple<
-    std::tuple<Pool2dSliceAttr::IOShape, Pool2dSliceAttr::IOShape>,
-    std::array<uint32_t, 4>,
-    std::array<uint32_t, 2>,
-    uint32_t>
-Pool2dSliceAttr::get_input_slice_and_padding(const IOShape& output_slice_start, const IOShape& output_slice_end) const {
-    auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
-    auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
-    int input_slice_height_start = (output_slice_height_start * stride[0]) - padding_n4[0];
-    int input_slice_height_end = ((output_slice_height_end - 1) * stride[0]) - padding_n4[0] +
-                                 ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
-    int input_slice_width_start = (output_slice_width_start * stride[1]) - padding_n4[2];
-    int input_slice_width_end = ((output_slice_width_end - 1) * stride[1]) - padding_n4[2] +
-                                ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
-
-    int pad_top = std::max<int>(0, -input_slice_height_start);
-    int pad_bottom = std::max<int>(0, input_slice_height_end - std::get<0>(input_shape));
-    int pad_left = std::max<int>(0, -input_slice_width_start);
-    int pad_right = std::max<int>(0, input_slice_width_end - std::get<1>(input_shape));
-
-    input_slice_height_start = std::max<int>(0, input_slice_height_start);
-    input_slice_height_end = std::min<int>(std::get<0>(input_shape), input_slice_height_end);
-    input_slice_width_start = std::max<int>(0, input_slice_width_start);
-    input_slice_width_end = std::min<int>(std::get<1>(input_shape), input_slice_width_end);
-
-    std::array<uint32_t, 2> this_ceil_pad = {0, 0};
-    auto [output_height, output_width] = output_shape;
-    if (output_slice_height_start == 0) {
-        pad_top = padding_n4[0];
-        input_slice_height_start = 0;
-    }
-    if (output_slice_height_end == output_height) {
-        pad_bottom = padding_n4[1];
-        input_slice_height_end = std::get<0>(input_shape);
-        this_ceil_pad[0] = ceil_pad[0];
-    }
-    if (output_slice_width_start == 0) {
-        pad_left = padding_n4[2];
-        input_slice_width_start = 0;
-    }
-    if (output_slice_width_end == output_width) {
-        pad_right = padding_n4[3];
-        input_slice_width_end = std::get<1>(input_shape);
-        this_ceil_pad[1] = ceil_pad[1];
-    }
-    uint32_t width_rounding_value = (output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
-    uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
-    uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
-    if (output_slice_width % width_rounding_value != 0) {
-        uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
-        log_trace(
-            tt::LogOp,
-            "Pool2d Slicing: Additional output width of {} added to the right side.",
-            additional_padded_width);
-
-        output_slice_width += additional_padded_width;
-        pad_right = (output_slice_width - 1) * stride[1] - input_slice_width +
-                    ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
-    }
-    return {
-        {{input_slice_height_start, input_slice_width_start}, {input_slice_height_end, input_slice_width_end}},
-        {pad_top, pad_bottom, pad_left, pad_right},
-        this_ceil_pad,
-        output_slice_width};
-}
-std::tuple<Pool2dSliceAttr::IOShape, Pool2dSliceAttr::IOShape> Pool2dSliceAttr::get_input_slice(
-    const IOShape& output_slice_start, const IOShape& output_slice_end) const {
-    return std::get<0>(get_input_slice_and_padding(output_slice_start, output_slice_end));
-}
-
-uint32_t Pool2dSliceAttr::get_L1_usage(
-    const IOShape& output_slice_start,
-    const IOShape& output_slice_end,
-    const op_slicing::Op2DSliceConfig& slice_config) const {
-    return 0;
-}
-tt::tt_metal::MemoryConfig Pool2dSliceAttr::get_input_memory_config(
-    const IOShape& output_slice_start, const IOShape& output_slice_end) const {
-    auto [input_slice, this_slice_padding, this_ceil_pad, this_output_width] =
-        get_input_slice_and_padding(output_slice_start, output_slice_end);
-    auto [input_slice_start, input_slice_end] = input_slice;
-    uint32_t input_slice_height = std::get<0>(input_slice_end) - std::get<0>(input_slice_start);
-    uint32_t input_slice_width = std::get<1>(input_slice_end) - std::get<1>(input_slice_start);
-    uint32_t output_slice_height = std::get<0>(output_slice_end) - std::get<0>(output_slice_start);
-
-    uint32_t input_nhw_rounding_value = (input_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
-    uint32_t input_slice_nhw =
-        tt::round_up(batch_size * input_slice_height * input_slice_width, input_nhw_rounding_value);
-    auto sliced_input_tensor_memory_config = std::get<0>(get_pool_input_memory_config(
-        sliding_window_config,
-        shard_layout,
-        batch_size,
-        channels,
-        ttnn::Shape({1, 1, input_slice_nhw, channels}),
-        ttnn::Shape({batch_size, output_slice_height, this_output_width, channels}),
-        device->compute_with_storage_grid_size(),
-        dtype,
-        input_layout,
-        dtype,
-        output_layout,
-        pool_type,
-        count_include_pad,
-        divisor_override,
-        return_indices));
-
-    return sliced_input_tensor_memory_config;
-}
-std::vector<ttnn::Tensor> Pool2dSliceAttr::run_L1_op(
-    const ttnn::Tensor& sliced_input_tensor, const IOShape& output_slice_start, const IOShape& output_slice_end) {
-    auto [input_slice, this_slice_padding, this_ceil_pad, this_output_width] =
-        get_input_slice_and_padding(output_slice_start, output_slice_end);
-    auto [input_slice_start, input_slice_end] = input_slice;
-    auto [input_slice_height_start, input_slice_width_start] = input_slice_start;
-    auto [input_slice_height_end, input_slice_width_end] = input_slice_end;
-
-    int input_slice_height = input_slice_height_end - input_slice_height_start;
-    int input_slice_width = input_slice_width_end - input_slice_width_start;
-    auto this_ceil_mode = ceil_mode;
-    if (this_ceil_pad[0] > 0 || this_ceil_pad[1] > 0) {
-        this_ceil_mode = true;
-    }
-    return pool2d_L1(
-        sliced_input_tensor,
-        pool_type,
-        batch_size,
-        input_slice_height,
-        input_slice_width,
-        channels,
-        kernel_size,
-        stride,
-        this_slice_padding,
-        dilation,
-        this_ceil_mode,
-        count_include_pad,
-        divisor_override,
-        std::nullopt,
-        std::nullopt,
-        compute_kernel_config,
-        true, /* deallocate_input to save L1 */
-        true, /* reallocate_halo_output to save L1 */
-        return_indices,
-        dtype,
-        output_layout,
-        this_ceil_pad);
-}
-std::string Pool2dSliceAttr::name() const { return "Pool2D"; }
 
 }  // namespace ttnn::operations::pool

@@ -129,9 +129,8 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 
     // 3) Otherwise, when the input is tiled, it is never a NOP if the last two dimensions are permuted. When it is row
     // major, it is never a NOP if the last dimension is permuted.
-    if (a.layout() == Layout::TILE && (dims[rank - 1] != rank - 1 || dims[rank - 2] != rank - 2)) {
-        return false;
-    } else if (a.layout() == Layout::ROW_MAJOR && dims[rank - 1] != rank - 1) {
+    if ((a.layout() == Layout::TILE && (dims[rank - 1] != rank - 1 || dims[rank - 2] != rank - 2)) ||
+        (a.layout() == Layout::ROW_MAJOR && dims[rank - 1] != rank - 1)) {
         return false;
     }
 
