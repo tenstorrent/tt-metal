@@ -754,7 +754,11 @@ jobs:
 
           # Decompress and read the SQL dump
           with gzip.open("model_tracer/ttnn_operations_db.sql.gz", "rt", encoding="utf-8") as f:
-              sql_content = f.read()
+              lines = f.readlines()
+
+          # Filter out psql meta-commands (lines starting with \)
+          sql_lines = [line for line in lines if not line.strip().startswith('\\')]
+          sql_content = ''.join(sql_lines)
 
           # Connect and execute
           conn = psycopg2.connect("postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces")
