@@ -210,6 +210,19 @@ private:
         uint32_t timer_id,
         uint64_t timestamp);
 
+    void readTsData16BMarkerData(
+        std::set<tracy::TTDeviceMarker>& device_markers,
+        uint32_t run_host_id,
+        uint32_t device_trace_counter,
+        const std::string& op_name,
+        ChipId device_id,
+        const CoreCoord& physical_core,
+        tracy::RiscType risc_type,
+        uint64_t data,
+        const std::vector<uint64_t>& trailer_data,
+        uint32_t timer_id,
+        uint64_t timestamp);
+
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
 
