@@ -183,11 +183,11 @@ ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::LlamaAllGath
 
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input0);
 
-    auto matmul_struct = matmul::create_matmul_attributes(
+    auto matmul_struct = ttnn::operations::matmul::create_matmul_attributes(
         input0,
         input1,
         /*parameters=*/
-        matmul::operation_attributes_t{
+        ttnn::operations::matmul::operation_attributes_t{
             program_config,
             /*bcast_batch=*/std::nullopt,
             mm_memory_config.value_or(input0.memory_config()),

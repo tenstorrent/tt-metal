@@ -1325,10 +1325,10 @@ operations::matmul::MatmulDeviceOperation::tensor_return_value_t matmul(
             bias_single_tile_size,
             attributes);
 
-        return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        return ttnn::device_operation::launch<OperationType>(
             attributes_with_program_config, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
     }
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
 }
 
@@ -1348,12 +1348,11 @@ operations::matmul::MatmulDeviceOperation::tensor_return_value_t matmul(
             bias_single_tile_size,
             attributes);
 
-        return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        return ttnn::device_operation::launch<OperationType>(
             attributes_with_program_config, {input_tensors, {}, {optional_output_tensor}});
     }
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
-        attributes, {input_tensors, {}, {optional_output_tensor}});
+    return ttnn::device_operation::launch<OperationType>(attributes, {input_tensors, {}, {optional_output_tensor}});
 }
 
 }  // namespace ttnn::prim
