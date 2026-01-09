@@ -37,7 +37,7 @@ def pad_dim_to_size(x: "torch.Tensor", dim: int, size: int) -> "torch.Tensor":
     return torch.nn.functional.pad(x, pad, mode="constant", value=0)
 
 
-def pad_to_shape(x: "torch.Tensor", target_shape: tuple[int, ...]) -> "torch.Tensor":
+def pad_to_shape(x: "torch.Tensor", target_shape: tuple[int, ...], pad_value: float = 0.0) -> "torch.Tensor":
     """Pad tensor to target_shape in a single F.pad call (more efficient than per-dim padding)."""
     if x.shape == target_shape:
         return x
@@ -49,7 +49,7 @@ def pad_to_shape(x: "torch.Tensor", target_shape: tuple[int, ...]) -> "torch.Ten
             raise ValueError(f"Target size {target} is smaller than current size {orig}")
         pad.extend([0, target - orig])
 
-    return torch.nn.functional.pad(x, pad, mode="constant", value=0)
+    return torch.nn.functional.pad(x, pad, mode="constant", value=pad_value)
 
 
 def get_padded_hidden_dim(hidden_dim: int, num_devices: int, tile_size: int = 32) -> int:

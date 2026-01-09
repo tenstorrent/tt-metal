@@ -40,7 +40,6 @@ class LazyWeight:
 
     The source can be:
     - A tensor directly (duck-typed, typically torch.Tensor)
-    - A callable that returns a tensor (for truly lazy loading)
 
     All fields except source are optional at construction time and can be
     provided later. get_weight() will check
@@ -66,15 +65,9 @@ class LazyWeight:
         weight = LazyWeight.sharded_1d(source=tensor, device=mesh_device, dtype=ttnn.bfloat16, dim=3)
         weight = LazyWeight.replicated(source=tensor, device=mesh_device, dtype=ttnn.bfloat16)
 
-        # Callable source (fully lazy)
-        weight = LazyWeight(
-            source=lambda: load_checkpoint()["weight"],
-            weight_name="my_weight",
-        )
-        ttnn_tensor = weight.get_weight(device=mesh_device, dtype=ttnn.bfloat16, cache_dir=Path("/tmp/cache"))
     """
 
-    # Source: duck-typed tensor OR callable that returns one
+    # Source: duck-typed tensor
     # String annotation documents intent without importing torch
     # todo)) use something like LazyStateDict for the source
     source: "torch.Tensor"
@@ -132,14 +125,14 @@ class LazyWeight:
             self._value = ttnn.load_tensor(str(cache_file_name), device=self.device)
             return self._value
 
-        # Resolve source (call if callable, otherwise use directly)
+        # Resolve source
         tensor = self.source
 
         # Get mesh mapper (created from config)
         if self.mesh_mapper_config is not None:
             mesh_mapper = ttnn.create_mesh_mapper(self.device, self.mesh_mapper_config)
             # Auto-pad tensor to satisfy ttnn.from_torch's tile alignment constraint
-            tensor = _auto_pad_for_sharding(tensor, self.padded_shape)
+            tensor = _auto_pad_for_sharding(tensor, self.padded_shape, pad_value=self.pad_value)
         else:
             # None config means replicate
             mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(self.device)
@@ -265,6 +258,7 @@ class LazyWeight:
 def _auto_pad_for_sharding(
     tensor: "torch.Tensor",
     padded_shape: tuple[int, ...],
+    pad_value: float = 0.0,
 ) -> "torch.Tensor":
     """
     Auto-pad tensor to satisfy ttnn.from_torch's tile alignment constraint for sharding.
@@ -275,13 +269,14 @@ def _auto_pad_for_sharding(
     Args:
         tensor: Source torch tensor
         padded_shape: Target shape after padding (from LazyWeight.padded_shape)
+        pad_value: Value to use for padding (default 0.0)
 
     Returns:
         Padded tensor if padding was needed, otherwise original tensor
     """
     if tensor.shape != padded_shape:
         logger.debug(f"Auto-padding from {tuple(tensor.shape)} to {padded_shape} for tile alignment")
-        return pad_to_shape(tensor, padded_shape)
+        return pad_to_shape(tensor, padded_shape, pad_value=pad_value)
     return tensor
 
 
