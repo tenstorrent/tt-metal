@@ -104,12 +104,12 @@ private:
     struct Limits {
         // 1D: Max hops supported by L1 memory map
         //     ROUTING_PATH_SIZE_1D = 1024 bytes / 16 bytes per entry = 64 chips max (63 hops)
-        static constexpr uint32_t MAX_1D_HOPS = 63;  // Was 32
+        static constexpr uint32_t MAX_1D_HOPS = 63;
 
         // 2D: Max route buffer size (optimized to 67, fits in 128B header)
         //     Each byte in route buffer encodes 1 hop, so MAX_2D_HOPS = MAX_2D_ROUTE_BUFFER_SIZE
         //     67-byte buffer fits in 128B header (61B base + 67B buffer = 128B, zero padding waste)
-        static constexpr uint32_t MAX_2D_ROUTE_BUFFER_SIZE = 67;  // Was 35, supports 66-hop routes
+        static constexpr uint32_t MAX_2D_ROUTE_BUFFER_SIZE = 67;
         static constexpr uint32_t MAX_2D_HOPS = MAX_2D_ROUTE_BUFFER_SIZE;
     };
 
@@ -127,10 +127,10 @@ private:
         uint32_t buffer_size;
     };
     static constexpr Routing2DBufferTier ROUTING_2D_BUFFER_TIERS[] = {
-        {19, 19},  // 80B header - max capacity (61+19=80, ZERO waste)
-        {35, 35},  // 96B header - max capacity (61+35=96, ZERO waste)
-        {51, 51},  // 112B header - max capacity (61+51=112, ZERO waste)
-        {67, 67}   // 128B header - max capacity (61+67=128, ZERO waste), supports 66-hop max
+        {19, 19},  // 80B header - max capacity (61+19=80)
+        {35, 35},  // 96B header - max capacity (61+35=96)
+        {51, 51},  // 112B header - max capacity (61+51=112)
+        {67, 67}   // 128B header - max capacity (61+67=128)
     };
 
     // ============ Private Implementation ============

@@ -182,8 +182,8 @@ size_t FabricContext::get_1d_header_size(uint32_t extension_words) const {
     switch (extension_words) {
         case 0: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<0>);
         case 1: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<1>);
-        case 2: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<2>);  // NEW: 48 hops
-        case 3: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<3>);  // NEW: 64 hops
+        case 2: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<2>);
+        case 3: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<3>);
         default: TT_THROW("Unsupported extension words: {}", extension_words);
     }
 }

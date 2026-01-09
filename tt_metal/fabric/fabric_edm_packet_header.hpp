@@ -873,6 +873,12 @@ struct LowLatencyMeshRoutingFields {
 // Primary template for 2D routing headers with variable route buffer size
 template <int RouteBufferSize = 32>
 struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteBufferSize>> {
+    // Block route buffers >67 bytes until memory map is updated
+    static_assert(
+        RouteBufferSize <= 67,
+        "ERROR: 2D routing with >67-byte route buffer requires memory map updates.\n"
+        "Current L1 allocation (ROUTING_PATH_SIZE_2D = 1024 bytes) supports max 67 hops.");
+
     LowLatencyMeshRoutingFields routing_fields;
     uint8_t route_buffer[RouteBufferSize];
     union {
@@ -900,12 +906,8 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
 //              routing_fields:4 + dst_start:4 + mcast_params:8 + is_mcast_active:1)
 static_assert(sizeof(HybridMeshPacketHeaderT<19>) == 80, "19B buffer must result in 80B header (max capacity)");
 static_assert(sizeof(HybridMeshPacketHeaderT<35>) == 96, "35B buffer must result in 96B header (max capacity)");
-static_assert(
-    sizeof(HybridMeshPacketHeaderT<51>) == 112,
-    "51B buffer must result in 112B header (max capacity)");  // NEW for 4×64
-static_assert(
-    sizeof(HybridMeshPacketHeaderT<67>) == 128,
-    "67B buffer must result in 128B header (max capacity)");  // NEW for 4×64
+static_assert(sizeof(HybridMeshPacketHeaderT<51>) == 112, "51B buffer must result in 112B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<67>) == 128, "67B buffer must result in 128B header (max capacity)");
 
 // Conditional type selection based on injected define
 #ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE

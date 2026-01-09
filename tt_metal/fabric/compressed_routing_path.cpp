@@ -152,11 +152,6 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
             consume_axis(is_ew, ew_bit, ew_hops, ew_direction);
         }
 
-        // NOTE: ns_hops and ew_hops now use 7 bits (0-127)
-        // Validate they don't exceed this range
-        TT_ASSERT(ns_hops <= 127, "ns_hops {} exceeds 7-bit limit", ns_hops);
-        TT_ASSERT(ew_hops <= 127, "ew_hops {} exceeds 7-bit limit", ew_hops);
-
         paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, ns_hops);
     }
 }

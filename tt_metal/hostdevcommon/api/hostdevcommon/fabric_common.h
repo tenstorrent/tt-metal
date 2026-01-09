@@ -105,34 +105,45 @@ struct __attribute__((packed)) direction_table_t {
 // makes both equivalent in memory (union = max(1024, 1024) = 1024B). Prioritizing performance.
 // Can switch to 3B packed (uint16_t+uint8_t) if memory becomes critical in future.
 struct __attribute__((packed)) compressed_route_2d_t {
-    uint32_t data;
+    // Field widths (source of truth)
+    static constexpr uint32_t NS_HOPS_WIDTH = 7;
+    static constexpr uint32_t EW_HOPS_WIDTH = 7;
+    static constexpr uint32_t NS_DIR_WIDTH = 1;
+    static constexpr uint32_t EW_DIR_WIDTH = 1;
+    static constexpr uint32_t TURN_POINT_WIDTH = 7;
 
-    // Bit layout in uint32_t data:
-    // ns_hops:     7 bits (0-127)  ← bits 0-6, supports 128-chip dimension
-    // ew_hops:     7 bits (0-127)  ← bits 7-13
-    // ns_dir:      1 bit           ← bit 14
-    // ew_dir:      1 bit           ← bit 15
-    // turn_point:  7 bits (0-127)  ← bits 16-22, consistent with hop fields
-    // reserved:    9 bits          ← bits 23-31 (available for future extensions)
+    // Bit positions (derived from widths)
+    static constexpr uint32_t NS_HOPS_SHIFT = 0;
+    static constexpr uint32_t EW_HOPS_SHIFT = NS_HOPS_SHIFT + NS_HOPS_WIDTH;   // 7
+    static constexpr uint32_t NS_DIR_SHIFT = EW_HOPS_SHIFT + EW_HOPS_WIDTH;    // 14
+    static constexpr uint32_t EW_DIR_SHIFT = NS_DIR_SHIFT + NS_DIR_WIDTH;      // 15
+    static constexpr uint32_t TURN_POINT_SHIFT = EW_DIR_SHIFT + EW_DIR_WIDTH;  // 16
+
+    // Masks (derived from widths)
+    static constexpr uint32_t NS_HOPS_MASK = (1U << NS_HOPS_WIDTH) - 1;        // 0x7F
+    static constexpr uint32_t EW_HOPS_MASK = (1U << EW_HOPS_WIDTH) - 1;        // 0x7F
+    static constexpr uint32_t NS_DIR_MASK = (1U << NS_DIR_WIDTH) - 1;          // 0x1
+    static constexpr uint32_t EW_DIR_MASK = (1U << EW_DIR_WIDTH) - 1;          // 0x1
+    static constexpr uint32_t TURN_POINT_MASK = (1U << TURN_POINT_WIDTH) - 1;  // 0x7F
+
+    uint32_t data;
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     void set(uint8_t ns_hops, uint8_t ew_hops, uint8_t ns_dir, uint8_t ew_dir, uint8_t turn_point) {
-        data = (ns_hops & 0x7F) |            // bits 0-6
-               ((ew_hops & 0x7F) << 7) |     // bits 7-13
-               ((ns_dir & 0x1) << 14) |      // bit 14
-               ((ew_dir & 0x1) << 15) |      // bit 15
-               ((turn_point & 0x7F) << 16);  // bits 16-22
+        data = (ns_hops & NS_HOPS_MASK) | ((ew_hops & EW_HOPS_MASK) << EW_HOPS_SHIFT) |
+               ((ns_dir & NS_DIR_MASK) << NS_DIR_SHIFT) | ((ew_dir & EW_DIR_MASK) << EW_DIR_SHIFT) |
+               ((turn_point & TURN_POINT_MASK) << TURN_POINT_SHIFT);
     }
 #else
-    uint8_t get_ns_hops() const { return data & 0x7F; }
-    uint8_t get_ew_hops() const { return (data >> 7) & 0x7F; }
-    uint8_t get_ns_direction() const { return (data >> 14) & 0x1; }
-    uint8_t get_ew_direction() const { return (data >> 15) & 0x1; }
-    uint8_t get_turn_point() const { return (data >> 16) & 0x7F; }
+    uint8_t get_ns_hops() const { return data & NS_HOPS_MASK; }
+    uint8_t get_ew_hops() const { return (data >> EW_HOPS_SHIFT) & EW_HOPS_MASK; }
+    uint8_t get_ns_direction() const { return (data >> NS_DIR_SHIFT) & NS_DIR_MASK; }
+    uint8_t get_ew_direction() const { return (data >> EW_DIR_SHIFT) & EW_DIR_MASK; }
+    uint8_t get_turn_point() const { return (data >> TURN_POINT_SHIFT) & TURN_POINT_MASK; }
 #endif
 };
 
-static_assert(sizeof(compressed_route_2d_t) == 4, "2D route must be 4 bytes (uint32_t)");
+static_assert(sizeof(compressed_route_2d_t) == 4, "2D route must be 4 bytes");
 
 // ============================================================================
 // Dynamic Packet Header Configuration
@@ -403,11 +414,11 @@ inline void encode_2d_unicast(
 
 // Number of routing table entries (destinations), not hops.
 // For 4×64 mesh: 64 entries, each storing a route up to 63 hops long.
-static const uint16_t MAX_CHIPS_LOWLAT_1D = 64;   // Was 32
-static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;  // Unchanged
-// Size of each routing table entry in bytes (4 words for 64 hops: base + 3 extension words)
-static const uint16_t SINGLE_ROUTE_SIZE_1D = 16;  // Was 8
-static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;  // Unchanged
+static const uint16_t MAX_CHIPS_LOWLAT_1D = 64;
+static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
+// Size of each routing table entry in bytes
+static const uint16_t SINGLE_ROUTE_SIZE_1D = 16;  // 4 words for 64 hops: base + 3 extension words
+static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
 template <uint8_t dim, bool compressed>
 struct __attribute__((packed)) intra_mesh_routing_path_t {
@@ -443,15 +454,6 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
         uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop = false) const;
 #endif
 };
-// 64 chips * 16 bytes = 1024
-static_assert(
-    sizeof(intra_mesh_routing_path_t<1, false>) == 1024,
-    "1D uncompressed routing path must be 1024 bytes (64 entries × 16 bytes per route)");
-static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
-// 256 chips * 4 bytes = 1024
-static_assert(
-    sizeof(intra_mesh_routing_path_t<2, true>) == 1024,
-    "2D compressed routing path must be 1024 bytes (256 entries × 4 bytes uint32_t)");
 
 struct fabric_connection_info_t {
     uint32_t edm_buffer_base_addr;
@@ -498,37 +500,31 @@ struct routing_l1_info_t {
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
 
     // Union overlaps 1D and 2D routing tables at same offset
-    // Current: 768B (256+512), With union: 1024B, Growth: +256B
-    // Both tables now 1024B, enabling uint32_t aligned access at no extra cost!
     union {
         intra_mesh_routing_path_t<1, false> routing_path_table_1d;  // 1024 bytes
-        intra_mesh_routing_path_t<2, true> routing_path_table_2d;   // 1024 bytes (uint32_t)
+        intra_mesh_routing_path_t<2, true> routing_path_table_2d;   // 1024 bytes
     };
 
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
     uint8_t padding[12] = {};                                        // pad to 16-byte alignment
 } __attribute__((packed));
 
-// Verify union members are both 1024 bytes (critical for memory calculations)
+// 64 chips * 16 bytes = 1024
 static_assert(
-    sizeof(intra_mesh_routing_path_t<1, false>) == 1024, "1D routing table must be 1024 bytes for union optimization");
+    sizeof(intra_mesh_routing_path_t<1, false>) == 1024,
+    "1D uncompressed routing path must be 1024 bytes (64 entries x 16 bytes per route)");
+
+static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
+
+// 256 chips * 4 bytes = 1024
 static_assert(
     sizeof(intra_mesh_routing_path_t<2, true>) == 1024,
-    "2D routing table must be 1024 bytes (256 entries × 4 bytes uint32_t)");
-// Verify total struct size matches design doc calculations
+    "2D compressed routing path must be 1024 bytes (256 entries x 4 bytes per route)");
+
+// Verify total struct size
 static_assert(
     sizeof(routing_l1_info_t) == 2544,
     "routing_l1_info_t must be 2544 bytes: base(484) + union(1024) + exit(1024) + pad(12)");
-// CRITICAL: Verify union members are identical in size (enables uint32_t at zero cost)
-static_assert(
-    sizeof(decltype(routing_l1_info_t::routing_path_table_1d)) ==
-        sizeof(decltype(routing_l1_info_t::routing_path_table_2d)),
-    "Union members must be same size (1024 bytes each) for union optimization to work");
-static_assert(
-    sizeof(decltype(routing_l1_info_t::routing_path_table_1d)) == 1024, "1D routing table must be 1024 bytes in union");
-static_assert(
-    sizeof(decltype(routing_l1_info_t::routing_path_table_2d)) == 1024,
-    "2D routing table must be 1024 bytes in union (256 entries × 4 bytes uint32_t)");
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};
