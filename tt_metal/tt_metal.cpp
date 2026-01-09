@@ -1169,12 +1169,12 @@ KernelHandle CreateEthernetKernel(
             }
         } else {
             // ERISC1 must use NOC1 in dedicated mode
-            // TT_FATAL(
-            //     config.noc == NOC::NOC_1,
-            //     "EthernetKernel creation failure: In single ERISC mode, ERISC0 must use NOC1. "
-            //     "Kernel: {}, Current NOC: {}, Required NOC: NOC_1.",
-            //     kernel->name(),
-            //     config.noc);
+            TT_FATAL(
+                config.noc == NOC::NOC_1,
+                "EthernetKernel creation failure: In single ERISC mode, ERISC0 must use NOC1. "
+                "Kernel: {}, Current NOC: {}, Required NOC: NOC_1.",
+                kernel->name(),
+                config.noc);
         }
     }
 

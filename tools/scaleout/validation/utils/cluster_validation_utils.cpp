@@ -245,7 +245,7 @@ void configure_cross_host_kernels(
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
                     my_coord,
                     tt::tt_metal::EthernetConfig{
-                        .noc = tt::tt_metal::NOC::NOC_0, .compile_args = {packet_size_bytes, packet_size_words}});
+                        .noc = tt::tt_metal::NOC::NOC_1, .compile_args = {packet_size_bytes, packet_size_words}});
                 tt::tt_metal::SetRuntimeArgs(
                     my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
             } else {
@@ -256,7 +256,7 @@ void configure_cross_host_kernels(
                     my_program,
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
                     my_coord,
-                    tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0});
+                    tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_1});
                 tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
             }
         }
