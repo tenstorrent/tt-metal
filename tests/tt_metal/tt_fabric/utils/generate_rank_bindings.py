@@ -106,6 +106,7 @@ def generate_supported_rank_bindings():
         3: [4],
     }
 
+    T3K_DUAL_MESH_RANK_TO_TRAY_MAPPING = {0: [1], 1: [2]}
     # Rank bindings for Dual Mesh Setup (1 process per mesh)
     DUAL_MESH_RANK_BINDINGS = [
         {
@@ -167,33 +168,52 @@ def generate_supported_rank_bindings():
         },
     ]
 
+    T3K_DUAL_MESH_RANK_BINDINGS = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 1,
+            "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+    ]
+
     mapping_file = "tray_to_pcie_device_mapping.yaml"
     generate_tray_to_pcie_device_mapping(mapping_file)
     with open(mapping_file, "r") as f:
         tray_to_pcie_device_mapping = yaml.safe_load(f)
     validate_device_mapping(tray_to_pcie_device_mapping)
 
-    generate_rank_binding_yaml(
-        tray_to_pcie_device_mapping,
-        DUAL_MESH_RANK_BINDINGS,
-        WH_GLX_DUAL_RANK_TO_TRAY_MAPPING,
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_multi_mesh.textproto",
-        "4x4_multi_mesh_rank_binding.yaml",
-    )
-    generate_rank_binding_yaml(
-        tray_to_pcie_device_mapping,
-        DUAL_BIG_MESH_RANK_BINDINGS,
-        WH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_multi_big_mesh.textproto",
-        "4x4_multi_big_mesh_rank_binding.yaml",
-    )
-    generate_rank_binding_yaml(
-        tray_to_pcie_device_mapping,
-        QUAD_MESH_RANK_BINDINGS,
-        WH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x2_multi_mesh.textproto",
-        "4x2_multi_mesh_rank_binding.yaml",
-    )
+    if tray_to_pcie_device_mapping["cluster_type"] == "GALAXY":
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            DUAL_MESH_RANK_BINDINGS,
+            WH_GLX_DUAL_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_multi_mesh.textproto",
+            "4x4_multi_mesh_rank_binding.yaml",
+        )
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            DUAL_BIG_MESH_RANK_BINDINGS,
+            WH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_multi_big_mesh.textproto",
+            "4x4_multi_big_mesh_rank_binding.yaml",
+        )
+        generate_rank_binding_yaml(
+            tray_to_pcie_device_mapping,
+            QUAD_MESH_RANK_BINDINGS,
+            WH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x2_multi_mesh.textproto",
+            "4x2_multi_mesh_rank_binding.yaml",
+        )
+    elif tray_to_pcie_device_mapping["cluster_type"] == "T3K":
+        # Implement this
+        pass
+    else:
+        assert False, "Unsupported cluster type"
 
 
 if __name__ == "__main__":

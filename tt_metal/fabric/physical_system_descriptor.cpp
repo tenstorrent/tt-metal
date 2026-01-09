@@ -106,6 +106,10 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         } else {
             TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
         }
+        if (cluster_desc->get_chips_with_mmio().contains(chip_id)) {
+            auto pcie_id = cluster_desc->get_chips_with_mmio().at(chip_id);
+            pcie_devices_per_tray[tray_id].insert(pcie_id);
+        }
         return {tray_id, asic_location};
     }
 }

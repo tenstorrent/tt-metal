@@ -164,6 +164,7 @@ TEST(PhysicalDiscovery, GenerateTrayToPCIeDeviceMapping) {
     }
     tray_to_pcie_device_mapping["device_mapping"] = device_mapping;
     tray_to_pcie_device_mapping["arch"] = enchantum::to_string(cluster.get_cluster_desc()->get_arch());
+    tray_to_pcie_device_mapping["cluster_type"] = cluster.get_cluster_type();
     std::ofstream outfile("tray_to_pcie_device_mapping.yaml");
     outfile << tray_to_pcie_device_mapping;
     outfile.close();
