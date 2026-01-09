@@ -81,6 +81,9 @@ def test_sfpu_reduce(
     if reduce_pool in [ReducePool.Average, ReducePool.Min] and TestConfig.WITH_COVERAGE:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
+    if dest_acc == DestAccumulation.No and formats.input_format.is_32_bit():
+        pytest.skip(reason="Dest must be in 32bit mode when input is 32bit")
+
     min_value, max_value = input_bounds
     input_dimensions = dimension_combinations
     torch_format = format_dict[formats.input_format]

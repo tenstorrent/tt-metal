@@ -145,18 +145,18 @@ constexpr bool is_supported_reduce_format(DataFormat format)
  * @brief Return appropriate InstrModLoadStore based on DataFormat and PoolType
  * @tparam format The DataFormat enum value for supported formats: Int32, UInt32, UInt16, Float32, Float16_b
  * @tparam pool_type The PoolType enum value (MAX, MIN, SUM, AVG). For Int32 format, MAX and MIN use INT32_2S_COMP, while SUM and AVG use INT32.
- * @return The corresponding InstrModLoadStore enum values: INT32, INT32_2S_COMP, LO16, FP32, FP16B
+ * @return The corresponding InstrModLoadStore enum values: INT32, INT32_2S_COMP, LO16, DEFAULT (FP32, FP16B)
  */
 template <DataFormat format, PoolType pool_type>
 constexpr InstrModLoadStore get_instruction_mode()
 {
     if constexpr (format == DataFormat::Float32)
     {
-        return InstrModLoadStore::FP32;
+        return InstrModLoadStore::DEFAULT;
     }
     else if constexpr (format == DataFormat::Float16_b)
     {
-        return InstrModLoadStore::FP16B;
+        return InstrModLoadStore::DEFAULT;
     }
     else if constexpr (format == DataFormat::Int32)
     {
@@ -219,7 +219,7 @@ inline void configure_addrmod_max_min(uint32_t num_cols)
  *        and records replay buffers for efficient column-wise maximum/minimum reduction.
  *        For MIN operations, inverts the swap direction by configuring the SFPU control register.
  *
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, FP32, FP16B
+ * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT (FP32, FP16B)
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN inverts the swap direction for minimum reduction.
  * @param num_cols The number of columns to process (typically 32 for a single tile, or multiple of 32 for block operations)
  */
@@ -272,7 +272,7 @@ inline void init_reduce_max_min(uint32_t num_cols)
  *        Records replay buffers for column-wise summation using tree reduction.
  *        Integer modes use 6 instructions (SFPIADD), float modes use 12 (SFPADD + NOPs for latency).
  *
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, FP32, FP16B
+ * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT (FP32, FP16B)
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void init_reduce_sum_avg()
@@ -346,7 +346,7 @@ inline void init_reduce_sum_avg()
  *
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN uses inverted swap direction for minimum reduction.
  * @tparam reduce_dim The reduction dimension (currently only REDUCE_COL is supported)
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, FP32, FP16B
+ * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT (FP32, FP16B)
  * @param block_height The number of tiles in the vertical block to reduce (default is 1 for single tile).
  *                     For example, block_height=4 means reduce across 4 vertically stacked tiles (128 rows total).
  */
@@ -419,7 +419,7 @@ inline void calculate_reduce_max_min(const uint32_t block_height)
  *
  * @tparam pool_type The reduction operation, currently supported: (SUM, AVG)
  * @tparam reduce_dim The reduction dimension (currently only REDUCE_COL is supported)
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, FP32, FP16B
+ * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT (FP32, FP16B)
  */
 template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE>
 inline void calculate_reduce_sum_avg()
@@ -431,9 +431,9 @@ inline void calculate_reduce_sum_avg()
     // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP || INSTRUCTION_MODE == InstrModLoadStore::LO16);
-    constexpr bool is_float_mode = (INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::FP16B);
+    constexpr bool is_float_mode = (INSTRUCTION_MODE == InstrModLoadStore::DEFAULT); // float must use DEFAULT instruction mode - HW handles FP32 vs. FP16_B
 
-    static_assert(is_integer_mode || is_float_mode, "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, LO16, FP32, FP16B");
+    static_assert(is_integer_mode || is_float_mode, "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, LO16, DEFAULT");
 
     // Optimized approach: Process 4 iterations to handle all column combinations
     // This reduces operations by processing complementary face pairs simultaneously, less load/store operations
