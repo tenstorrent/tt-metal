@@ -614,8 +614,8 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     }
 
     // Only can launch Fabric if all devices are active
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    if (tt_fabric::is_tt_fabric_config(fabric_config)) {
+    // tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    /*if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
             // Fabric currently requires all devices to be active
             TT_FATAL(
@@ -631,7 +631,7 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
                 "submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2,8))",
                 i);
         }
-    }
+    }*/
 
     if (this->using_fast_dispatch_ && !devices_to_activate.empty()) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs_);
