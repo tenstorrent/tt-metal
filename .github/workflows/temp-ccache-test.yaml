@@ -13,7 +13,7 @@ jobs:
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
       wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
     container:
-      image: harbor.ci.tenstorrent.net/tt-metalium-ci/tt-metalium-ci-ubuntu-22.04-amd64:main-ca8e3a662-20250107193817
+      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:d8ab8ee3fe4d35256b675bd6f47c0d48f7cada78
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -134,7 +134,7 @@ jobs:
     runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:d8ab8ee3fe4d35256b675bd6f47c0d48f7cada78
       env:
         TT_METAL_HOME: /work
         TT_METAL_RUNTIME_ROOT: /work
@@ -567,7 +567,7 @@ jobs:
     runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:d8ab8ee3fe4d35256b675bd6f47c0d48f7cada78
       env:
         TT_METAL_HOME: /work
         TT_METAL_RUNTIME_ROOT: /work
