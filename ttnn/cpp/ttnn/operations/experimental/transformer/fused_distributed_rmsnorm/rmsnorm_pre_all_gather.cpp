@@ -4,9 +4,7 @@
 
 #include "rmsnorm_pre_all_gather.hpp"
 
-#include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.hpp"
-
-namespace operation = tt::tt_metal::operation;
+#include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/fused_rmsnorm_pre_all_gather_device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -18,9 +16,7 @@ ttnn::Tensor ExecuteFusedRMSNormPreAllGather::invoke(
     auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, false, true, false);
-    return operation::run(
-               FusedRMSNormPreAllGather{.dtype = dtype, .compute_kernel_config = kernel_config_val}, {input_tensor})
-        .at(0);
+    return ttnn::prim::fused_rmsnorm_pre_all_gather(input_tensor, dtype, kernel_config_val);
 }
 
 }  // namespace ttnn::operations::experimental::transformer

@@ -2,20 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operations/cb_utils.hpp"
+#include "fused_rmsnorm_pre_all_gather_program_factory.hpp"
 
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+
+#include "ttnn/operations/math.hpp"
+#include "ttnn/operations/cb_utils.hpp"
+
 #include <optional>
 #include <string>
 #include <variant>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather::program {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -42,13 +44,16 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-namespace operation = tt::tt_metal::operation;
-
-operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
-    const Tensor& input_tensor, Tensor& output_tensor, DeviceComputeKernelConfig compute_kernel_config) {
+FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGatherProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using namespace tt::constants;
     using namespace tt::tt_metal;
+
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     Program program = tt::tt_metal::CreateProgram();
 
@@ -82,8 +87,6 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
     tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat reduce_scalar_data_format = tt::DataFormat::Float16_b;
-    // TODO: FP32 intermediate CBs if DST is FP32
-    // tt::DataFormat intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat intermediate_data_format = tt::DataFormat::Float32;
     uint32_t input_tile_size = tt::tile_size(input_data_format);
     uint32_t output_tile_size = tt::tile_size(output_data_format);
@@ -229,37 +232,43 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
     }
 
-    auto override_runtime_arguments_callback =
-        [reader_kernel_id = reader_kernels_id, writer_kernel_id = writer_kernels_id, cores](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const auto& input_tensor = input_tensors.at(0);
-
-            const auto input_addr = input_tensor.buffer()->address();
-
-            const auto& output_tensor = output_tensors.at(0);
-            const auto output_addr = output_tensor.buffer()->address();
-
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-
-            for (const auto& core : cores) {
-                {
-                    auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
-                    reader_args[0] = input_addr;
-                }
-
-                {
-                    auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
-                    writer_args[0] = output_addr;
-                }
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {
+        std::move(program),
+        FusedRMSNormPreAllGatherSharedVariables{
+            .reader_kernel_id = reader_kernels_id,
+            .writer_kernel_id = writer_kernels_id,
+            .cores = cores,
+        }};
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+void FusedRMSNormPreAllGatherProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    auto& program = cached_program.program;
+    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    const auto& cores = cached_program.shared_variables.cores;
+
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto input_addr = input_tensor.buffer()->address();
+    const auto output_addr = output_tensor.buffer()->address();
+
+    auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+
+    for (const auto& core : cores) {
+        {
+            auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
+            reader_args[0] = input_addr;
+        }
+
+        {
+            auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
+            writer_args[0] = output_addr;
+        }
+    }
+}
+
+}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather::program
