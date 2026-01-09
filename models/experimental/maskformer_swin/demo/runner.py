@@ -5,7 +5,7 @@
 """
 CLI runner for MaskFormer Swin-Base demo.
 
-This file will expose a ``python -m models.experimental.maskformer_swin.runner``
+This file will expose a ``python -m models.experimental.maskformer_swin.demo.runner``
 entrypoint that:
 
 1. Loads / converts weights (using ``weights.py`` helpers).
@@ -31,19 +31,19 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - only needed for preview mode
     Image = None
 
-from .backbone_swin import MaskFormerSwinBackbone
-from .heads import MaskFormerHeads, MaskFormerHeadsConfig
-from .pixel_decoder import MaskFormerPixelDecoder, PixelDecoderConfig
-from .transformer_decoder import MaskFormerTransformerDecoder, TransformerDecoderConfig
-from .fallback import MaskFormerFallbackPipeline
-from .weights import (
+from ..tt.backbone_swin import MaskFormerSwinBackbone
+from ..tt.heads import MaskFormerHeads, MaskFormerHeadsConfig
+from ..tt.pixel_decoder import MaskFormerPixelDecoder, PixelDecoderConfig
+from ..tt.transformer_decoder import MaskFormerTransformerDecoder, TransformerDecoderConfig
+from ..tt.fallback import MaskFormerFallbackPipeline
+from ..tt.weights import (
     ReferenceWeights,
     WeightConversionConfig,
     convert_state_dict_to_tt,
     download_reference_weights,
 )
-from .ttnn_compat import ttnn, require_ttnn
-from .eval_utils import default_prediction_path, dump_predictions_json, run_coco_eval
+from ..tt.ttnn_compat import ttnn, require_ttnn
+from ..tt.eval_utils import default_prediction_path, dump_predictions_json, run_coco_eval
 
 
 def build_argparser() -> argparse.ArgumentParser:
