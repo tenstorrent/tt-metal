@@ -991,8 +991,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     auto semaphore_round1_fw = semaphores[0];
     auto semaphore_round1_bw = semaphores[1];
     auto semaphore_round2_fw = semaphores[2];
-    auto semaphore_round2_bw = semaphores[2];
-    auto coord_semaphore = semaphores[2];
+    auto semaphore_round2_bw = semaphores[3];
+    auto coord_semaphore = semaphores[4];
 
     // Extract shard grid from input tensor
     TT_FATAL(input_tensor_l.is_sharded(), "Input tensor must be sharded");
@@ -1589,19 +1589,22 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         // uint32_t start_idx = link_idx == 0 ? 0 : 2;
         for (uint32_t dir = 0; dir < 2; dir++) {
             CoreCoord mux_logical_core = all_mux_cores[mux_core_offset++];
-            if (mux_connection_valid(dir, is_leftmost, is_sender_device)) {
-                std::vector<uint32_t> mux_rt_args = {};
-                const auto src_node_id = mesh_device->get_fabric_node_id(device_coordinate);
-                if (dir) {  // forward
+            std::vector<uint32_t> mux_rt_args = {};
+            const auto src_node_id = mesh_device->get_fabric_node_id(device_coordinate);
+            if (dir) {  // forward
+                if (forward_coord.has_value()) {
                     const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
-                } else {
+                    tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+                }
+            } else {
+                if (backward_coord.has_value()) {
                     const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
+                    tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
                 }
-                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }
         }
 
@@ -1624,12 +1627,29 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
             if ((is_sender_device && is_leftmost) || is_root2_device) {
                 if (core_idx < num_worker_cores_per_link_per_dir) {
-                    // first 4 cores: fw: reader/writer 1
-                    // second 4 cores: bw: reader/writer 2
+                    // first 4 cores: reader/writer 1
+                    // Writer1: sends data to fwd neighbor (D0->D1, D2->D3)
+                    // Reader1: sends barrier/receives in Round2 to/from fwd neighbor
+                    // Use forward mux (routes to forward neighbor)
+                    // CoreCoord mux_virtual_core_bwd =
+                    //    mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
-                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
-                    CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+
+                    printf(
+                        "Device %u Link %u Core %zu %zu Reader 1 Mux core %zu %zu Writer 1 Mux core %zu %zu \n",
+                        device_idx,
+                        link_idx,
+                        c.x,
+                        c.y,
+                        mux_virtual_core_fwd.x,
+                        mux_virtual_core_fwd.y,
+                        mux_virtual_core_fwd.x,
+                        mux_virtual_core_fwd.y);
+
+                    // Create handoff semaphore for Writer1→Reader1 mux channel handoff
+                    // Writer1 will signal this after disconnecting from mux, Reader1 waits before connecting
+                    auto writer_to_reader_handoff_sem = CreateSemaphore(program, {c}, 0);
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
@@ -1643,12 +1663,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         fw_intermediate_tensor.buffer()->address(),
                         semaphore_round2_fw.address(),
                         round1_intermediate_tensor.buffer()->address(),
-                        coord_semaphore.address()};
+                        coord_semaphore.address(),
+                        writer_to_reader_handoff_sem};  // Add handoff semaphore for Reader1
 
                     fabric_mux_rt_args(
                         c == termination_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        mux_virtual_core_bwd,
+                        mux_virtual_core_fwd,
                         worker_id,
                         c,
                         mux_kernel_config,
@@ -1665,6 +1686,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         output_tensor_l.buffer()->address(),
                         output_tensor_s.buffer()->address(),
                         output_tensor_m.buffer()->address(),
+                        writer_to_reader_handoff_sem,  // Add handoff semaphore for Writer1
                     };
                     fabric_mux_rt_args(
                         c == termination_master,
@@ -1681,11 +1703,37 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel1, c, writer_runtime_args);
                     cores1.push_back(c);
                 } else {
-                    // second 4 cores: bw: reader/writer 2
-                    CoreCoord mux_virtual_core_fwd =
-                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
+                    // second 4 cores: reader/writer 2
+                    // Reader2: receives barrier in Round1 from bwd neighbor (D3->D0, D1->D2)
+                    // Writer2: sends data in Round2 to bwd neighbor
+                    // Use backward mux (routes to backward neighbor)
                     CoreCoord mux_virtual_core_bwd =
-                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
+                    // CoreCoord mux_virtual_core_fwd =
+                    //     mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+
+                    printf(
+                        "Device %u Link %u Core %zu %zu Reader 2 Mux core %zu %zu Writer 2 Mux core %zu %zu \n",
+                        device_idx,
+                        link_idx,
+                        c.x,
+                        c.y,
+                        mux_virtual_core_bwd.x,
+                        mux_virtual_core_bwd.y,
+                        mux_virtual_core_bwd.x,
+                        mux_virtual_core_bwd.y);
+
+                    // Create handoff semaphore for Reader2 -> Writer2 coordination
+                    auto reader2_to_writer2_handoff_sem = CreateSemaphore(program, {c}, 0);
+
+                    // For D0/D2 second 4 cores, Writer2 needs to signal the paired Reader1 on first 4 cores
+                    // The paired Reader1 is at core_idx - num_worker_cores_per_link_per_dir (i.e., core 0-0 for core
+                    // 0-4)
+                    auto& worker_cores_for_link = (link_idx == 0) ? worker_cores_link_1 : worker_cores_link_2;
+                    auto paired_reader1_core = worker_cores_for_link[core_idx - num_worker_cores_per_link_per_dir];
+                    auto paired_reader1_noc = mesh_device->worker_core_from_logical_core(paired_reader1_core);
+                    auto paired_reader1_noc_x = paired_reader1_noc.x;
+                    auto paired_reader1_noc_y = paired_reader1_noc.y;
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
@@ -1696,26 +1744,29 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         core_noc_x,
                         core_noc_y,
                         current_core_x,
-                        current_core_y};
+                        current_core_y,
+                        reader2_to_writer2_handoff_sem};
                     fabric_mux_rt_args(
                         c == termination_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        mux_virtual_core_fwd,
+                        mux_virtual_core_bwd,
                         worker_id,
                         c,
                         mux_kernel_config,
                         program,
                         mesh_device->worker_core_from_logical_core(termination_master),
                         reader_runtime_args);
+                    // Use paired_reader1_noc for device_semaphore target instead of data core
                     writer_runtime_args = {
                         bw_intermediate_tensor.buffer()->address(),
                         semaphore_round2_bw.address(),
-                        core_noc_x,
-                        core_noc_y,
+                        paired_reader1_noc_x,
+                        paired_reader1_noc_y,
                         current_core_x,
                         current_core_y,
                         round1_intermediate_tensor.buffer()->address(),
                         coord_semaphore.address(),
+                        reader2_to_writer2_handoff_sem,
                     };
                     fabric_mux_rt_args(
                         c == termination_master,
@@ -1735,13 +1786,37 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             } else {
                 // devices 1 and 3:
                 if (core_idx < num_worker_cores_per_link_per_dir) {
-                    // first 4 cores: fw: reader/writer 2
-                    // second 4 cores: bw: reader/writer 1
-
-                    CoreCoord mux_virtual_core_fwd =
-                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
+                    // first 4 cores: reader/writer 2
+                    // Reader2: receives barrier in Round1 from bwd neighbor (D0->D1, D2->D3)
+                    // Writer2: sends data in Round2 to bwd neighbor
+                    // D0/D2 uses forward mux to send, so D1/D3 must use backward mux to match the link
                     CoreCoord mux_virtual_core_bwd =
-                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
+                    // CoreCoord mux_virtual_core_fwd =
+                    //     mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+
+                    printf(
+                        "Device %u Link %u Core %zu %zu Reader 2 Mux core %zu %zu Writer 2 Mux core %zu %zu \n",
+                        device_idx,
+                        link_idx,
+                        c.x,
+                        c.y,
+                        mux_virtual_core_bwd.x,
+                        mux_virtual_core_bwd.y,
+                        mux_virtual_core_bwd.x,
+                        mux_virtual_core_bwd.y);
+
+                    // Create handoff semaphore for Reader2 -> Writer2 coordination
+                    auto reader2_to_writer2_handoff_sem = CreateSemaphore(program, {c}, 0);
+
+                    // For D1/D3 first 4 cores, Writer2 needs to signal the paired Reader1 on second 4 cores
+                    // The paired Reader1 is at core_idx + num_worker_cores_per_link_per_dir (i.e., core 0-4 for core
+                    // 0-0)
+                    auto& worker_cores_for_link = (link_idx == 0) ? worker_cores_link_1 : worker_cores_link_2;
+                    auto paired_reader1_core = worker_cores_for_link[core_idx + num_worker_cores_per_link_per_dir];
+                    auto paired_reader1_noc = mesh_device->worker_core_from_logical_core(paired_reader1_core);
+                    auto paired_reader1_noc_x = paired_reader1_noc.x;
+                    auto paired_reader1_noc_y = paired_reader1_noc.y;
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
@@ -1752,7 +1827,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         core_noc_x,
                         core_noc_y,
                         current_core_x,
-                        current_core_y};
+                        current_core_y,
+                        reader2_to_writer2_handoff_sem};
                     fabric_mux_rt_args(
                         c == termination_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -1763,20 +1839,22 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         program,
                         mesh_device->worker_core_from_logical_core(termination_master),
                         reader_runtime_args);
+                    // Use paired_reader1_noc for device_semaphore target instead of data core
                     writer_runtime_args = {
                         fw_intermediate_tensor.buffer()->address(),
                         semaphore_round2_fw.address(),
-                        core_noc_x,
-                        core_noc_y,
+                        paired_reader1_noc_x,
+                        paired_reader1_noc_y,
                         current_core_x,
                         current_core_y,
                         round1_intermediate_tensor.buffer()->address(),
                         coord_semaphore.address(),
+                        reader2_to_writer2_handoff_sem,
                     };
                     fabric_mux_rt_args(
                         c == termination_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        mux_virtual_core_fwd,
+                        mux_virtual_core_bwd,
                         worker_id,
                         c,
                         mux_kernel_config,
@@ -1788,11 +1866,29 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel2, c, writer_runtime_args);
                     cores2.push_back(c);
                 } else {
-                    // second 4 cores: bw: reader/writer 1
+                    // second 4 cores: reader/writer 1
+                    // Writer1: sends data to fwd neighbor (D1->D2, D3->D0)
+                    // Reader1: sends barrier/receives in Round2 to/from fwd neighbor
+                    // Use forward mux (routes to forward neighbor)
+                    // CoreCoord mux_virtual_core_bwd =
+                    //    mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
-                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
-                    CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+
+                    printf(
+                        "Device %u Link %u Core %zu %zu Reader 1 Mux core %zu %zu Writer 1 Mux core %zu %zu \n",
+                        device_idx,
+                        link_idx,
+                        c.x,
+                        c.y,
+                        mux_virtual_core_fwd.x,
+                        mux_virtual_core_fwd.y,
+                        mux_virtual_core_fwd.x,
+                        mux_virtual_core_fwd.y);
+
+                    // Create handoff semaphore for Writer1→Reader1 mux channel handoff
+                    // Writer1 will signal this after disconnecting from mux, Reader1 waits before connecting
+                    auto writer_to_reader_handoff_sem = CreateSemaphore(program, {c}, 0);
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
@@ -1806,7 +1902,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         bw_intermediate_tensor.buffer()->address(),
                         semaphore_round2_bw.address(),
                         round1_intermediate_tensor.buffer()->address(),
-                        coord_semaphore.address()};
+                        coord_semaphore.address(),
+                        writer_to_reader_handoff_sem};  // Add handoff semaphore for Reader1
 
                     fabric_mux_rt_args(
                         c == termination_master,
@@ -1828,11 +1925,12 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         output_tensor_l.buffer()->address(),
                         output_tensor_s.buffer()->address(),
                         output_tensor_m.buffer()->address(),
+                        writer_to_reader_handoff_sem,  // Add handoff semaphore for Writer1
                     };
                     fabric_mux_rt_args(
                         c == termination_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        mux_virtual_core_bwd,
+                        mux_virtual_core_fwd,
                         worker_id,
                         c,
                         mux_kernel_config,
@@ -1880,52 +1978,61 @@ void ReduceToRootOp::ReduceToRoot::override_runtime_arguments(
         const auto& output_tensors_l = tensor_return_value[1];
         const auto& intermediate_tensors = tensor_return_value[0];
 
-        // cores 1 have reader/writer 1
-        // cores 2 have reader/writer 2
-        // fix semaphore indices
         for (const auto& core : shared_variables.cores1) {
-            // Update reader runtime args
+            // Update reader1 runtime args
             auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel1);
             auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
             reader_runtime_args[0] = input_tensor_l.buffer()->address();
             reader_runtime_args[1] = input_tensor_s.buffer()->address();
             reader_runtime_args[2] = input_tensor_m.buffer()->address();
-            reader_runtime_args[6] = shared_variables.is_device_0_2 ? intermediate_tensors[0].buffer()->address()
+            // D0/D2 uses fw_intermediate (index 0), D1/D3 uses bw_intermediate (index 1)
+            reader_runtime_args[8] = shared_variables.is_device_0_2 ? intermediate_tensors[0].buffer()->address()
                                                                     : intermediate_tensors[1].buffer()->address();
-            reader_runtime_args[7] = shared_variables.semaphores[1].address();
-            reader_runtime_args[8] = intermediate_tensors[2].buffer()->address();
-            reader_runtime_args[9] = shared_variables.semaphores[2].address();
+            // D0/D2 uses semaphore_round2_fw (index 2), D1/D3 uses semaphore_round2_bw (index 3)
+            reader_runtime_args[9] = shared_variables.is_device_0_2 ? shared_variables.semaphores[2].address()
+                                                                    : shared_variables.semaphores[3].address();
+            reader_runtime_args[10] = intermediate_tensors[2].buffer()->address();
+            reader_runtime_args[11] = shared_variables.semaphores[4].address();
 
-            // Update writer runtime args
+            // Update writer1 runtime args
             auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel1);
             auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+            // D0/D2 uses fw_intermediate (index 0), D1/D3 uses bw_intermediate (index 1)
             writer_runtime_args[0] = shared_variables.is_device_0_2 ? intermediate_tensors[0].buffer()->address()
                                                                     : intermediate_tensors[1].buffer()->address();
-            writer_runtime_args[1] = shared_variables.semaphores[0].address();
-            writer_runtime_args[4] = output_tensors_l[0].buffer()->address();
-            writer_runtime_args[5] = output_tensors_l[1].buffer()->address();
-            writer_runtime_args[6] = output_tensors_l[2].buffer()->address();
+            // D0/D2 uses semaphore_round1_fw (index 0), D1/D3 uses semaphore_round1_bw (index 1)
+            writer_runtime_args[1] = shared_variables.is_device_0_2 ? shared_variables.semaphores[0].address()
+                                                                    : shared_variables.semaphores[1].address();
+            writer_runtime_args[6] = output_tensors_l[0].buffer()->address();
+            writer_runtime_args[7] = output_tensors_l[1].buffer()->address();
+            writer_runtime_args[8] = output_tensors_l[2].buffer()->address();
         }
 
         for (const auto& core : shared_variables.cores2) {
-            // Update reader runtime args
+            // Update reader2 runtime args
             auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel2);
             auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
             reader_runtime_args[0] = input_tensor_l.buffer()->address();
             reader_runtime_args[1] = input_tensor_s.buffer()->address();
             reader_runtime_args[2] = input_tensor_m.buffer()->address();
+            // D0/D2 uses bw_intermediate (index 1), D1/D3 uses fw_intermediate (index 0)
             reader_runtime_args[3] = shared_variables.is_device_0_2 ? intermediate_tensors[1].buffer()->address()
                                                                     : intermediate_tensors[0].buffer()->address();
-            reader_runtime_args[4] = shared_variables.semaphores[0].address();
+            // D0/D2 uses semaphore_round1_bw (index 1), D1/D3 uses semaphore_round1_fw (index 0)
+            reader_runtime_args[4] = shared_variables.is_device_0_2 ? shared_variables.semaphores[1].address()
+                                                                    : shared_variables.semaphores[0].address();
 
-            // Update writer runtime args
+            // Update writer2 runtime args
             auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel2);
             auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-            reader_runtime_args[0] = shared_variables.is_device_0_2 ? intermediate_tensors[1].buffer()->address()
+            // D0/D2 uses bw_intermediate (index 1), D1/D3 uses fw_intermediate (index 0)
+            writer_runtime_args[0] = shared_variables.is_device_0_2 ? intermediate_tensors[1].buffer()->address()
                                                                     : intermediate_tensors[0].buffer()->address();
-            writer_runtime_args[1] = shared_variables.semaphores[0].address();
-            writer_runtime_args[4] = intermediate_tensors[2].buffer()->address();
-            writer_runtime_args[5] = shared_variables.semaphores[2].address();
+            // D0/D2 uses semaphore_round2_bw (index 3), D1/D3 uses semaphore_round2_fw (index 2)
+            writer_runtime_args[1] = shared_variables.is_device_0_2 ? shared_variables.semaphores[3].address()
+                                                                    : shared_variables.semaphores[2].address();
+            writer_runtime_args[6] = intermediate_tensors[2].buffer()->address();
+            writer_runtime_args[7] = shared_variables.semaphores[4].address();
         }
     }
 };
