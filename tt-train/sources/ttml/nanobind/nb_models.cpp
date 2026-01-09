@@ -5,12 +5,16 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/function.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
+#include <optional>
+
 #include "models/base_transformer.hpp"
+#include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
 #include "models/distributed/pipeline_parallel_llama.hpp"
@@ -32,6 +36,67 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
 
     ttml::nanobind::util::export_enum<models::common::transformer::RunnerType>(m);
     ttml::nanobind::util::export_enum<models::common::transformer::WeightTyingType>(m);
+
+    // Export KvCacheConfig class
+    {
+        auto py_kv_cache_config = nb::class_<models::common::transformer::KvCacheConfig>(m, "KvCacheConfig");
+        py_kv_cache_config.def(
+            nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
+            nb::arg("num_layers"),
+            nb::arg("batch_size"),
+            nb::arg("num_groups"),
+            nb::arg("max_seq_len"),
+            nb::arg("head_dim"),
+            "KV Cache configuration");
+        py_kv_cache_config.def_rw("num_layers", &models::common::transformer::KvCacheConfig::num_layers);
+        py_kv_cache_config.def_rw("batch_size", &models::common::transformer::KvCacheConfig::batch_size);
+        py_kv_cache_config.def_rw("num_groups", &models::common::transformer::KvCacheConfig::num_groups);
+        py_kv_cache_config.def_rw("max_seq_len", &models::common::transformer::KvCacheConfig::max_seq_len);
+        py_kv_cache_config.def_rw("head_dim", &models::common::transformer::KvCacheConfig::head_dim);
+    }
+
+    // Export KvCache class
+    {
+        auto py_kv_cache = nb::class_<models::common::transformer::KvCache>(m, "KvCache");
+        py_kv_cache.def(
+            nb::init<const models::common::transformer::KvCacheConfig&>(),
+            nb::arg("config"),
+            "Construct KV cache from config");
+        py_kv_cache.def(
+            nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
+            nb::arg("num_layers"),
+            nb::arg("batch_size"),
+            nb::arg("num_groups"),
+            nb::arg("max_seq_len"),
+            nb::arg("head_dim"),
+            "Construct KV cache (convenience constructor)");
+        py_kv_cache.def(
+            "update",
+            &models::common::transformer::KvCache::update,
+            nb::arg("layer_idx"),
+            nb::arg("key_states"),
+            nb::arg("value_states"),
+            nb::arg("new_tokens"),
+            "Update KV cache with new key and value states");
+        py_kv_cache.def(
+            "get_k_cache",
+            &models::common::transformer::KvCache::get_k_cache,
+            nb::arg("layer_idx"),
+            "Get K cache tensor for a layer");
+        py_kv_cache.def(
+            "get_v_cache",
+            &models::common::transformer::KvCache::get_v_cache,
+            nb::arg("layer_idx"),
+            "Get V cache tensor for a layer");
+        py_kv_cache.def(
+            "get_cache_position",
+            &models::common::transformer::KvCache::get_cache_position,
+            "Get current cache position");
+        py_kv_cache.def("reset", &models::common::transformer::KvCache::reset, "Reset cache position for new sequence");
+        py_kv_cache.def("clear", &models::common::transformer::KvCache::clear, "Clear all cache data");
+        py_kv_cache.def("num_layers", &models::common::transformer::KvCache::num_layers, "Get number of layers");
+        py_kv_cache.def("empty", &models::common::transformer::KvCache::empty, "Check if cache is empty");
+    }
 
     nb::class_<models::BaseTransformer, ttml::modules::ModuleBase>(m, "BaseTransformer");
 
@@ -214,6 +279,36 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
         auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("Llama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());
+
+        // Overload 1: Without KV cache
+        py_llama.def(
+            "__call__",
+            [](models::llama::Llama& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& mask) { return self(tensor, mask); },
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            "Model forward pass without KV cache.");
+
+        // Overload 2: With KV cache and new_tokens
+        py_llama.def(
+            "__call__",
+            [](models::llama::Llama& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& mask,
+               std::shared_ptr<models::common::transformer::KvCache> kv_cache,
+               uint32_t new_tokens) { return self(tensor, mask, kv_cache, new_tokens); },
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            nb::arg("kv_cache"),
+            nb::arg("new_tokens"), /* Danik: number of new tokens to process (we must pad the sequence
+            to a multiple of 32 for perfomance of models' training step due to an inefficient implementation of linear
+            backward) */
+            "Model forward pass with KV cache for inference.");
+        py_llama.def(
+            "get_original_vocab_size",
+            &models::llama::Llama::get_original_vocab_size,
+            "Get the original vocabulary size");
     }
 
     {
