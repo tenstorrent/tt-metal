@@ -491,7 +491,7 @@ void ControlPlane::init_control_plane(
 
     // Initialize distributed contexts after topology_mapper is created so we can use its helper function
     this->initialize_distributed_contexts();
-    this->generate_intermesh_connectivity();
+    // this->generate_intermesh_connectivity();
 
     // Printing, only enabled with log_debug
     this->mesh_graph_->print_connectivity();
@@ -1952,6 +1952,34 @@ void ControlPlane::print_ethernet_channels() const {
         }
     }
     log_debug(tt::LogFabric, "{}", ss.str());
+
+    // Print logical to physical chip ID mapping with UBB IDs
+    std::stringstream mapping_ss;
+    mapping_ss << "Control Plane: Logical to Physical Chip ID Mapping" << std::endl;
+    mapping_ss << "====================================================" << std::endl;
+    mapping_ss << std::left << std::setw(25) << "FabricNodeId" << std::setw(20) << "Physical ChipID" << std::setw(30)
+               << "UBB ID (Tray, ASIC)" << std::endl;
+    mapping_ss << std::string(75, '-') << std::endl;
+
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    for (const auto& [fabric_node_id, physical_chip_id] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+        auto ubb_id = tt::tt_fabric::get_ubb_id(*driver, physical_chip_id);
+
+        std::stringstream fabric_node_ss;
+        fabric_node_ss << "M" << *fabric_node_id.mesh_id << "D" << fabric_node_id.chip_id;
+
+        std::stringstream ubb_id_ss;
+        if (ubb_id.tray_id != 0 || ubb_id.asic_id != 0) {
+            ubb_id_ss << "Tray " << ubb_id.tray_id << ", N" << ubb_id.asic_id;
+        } else {
+            ubb_id_ss << "N/A";
+        }
+
+        mapping_ss << std::left << std::setw(25) << fabric_node_ss.str() << std::setw(20) << physical_chip_id
+                   << std::setw(30) << ubb_id_ss.str() << std::endl;
+    }
+    log_info(tt::LogFabric, "{}", mapping_ss.str());
 }
 
 void ControlPlane::initialize_fabric_context(tt_fabric::FabricConfig fabric_config) {
