@@ -154,6 +154,15 @@ class TTTemporalSelfAttention:
                 reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
 
+        # Create temporal value features exactly
+        if value is None:
+            # For simplified version, just use query as value (no temporal information)
+            value = ttnn.clone(query)
+        else:
+            # Value already provided in the expected format
+            if isinstance(value, torch.Tensor):
+                value = ttnn.from_torch(value, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
         # Handle defaults
         if identity is None:
             identity = query
@@ -165,15 +174,6 @@ class TTTemporalSelfAttention:
             query = ttnn.add(query, query_pos)
 
         bs, num_query, _ = query.shape
-
-        # Create temporal value features exactly
-        if value is None:
-            # For simplified version, just use query as value (no temporal information)
-            value = query
-        else:
-            # Value already provided in the expected format
-            if isinstance(value, torch.Tensor):
-                value = ttnn.from_torch(value, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         # Use reference points as-is for simplified version
         ref_points = reference_points
@@ -188,7 +188,12 @@ class TTTemporalSelfAttention:
                 level_start_index, device=self.device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
 
+        if use_signpost:
+            signpost(header="TSA Tensor Conversion Complete")
+
         # Apply deformable attention with integrated temporal processing
+        if use_signpost:
+            signpost(header="TSA Calling Deformable Attention")
         output = self.deformable_attention(
             query=query,
             value=value,
@@ -202,6 +207,9 @@ class TTTemporalSelfAttention:
         # Convert back to ttnn tensor if needed
         if isinstance(output, torch.Tensor):
             output = ttnn.from_torch(output, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+        if use_signpost:
+            signpost(header="TSA Adding Residual")
 
         # Residual connection
         output = ttnn.add(output, identity)

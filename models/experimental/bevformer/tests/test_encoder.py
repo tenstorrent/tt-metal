@@ -159,7 +159,7 @@ def test_bevformer_encoder_forward(
     tt_parameters = create_bevformer_encoder_parameters(
         torch_model=ref_model,
         device=device,
-        dtype=ttnn.float32,
+        dtype=ttnn.bfloat16,
     )
 
     # Create ttnn model with preprocessed parameters
@@ -192,14 +192,14 @@ def test_bevformer_encoder_forward(
         )
 
     # Convert tensors to ttnn format
-    tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_prev_bev = ttnn.from_torch(prev_bev, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_prev_bev = ttnn.from_torch(prev_bev, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_level_start_index = ttnn.from_torch(
-        level_start_index, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+        level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
-    tt_valid_ratios = ttnn.from_torch(valid_ratios, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    tt_valid_ratios = ttnn.from_torch(valid_ratios, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     # Forward pass with ttnn model
     tt_output = tt_model(
