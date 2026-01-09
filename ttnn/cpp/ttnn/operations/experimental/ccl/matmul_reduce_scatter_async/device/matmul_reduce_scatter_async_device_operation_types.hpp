@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async {
 

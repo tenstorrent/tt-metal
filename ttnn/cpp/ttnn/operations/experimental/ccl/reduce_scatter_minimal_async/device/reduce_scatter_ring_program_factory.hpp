@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "reduce_scatter_minimal_async_op_device_operation_types.hpp"
+#include "reduce_scatter_minimal_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
