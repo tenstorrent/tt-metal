@@ -5,7 +5,7 @@
 #include "recv_async_op_device_operation_types.hpp"
 #include "recv_async_op_device_operation.hpp"
 
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
