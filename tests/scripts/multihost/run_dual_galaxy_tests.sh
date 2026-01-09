@@ -43,6 +43,34 @@ run_dual_galaxy_unit_tests() {
   fi
 }
 
+run_dual_galaxy_deepseekv3_tests() {
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_dual_galaxy_deepseekv3_tests"
+
+  source python_env/bin/activate
+
+  local rank_binding="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+  local hosts="g10glx03,g10glx04"
+  local rankfile="/etc/mpirun/rankfile"
+  local mpi_args="--host $hosts --map-by rankfile:file=$rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output"
+
+  local deepseek_env="export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 && export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI && export MESH_DEVICE=DUAL"
+  local test_teacher_forced="pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy"
+
+  tt-run --rank-binding "$rank_binding" \
+    --mpi-args "$mpi_args" \
+    bash -c "source ./python_env/bin/activate && $deepseek_env && $test_teacher_forced" ; fail+=$?
+
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_dual_galaxy_deepseekv3_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_dual_galaxy_resnet50_tests() {
   # Record the start time
   fail=0
@@ -63,6 +91,7 @@ run_dual_galaxy_resnet50_tests() {
 
 run_dual_galaxy_tests() {
   run_dual_galaxy_unit_tests
+  run_dual_galaxy_deepseekv3_tests
   # TODO: #30155 - Enable the test when hardware hang is addressed.
   # run_dual_galaxy_resnet50_tests
 }
