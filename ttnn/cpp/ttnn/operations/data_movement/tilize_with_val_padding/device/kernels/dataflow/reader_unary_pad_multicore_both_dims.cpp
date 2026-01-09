@@ -14,6 +14,7 @@ FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
 }
 
 void kernel_main() {
+    DPRINT << "reader_unary_pad_multicore_both_dims kernel started" << ENDL();
     constexpr uint32_t cb_id_in0 = 0;
 
     constexpr uint32_t total_num_rows = get_compile_time_arg_val(0);

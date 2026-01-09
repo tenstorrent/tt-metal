@@ -56,6 +56,7 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
 }
 
 void kernel_main() {
+    DPRINT << "reader_unary_pad_dims_split_rows_multicore kernel started" << ENDL();
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t tile_height = 32;
 

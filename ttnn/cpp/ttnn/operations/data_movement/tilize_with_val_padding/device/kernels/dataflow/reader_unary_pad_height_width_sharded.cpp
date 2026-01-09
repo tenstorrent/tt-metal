@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
+    DPRINT << "reader_unary_pad_height_width_sharded kernel started" << ENDL();
     const uint32_t num_input_rows = get_arg_val<uint32_t>(0);
     const uint32_t input_width_bytes = get_arg_val<uint32_t>(1);
     const uint32_t input_block_size = get_arg_val<uint32_t>(2);
