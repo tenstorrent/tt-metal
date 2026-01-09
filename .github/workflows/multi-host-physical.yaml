@@ -87,7 +87,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
-    if: ${{ github.event.inputs.glx_2x_multihost == 'true' }}
+    if: ${{ github.event.inputs.glx_2x_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-galaxy
