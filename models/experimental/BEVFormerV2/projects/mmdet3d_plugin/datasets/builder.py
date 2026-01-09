@@ -8,12 +8,17 @@ import numpy as np
 # from mmcv.parallel import collate
 # from mmcv.runner import get_dist_info
 # from mmcv.utils import Registry, build_from_cfg
-from projects.mmdet3d_plugin.dependency import collate, get_dist_info, Registry, build_from_cfg
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    collate,
+    get_dist_info,
+    Registry,
+    build_from_cfg,
+)
 from torch.utils.data import DataLoader
 
 # from mmdet.datasets.samplers import GroupSampler
-from projects.mmdet3d_plugin.dependency import GroupSampler
-from projects.mmdet3d_plugin.datasets.samplers.sampler import build_sampler
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import GroupSampler
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.datasets.samplers.sampler import build_sampler
 
 
 def build_dataloader(
@@ -99,11 +104,11 @@ def worker_init_fn(worker_id, num_workers, rank, seed):
 import platform
 
 # from mmcv.utils import Registry, build_from_cfg
-from projects.mmdet3d_plugin.dependency import Registry, build_from_cfg
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import Registry, build_from_cfg
 
 # from mmdet.datasets import DATASETS
 # from mmdet.datasets.builder import _concat_dataset
-from projects.mmdet3d_plugin.dependency import DATASETS, _concat_dataset
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import DATASETS, _concat_dataset
 
 if platform.system() != "Windows":
     # https://github.com/pytorch/pytorch/issues/973

@@ -7,11 +7,13 @@
 import copy
 from collections import OrderedDict
 import torch
-from mmdet.models import DETECTORS
-from mmdet3d.core import bbox3d2result
-from mmdet3d.models.detectors.mvx_two_stage import MVXTwoStageDetector
-from mmdet3d.models.builder import build_head
-from projects.mmdet3d_plugin.models.utils.grid_mask import GridMask
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    DETECTORS,
+    bbox3d2result,
+    MVXTwoStageDetector,
+    build_head,
+)
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.models.utils.grid_mask import GridMask
 
 
 @DETECTORS.register_module()
@@ -109,17 +111,58 @@ class BEVFormerV2(MVXTwoStageDetector):
         """Extract features from images and points."""
 
         img_feats = self.extract_img_feat(img)
-        if "aug_param" in img_metas[0] and img_metas[0]["aug_param"]["CropResizeFlipImage_param"][-1] is True:
-            # flip feature
-            img_feats = [
-                torch.flip(
-                    x,
-                    dims=[
-                        -1,
-                    ],
-                )
-                for x in img_feats
-            ]
+        # Safely check for aug_param and CropResizeFlipImage_param
+        # Handle cases where img_metas[0] or aug_param might be numpy arrays
+        try:
+            # Use try-except instead of 'in' operator to avoid numpy array boolean ambiguity
+            aug_param = None
+            try:
+                if hasattr(img_metas[0], "get"):
+                    aug_param = img_metas[0].get("aug_param")
+                else:
+                    # If it's not a dict-like object, try direct access
+                    aug_param = img_metas[0]["aug_param"]
+            except (KeyError, TypeError, AttributeError):
+                pass
+
+            if aug_param is not None:
+                crop_param = None
+                try:
+                    if hasattr(aug_param, "get"):
+                        crop_param = aug_param.get("CropResizeFlipImage_param")
+                    else:
+                        crop_param = aug_param["CropResizeFlipImage_param"]
+                except (KeyError, TypeError, AttributeError):
+                    pass
+
+                if crop_param is not None:
+                    flip_value = crop_param[-1] if isinstance(crop_param, (list, tuple)) else crop_param
+                    # Handle numpy array or tensor by extracting scalar value
+                    # This prevents "ValueError: The truth value of an array with more than one element is ambiguous"
+                    if hasattr(flip_value, "item"):  # PyTorch tensor or numpy scalar array
+                        flip_value = flip_value.item()
+                    elif hasattr(flip_value, "__array__"):  # numpy array
+                        import numpy as np
+
+                        arr = np.asarray(flip_value)
+                        flip_value = bool(arr.item() if arr.size == 1 else arr.any())
+                    else:
+                        flip_value = bool(flip_value)
+                    # Check if flip is True
+                    if flip_value:
+                        # flip feature
+                        img_feats = [
+                            torch.flip(
+                                x,
+                                dims=[
+                                    -1,
+                                ],
+                            )
+                            for x in img_feats
+                        ]
+        except (KeyError, TypeError, ValueError, AttributeError, IndexError):
+            # If aug_param doesn't exist or has unexpected structure, skip flip
+            pass
         return img_feats
 
     def forward_pts_train(self, pts_feats, gt_bboxes_3d, gt_labels_3d, img_metas, gt_bboxes_ignore=None, prev_bev=None):
@@ -206,13 +249,23 @@ class BEVFormerV2(MVXTwoStageDetector):
     ):
         img_metas = OrderedDict(sorted(img_metas[0].items()))
         img_dict = {}
+        # num_images = img.shape[1] if len(img.shape) > 1 else 1
+        # img_metas_keys = list(img_metas.keys())
         for ind, t in enumerate(img_metas.keys()):
+            # Use the first image if there are fewer images than timestamp keys
+            # img_idx = min(ind, num_images - 1)
+            # img_dict[t] = img[:, img_idx, ...]
             img_dict[t] = img[:, ind, ...]
 
+        # Get the first key from sorted img_metas
+        # first_key = img_metas_keys[0]
+        # img = img_dict[first_key]
+        # img_dict.pop(first_key)
         img = img_dict[0]
         img_dict.pop(0)
 
         prev_img_metas = copy.deepcopy(img_metas)
+        # prev_img_metas.pop(first_key)
         prev_img_metas.pop(0)
         prev_bev = self.obtain_history_bev(img_dict, prev_img_metas)
 
@@ -246,7 +299,15 @@ class BEVFormerV2(MVXTwoStageDetector):
         for var, name in [(img_metas, "img_metas")]:
             if not isinstance(var, list):
                 raise TypeError("{} must be a list, but got {}".format(name, type(var)))
-        img = [img] if img is None else img
+        if not isinstance(img, list):
+            img = [img]
+
+        # Reshape image tensor from [1, 1, 6, 640, 1600, 3] (NHWC) to [1, 6, 3, 640, 1600] (NCHW)
+        if img[0] is not None and img[0].dim() == 6:
+            # Shape: [B, 1, N, H, W, C] -> [B, N, C, H, W]
+            img[0] = img[0].squeeze(1).permute(0, 1, 4, 2, 3)  # [B, N, H, W, C] -> [B, N, C, H, W]
+        # print(img[0].shape)
+        # print(img_metas[0])
         new_prev_bev, bbox_results = self.simple_test(img_metas[0], img[0], prev_bev=None, **kwargs)
         return bbox_results
 
@@ -262,16 +323,23 @@ class BEVFormerV2(MVXTwoStageDetector):
         """Test function without augmentaiton."""
         img_metas = OrderedDict(sorted(img_metas[0].items()))
         img_dict = {}
-        for ind, t in enumerate(img_metas.keys()):
-            img_dict[t] = img[:, ind, ...]
-        img = img_dict[0]
-        img_dict.pop(0)
+        num_images = img.shape[1] if len(img.shape) > 1 else 1
+        img_metas_keys = list(img_metas.keys())
+        for ind, t in enumerate(img_metas_keys):
+            # Use the first image if there are fewer images than timestamp keys
+            img_idx = min(ind, num_images - 1)
+            img_dict[t] = img[:, img_idx, ...]
+        # Get the first key from sorted img_metas
+        first_key = img_metas_keys[0]
+        img = img_dict[first_key]
+        img_dict.pop(first_key)
 
         prev_img_metas = copy.deepcopy(img_metas)
+        prev_img_metas.pop(first_key)
         prev_bev = self.obtain_history_bev(img_dict, prev_img_metas)
 
         img_metas = [
-            img_metas[0],
+            img_metas[first_key],
         ]
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
         if self.num_levels:

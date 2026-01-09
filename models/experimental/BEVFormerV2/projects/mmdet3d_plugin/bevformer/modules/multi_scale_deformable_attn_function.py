@@ -9,7 +9,7 @@ from torch.cuda.amp import custom_bwd, custom_fwd
 from torch.autograd.function import Function, once_differentiable
 
 # from mmcv.utils import ext_loader
-from projects.mmdet3d_plugin.dependency import ext_loader
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import ext_loader
 
 ext_module = ext_loader.load_ext("_ext", ["ms_deform_attn_backward", "ms_deform_attn_forward"])
 

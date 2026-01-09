@@ -8,16 +8,16 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 # from detectron2.data import MetadataCatalog
-from detectron2.structures.boxes import BoxMode
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import BoxMode
 from nuscenes.eval.detection.utils import category_to_detection_name
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.splits import create_splits_scenes
 
 # from tridet.data import collect_dataset_dicts
-from projects.mmdet3d_plugin.dd3d.structures.boxes3d import GenericBoxes3D
-from projects.mmdet3d_plugin.dd3d.structures.pose import Pose
-from projects.mmdet3d_plugin.dd3d.utils.geometry import project_points3d
-from projects.mmdet3d_plugin.dd3d.utils.visualization import float_to_uint8_color
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.structures.boxes3d import GenericBoxes3D
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.structures.pose import Pose
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.utils.geometry import project_points3d
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.utils.visualization import float_to_uint8_color
 
 #  https://github.com/nutonomy/nuscenes-devkit/blob/9b209638ef3dee6d0cdc5ac700c493747f5b35fe/python-sdk/nuscenes/utils/splits.py#L189
 #     - train/val/test: The standard splits of the nuScenes dataset (700/150/150 scenes).

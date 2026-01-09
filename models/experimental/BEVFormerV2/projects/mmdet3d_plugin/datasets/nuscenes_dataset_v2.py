@@ -1,15 +1,20 @@
 import copy
-from mmdet3d.datasets import NuScenesDataset
+
+#  from mmdet3d.datasets import NuScenesDataset
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import NuScenesDataset
 import mmcv
 from os import path as osp
-from mmdet.datasets import DATASETS
+
+# from mmdet.datasets import DATASETS
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import DATASETS
 import torch
 import numpy as np
 from nuscenes.eval.common.utils import Quaternion
 from .nuscnes_eval import NuScenesEval_custom
-from mmcv.parallel import DataContainer as DC
+
+# from mmcv.parallel import DataContainer as DC
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import DataContainer as DC
 from collections import defaultdict, OrderedDict
-from projects.mmdet3d_plugin.dd3d.datasets.nuscenes import NuscenesDataset as DD3DNuscenesDataset
 
 
 @DATASETS.register_module()
@@ -21,6 +26,10 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
         self.overlap_test = overlap_test
         self.mono_cfg = mono_cfg
         if not self.test_mode and mono_cfg is not None:
+            from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.datasets.nuscenes import (
+                NuscenesDataset as DD3DNuscenesDataset,
+            )
+
             self.mono_dataset = DD3DNuscenesDataset(**mono_cfg)
 
     def prepare_test_data(self, index):
@@ -52,18 +61,19 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
 
         data_queue = OrderedDict(sorted(data_queue.items()))
         ret = defaultdict(list)
-        for i in range(len(data_queue[0]["img"])):
-            single_aug_data_queue = {}
-            for t in data_queue.keys():
-                single_example = {}
-                for key, value in data_queue[t].items():
-                    single_example[key] = value[i]
-                single_aug_data_queue[t] = single_example
-            single_aug_data_queue = OrderedDict(sorted(single_aug_data_queue.items()))
-            single_aug_sample = self.union2one(single_aug_data_queue)
+        # for i in range(len(data_queue[0]["img"])):
+        #     single_aug_data_queue = {}
+        #     for t in data_queue.keys():
+        #         single_example = {}
+        #         for key, value in data_queue[t].items():
+        #             single_example[key] = value[i]
+        #         single_aug_data_queue[t] = single_example
+        #     single_aug_data_queue = OrderedDict(sorted(single_aug_data_queue.items()))
+        #     single_aug_sample = self.union2one(single_aug_data_queue)
 
-            for key, value in single_aug_sample.items():
-                ret[key].append(value)
+        #     for key, value in single_aug_sample.items():
+        #         ret[key].append(value)
+        ret = self.union2one(data_queue)
         return ret
 
     def prepare_train_data(self, index):
@@ -109,7 +119,32 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
         """
         convert sample queue into one single sample.
         """
-        imgs_list = [each["img"].data for each in queue.values()]
+        # Handle both DataContainer and plain list cases for img
+        imgs_list = []
+        for each in queue.values():
+            img = each["img"]
+            if hasattr(img, "data"):
+                # DataContainer object
+                img_data = img.data
+            else:
+                # Plain list or tensor
+                img_data = img
+
+            # If img_data is a list of numpy arrays (from loading pipeline), convert to tensor
+            if isinstance(img_data, list) and len(img_data) > 0:
+                if isinstance(img_data[0], np.ndarray):
+                    # List of numpy arrays (one per camera view), stack them into a tensor
+                    img_data = torch.from_numpy(np.stack(img_data))
+                elif isinstance(img_data[0], torch.Tensor):
+                    # List of tensors, stack them
+                    img_data = torch.stack(img_data)
+                # If it's already a tensor or other type, use as-is
+            elif isinstance(img_data, np.ndarray):
+                # Single numpy array, convert to tensor
+                img_data = torch.from_numpy(img_data)
+
+            imgs_list.append(img_data)
+
         lidar2ego = np.eye(4, dtype=np.float32)
         lidar2ego[:3, :3] = Quaternion(queue[0]["lidar2ego_rotation"]).rotation_matrix
         lidar2ego[:3, 3] = queue[0]["lidar2ego_translation"]
@@ -119,8 +154,27 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
         egocurr2global[:3, 3] = queue[0]["ego2global_translation"]
         metas_map = {}
         for i, each in queue.items():
-            metas_map[i] = each["img_metas"].data
-            metas_map[i]["timestamp"] = each["timestamp"]
+            # Handle both DataContainer and plain dict cases for img_metas
+            # img_metas might not exist in test mode, so create it from available data
+            if "img_metas" in each:
+                img_metas = each["img_metas"]
+                if hasattr(img_metas, "data"):
+                    # DataContainer object
+                    metas_map[i] = img_metas.data
+                else:
+                    # Plain dict
+                    metas_map[i] = img_metas
+            else:
+                # Create img_metas dict from available metadata
+                metas_map[i] = {}
+                # Copy relevant metadata fields if they exist
+                for key in ["lidar2img", "cam2img", "lidar2cam", "img_shape", "ori_shape", "img_norm_cfg"]:
+                    if key in each:
+                        metas_map[i][key] = each[key]
+
+            # Add timestamp if available
+            if "timestamp" in each:
+                metas_map[i]["timestamp"] = each["timestamp"]
             if "aug_param" in each:
                 metas_map[i]["aug_param"] = each["aug_param"]
             if i == 0:
@@ -134,10 +188,12 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
                     np.linalg.inv(lidar2ego) @ np.linalg.inv(egocurr2global) @ egoadj2global @ lidar2ego
                 )
                 metas_map[i]["lidaradj2lidarcurr"] = lidaradj2lidarcurr
-                for i_cam in range(len(metas_map[i]["lidar2img"])):
-                    metas_map[i]["lidar2img"][i_cam] = metas_map[i]["lidar2img"][i_cam] @ np.linalg.inv(
-                        lidaradj2lidarcurr
-                    )
+                # Only update lidar2img if it exists
+                if "lidar2img" in metas_map[i] and isinstance(metas_map[i]["lidar2img"], (list, np.ndarray)):
+                    for i_cam in range(len(metas_map[i]["lidar2img"])):
+                        metas_map[i]["lidar2img"][i_cam] = metas_map[i]["lidar2img"][i_cam] @ np.linalg.inv(
+                            lidaradj2lidarcurr
+                        )
         queue[0]["img"] = DC(torch.stack(imgs_list), cpu_only=False, stack=True)
         queue[0]["img_metas"] = DC(metas_map, cpu_only=True)
         queue = queue[0]
@@ -145,9 +201,23 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
 
     def prepare_input_dict(self, info):
         # standard protocal modified from SECOND.Pytorch
+        # Replace hardcoded ./data/nuscenes/ or data/nuscenes/ with actual data_root for lidar_path
+        lidar_path = info["lidar_path"]
+        # Check for both lowercase and uppercase variants (annotation has lowercase, config may have uppercase)
+        if lidar_path.startswith("./data/nuscenes/"):
+            # Strip ./data/nuscenes/ prefix to get relative path like samples/...
+            lidar_path = osp.join(self.data_root, lidar_path[len("./data/nuscenes/") :])
+        elif lidar_path.startswith("./data/nuScenes/"):
+            lidar_path = osp.join(self.data_root, lidar_path[len("./data/nuScenes/") :])
+        elif lidar_path.startswith("data/nuscenes/"):
+            lidar_path = osp.join(self.data_root, lidar_path[len("data/nuscenes/") :])
+        elif lidar_path.startswith("data/nuScenes/"):
+            lidar_path = osp.join(self.data_root, lidar_path[len("data/nuScenes/") :])
+        elif not osp.isabs(lidar_path):
+            lidar_path = osp.join(self.data_root, lidar_path)
         input_dict = dict(
             sample_idx=info["token"],
-            pts_filename=info["lidar_path"],
+            pts_filename=lidar_path,
             sweeps=info["sweeps"],
             ego2global_translation=info["ego2global_translation"],
             ego2global_rotation=info["ego2global_rotation"],
@@ -166,7 +236,22 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
             lidar2cam_rts = []
             cam_intrinsics = []
             for cam_type, cam_info in info["cams"].items():
-                image_paths.append(cam_info["data_path"])
+                # Replace hardcoded ./data/nuscenes/ or data/nuscenes/ with actual data_root
+                data_path = cam_info["data_path"]
+                # Check for both lowercase and uppercase variants (annotation has lowercase, config may have uppercase)
+                if data_path.startswith("./data/nuscenes/"):
+                    # Strip ./data/nuscenes/ prefix to get relative path like samples/CAM_FRONT/...
+                    data_path = osp.join(self.data_root, data_path[len("./data/nuscenes/") :])
+                elif data_path.startswith("./data/nuScenes/"):
+                    data_path = osp.join(self.data_root, data_path[len("./data/nuScenes/") :])
+                elif data_path.startswith("data/nuscenes/"):
+                    data_path = osp.join(self.data_root, data_path[len("data/nuscenes/") :])
+                elif data_path.startswith("data/nuScenes/"):
+                    data_path = osp.join(self.data_root, data_path[len("data/nuScenes/") :])
+                elif not osp.isabs(data_path):
+                    # If path is relative but doesn't match the pattern, join with data_root
+                    data_path = osp.join(self.data_root, data_path)
+                image_paths.append(data_path)
                 # obtain lidar to image transformation matrix
                 lidar2cam_r = np.linalg.inv(cam_info["sensor2lidar_rotation"])
                 lidar2cam_t = cam_info["sensor2lidar_translation"] @ lidar2cam_r.T

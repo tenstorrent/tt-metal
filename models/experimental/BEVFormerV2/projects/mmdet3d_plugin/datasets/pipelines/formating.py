@@ -1,9 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from mmcv.parallel import DataContainer as DC
+# from mmcv.parallel import DataContainer as DC
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import DataContainer as DC
 
-from mmdet.datasets.builder import PIPELINES
-from mmdet.datasets.pipelines import to_tensor
-from mmdet3d.datasets.pipelines import DefaultFormatBundle3D
+# from mmdet.datasets.builder import PIPELINES
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import PIPELINES
+
+# from mmdet.datasets.pipelines import to_tensor
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import to_tensor
+
+# from mmdet3d.datasets.pipelines import DefaultFormatBundle3D
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import DefaultFormatBundle3D
 
 
 @PIPELINES.register_module()

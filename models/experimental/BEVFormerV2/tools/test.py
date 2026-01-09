@@ -459,8 +459,8 @@ from logging import FileHandler
 
 import torch.nn as nn
 
-from mmcv.runner.dist_utils import master_only
-from mmcv.utils.logging import get_logger, logger_initialized, print_log
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import master_only
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import get_logger, logger_initialized, print_log
 
 
 class BaseModule(nn.Module, metaclass=ABCMeta):
@@ -646,7 +646,7 @@ class ModuleList(BaseModule, nn.ModuleList):
 import warnings
 
 # from mmcv.cnn import MODELS as MMCV_MODELS
-from mmcv.utils import Registry, build_from_cfg
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import Registry, build_from_cfg
 
 
 def build_model_from_cfg(cfg, registry, default_args=None):
@@ -683,6 +683,8 @@ ROI_EXTRACTORS = _MODELS_DET
 SHARED_HEADS = _MODELS_DET
 HEADS = _MODELS_DET
 LOSSES = _MODELS_DET
+
+
 DETECTORS = _MODELS_DET
 
 
@@ -761,13 +763,14 @@ def build_model(cfg, train_cfg=None, test_cfg=None):
 
 
 # https://github.com/open-mmlab/mmdetection3d/blob/v0.17.1/mmdet3d/datasets/builder.py#L39
-DATASETS = Registry("dataset")
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import DATASETS
+
 PIPELINES = Registry("pipeline")
 # from .custom import CustomDataset
 # https://github.com/open-mmlab/mmdetection/blob/v2.14.0/mmdet/datasets/pipelines/compose.py
 import collections
 
-from mmcv.utils import build_from_cfg
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import build_from_cfg
 
 
 @PIPELINES.register_module()
@@ -1892,31 +1895,38 @@ def _concat_dataset(cfg, default_args=None):
 
 
 # https://github.com/open-mmlab/mmdetection3d/blob/v0.17.1/mmdet3d/datasets/builder.py#L39
-from mmcv.utils import Registry, build_from_cfg, Registry
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
+    Registry,
+    build_from_cfg,
+    DATASETS,
+    DETECTORS,
+    ProgressBar,
+)
 
-DATASETS = Registry("dataset")
+# dd3d_mapper is only needed for training, import lazily if needed
+# from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.datasets.pipelines import dd3d_mapper
 
 
 def build_dataset(cfg, default_args=None):
-    from mmdet3d.datasets.dataset_wrappers import CBGSDataset
-    from mmdet.datasets.dataset_wrappers import ClassBalancedDataset, ConcatDataset, RepeatDataset
+    # from mmdet3d.datasets.dataset_wrappers import CBGSDataset
+    # from mmdet.datasets.dataset_wrappers import ClassBalancedDataset, ConcatDataset, RepeatDataset
 
-    if isinstance(cfg, (list, tuple)):
-        dataset = ConcatDataset([build_dataset(c, default_args) for c in cfg])
-    elif cfg["type"] == "ConcatDataset":
-        dataset = ConcatDataset(
-            [build_dataset(c, default_args) for c in cfg["datasets"]], cfg.get("separate_eval", True)
-        )
-    elif cfg["type"] == "RepeatDataset":
-        dataset = RepeatDataset(build_dataset(cfg["dataset"], default_args), cfg["times"])
-    elif cfg["type"] == "ClassBalancedDataset":
-        dataset = ClassBalancedDataset(build_dataset(cfg["dataset"], default_args), cfg["oversample_thr"])
-    elif cfg["type"] == "CBGSDataset":
-        dataset = CBGSDataset(build_dataset(cfg["dataset"], default_args))
-    elif isinstance(cfg.get("ann_file"), (list, tuple)):
-        dataset = _concat_dataset(cfg, default_args)
-    else:
-        dataset = build_from_cfg(cfg, DATASETS, default_args)
+    # if isinstance(cfg, (list, tuple)):
+    #     dataset = ConcatDataset([build_dataset(c, default_args) for c in cfg])
+    # elif cfg["type"] == "ConcatDataset":
+    #     dataset = ConcatDataset(
+    #         [build_dataset(c, default_args) for c in cfg["datasets"]], cfg.get("separate_eval", True)
+    #     )
+    # elif cfg["type"] == "RepeatDataset":
+    #     dataset = RepeatDataset(build_dataset(cfg["dataset"], default_args), cfg["times"])
+    # elif cfg["type"] == "ClassBalancedDataset":
+    #     dataset = ClassBalancedDataset(build_dataset(cfg["dataset"], default_args), cfg["oversample_thr"])
+    # # elif cfg["type"] == "CBGSDataset":
+    # #     dataset = CBGSDataset(build_dataset(cfg["dataset"], default_args))
+    # elif isinstance(cfg.get("ann_file"), (list, tuple)):
+    #     dataset = _concat_dataset(cfg, default_args)
+    # else:
+    dataset = build_from_cfg(cfg, DATASETS, default_args)
 
     return dataset
 
@@ -1929,7 +1939,7 @@ def single_gpu_test(model, data_loader, show=False, out_dir=None, show_score_thr
     model.eval()
     results = []
     dataset = data_loader.dataset
-    prog_bar = mmcv.ProgressBar(len(dataset))
+    prog_bar = ProgressBar(len(dataset))
     for i, data in enumerate(data_loader):
         with torch.no_grad():
             result = model(return_loss=False, rescale=True, **data)
@@ -1976,7 +1986,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from mmcv.utils import TORCH_VERSION, digit_version
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import TORCH_VERSION, digit_version
 
 
 def cast_tensor_type(inputs, src_type, dst_type):
@@ -2155,10 +2165,14 @@ def get_dist_info():
 
 
 # https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/runner/checkpoint.py
-def load_checkpoint(cls, filename, map_location=None, logger=None):
+import os
+
+
+def load_checkpoint(model, filename, map_location=None, logger=None):
     """load checkpoint through URL scheme path.
 
     Args:
+        model (nn.Module): Model to load checkpoint for (not used, kept for compatibility).
         filename (str): checkpoint file name with given prefix
         map_location (str, optional): Same as :func:`torch.load`.
             Default: None
@@ -2168,11 +2182,52 @@ def load_checkpoint(cls, filename, map_location=None, logger=None):
     Returns:
         dict or OrderedDict: The loaded checkpoint.
     """
+    if logger is not None:
+        from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import print_log
 
-    checkpoint_loader = cls._get_checkpoint_loader(filename)
-    class_name = checkpoint_loader.__name__
-    mmcv.print_log(f"load checkpoint from {class_name[10:]} path: {filename}", logger)
-    return checkpoint_loader(filename, map_location)
+        print_log(f"load checkpoint from path: {filename}", logger=logger)
+
+    # Validate file exists and is readable
+    if not os.path.exists(filename):
+        raise FileNotFoundError(f"Checkpoint file not found: {filename}")
+
+    if not os.path.isfile(filename):
+        raise ValueError(f"Checkpoint path is not a file: {filename}")
+
+    # Check file size
+    file_size = os.path.getsize(filename)
+    if file_size == 0:
+        raise ValueError(f"Checkpoint file is empty: {filename}")
+
+    # Check if file appears to be a text file (likely a download error or URL)
+    try:
+        with open(filename, "rb") as f:
+            first_bytes = f.read(100)
+            # PyTorch checkpoint files should start with specific pickle magic bytes
+            # If it starts with text characters, it's likely not a valid checkpoint
+            if first_bytes.startswith(b"--") or first_bytes.startswith(b"http") or first_bytes.startswith(b"<!"):
+                raise ValueError(
+                    f"Checkpoint file appears to be a text file or download error, not a valid PyTorch checkpoint.\n"
+                    f"File path: {filename}\n"
+                    f"File size: {file_size} bytes\n"
+                    f"Please ensure the checkpoint file is properly downloaded from the source."
+                )
+    except (UnicodeDecodeError, ValueError) as e:
+        # If it's already a ValueError from our check, re-raise it
+        if isinstance(e, ValueError) and "Checkpoint file appears" in str(e):
+            raise
+        # Otherwise, continue to try loading
+
+    try:
+        # weights_only=False is required for PyTorch 2.6+ compatibility with checkpoint files
+        checkpoint = torch.load(filename, map_location=map_location, weights_only=False)
+        return checkpoint
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to load checkpoint from {filename}: {str(e)}\n"
+            f"File size: {file_size} bytes. "
+            f"Please verify the checkpoint file is valid and not corrupted."
+        ) from e
 
 
 # Adapted from : https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/parallel/data_parallel.py
@@ -2181,7 +2236,7 @@ from itertools import chain
 
 from torch.nn.parallel import DataParallel
 
-from mmcv.parallel.scatter_gather import scatter_kwargs
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import scatter_kwargs
 
 
 class MMDataParallel(DataParallel):
@@ -2385,7 +2440,7 @@ def main():
     # import modules from plguin/xx, registry will be updated
     if hasattr(cfg, "plugin"):
         if cfg.plugin:
-            import importlib
+            pass
 
             if hasattr(cfg, "plugin_dir"):
                 plugin_dir = cfg.plugin_dir
@@ -2396,7 +2451,7 @@ def main():
                 for m in _module_dir[1:]:
                     _module_path = _module_path + "." + m
                 print(_module_path)
-                plg_lib = importlib.import_module(_module_path)
+                # plg_lib = importlib.import_module(_module_path)
             else:
                 # import dir is the dirpath for the config file
                 _module_dir = os.path.dirname(args.config)
@@ -2405,11 +2460,11 @@ def main():
                 for m in _module_dir[1:]:
                     _module_path = _module_path + "." + m
                 print(_module_path)
-                plg_lib = importlib.import_module(_module_path)
+                # plg_lib = importlib.import_module(_module_path)
 
-    # set cudnn_benchmark
-    if cfg.get("cudnn_benchmark", False):
-        torch.backends.cudnn.benchmark = True
+    # # set cudnn_benchmark
+    # if cfg.get("cudnn_benchmark", False):
+    #     torch.backends.cudnn.benchmark = True
     # set tf32
     if cfg.get("close_tf32", False):
         torch.backends.cuda.matmul.allow_tf32 = False

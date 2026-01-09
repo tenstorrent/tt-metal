@@ -8,7 +8,7 @@ import torch
 from torch import device
 from torch.nn import functional as F
 
-from detectron2.utils.env import TORCH_VERSION
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import TORCH_VERSION
 
 
 def _as_tensor(x: Tuple[int, int]) -> torch.Tensor:

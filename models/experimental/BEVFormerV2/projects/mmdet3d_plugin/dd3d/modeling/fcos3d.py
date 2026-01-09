@@ -3,13 +3,19 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from detectron2.layers import Conv2d, cat, get_norm
-from mmcv.runner import force_fp32
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import Conv2d, cat, get_norm, force_fp32
 
-from projects.mmdet3d_plugin.dd3d.layers.normalization import ModuleListDial, Offset, Scale
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.layers.normalization import (
+    ModuleListDial,
+    Offset,
+    Scale,
+)
 from .disentangled_box3d_loss import DisentangledBox3DLoss
-from projects.mmdet3d_plugin.dd3d.structures.boxes3d import Boxes3D
-from projects.mmdet3d_plugin.dd3d.utils.geometry import allocentric_to_egocentric, unproject_points2d
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.structures.boxes3d import Boxes3D
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.utils.geometry import (
+    allocentric_to_egocentric,
+    unproject_points2d,
+)
 
 EPS = 1e-7
 

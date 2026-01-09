@@ -1,8 +1,12 @@
 import numpy as np
 from numpy import random
 import mmcv
-from mmdet.datasets.builder import PIPELINES
-from mmcv.parallel import DataContainer as DC
+
+# from mmdet.datasets.builder import PIPELINES
+
+# from mmcv.parallel import DataContainer as DC
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import DataContainer as DC
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import PIPELINES
 
 
 @PIPELINES.register_module()

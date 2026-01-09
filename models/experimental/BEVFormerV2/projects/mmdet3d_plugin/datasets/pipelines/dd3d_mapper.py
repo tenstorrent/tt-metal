@@ -1,11 +1,17 @@
 import copy
 import numpy as np
 import torch
-from mmcv.parallel.data_container import DataContainer as DC
-from mmdet.datasets.builder import PIPELINES
-from projects.mmdet3d_plugin.dd3d.datasets.transform_utils import annotations_to_instances
-from projects.mmdet3d_plugin.dd3d.structures.pose import Pose
-from projects.mmdet3d_plugin.dd3d.utils.tasks import TaskManager
+
+# from mmcv.parallel.data_container import DataContainer as DC
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import DataContainer as DC
+
+# from mmdet.datasets.builder import PIPELINES
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import PIPELINES
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.datasets.transform_utils import (
+    annotations_to_instances,
+)
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.structures.pose import Pose
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dd3d.utils.tasks import TaskManager
 
 
 @PIPELINES.register_module()
