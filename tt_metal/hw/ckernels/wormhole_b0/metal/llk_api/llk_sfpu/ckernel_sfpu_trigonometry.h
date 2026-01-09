@@ -160,7 +160,9 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     sfpi::vInt mantissa = sfpi::exman9(val);
     v_if(exponent == 255 && mantissa != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_else {
-        v_if(t0 > 1) { t0 = sfpu_reciprocal<false>(t0); }
+        sfpi::vFloat absval_minus_1 = t0 - sfpi::vConst1;
+
+        v_if(absval_minus_1 > 0.0f) { t0 = sfpu_reciprocal<false>(t0); }
         v_endif;
 
         sfpi::vFloat t1 = t0 * t0;
@@ -192,7 +194,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
 
         t1 = t1 * t0;
 
-        v_if(sfpi::abs(val) > 1) { t1 = PI_2 - t1; }
+        v_if(absval_minus_1 > 0.0f) { t1 = PI_2 - t1; }
         v_endif;
 
         result = sfpi::setsgn(t1, val);
