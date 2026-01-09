@@ -24,7 +24,7 @@ from typing import Optional
 from loguru import logger
 
 import ttnn
-from models.common.modules.tensor_utils import (
+from models.common.tensor_utils import (
     get_padded_hidden_dim,
     pad_to_shape,
     parse_shard_dims_from_mesh_mapper_config,
