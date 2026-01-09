@@ -7,6 +7,7 @@
 
 namespace NAMESPACE {
 void MAIN {
+    DPRINT << "untilize_w kernel started" << ENDL();
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
     uint32_t third_dim = get_compile_time_arg_val(2);

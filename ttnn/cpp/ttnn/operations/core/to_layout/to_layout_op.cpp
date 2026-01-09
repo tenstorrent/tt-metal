@@ -148,9 +148,7 @@ Tensor to_layout_impl(
 
             // 3. Print first element
             if (!data.empty()) {
-                for (auto i = 0; i < 32; i++) {
-                    std::cout << "data[" << i << "] = " << data[i] << std::endl;
-                }
+                std::cout << "data[" << "0" << "] = " << data[0] << std::endl;
             }
 
             tensor = ttnn::untilize_with_unpadding(
@@ -171,9 +169,7 @@ Tensor to_layout_impl(
 
             // 3. Print first element
             if (!data.empty()) {
-                for (auto i = 0; i < 32; i++) {
-                    std::cout << "data[" << i << "] = " << data[i] << std::endl;
-                }
+                std::cout << "data[" << "0" << "] = " << data[0] << std::endl;
             }
 
             tensor = ttnn::reshape(
@@ -194,9 +190,7 @@ Tensor to_layout_impl(
 
             // 3. Print first element
             if (!data.empty()) {
-                for (auto i = 0; i < 32; i++) {
-                    std::cout << "data[" << i << "] = " << data[i] << std::endl;
-                }
+                std::cout << "data[" << "0" << "] = " << data[0] << std::endl;
             }
 
             return tensor;

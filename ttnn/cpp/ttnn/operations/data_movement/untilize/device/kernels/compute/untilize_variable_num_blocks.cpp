@@ -8,6 +8,7 @@
 
 namespace NAMESPACE {
 void MAIN {
+    DPRINT << "untilize_variable_num_blocks kernel started" << ENDL();
     const uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(0);

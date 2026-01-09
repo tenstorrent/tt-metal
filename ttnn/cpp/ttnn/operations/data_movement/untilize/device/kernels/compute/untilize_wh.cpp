@@ -7,6 +7,7 @@
 
 namespace NAMESPACE {
 void MAIN {
+    DPRINT << "untilize_wh kernel started" << ENDL();
     const uint32_t block_size_col = get_compile_time_arg_val(0);
     const uint32_t block_size_row = get_compile_time_arg_val(1);
     const uint32_t third_dim = get_compile_time_arg_val(2);

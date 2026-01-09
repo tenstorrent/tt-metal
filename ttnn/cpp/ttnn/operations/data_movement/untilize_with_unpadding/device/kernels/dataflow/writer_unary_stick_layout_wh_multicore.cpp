@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
+    DPRINT << "writer_unary_stick_layout_wh_multicore kernel started" << ENDL();
     constexpr uint32_t cb_id_out0 = 16;
 
     constexpr uint32_t total_num_rows = get_compile_time_arg_val(0);

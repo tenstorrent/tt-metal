@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
+    DPRINT << "writer_unary_stick_layout_row_multicore kernel started" << ENDL();
     // Constexpr
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;

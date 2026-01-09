@@ -8,6 +8,7 @@
 // Special case writer for unpad width 16 tensors
 // Skip untilize and just copy f0 and f2 from input tiles to output tiles
 void kernel_main() {
+    DPRINT << "writer_unary_unpad_width_16_sharded kernel started" << ENDL();
     uint32_t num_unpadded_output_rows = get_arg_val<uint32_t>(0);
     uint32_t num_padded_tiles_per_core = get_arg_val<uint32_t>(1);
 

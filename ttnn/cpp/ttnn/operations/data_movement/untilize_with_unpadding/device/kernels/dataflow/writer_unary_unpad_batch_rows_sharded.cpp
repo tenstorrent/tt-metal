@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
+    DPRINT << "writer_unary_unpad_batch_rows_sharded kernel started" << ENDL();
     uint32_t num_unpadded_output_rows = get_arg_val<uint32_t>(0);
     uint32_t num_padded_tiles_per_batch = get_arg_val<uint32_t>(1);
     uint32_t num_unpadded_rows_per_batch = get_arg_val<uint32_t>(2);

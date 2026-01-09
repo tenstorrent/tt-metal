@@ -8,6 +8,7 @@
 inline uint64_t round_down_32(uint64_t a) { return (a >> 5) << 5; }
 
 void kernel_main() {
+    DPRINT << "writer_unary_unpad_dims_split_rows kernel started" << ENDL();
     // Constexpr
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
