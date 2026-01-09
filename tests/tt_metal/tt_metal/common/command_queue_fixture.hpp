@@ -56,16 +56,10 @@ protected:
         std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
-        auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
-        if (enable_remote_chip or
-            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
-            for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
-                chip_ids.push_back(id);
-            }
-        } else {
-            chip_ids.push_back(mmio_device_id);
+
+        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+            chip_ids.push_back(id);
         }
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
             chip_ids, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, dispatch_core_config, {}, worker_l1_size);
@@ -131,8 +125,7 @@ protected:
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
-        if (enable_remote_chip or
-            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
+        if (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
             for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
                 chip_ids.push_back(id);
             }
@@ -141,21 +134,24 @@ protected:
         }
         reserved_devices_ = distributed::MeshDevice::create_unit_meshes(
             chip_ids, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, dispatch_core_config);
-
-        if (enable_remote_chip) {
-            const auto tunnels =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-            for (const auto& tunnel : tunnels) {
-                for (const auto chip_id : tunnel) {
-                    if (reserved_devices_.contains(chip_id)) {
-                        devices_.push_back(reserved_devices_.at(chip_id));
-                    }
-                }
-                break;
-            }
-        } else {
-            devices_.push_back(reserved_devices_.at(mmio_device_id));
+        for (const auto& [id, device] : reserved_devices_) {
+            devices_.push_back(device);
         }
+        // if (enable_remote_chip) {
+
+        //     const auto tunnels =
+        //         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+        //     for (const auto& tunnel : tunnels) {
+        //         for (const auto chip_id : tunnel) {
+        //             if (reserved_devices_.contains(chip_id)) {
+        //                 devices_.push_back(reserved_devices_.at(chip_id));
+        //             }
+        //         }
+        //         break;
+        //     }
+        // } else {
+        //     devices_.push_back(reserved_devices_.at(mmio_device_id));
+        // }
     }
 
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;

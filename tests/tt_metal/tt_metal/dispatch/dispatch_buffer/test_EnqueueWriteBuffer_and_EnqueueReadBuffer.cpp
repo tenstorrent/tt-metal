@@ -2353,6 +2353,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferLargeL1ReadWrites) {
 }
 
 TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
+    std::cout << "Running on: " << devices_.size() << " devices" << std::endl;
     for (const auto& mesh_device : devices_) {
         for (const std::array<uint32_t, 2> cores : {std::array<uint32_t, 2>{1, 1}, std::array<uint32_t, 2>{6, 1}}) {
             for (const std::array<uint32_t, 2> num_pages : {
