@@ -11,7 +11,6 @@ jobs:
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
-      wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
     container:
       image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:d8ab8ee3fe4d35256b675bd6f47c0d48f7cada78
       env:
@@ -91,15 +90,39 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  build-wheel:
+    name: "🐍 Build Python Wheel"
+    timeout-minutes: 30
+    runs-on: tt-ubuntu-2204-large-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    outputs:
+      wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check Redis credentials
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 500
+          fetch-tags: true
+
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-
-      - name: Fix pip cache permissions
-        run: |
-          mkdir -p /github/home/.cache/pip
-          chmod -R 777 /github/home/.cache
 
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
@@ -110,7 +133,7 @@ jobs:
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
-            CCACHE_REMOTE_STORAGE=${{ env.CCACHE_REMOTE_STORAGE }}
+            CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY=ON
             CIBW_BUILD_TYPE=Release
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
@@ -134,7 +157,7 @@ jobs:
           retention-days: 1
 
   ttnn-ccache-test:
-    needs: build-artifact
+    needs: build-wheel
     name: TTNN CCache Test (3 runs on same machine)
     runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
@@ -181,20 +204,10 @@ jobs:
           submodules: recursive
           path: docker-job
 
-      - name: 📦 Download Build Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build-artifact.outputs.build_artifact_name }}
-          path: docker-job
-
-      - name: 📂 Extract Build Files
-        working-directory: docker-job
-        run: tar --zstd -xf ttm_any.tar.zst
-
       - name: 🧪 Download Python Wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.build-artifact.outputs.wheel_artifact_name }}
+          name: ${{ needs.build-wheel.outputs.wheel_artifact_name }}
           path: docker-job
 
       - name: 💿 Install Wheel
