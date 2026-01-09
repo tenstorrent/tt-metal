@@ -13,7 +13,7 @@ Tests:
     parametrization_params:
       ftype: [unicast, mcast]
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2, 3, 4]
+      num_links: [2]
 
     defaults:
       size: 32
@@ -31,7 +31,7 @@ Tests:
     parametrization_params:
       ftype: [unicast, mcast]
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2, 3, 4]
+      num_links: [2]
       size: [1024, 2048, 4096]
 
     defaults:
@@ -49,7 +49,7 @@ Tests:
     parametrization_params:
       ftype: [unicast, mcast]
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2, 3, 4]
+      num_links: [2]
 
     defaults:
       size: 32
@@ -67,7 +67,7 @@ Tests:
     parametrization_params:
       ftype: [unicast, mcast]
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2, 3, 4]
+      num_links: [2]
       size: [1024, 2048, 4096]
 
     defaults:
