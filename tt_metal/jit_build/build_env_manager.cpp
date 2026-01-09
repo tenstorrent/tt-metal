@@ -13,7 +13,6 @@
 #include <map>
 #include <optional>
 #include <string>
-#include <umd/device/types/arch.hpp>
 #include <variant>
 
 #include <tt_stl/assert.hpp>
@@ -25,6 +24,7 @@
 #include "jit_build/build.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
@@ -149,22 +149,15 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw
                 .is_cooperative = hal.get_eth_fw_is_cooperative(),
             };
 
+            // On Quasar, all DM processors share the same firmware binary, so we only need to create a single firmware
+            // build state.
             if (is_fw && config.processor_class == HalProcessorClassType::DM &&
                 MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
                 build_states.emplace_back(build_env, config);
             } else {
-                uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
+                const uint32_t processor_types_count =
+                    hal.get_processor_types_count(programmable_core, processor_class);
                 for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
-                    if (is_fw) {
-                        log_info(
-                            tt::LogMetal,
-                            "Adding firmware build state for processor type {} of programmable core type {} and "
-                            "processor "
-                            "class type {}",
-                            processor_type,
-                            programmable_core,
-                            processor_class);
-                    }
                     config.processor_id = processor_type;
                     build_states.emplace_back(build_env, config);
                 }
@@ -201,11 +194,13 @@ const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
 
 const JitBuildState& BuildEnvManager::get_firmware_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
+    // On Quasar, all DM processors share the same firmware binary, so there is only a single firmware build state.
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR &&
         processor_class == static_cast<uint32_t>(HalProcessorClassType::DM)) {
         TT_ASSERT(get_device_build_env(device_id).firmware_build_states.size() == 1);
         return get_device_build_env(device_id).firmware_build_states[0];
     }
+
     const uint32_t state_idx = get_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
     return get_device_build_env(device_id).firmware_build_states[state_idx];
 }
