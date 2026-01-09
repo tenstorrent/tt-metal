@@ -3,7 +3,7 @@ name: "(T3K) T3000 e2e tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 21 * * *" # runs every day at 9pm UTC
+    - cron: "0 6 * * *" # runs every day at 6am UTC, 1am EST
 
 jobs:
   build-artifact:
