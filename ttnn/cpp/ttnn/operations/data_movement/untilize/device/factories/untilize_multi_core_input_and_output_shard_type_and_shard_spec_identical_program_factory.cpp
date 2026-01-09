@@ -14,7 +14,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
-
+#include <iostream>
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -24,6 +24,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    std::cout << "AAAAAAAAAc creating program" << std::endl;
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
@@ -48,23 +49,70 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     uint32_t shard_width;
     CoreRangeSet grid;
     ShardOrientation orientation;
+    uint32_t num_tiles_per_block;
+    uint32_t num_blocks_per_shard;
+    uint32_t num_tiles_per_shard;
+    uint32_t num_shards_per_core;
+    uint32_t extra_shards;
     if (a.shard_spec().has_value()) {
         const auto& shard_spec = a.shard_spec().value();
         shard_height = shard_spec.shape[0];
         shard_width = shard_spec.shape[1];
         grid = shard_spec.grid;
         orientation = shard_spec.orientation;
+        num_tiles_per_block = shard_width / tile_width;
+        num_blocks_per_shard = shard_height / tile_height;
+        num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
+        num_shards_per_core = 1;
+        extra_shards = 0;
     } else {
         const auto& nd_shard_spec = a.nd_shard_spec().value();
         shard_height = nd_shard_spec.shard_shape[-2];
         shard_width = nd_shard_spec.shard_shape[-1];
         grid = nd_shard_spec.grid;
         orientation = nd_shard_spec.orientation;
-    }
 
-    uint32_t num_tiles_per_block = shard_width / tile_width;
-    uint32_t num_blocks_per_core = shard_height / tile_height;
-    uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_core;
+        uint32_t shard_vol = nd_shard_spec.shard_shape.volume();
+
+        num_tiles_per_block = shard_width / tile_width;
+        num_blocks_per_shard = shard_height / tile_height * shard_vol / (shard_height * shard_width);
+        num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
+
+        // Estimate shard distribution across cores (round-robin strategy)
+        uint32_t total_shards = 1;
+        auto tensor_shape = a.padded_shape();
+        for (int i = 0; i < nd_shard_spec.shard_shape.rank(); ++i) {
+            total_shards *= tt::div_up(tensor_shape[i], nd_shard_spec.shard_shape[i]);
+        }
+        uint32_t num_cores = grid.num_cores();
+        num_shards_per_core = total_shards / num_cores;
+        extra_shards = total_shards % num_cores;
+        std::cout << "BBBBB num_shards_per_core: " << num_shards_per_core << std::endl;
+        std::cout << "BBBBB extra_shards: " << extra_shards << std::endl;
+        std::cout << "BBBBB num_cores: " << num_cores << std::endl;
+        std::cout << "BBBBB total_shards: " << total_shards << std::endl;
+        log_debug(
+            tt::LogOp,
+            "ND sharding: total_shards={}, cores={}, base_shards_per_core={}, extra={} (first extra cores get +1 "
+            "shard)",
+            total_shards,
+            num_cores,
+            num_shards_per_core,
+            extra_shards);
+
+        // std::cout << "shard_vol: " << shard_vol << std::endl;
+        // auto layout_to_string = [](tt::tt_metal::TensorMemoryLayout l) {
+        //     switch (l) {
+        //         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:   return "INTERLEAVED";
+        //         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:return "HEIGHT_SHARDED";
+        //         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED: return "WIDTH_SHARDED";
+        //         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return "BLOCK_SHARDED";
+        //     }
+        //     return "UNKNOWN";
+        // };
+
+        // std::cout << "memlayout: " << layout_to_string(a.memory_config().memory_layout()) << std::endl;
+    }
 
     // Input CB
     auto [src0_cb_index, cb_src0] = create_cb(
@@ -72,7 +120,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         program,
         grid,
         input_single_tile_size,
-        num_tiles_per_shard,
+        num_tiles_per_shard,  //* (extra_shards ? num_shards_per_core + 1 : num_shards_per_core),
         input_cb_data_format,
         src0_buffer);
 
@@ -82,7 +130,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         program,
         grid,
         output_single_tile_size,
-        num_tiles_per_shard,
+        num_tiles_per_shard,  // * (extra_shards ? num_shards_per_core + 1 : num_shards_per_core),
         output_cb_data_format,
         dst_buffer);
 
@@ -105,59 +153,132 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
         grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    if (a.shard_spec().has_value()) {  // case for non ND-sharded tensor
+        // Compute compile-time args
+        std::vector<uint32_t> compute_compile_time_args = {
+            (uint32_t)num_blocks_per_shard,
+            (uint32_t)num_tiles_per_block,
+            (uint32_t)src0_cb_index,
+            (uint32_t)output_cb_index};
 
-    // Compute compile-time args
-    std::vector<uint32_t> compute_compile_time_args = {
-        (uint32_t)num_blocks_per_core,
-        (uint32_t)num_tiles_per_block,
-        (uint32_t)src0_cb_index,
-        (uint32_t)output_cb_index};
+        // Compute kernel
+        std::map<std::string, std::string> compute_kernel_defines;
+        if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
+            compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+        }
+        std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        if (fp32_dest_acc_en) {
+            unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        }
+        std::string compute_kernel;
+        if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+            (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
+            log_debug(tt::LogOp, "Using slow untilize.");
+            compute_kernel =
+                std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+            unpack_to_dest_mode[src0_cb_index] =
+                UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
+        } else {
+            log_debug(tt::LogOp, "Using fast pack untilize.");
+            compute_kernel =
+                std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+        }
+        CreateKernel(
+            program,
+            compute_kernel,
+            grid,
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = compute_compile_time_args,
+                .defines = compute_kernel_defines});
 
-    // Compute kernel
-    std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
-    }
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (fp32_dest_acc_en) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    }
-    std::string compute_kernel;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
-        unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    }
-    CreateKernel(
-        program,
-        compute_kernel,
-        grid,
-        ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = compute_kernel_defines});
+        // Run-time args
+        auto cores = corerange_to_cores(grid, std::nullopt, orientation == ShardOrientation::ROW_MAJOR);
+        for (auto core : cores) {
+            // Reader run-time args
+            uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_shard;
+            std::vector<uint32_t> reader_run_time_args = {num_tiles_to_read};
 
-    // Run-time args
-    auto cores = corerange_to_cores(grid, std::nullopt, orientation == ShardOrientation::ROW_MAJOR);
-    for (auto core : cores) {
-        // Reader run-time args
-        uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_core;
-        std::vector<uint32_t> reader_run_time_args = {num_tiles_to_read};
+            // Writer run-time args
+            uint32_t num_tiles_to_write = num_tiles_per_block * num_blocks_per_shard;
+            std::vector<uint32_t> writer_run_time_args = {num_tiles_to_write};
 
-        // Writer run-time args
-        uint32_t num_tiles_to_write = num_tiles_per_block * num_blocks_per_core;
-        std::vector<uint32_t> writer_run_time_args = {num_tiles_to_write};
+            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
+            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
+        }
+    } else {  // case for ND-sharded tensor
+        // Compute compile-time args
+        std::vector<uint32_t> compute_compile_time_args = {
+            (uint32_t)num_tiles_per_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
 
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
+        // Compute kernel
+        std::map<std::string, std::string> compute_kernel_defines;
+        if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
+            compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+        }
+        std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        if (fp32_dest_acc_en) {
+            unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        }
+        std::string compute_kernel;
+        if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+            (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
+            log_debug(tt::LogOp, "Using slow untilize.");
+            compute_kernel = std::string(
+                "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
+                "untilize_variable_num_blocks.cpp");
+            unpack_to_dest_mode[src0_cb_index] =
+                UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
+        } else {
+            log_debug(tt::LogOp, "Using fast pack untilize.");
+            compute_kernel = std::string(
+                "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
+                "pack_untilize_variable_num_blocks.cpp");
+        }
+        KernelHandle untilize_kernel_id = CreateKernel(
+            program,
+            compute_kernel,
+            grid,
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = compute_compile_time_args,
+                .defines = compute_kernel_defines});
+
+        // Run-time args
+        auto cores = corerange_to_cores(grid, std::nullopt, orientation == ShardOrientation::ROW_MAJOR);
+        uint32_t core_count = 0;
+        for (auto core : cores) {
+            uint32_t num_tiles_to_process;
+            // if(core_count < extra_shards) {
+            //     num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * (num_shards_per_core + 1);
+            // } else {
+            //     num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * num_shards_per_core;
+            // }
+            std::cout << "core_count: " << core_count << std::endl;
+            std::cout << "num_tiles_per_block: " << num_tiles_per_block << std::endl;
+            std::cout << "num_blocks_per_shard: " << num_blocks_per_shard << std::endl;
+
+            num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard;
+            std::cout << "num_tiles_to_process: " << num_tiles_to_process << std::endl;
+            // Reader run-time args
+            // uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_shard;
+            std::vector<uint32_t> reader_run_time_args = {num_tiles_to_process};
+
+            // Compute run-time args
+            std::vector<uint32_t> compute_run_time_args = {num_tiles_to_process};
+
+            // Compute run-time args
+            // Writer run-time args
+            // uint32_t num_tiles_to_write = num_tiles_per_block * num_blocks_per_shard;
+            std::vector<uint32_t> writer_run_time_args = {num_tiles_to_process};
+
+            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
+            tt::tt_metal::SetRuntimeArgs(program, untilize_kernel_id, core, compute_run_time_args);
+            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
+            core_count++;
+        }
     }
 
     return UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cached_program_t{
@@ -169,6 +290,7 @@ void UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory
     const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    std::cout << "AAAAAAAAAc overriding runtime arguments" << std::endl;
     auto& program = cached_program.program;
     auto& cb_src0 = cached_program.shared_variables.cb_src0;
     auto& cb_output = cached_program.shared_variables.cb_output;

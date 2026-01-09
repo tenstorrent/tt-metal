@@ -284,16 +284,19 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
 
     if (!operation_attributes.use_multicore) {
         // Single core implementation
+        std::cout << "selecting single core implementation" << std::endl;
         return program::UntilizeSingleCoreProgramFactory{};
     }
     if (operation_attributes.sub_core_grids.has_value()) {
         // If sub_core_grids parameter is provided, use custom sub_core_grid implementation instead
         // of the standard multicore implementation or the block multicore implementation.
         // Note that this implementation does not support sharding, which is enforced in validate().
+        std::cout << "selecting UntilizeMultiCoreSubCoreGridsProgramFactory" << std::endl;
         return program::UntilizeMultiCoreSubCoreGridsProgramFactory{};
     }
     if (!operation_attributes.enough_space_height && !input_is_sharded && !output_is_sharded) {
         // Optimized special case implementation, only supported when neither input or output is sharded
+        std::cout << "selecting UntilizeMultiCoreBlockProgramFactory" << std::endl;
         return program::UntilizeMultiCoreBlockProgramFactory{};
     }
     if (input_is_sharded && output_is_sharded && input_buffer_type == BufferType::L1 &&
@@ -303,6 +306,8 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         // Optimized special case implementation for when both input and output are sharded, both are located in L1,
         // have identical memory layouts (i.e. height->height, width->width, block->block), and have identical shard
         // specs
+        std::cout << "selecting UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory"
+                  << std::endl;
         return program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
     }
 
@@ -329,6 +334,7 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
                                         (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
             auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (num_compute_cores < ncores_wh.ncores) {
+                std::cout << "selecting UntilizeMultiCoreBlockProgramFactory" << std::endl;
                 return program::UntilizeMultiCoreBlockProgramFactory{};
             }
         }
@@ -337,11 +343,14 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     // Need to debug this to work on wide tensors that are higher than a single tile
     auto pf_option = get_pf_type(output_is_sharded, input_tensor_a);
     if (pf_option == 0) {
+        std::cout << "selecting 2 UntilizeMultiCoreParallelizeColumnProgramFactory" << std::endl;
         return program::UntilizeMultiCoreParallelizeColumnProgramFactory{};
     } else if (pf_option == 1) {
+        std::cout << "selecting 2 UntilizeSingleCoreProgramFactory" << std::endl;
         return program::UntilizeSingleCoreProgramFactory{};
     }
     // Default multi core implementation
+    std::cout << "selecting UntilizeMultiCoreProgramFactory" << std::endl;
     return program::UntilizeMultiCoreProgramFactory{};
 }
 

@@ -1414,3 +1414,36 @@ def test_untilize_same_volume_different_shapes(device, dtype, use_multicore, sha
         )
 
         assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+
+
+def test_untilize_nd_shard_spec(device):
+    # device_id = 0
+    # device = ttnn.open_device(device_id=device_id)
+
+    torch.manual_seed(0)
+
+    # This is the exact tensor in the sharding tech report
+    core_ranges = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 3))})
+
+    nd_spec = ttnn.TensorSpec(
+        shape=[4, 512, 768], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+    ).sharded_across_dims([0, 1], core_ranges)
+    print("Shard shape:", nd_spec.memory_config.nd_shard_spec.shard_shape)
+
+    torch_tensor = torch.randn(tuple(nd_spec.shape))
+    ttnn_tensor = ttnn.from_torch(torch_tensor, spec=nd_spec, device=device)
+
+    print("is_sharded():", ttnn_tensor.is_sharded())
+    print("memory config:", ttnn_tensor.memory_config())
+    print("shard spec:", ttnn_tensor.memory_config().shard_spec)
+    print("ND shard spec:", ttnn_tensor.memory_config().nd_shard_spec)
+    print("Attempting ttnn.untilize on ND sharded tensor...")
+
+    untilized_tensor = ttnn.untilize(ttnn_tensor)
+    print("Successfully untilized ND sharded tensor!")
+    print("Output layout:", untilized_tensor.layout)
+    assert_with_pcc(torch_tensor, ttnn.to_torch(untilized_tensor), 0.9999)
+
+
+# finally:
+#     ttnn.close_device(device)
