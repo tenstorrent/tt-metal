@@ -40,21 +40,9 @@ ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekRe
     tensor_return_value_t
     deepseek_reduce_scatter(
         const ttnn::Tensor& input_tensor,
-        const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
-        const std::optional<ttnn::Tensor>& optional_output_tensor,
-        uint32_t dim,
+        const ttnn::MemoryConfig& output_memory_config,
         uint32_t num_links,
-        uint32_t ring_size,
-        MemoryConfig output_mem_config,
-        std::optional<MemoryConfig> optional_intermediate_mem_config,
-        ttnn::ccl::Topology topology,
-        std::vector<GlobalSemaphore> semaphore,
-        std::optional<GlobalSemaphore> barrier_semaphore,
-        bool using_persistent_buffers,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         std::optional<uint32_t> cluster_axis,
-        std::optional<uint32_t> chunks_per_sync,
-        std::optional<uint32_t> num_workers_per_link,
-        std::optional<uint32_t> num_buffers_per_channel);
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 
 }  // namespace ttnn::prim

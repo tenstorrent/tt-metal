@@ -30,46 +30,25 @@ struct DeepseekReduceScatterProgramArtifacts {
 };
 
 struct operation_attributes_t {
-    uint32_t dim;
+    ttnn::MemoryConfig output_memory_config;
     uint32_t num_links;
-    uint32_t ring_size;
-    MemoryConfig output_mem_config;
-    std::optional<MemoryConfig> optional_intermediate_mem_config;
-    ttnn::ccl::Topology topology;
-    std::vector<GlobalSemaphore> semaphore;
-    std::optional<GlobalSemaphore> barrier_semaphore;
-    bool using_persistent_buffers;
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
-    std::optional<uint32_t> chunks_per_sync;
-    std::optional<uint32_t> num_workers_per_link;
-    std::optional<uint32_t> num_buffers_per_channel;
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
     // Add attributes method for reflection
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("dim", dim);
+        attrs.emplace_back("output_memory_config", output_memory_config);
         attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("optional_intermediate_mem_config", optional_intermediate_mem_config);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore", semaphore);
-        attrs.emplace_back("barrier_semaphore", barrier_semaphore);
-        attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
         attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("chunks_per_sync", chunks_per_sync);
-        attrs.emplace_back("num_workers_per_link", num_workers_per_link);
-        attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
+        attrs.emplace_back("sub_device_id", sub_device_id);
         return attrs;
     }
 };
 
 struct tensor_args_t {
-    Tensor input_tensor;
-    std::optional<Tensor> optional_intermediate_tensor;
-    std::optional<Tensor> optional_output_tensor;
+    ttnn::Tensor input_tensor;
 };
 
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
@@ -78,11 +57,8 @@ using tensor_return_value_t = std::vector<Tensor>;
 // Common validation function
 void deepseek_reduce_scatter_common_validates(
     const ttnn::Tensor& input_tensor,
-    ttnn::ccl::Topology topology,
-    uint32_t dim,
+    const ttnn::MemoryConfig& output_memory_config,
     uint32_t num_links,
-    uint32_t ring_size,
-    const ttnn::MemoryConfig& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor);
+    uint32_t ring_size);
 
 }  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail
