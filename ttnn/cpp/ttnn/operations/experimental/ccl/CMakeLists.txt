@@ -39,7 +39,10 @@ target_sources(
         FILES
             all_reduce_async/all_reduce_async.hpp
             all_gather_async/all_gather_async.hpp
-            all_gather_async/device/all_gather_async_op.hpp
+            all_gather_async/device/all_gather_async_device_operation.hpp
+            all_gather_async/device/all_gather_async_default_program_factory.hpp
+            all_gather_async/device/all_gather_async_llama_sharded_program_factory.hpp
+            all_gather_async/device/all_gather_async_device_operation_types.hpp
             composite_common.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp
@@ -68,8 +71,9 @@ target_sources(
         llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_device_op.cpp
         llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_program_factory.cpp
         all_gather_async/all_gather_async.cpp
-        all_gather_async/device/all_gather_async_op.cpp
-        all_gather_async/device/all_gather_async_program_minimal_variants.cpp
+        all_gather_async/device/all_gather_async_device_operation.cpp
+        all_gather_async/device/all_gather_async_default_program_factory.cpp
+        all_gather_async/device/all_gather_async_llama_sharded_program_factory.cpp
         llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.cpp

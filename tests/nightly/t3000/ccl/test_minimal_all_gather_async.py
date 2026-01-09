@@ -373,8 +373,30 @@ def run_all_gather_impl(
             1.0,
         ),  # perf, no_barrier_with_persistent
         (
+            [1, 1, 1024, 1024],
+            -1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            10,
+            False,
+            True,
+            1.0,
+        ),  # perf, no_barrier_with_persistent
+        (
             [1, 1, 48, 1024],
             3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+            True,
+            True,
+            1.0,
+        ),  # check, barrier_with_persistent
+        (
+            [1, 1, 48, 1024],
+            -1,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
             False,
@@ -422,7 +444,9 @@ def run_all_gather_impl(
         "sd35_spatial-perf-barrier_with_persistent",
         "gather_dim_0-check-barrier_without_persistent",
         "gather_dim_2-perf-no_barrier_with_persistent",
+        "gather_dim_negative_2-perf-no_barrier_with_persistent",
         "gather_dim_3_padded_dim_2-check-barrier_with_persistent",
+        "gather_dim_negative_1_padded_dim_2-check-barrier_with_persistent",
         "composite_ag_test_two-perf-barrier_without_persistent",
         "composite_ag_test_four-check-no_barrier_with_persistent",
         "sd35_spatial-perf-barrier_with_persistent_bfloat8_b",
