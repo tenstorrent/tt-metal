@@ -441,7 +441,7 @@ def test_bilinear_multi_core(
     "scale_h, scale_w",
     (
         (2, 2),
-        # (4, 4),
+        (4, 4),
     ),
 )
 @pytest.mark.parametrize(
@@ -504,23 +504,19 @@ def test_bilinear_multi_core(
             128,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
-        # TEST: 57 cores for shape (1, 13, 13, 128)
-        # 13*13 = 169 sticks, ceil(169/57) = 3 sticks per core
-        # 57 cores * 3 sticks = 171 capacity (sufficient)
-        # Core grid: 7 full rows (56 cores) + 1 core = 57 cores total
+        # Test when empty shards are present
         (
             1,
-            128,  # channels
-            13,  # height
-            13,  # width
+            128,
+            13,
+            13,
             ttnn.CoreRangeSet(
                 {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),  # 8 cols * 7 rows = 56 cores
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(0, 7)),  # 1 more core = 57 total
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
                 }
             ),
-            3,  # shard_height = ceil(169/57) = 3
-            128,  # shard_width = channels
+            3,
+            128,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
     ),
