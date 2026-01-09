@@ -49,6 +49,7 @@ target_sources(
             reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
             reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
+            strided_reduce_scatter_minimal_async/strided_reduce_scatter_minimal_async.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -100,6 +101,7 @@ target_sources(
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
+        strided_reduce_scatter_minimal_async/strided_reduce_scatter_minimal_async.cpp
         send_recv_async/send_async/send_async.cpp
         send_recv_async/send_async/device/send_async_op_device_operation.cpp
         send_recv_async/send_async/device/send_async_op_program_factory.cpp
