@@ -8,20 +8,21 @@
 - [2. Physical Topologies](#2-physical-topologies)
   - [2.1 Closetbox (16 Loudbox)](#21-closetbox-16-loudbox)
   - [2.2 WH Galaxy All-to-All System (5 Galaxies)](#22-wh-galaxy-all-to-all-system-5-galaxies)
+  - [2.3 Blackhole Quietbox Cluster (Planned Topology)](#23-blackhole-quietbox-cluster-planned-topology)
 - [3. Mesh Graph Descriptors](#3-mesh-graph-descriptors)
-  - [3.1 Why MGDs Matter](#31-why-mgds-matter)
-  - [3.2 MGD 2.0 Format](#32-mgd-20-format)
+  - [3.1 The Purpose of MGDs](#31-the-purpose-of-mgds)
+  - [3.2 MGD Format Reference](#32-mgd-format-reference)
   - [3.3 Example: Closetbox MGD](#33-example-closetbox-mgd)
   - [3.4 Example: Exabox MGD](#34-example-exabox-mgd)
 - [4. Rank Bindings and tt-run](#4-rank-bindings-and-tt-run)
   - [4.1 The Role of Rank Bindings](#41-the-role-of-rank-bindings)
   - [4.2 Rank Binding Format](#42-rank-binding-format)
   - [4.3 Running with tt-run](#43-running-with-tt-run)
-  - [4.4 Generating Rank Bindings](#44-generating-rank-bindings)
 - [5. Multi-Processing Support](#5-multi-processing-support)
   - [5.1 Virtualizing a Galaxy as Multiple Meshes](#51-virtualizing-a-galaxy-as-multiple-meshes)
   - [5.2 TT_VISIBLE_DEVICES](#52-tt_visible_devices)
   - [5.3 P300 Example (2-Chip Pipeline)](#53-p300-example-2-chip-pipeline)
+  - [5.4 Generating Rank Bindings for Galaxy Systems](#54-generating-rank-bindings-for-galaxy-systems)
 - [6. Fabric Configuration](#6-fabric-configuration)
   - [6.1 What is TT-Fabric?](#61-what-is-tt-fabric)
   - [6.2 FabricConfig Options](#62-fabricconfig-options)
@@ -33,12 +34,16 @@
   - [7.4 Intra-Process Sockets](#74-intra-process-sockets)
 - [8. Programming Example](#8-programming-example)
 - [9. Troubleshooting](#9-troubleshooting)
+  - [Common Issues](#common-issues)
+  - [Debugging Tips](#debugging-tips)
 
 ## 1. Overview
 
 The Multi-Mesh programming model enables splitting a Tenstorrent system into multiple independent logical meshes. Each mesh is managed by a separate process, potentially running on a different host. This works well for workloads that partition computation across distinct stages or models.
 
-A mesh is a uniformly connected grid of Tenstorrent devices that work together on computations. Each device on the same mesh has identical memory and runtime state, which allows you to virtualize an arbitrarily sized mesh as a single device. Conversely, the Multi-Mesh programming model allows each mesh to operate independently. Meshes can have non-uniform runtime state and are managed by independent processes. Meshes communicate through sockets. There's no implicit data sharing. Each process is completely isolated with its own memory space, compiled kernels, and execution state.
+A mesh is a uniformly connected grid of Tenstorrent devices that work together on computations. Each device on the same mesh has identical memory and runtime state, which allows you to virtualize an arbitrarily sized mesh as a single device. For details on single-mesh programming, tensor distribution, and collective operations (CCL), see [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md).
+
+Conversely, the Multi-Mesh programming model allows each mesh to operate independently. Meshes can have non-uniform runtime state and are managed by independent processes. Meshes communicate through sockets. There's no implicit data sharing. Each process is completely isolated with its own memory space, compiled kernels, and execution state.
 
 ### 1.1 When to Use Multi-Mesh
 
@@ -54,7 +59,7 @@ Multi-Mesh works well for:
 
 TT-Metal supports two independent distributed execution patterns:
 
-- **Big-Mesh (scale-up)**: All processes share one mesh and run identical code in lockstep (SPMD). Use this for tensor/data parallelism where you need a unified view of all devices, like large matrix multiplications split across the mesh. Big-Mesh requires tight synchronization and deterministic execution across all ranks. Every process must execute the same sequence of operations on its local sub-mesh. This lockstep model enables efficient data parallelism (DP) and tensor parallelism (TP) for scaling models like Llama from 70B to 2T+ parameters.
+- **Big-Mesh (scale-up)**: All processes share one mesh and run identical code in lockstep (SPMD). Use this for tensor/data parallelism where you need a unified view of all devices, like large matrix multiplications split across the mesh. Big-Mesh requires tight synchronization and deterministic execution across all ranks. Every process must execute the same sequence of operations on its local sub-mesh. This lockstep model enables efficient data parallelism (DP) and tensor parallelism (TP) for scaling models like Llama from 70B to 2T+ parameters. For detailed multi-host SPMD architecture (managing a single uniform logical mesh across multiple hosts), see [TT-Distributed: Multi-Host Runtime](../TT-Distributed/MultiHostMeshRuntime.md).
 
 - **Multi-Mesh (scale-out)**: Each process owns a separate mesh and communicates via sockets. Use this for pipeline parallelism or multi-model inference where stages run asynchronously. Unlike Big-Mesh, processes don't need to stay in lockstep. One mesh can be computing while another is idle or running completely different code. This decoupling makes Multi-Mesh ideal for pipeline parallelism where different transformer layers run on different meshes with data flowing through sockets.
 
@@ -80,15 +85,15 @@ The Closetbox consists of 16 Loudbox units organized hierarchically into Super-P
 
 <img src="images/closetbox_cabling.png" alt="Closetbox Physical Topology" style="width:600px;"/>
 
-*Figure 1: Closetbox Physical Topology. Purple dashed boxes indicate Super-Pods, red dashed box indicates the Cluster boundary.*
+*Figure 1: Closetbox Cabling Topology. Shows the physical connections between Super-Pods and Loudbox units.*
 
 <img src="images/closetbox_logical.png" alt="Closetbox Logical Topology" style="width:500px;"/>
 
-*Figure 2: Closetbox Cabling Topology. Shows the MGD hierarchy: 16 meshes (M0) grouped into 4 PODs (G0), composed into 1 Cluster (G1).*
+*Figure 2: Closetbox Logical Topology. Shows the MGD hierarchy: 16 meshes (M0) grouped into 4 PODs (G0), composed into 1 Cluster (G1).*
 
 ### 2.2 WH Galaxy All-to-All System (5 Galaxies)
 
-The WH Galaxy All-to-All system consists of 5 Galaxy systems in an all-to-all topology. As shown in Figure 3:
+The WH Galaxy All-to-All system consists of 5 Galaxy systems in an all-to-all topology. As shown in Figures 3 and 4:
 
 - **5 Galaxy units**, each an 8×4 mesh (32 Wormhole B0 devices). A Galaxy is Tenstorrent's standard system.
 - **Total: 160 devices** across 5 meshes. Massive compute capacity for large models.
@@ -96,11 +101,32 @@ The WH Galaxy All-to-All system consists of 5 Galaxy systems in an all-to-all to
 
 <img src="images/exabox_cabling.png" alt="WH Galaxy All-to-All System Physical Topology" style="width:600px;"/>
 
-*Figure 3: WH Galaxy All-to-All System Physical Topology. Blue lines show intra-Galaxy connections, orange lines show inter-Galaxy connections.*
+*Figure 3: WH Galaxy All-to-All System Cabling Topology. Shows the physical connections between Galaxy units.*
 
 <img src="images/exabox_logical.png" alt="WH Galaxy All-to-All System Logical Topology" style="width:500px;"/>
 
-*Figure 4: WH Galaxy All-to-All System Cabling Topology. 5 Galaxy meshes in a single FABRIC graph with all-to-all connectivity.*
+*Figure 4: WH Galaxy All-to-All System Logical Topology. 5 Galaxy meshes in a single FABRIC graph with all-to-all connectivity.*
+
+### 2.3 Blackhole Quietbox Cluster (Planned Topology)
+
+The Blackhole (BH) Quietbox Cluster represents a next-generation multi-host configuration for Blackhole ASICs. This topology is currently under active development for scale-out testing and software bring-up.
+
+The cluster consists of 4 Quietbox hosts connected to form a 4×4 (TODO: is it 4x4? im seeing some bigger meshes) mesh:
+
+- **4 Quietbox hosts** arranged in a 2×2 host topology
+- **16 P150 boards total**: 4 P150 boards per Quietbox (Tray IDs 1-4)
+- **16 Blackhole ASICs total**: 1 Blackhole ASIC per P150 board
+- **Device topology**: Can be configured as 4×4 mesh, 4×4 torus, or smaller variants (2×4, 2×2)
+
+Each P150 board has 4 QSFP ports for connectivity:
+- **Ports 1 & 4**: External connections between P150 boards on different hosts
+- **Ports 2 & 3**: Internal connections between P150 boards on the same host
+
+<img src="../../tests/scale_out/4x_bh_quietbox/images/cablegen.png" alt="Blackhole Quietbox Cluster Physical Topology" style="width:600px;"/>
+
+<img src="images/4x_bh_logical.png" alt="Blackhole Quietbox Cluster Logical Topology" style="width:500px;"/>
+
+This topology enables testing of Multi-Mesh configurations across multiple Blackhole hosts, supporting both scale-up (Big-Mesh) and scale-out (Multi-Mesh) patterns. For detailed configuration files and bring-up documentation, see [`tests/scale_out/4x_bh_quietbox/`](../../tests/scale_out/4x_bh_quietbox/README.md).
 
 ## 3. Mesh Graph Descriptors
 
@@ -120,38 +146,14 @@ Without an MGD, the runtime doesn't know how to partition the system or route tr
 
 The MGD is validated at startup. If the physical hardware can't accommodate the MGD, initialization will fail.
 
-### 3.2 MGD 2.0 Format
+### 3.2 MGD Format Reference
 
-MGD 2.0 uses Protobuf text format (`.textproto` files) and consists of three sections:
+MGDs use Protobuf text format (`.textproto` files). An MGD defines mesh templates, connectivity between meshes, and hierarchical groupings (PODs, clusters). This allows you to instantiate different logical topologies on the same physical hardware.
 
-```proto
-# 1. mesh_descriptors: Define reusable mesh templates
-mesh_descriptors {
-  name: "M0"
-  arch: WORMHOLE_B0
-  device_topology { dims: [ 2, 4 ] }    # [rows, cols] → 2 rows × 4 cols = 8 devices
-  host_topology   { dims: [ 1, 1 ] }    # [rows, cols] → 1 host controls this mesh
-  channels { count: 2 policy: STRICT }  # 2 ethernet links per direction; STRICT = must have all links
-}
+**For complete MGD schema documentation, syntax reference, and additional examples, see the comprehensive guide:**
+[`tt_metal/fabric/MGD_README.md`](../../tt_metal/fabric/MGD_README.md)
 
-# 2. graph_descriptors: Define connectivity
-graph_descriptors {
-  name: "G0"
-  type: "FABRIC"
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 2 }
-  }
-}
-
-# 3. top_level_instance: Root instance to instantiate
-top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-```
-
-For detailed documentation, see [`tt_metal/fabric/MGD_README.md`](../../tt_metal/fabric/MGD_README.md).
+The following sections show Multi-Mesh-specific MGD examples for the topologies described in Section 2.
 
 ### 3.3 Example: Closetbox MGD
 
@@ -421,37 +423,24 @@ The P300 example follows the same pattern as the Galaxy example but with a 1×1 
 
 ### 5.4 Generating Rank Bindings for Galaxy Systems
 
-For Wormhole (WH) Galaxy systems, use the rank binding generator script to automatically create rank binding configurations:
+>[!NOTE]
+>This tool is Galaxy-specific and generates preset rank binding configurations for testing Multi-Mesh workloads on a single Galaxy host.
 
 ```bash
-# Generates rank bindings with proper TT_VISIBLE_DEVICES for Galaxy
-# Output files are written to current working directory
+# Prerequisite: build with tests enabled
+./build_metal.sh --build-tests
+
+# Generate rank bindings (run on Galaxy host)
 python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
 ```
 
->[!NOTE]
->This functionality is currently limited to WH Galaxy systems only.
+**Generates 4 files:**
+- `tray_to_pcie_device_mapping.yaml` - Maps Galaxy trays to PCIe device IDs
+- `4x4_multi_mesh_rank_binding.yaml` - 2 meshes (trays 1-2, 3-4)
+- `4x2_multi_mesh_rank_binding.yaml` - 4 meshes (one per tray)
+- `4x4_multi_big_mesh_rank_binding.yaml` - 2 meshes with 2 ranks each (simulates multi-host)
 
-This script enables logical partitioning of a Galaxy cluster to simulate more complex systems. This is useful for software bringups where you want to test different topologies without physical hardware changes. You can partition the Galaxy in several ways:
-
-**Option 1: Split by Halves (2 processes)**
-- Top 2 trays → mesh 0 (process 0)
-- Bottom 2 trays → mesh 1 (process 1)
-- Result: Two 4×4 meshes
-- File: `4x4_multi_mesh_rank_binding.yaml`
-
-**Option 2: Split by Tray (4 processes)**
-- Each tray → separate mesh (one process per tray)
-- Result: Four 4×2 meshes
-- File: `4x2_multi_mesh_rank_binding.yaml`
-
-**Option 3: Multi Big-Mesh (4 processes)**
-- Top 2 trays → mesh 0 (2 processes share ownership, simulating Big-Mesh)
-- Bottom 2 trays → mesh 1 (2 processes share ownership, simulating Big-Mesh)
-- Result: Two 4×4 meshes, each owned by 2 processes
-- File: `4x4_multi_big_mesh_rank_binding.yaml`
-
-The script automatically sets the correct `TT_VISIBLE_DEVICES` mappings based on Galaxy's physical device IDs. These files serve as templates you can modify for custom partitioning schemes.
+Use the generated YAML files with `tt-run` to test different partitioning schemes. For other systems (P300, Closetbox, Blackhole), manually create rank binding files following the format shown in Section 5.3.
 
 ## 6. Fabric Configuration
 
@@ -722,7 +711,9 @@ if __name__ == "__main__":
 
 **Related Documentation**
 
-- [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md) - Single-mesh programming model
-- [TT-Distributed: Multi-Host Runtime](../TT-Distributed/MultiHostMeshRuntime.md) - SPMD architecture details
-- [TT-Fabric Architecture](../TT-Fabric/TT-Fabric-Architecture.md) - Network layer internals
+- [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md) - Single-mesh programming model, tensor distribution, and collective operations
+- [TT-Distributed: Multi-Host Runtime](../TT-Distributed/MultiHostMeshRuntime.md) - Multi-host SPMD architecture for managing a single uniform logical mesh across multiple hosts
+- [TT-Fabric Architecture](../TT-Fabric/TT-Fabric-Architecture.md) - Network layer internals, routing, and deadlock avoidance
+- [Ethernet Multichip Guide](../EthernetMultichip/BasicEthernetGuide.md) - Tenstorrent hardware overview and ethernet connectivity
+- [Tensor Sharding](../tensor_sharding/tensor_sharding.md) - Sharding strategies for distributing tensors across device memory
 - [MGD 2.0 Guide](../../tt_metal/fabric/MGD_README.md) - Mesh Graph Descriptor schema and examples
