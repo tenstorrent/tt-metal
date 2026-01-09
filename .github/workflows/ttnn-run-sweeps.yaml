@@ -686,6 +686,8 @@ jobs:
           POSTGRES_USER: tt-sweeps
           POSTGRES_PASSWORD: tt.sweeps
           POSTGRES_DB: tt-model-traces
+        volumes:
+          - ${{ github.workspace }}/docker-job:/work
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -704,6 +706,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
+        - /var/run/docker.sock:/var/run/docker.sock
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -747,27 +750,15 @@ jobs:
             sleep 2
           done
 
-          echo "♻ Restoring database from compressed SQL dump..."
-          python3 << 'EOF'
-          import gzip
-          import psycopg2
-
-          # Decompress and read the SQL dump
-          with gzip.open("model_tracer/ttnn_operations_db.sql.gz", "rt", encoding="utf-8") as f:
-              lines = f.readlines()
-
-          # Filter out psql meta-commands (lines starting with \)
-          sql_lines = [line for line in lines if not line.strip().startswith('\\')]
-          sql_content = ''.join(sql_lines)
-
-          # Connect and execute
-          conn = psycopg2.connect("postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces")
-          conn.autocommit = True
-          cur = conn.cursor()
-          cur.execute(sql_content)
-          conn.close()
-          print("✅ Database restored successfully")
-          EOF
+          echo "♻ Restoring database from SQL dump..."
+          # Use docker exec to run psql in the postgres container (has all the tools)
+          # The dump file is available at /work via the volume mount on postgres service
+          POSTGRES_CONTAINER=$(docker ps --filter "ancestor=postgres:18" --format "{{.Names}}" | head -1)
+          echo "Found postgres container: $POSTGRES_CONTAINER"
+          docker exec -e PGPASSWORD=tt.sweeps "$POSTGRES_CONTAINER" \
+            psql -h localhost -U tt-sweeps -d tt-model-traces \
+              -f /work/model_tracer/ttnn_operations_db.sql
+          echo "✅ Database restored successfully"
 
           echo "🔍 Verifying schema..."
           python3 << 'EOF'
