@@ -198,20 +198,33 @@ struct ChannelCounter {
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct OutboundReceiverChannelPointers {
     uint32_t num_free_slots;
-    BufferIndex remote_receiver_buffer_index;
+    // BufferIndex remote_receiver_buffer_index;
+    uint32_t remote_receiver_buffer_address;
+    uint32_t slot_size_bytes;
+    uint32_t remote_receiver_buffer_address_base;
+    uint32_t remote_receiver_buffer_address_last;
     size_t cached_next_buffer_slot_addr;
 
-    FORCE_INLINE void init() {
+    FORCE_INLINE void init(uint32_t remote_receiver_buffer_address, uint32_t slot_size_bytes, uint32_t num_slots) {
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
-        this->remote_receiver_buffer_index = BufferIndex{0};
+        this->remote_receiver_buffer_address = remote_receiver_buffer_address;
+        this->remote_receiver_buffer_address_base = remote_receiver_buffer_address;
+        this->slot_size_bytes = slot_size_bytes;
+        this->remote_receiver_buffer_address_last = remote_receiver_buffer_address + ((num_slots - 1) * slot_size_bytes);
         this->cached_next_buffer_slot_addr = 0;
     }
 
     FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
 
-    FORCE_INLINE void advance_remote_receiver_buffer_index() {
-        remote_receiver_buffer_index =
-            BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
+    FORCE_INLINE void advance_remote_receiver_buffer_pointer() {
+        bool is_last_buffer = remote_receiver_buffer_address == remote_receiver_buffer_address_last;
+        
+        // unlikely
+        if (is_last_buffer) {    
+            remote_receiver_buffer_address += slot_size_bytes;
+        } else {
+            remote_receiver_buffer_address = remote_receiver_buffer_address_base + (slot_size_bytes * (remote_receiver_buffer_address - remote_receiver_buffer_address_base));
+        }
     }
 };
 

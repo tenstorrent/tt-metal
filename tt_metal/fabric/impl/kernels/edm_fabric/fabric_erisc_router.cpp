@@ -527,16 +527,17 @@ FORCE_INLINE void send_next_data(
     SenderChannelT& sender_buffer_channel,
     WorkerInterfaceT& sender_worker_interface,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
-    ReceiverChannelT& receiver_buffer_channel,
+    // ReceiverChannelT& receiver_buffer_channel,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
-    auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
+    // auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
 
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
-    auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
+    // auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
+    auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_buffer_address;
     if constexpr (!skip_src_ch_id_update) {
         pkt_header->src_ch_id = sender_channel_index;
     }
@@ -552,9 +553,7 @@ FORCE_INLINE void send_next_data(
     sender_worker_interface.template update_write_counter_for_send<SKIP_CONNECTION_LIVENESS_CHECK>();
 
     // Advance receiver buffer pointers
-    outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_index();
-    receiver_buffer_channel.set_cached_next_buffer_slot_addr(
-        receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
+    outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_pointer();
     sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
     remote_receiver_num_free_slots--;
     // update the remote reg
@@ -1454,7 +1453,7 @@ FORCE_INLINE
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
-            remote_receiver_channel,
+            // remote_receiver_channel,
             perf_telemetry_recorder);
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
