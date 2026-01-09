@@ -11,8 +11,6 @@ target_link_libraries(
         TTNN::CPP
 )
 
-
-
 install(
     DIRECTORY
         add
