@@ -597,7 +597,7 @@ class MLA1D(AbstractModule):
             out_dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
-            num_links=4,
+            num_links=1,  # All to all only supports 1 link
         )
 
         wq_a2a_reshard_out_mem_config = ttnn.create_sharded_memory_config(
