@@ -27,7 +27,7 @@ namespace ckernel {
 
 template <BroadcastType bcast_type>
 ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
-    // 32bit formats are implemented using unpack to dest, since SrcB/FPU cannot handle these formats
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
@@ -58,7 +58,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
 template <BroadcastType bcast_type>
 ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    // 32bit and uint16 are implemented using upk to dest, since SrcB/FPU cannot handle these formats
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
     const std::uint32_t dst_format = get_operand_dst_format(icb);
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
@@ -66,7 +66,6 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
 
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(icb, in_tile_index)));
-        // UNPACK((llk_unpack_set_srcb_dummy_valid()));
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
     } else {
         UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
@@ -83,11 +82,11 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
 
+    UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
+
     if (enable_unpack_to_dest) {
-        UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, true>()));
     } else {
-        UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, false>()));
     }
 #endif
