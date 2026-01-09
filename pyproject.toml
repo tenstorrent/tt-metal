@@ -1,8 +1,8 @@
 [build-system]
 requires = [
   "setuptools==70.1.0",
-  "setuptools-scm==8.1.0",
-  "wheel",
+  "setuptools-scm==9.2.2",
+  "wheel>=0.45.1",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -13,13 +13,13 @@ authors = [
     {email = "info@tenstorrent.com"},
 ]
 dependencies = [
-  "numpy>=1.24.4,<2",
-  "loguru>=0.6.0",
-  "networkx>=3.1",
-  "graphviz>=0.20.3",
-  "pyyaml>=5.4",
-  "click>=8.1.7",
-  "pandas>=2.0.3",
+  "numpy>=2.2.6",
+  "loguru>=0.7.3",
+  "networkx>=3.4.2",
+  "graphviz>=0.21",
+  "pyyaml>=6.0.1",
+  "click>=8.3.1",
+  "pandas>=2.3.3",
   "seaborn>=0.13.2",
 ]
 requires-python = ">=3.10"

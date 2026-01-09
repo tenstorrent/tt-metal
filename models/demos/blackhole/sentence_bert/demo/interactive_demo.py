@@ -56,7 +56,12 @@ def compute_ttnn_embeddings(sentences, model_name, device, model_location_genera
 
         ttnn_output = sentence_bert_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
         logger.info("Running inference on TTNN model for current batch...")
-        ttnn_output = ttnn.to_torch(ttnn_output, mesh_composer=sentence_bert_module.runner_infra.output_mesh_composer)
+
+        # Only pass mesh_composer if it's not None (single device case)
+        to_torch_kwargs = {}
+        if sentence_bert_module.runner_infra.output_mesh_composer is not None:
+            to_torch_kwargs["mesh_composer"] = sentence_bert_module.runner_infra.output_mesh_composer
+        ttnn_output = ttnn.to_torch(ttnn_output, **to_torch_kwargs)
         # Always slice to the original batch size (before padding)embeddings = embeddings[:orig_batch_size]
         all_embeddings.append(ttnn_output)
         all_sentences.extend(sentences[i : i + orig_batch_size])
@@ -120,7 +125,12 @@ def run_interactive_demo_inference(device, model_name, sequence_length, batch_si
         position_ids = torch.arange(0, input_ids.shape[-1], dtype=torch.int64).unsqueeze(dim=0)
         ttnn_output = model_instance.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
         logger.info("Running inference on TTNN model for current batch...")
-        query_embeddings = ttnn.to_torch(ttnn_output, mesh_composer=model_instance.runner_infra.output_mesh_composer)
+
+        # Only pass mesh_composer if it's not None (single device case)
+        to_torch_kwargs = {}
+        if model_instance.runner_infra.output_mesh_composer is not None:
+            to_torch_kwargs["mesh_composer"] = model_instance.runner_infra.output_mesh_composer
+        query_embeddings = ttnn.to_torch(ttnn_output, **to_torch_kwargs)
         logger.info("Computing cosine similarities...")
         similarities = cosine_similarity(query_embeddings.detach().cpu().numpy(), kb_embeddings.detach().cpu().numpy())[
             0

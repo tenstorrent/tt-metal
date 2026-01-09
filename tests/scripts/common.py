@@ -276,9 +276,12 @@ def get_updated_device_params(device_params):
 
     new_device_params = device_params.copy()
 
+    # Pop dispatch-related params that will be used to create DispatchCoreConfig
     dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
     dispatch_core_type = new_device_params.pop("dispatch_core_type", None)
-    fabric_tensix_config = new_device_params.get("fabric_tensix_config", None)
+    # fabric_tensix_config is used for DispatchCoreConfig but also needs to be
+    # popped since it's not a valid CreateDevice parameter
+    fabric_tensix_config = new_device_params.pop("fabric_tensix_config", None)
 
     if ttnn.device.is_blackhole():
         # Only when both fabric_config and fabric_tensix_config are set, we can use ROW dispatch, otherwise force to use COL dispatch
@@ -295,6 +298,7 @@ def get_updated_device_params(device_params):
                 f"Blackhole with fabric_config and fabric_tensix_config enabled, using fabric_tensix_config={fabric_tensix_config}"
             )
 
+    # Create DispatchCoreConfig - it handles None values by using system defaults
     dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis, fabric_tensix_config)
     new_device_params["dispatch_core_config"] = dispatch_core_config
 

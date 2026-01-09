@@ -85,7 +85,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     model = load_torch_model(model_location_generator, embedding=True)
 
-    dataset = load_dataset("huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149")
+    dataset = load_dataset("huggingface/cats-image", revision="4613f5f1d3642cc2d56ffdf1b58c9d0f912cdc1f")
     image = dataset["test"]["image"][0]
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
@@ -160,12 +160,16 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
 def test_vit_attention(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
-    model = transformers.models.vit.modeling_vit.ViTAttention(config).eval()
+    torch_config = transformers.ViTConfig.from_pretrained(model_name)
+    model = transformers.models.vit.modeling_vit.ViTAttention(torch_config).eval()
+    config = ttnn_optimized_sharded_vit.update_model_config(torch_config, batch_size)
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    result = model(torch_hidden_states)
+    if isinstance(result, tuple):
+        torch_output = result[0]
+    else:
+        torch_output = result
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -284,12 +288,16 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
 def test_vit_layer(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    torch_config = transformers.ViTConfig.from_pretrained(model_name)
     model = load_torch_model(model_location_generator, embedding=True).vit.encoder.layer[0]
+    config = ttnn_optimized_sharded_vit.update_model_config(torch_config, batch_size)
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    result = model(torch_hidden_states)
+    if isinstance(result, tuple):
+        torch_output = result[0]
+    else:
+        torch_output = result
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
