@@ -14,8 +14,8 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     AutoImageProcessor = None
 
-from models.experimental.maskformer_swin.fallback import MaskFormerFallbackPipeline
-from models.experimental.maskformer_swin.weights import (
+from models.experimental.maskformer_swin.tt.fallback import MaskFormerFallbackPipeline
+from models.experimental.maskformer_swin.tt.weights import (
     WeightConversionConfig,
     convert_state_dict_to_tt,
     download_reference_weights,

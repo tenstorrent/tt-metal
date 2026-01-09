@@ -14,15 +14,15 @@ except ModuleNotFoundError:
 
 import torch
 
-from models.experimental.maskformer_swin.backbone_swin import MaskFormerSwinBackbone
-from models.experimental.maskformer_swin.pixel_decoder import MaskFormerPixelDecoder, PixelDecoderConfig
-from models.experimental.maskformer_swin.transformer_decoder import (
+from models.experimental.maskformer_swin.tt.backbone_swin import MaskFormerSwinBackbone
+from models.experimental.maskformer_swin.tt.pixel_decoder import MaskFormerPixelDecoder, PixelDecoderConfig
+from models.experimental.maskformer_swin.tt.transformer_decoder import (
     MaskFormerTransformerDecoder,
     TransformerDecoderConfig,
 )
-from models.experimental.maskformer_swin.heads import MaskFormerHeads, MaskFormerHeadsConfig
-from models.experimental.maskformer_swin.fallback import MaskFormerFallbackPipeline
-from models.experimental.maskformer_swin.weights import (
+from models.experimental.maskformer_swin.tt.heads import MaskFormerHeads, MaskFormerHeadsConfig
+from models.experimental.maskformer_swin.tt.fallback import MaskFormerFallbackPipeline
+from models.experimental.maskformer_swin.tt.weights import (
     WeightConversionConfig,
     convert_state_dict_to_tt,
     download_reference_weights,
@@ -195,7 +195,7 @@ def test_fallback_pipeline_forward():
 def test_tt_pipeline_forward_shapes():
     """Smoke-test TT decoder + heads (and optional TT mask projection) end-to-end."""
 
-    from models.experimental.maskformer_swin.ttnn_compat import ttnn as _ttnn
+    from models.experimental.maskformer_swin.tt.ttnn_compat import ttnn as _ttnn
 
     if _ttnn is None or not hasattr(_ttnn, "open_device"):
         pytest.skip("TTNN runtime with open_device is required for TT pipeline tests.")

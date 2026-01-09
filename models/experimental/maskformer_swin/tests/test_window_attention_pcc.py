@@ -10,10 +10,10 @@ import pytest
 import torch
 import math
 
-from models.experimental.maskformer_swin.backbone_swin import MaskFormerSwinBackbone
-from models.experimental.maskformer_swin.parity import ParityConfig, compare_tensors
-from models.experimental.maskformer_swin.ttnn_compat import get_default_dtype, ttnn
-from models.experimental.maskformer_swin.weights import (
+from models.experimental.maskformer_swin.tt.backbone_swin import MaskFormerSwinBackbone
+from models.experimental.maskformer_swin.tt.parity import ParityConfig, compare_tensors
+from models.experimental.maskformer_swin.tt.ttnn_compat import get_default_dtype, ttnn
+from models.experimental.maskformer_swin.tt.weights import (
     WeightConversionConfig,
     convert_state_dict_to_tt,
     download_reference_weights,

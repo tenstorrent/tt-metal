@@ -7,7 +7,7 @@ from pathlib import Path
 
 import torch
 
-from models.experimental.maskformer_swin.eval_utils import dump_predictions_json, summarize_predictions
+from models.experimental.maskformer_swin.tt.eval_utils import dump_predictions_json, summarize_predictions
 
 
 def test_dump_predictions_json(tmp_path: Path):
