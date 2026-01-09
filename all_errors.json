@@ -1,0 +1,466 @@
+[
+  [
+    "AVG DEVICE KERNEL DURATION [ns] 21594372.0 is outside of expected range (21597565.07, 22255358.93)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20830225208/job/59842978293"
+  ],
+  [
+    "Exception: PCC = 99.9404 % >= 99.9500 % (Run 2: PCC = 99.9095 % >= 99.9500 %). The test requires minimum PCC of 99.95% but consistently achieves only ~99.94% (Run 1) and ~99.91% (Run 2), indicating deterministic numerical precision degradation in ring SDPA operation for WAN 2.2 transformer block on 4x8 mesh with ring topology.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20804495957/job/59756141347"
+  ],
+  [
+    "terminate called after throwing an instance of 'std::runtime_error'\n  what():  Timeout waiting for Ethernet core service remote IO request flush.\nAborted (core dumped)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20830166881/job/59842862490"
+  ],
+  [
+    "Test BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/512/manual_time expected value 4.58us but got 36.40us (694.51% worse)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20830104340/job/59842710158"
+  ],
+  [
+    "Device 0: Timed out while waiting for active ethernet core (x=31,y=25) to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20823304803/job/59818250062"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:513: tt::exception - TIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20823341930/job/59818494481"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:513: TIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20823341930/job/59818494512"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:459: tt::exception\ninfo:\nTIMEOUT: device timeout in fetch queue wait, potential hang detected",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20823133899/job/59817714569"
+  ],
+  [
+    "AttributeError: type object 'TTDevice' has no attribute 'use_noc1' at /opt/venv/lib/python3.10/site-packages/ttexalens/tt_exalens_ifc.py:78",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20820322197/job/59807563658"
+  ],
+  [
+    "AttributeError: type object 'TTDevice' has no attribute 'use_noc1' at /opt/venv/lib/python3.10/site-packages/ttexalens/tt_exalens_ifc.py:78",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20820322197/job/59811494194"
+  ],
+  [
+    "Bandwidth mismatch in fabric mux tests after dynamic packet header sizing changes. Test golden values not updated for new 48B header size (was 64B). Multiple test variants failing with actual bandwidth differing from expected by >0.25 B/c.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20821388814/job/59811324934"
+  ],
+  [
+    "AVG DEVICE KERNEL DURATION [ns] 21596300.0 is outside of expected range (21597565.07, 22255358.93)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20819648964/job/59805030963"
+  ],
+  [
+    "AssertionError: Warning: encoder is outside of the tolerance range. Expected: 8.0, Actual: 8.314898",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20816100492/job/59792590280"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:513: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\nbacktrace:\n --- tt::tt_metal::buffer_dispatch::copy_completion_queue_data_into_user_space(...)\n --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20816222524/job/59792980247"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:513: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\nbacktrace:\n --- tt::tt_metal::buffer_dispatch::copy_completion_queue_data_into_user_space(...)\n --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20816222524/job/59792967295"
+  ],
+  [
+    "TT_THROW @ /work/tt_metal/impl/device/device_manager.cpp:703: tt::exception\ninfo:\nFabric Router Sync: Timeout after 10000 ms. Device 2: Expected status 0xa2b2c2d2, got 0xa1b1c1d1",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20809957759/job/59772091478"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:513: tt::exception - TIMEOUT: device timeout, potential hang detected, the device is unrecoverable. Backtrace shows hang in FDMeshCommandQueue::read_completion_queue().",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20807275243/job/59764299488"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:513: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\nbacktrace:\n --- tt::tt_metal::buffer_dispatch::copy_completion_queue_data_into_user_space(...)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20807275243/job/59764299514"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:513: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20807275243/job/59764299458"
+  ],
+  [
+    "Test BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/1024/manual_time expected value 4.58us but got 25.80us (462.77% worse)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20809932275/job/59772021033"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:513: tt::exception\\ninfo:\\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20808671911/job/59768250393"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:513: tt::exception\\ninfo:\\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\\nbacktrace:\\n --- tt::tt_metal::buffer_dispatch::copy_completion_queue_data_into_user_space(...)\\n --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20808671911/job/59768250385"
+  ],
+  [
+    "ERROR: Workload execution timed out after 30 seconds, cluster is not in a healthy state. ✗ Found Unhealthy Links. Num Unhealthy Links: 1. Host: ba33f18d6fba, Tray 3, ASIC 8, Ch 1, Port ID 19, Port Type TRACE, Mismatch Words: 90889, Failure Type: Data Mismatch. Signal: Aborted (6) in run_cluster_validation",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20809875690/job/59771834148"
+  ],
+  [
+    "2026-01-08 06:28:33.887 | error    |           Metal | Timeout detected (metal_context.cpp:1729)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20807406571/job/59764730184"
+  ],
+  [
+    "Whisper decode throughput regression: measured 300.6 tokens/s vs expected 330.0 tokens/s (8.9% degradation). AssertionError in verify_perf: decode performance lower than threshold.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20805318092/job/59758754522"
+  ],
+  [
+    "Performance tests failing because model runs faster than expected thresholds. Test expects inference time 0.364-0.428s but actual is 0.386s (below lower bound). Caused by sqrt implementation change from legacy to more accurate mode.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20800589836/job/59745372096"
+  ],
+  [
+    "ttnn_functional_ttnn_vgg16_1_ AVG DEVICE KERNEL SAMPLES/S is faster than expected with 365.6776, max expected 365.65. AssertionError: Some model(s) AVG DEVICE KERNEL SAMPLES/S are faster than expected, see above for details. {'AVG DEVICE KERNEL SAMPLES/S': [('ttnn_functional_ttnn_vgg16_1_', 365.6776, 365.65)]}",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20799485789/job/59743053012"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:513: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20801102207/job/59747591542"
+  ],
+  [
+    "FAIL Inference Time (sec): 0.0085 > 0.0082 (3.7% worse than expected - performance regression)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20799417671/job/59742981912"
+  ],
+  [
+    "terminate called after throwing an instance of 'std::runtime_error'\n  what():  DRAM training failed",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20794853463/job/59726597504"
+  ],
+  [
+    "Error:Test BM_pgm_dispatch/10000_kernel_all_cores_all_processors_32_cbs_trace/2048/manual_time expected value 8.29us but got 48.05us (479.96% worse)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20780964208/job/59678626430"
+  ],
+  [
+    "TT_FATAL: End marker found without a corresponding start marker. Profiler data corruption in SoftmaxDeviceOperation on TRISC_0 core (7,7). Caused by control buffer layout mismatch when debug dump mode is disabled - new DRAM address fields remain uninitialized (0), corrupting profiler buffer reads.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20777881142/job/59668557825"
+  ],
+  [
+    "TIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20774776711/job/59658352884"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20774708186/job/59658310590"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20774708186/job/59658310593"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20773552277/job/59654654196"
+  ],
+  [
+    "TT_THROW @ /project/tt_metal/impl/program/program.cpp:916: tt::exception\ninfo:\nStatically allocated circular buffers on core range [(x=0,y=0) - (x=6,y=7)] grow to 1574080 B which is beyond max L1 size of 1572864 B",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20773552277/job/59654648584"
+  ],
+  [
+    "AssertionError: Prefill or decode perf is either lower or higher than {'prefill_time_to_token': 0.06, 'decode_t/s/u': 310.0, 'decode_t/s': 310.0}. See earlier warnings for more details.\n\nWARNING: decode_t/s (301.5055494853068) is lower than expected 310.0\nWARNING: decode_t/s/u (301.5055494853068) is lower than expected 310.0",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20773552277/job/59654648572"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\nbacktrace:\n --- tt::tt_metal::buffer_dispatch::copy_completion_queue_data_into_user_space(tt::tt_metal::ReadBufferDescriptor const&, int, unsigned short, unsigned int, tt::tt_metal::SystemMemoryManager&, std::atomic<bool>&)\n --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20739692946/job/59544309041"
+  ],
+  [
+    "Device timeout during completion queue read: TIMEOUT: device timeout, potential hang detected, the device is unrecoverable. Error occurs in copy_completion_queue_data_into_user_space called by FDMeshCommandQueue::read_completion_queue().",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20772263358/job/59650974391"
+  ],
+  [
+    "Statically allocated circular buffers on core range [(x=0,y=0) - (x=6,y=7)] grow to 1574080 B which is beyond max L1 size of 1572864 B",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20770374695/job/59645537162"
+  ],
+  [
+    "Error:Test BM_pgm_dispatch/10000_kernel_all_cores_all_processors_32_cbs_trace/512/manual_time expected value 8.28us but got 326.45us (3840.34% worse) \nError:Test BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/4096/manual_time expected value 4.58us but got 25.79us (462.54% worse)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20770453547/job/59645783453"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:460: tt::exception\ninfo:\nTIMEOUT: device timeout in fetch queue wait, potential hang detected",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20765985903/job/59632468189"
+  ],
+  [
+    "WARNING: decode_t/s (326.09369007017943) is lower than expected 330.0\nWARNING: decode_t/s/u (326.09369007017943) is lower than expected 330.0\nWARNING: Perf Check Failed!\nAssertionError: Prefill or decode perf is either lower or higher than {'prefill_time_to_token': 0.05, 'decode_t/s/u': 330.0, 'decode_t/s': 330.0}. See earlier warnings for more details.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20760511961/job/59614441543"
+  ],
+  [
+    "##[error]The action 'Build and Run Metal Examples' has timed out after 3 minutes.\nttsim-integration-tests / TTSim Integration - blackhole\nBuilding hello_world_datamovement_kernel example (blackhole)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20762584218/job/59624807524"
+  ],
+  [
+    "TT_THROW: Fabric Router Sync: Timeout after 10000 ms. Device 0: Expected status 0xa2b2c2d2, got 0x00000000",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20742155986/job/59551408430"
+  ],
+  [
+    "2026-01-06 16:21:10.461 | error | Metal | Timeout detected (metal_context.cpp:1732)\n2026-01-06 16:21:26.790 | critical | Always | TT_THROW: Device 1: Timeout (10000 ms) waiting for physical cores to finish: (x=3,y=5). (assert.hpp:103)\n2026-01-06 16:21:26.791 | critical | Always | TT_THROW: Device 1 init: failed to initialize FW! Try resetting the board. (assert.hpp:103)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20754062291/job/59591703692"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20740984321/job/59547928377"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception - TIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20740984321/job/59547935648"
+  ],
+  [
+    "TT_THROW @ test_tt_fabric.cpp:308: Some tests failed golden comparison validation. Total failed tests: 1. Failed tests: TorusAllToAllMulticast [FAIL]",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20751451456/job/59582315160"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\\ninfo:\\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20744975704/job/59560872408"
+  ],
+  [
+    "FAIL Inference Time (sec): 0.0084 > 0.0082 (2.4% worse than expected - performance regression). Model: models/experimental/vovnet_: measured=0.0084, expected=0.0082, tolerance=[0.0066, 0.0082] (2.4% regression)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20744935153/job/59560883058"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:460: tt::exception\ninfo:\nTIMEOUT: device timeout in fetch queue wait, potential hang detected\nbacktrace:\n --- /opt/venv/lib/python3.10/site-packages/ttnn/build/lib/libtt_metal.so(+0x54f794) [0x7f330b6d1794]\n --- tt::tt_metal::SystemMemoryManager::fetch_queue_reserve_back(unsigned char)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20733412188/job/59526240269"
+  ],
+  [
+    "test_demo_for_conditional_generation - Whisper performance regression: prefill_time_to_token (0.20444941520690918) is higher than expected 0.2. AssertionError: Prefill or decode perf is either lower or higher than {'prefill_time_to_token': 0.2, 'decode_t/s/u': 80.0, 'decode_t/s': 2560.0}",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20733443952/job/59526368177"
+  ],
+  [
+    "decode_t/s (324.59298546118686) is lower than expected 330.0 | decode_t/s/u (324.59298546118686) is lower than expected 330.0 | AssertionError: Prefill or decode perf is either lower or higher than {'prefill_time_to_token': 0.05, 'decode_t/s/u': 330.0, 'decode_t/s': 330.0}",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20737763947/job/59538807449"
+  ],
+  [
+    "WARNING | decode_t/s (295.58723208329025) is lower than expected 310.0\nWARNING | decode_t/s/u (295.58723208329025) is lower than expected 310.0\nAssertionError: Prefill or decode perf is either lower or higher than {'prefill_time_to_token': 0.06, 'decode_t/s/u': 310.0, 'decode_t/s': 310.0}. See earlier warnings for more details.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20737763947/job/59538807437"
+  ],
+  [
+    "TT_FATAL: Fast dispatch read from control buffer requires mesh device support (assert.hpp:103)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20736096968/job/59533863972"
+  ],
+  [
+    "UMD mutex deadlock on 'NON_MMIO_3_PCIe' causing 10-minute timeout during device initialization. Lock held by thread TID:2397 was never released, blocking subsequent device access.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20733084213/job/59525233246"
+  ],
+  [
+    "AssertionError: 0.7069657047323463 - PCC check failed (expected ≥0.999, got 0.707) in Conv3d test with batch size 2204",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20714831199/job/59463855926"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\nbacktrace:\n --- tt::tt_metal::buffer_dispatch::copy_completion_queue_data_into_user_space(...)\n --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20707910887/job/59442299189"
+  ],
+  [
+    "Model: models/experimental/vovnet\nFAIL Inference Time (sec): 0.0086 > 0.0082 (4.9% worse than expected - performance regression)\nException: Performance checks failed - see above for models with regressions or significant improvements requiring baseline updates",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20722982150/job/59491996266"
+  ],
+  [
+    "Error:Test BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/512/manual_time expected value 4.58us but got 322.73us (6943.74% worse)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20721282208/job/59486030765"
+  ],
+  [
+    "AssertionError: 0.4804850886568553 - PCC check failed (expected >0.99, got 0.48)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20711914249/job/59454675112"
+  ],
+  [
+    "vLLM structured output benchmark failed with 90.625% correctness (29/32 requests) instead of required 100%. Three requests produce malformed JSON with repeated garbage characters.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20701431749/job/59424461726"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20689282284/job/59395116445"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\\ninfo:\\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\\nbacktrace:\\n --- tt::tt_metal::buffer_dispatch::copy_completion_queue_data_into_user_space(...)\\n --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20689282284/job/59395116451"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception - TIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20689282284/job/59395116444"
+  ],
+  [
+    "decode_t/s (278.3719232419948) is lower than expected 310.0 - Whisper decode performance regression (~10% slower)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20689282284/job/59395114652"
+  ],
+  [
+    "AssertionError: Prefill or decode perf is either lower or higher than {'prefill_time_to_token': 0.13, 'decode_t/s/u': 124.0, 'decode_t/s': 248.0}. See earlier warnings for more details.\n\nWARNING - decode_t/s (298.9154588098126) is much higher than expected 248.0. Please update the expected perf.\nWARNING - decode_t/s/u (149.4577294049063) is much higher than expected 124.0. Please update the expected perf.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20705856515/job/59436607240"
+  ],
+  [
+    "Whisper performance regression: decode throughput dropped from 320.928 t/s/u to 293.638 t/s/u (8.5% slower) after LLK submodule update. The LLK transpose synchronization fix introduced overhead that accumulates across Whisper's many transpose operations in attention layers.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20705013321/job/59434096998"
+  ],
+  [
+    "error: static assertion failed: Index out of range\\nstatic_assert(Idx < kernel_compile_time_args.size(), \\\"Index out of range\\\");\\nnote: the comparison reduces to '(27 < 27)'\\nTensorAccessorArgs<27> instantiation failed in reader_interleaved.cpp:38",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20688579878/job/59393475225"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/program/program.cpp:159: tt::exception - Failed to generate binaries for reader_interleaved - static assertion failed: Index out of range (27 < 27)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20688579878/job/59393475192"
+  ],
+  [
+    "RuntimeError: Index out of range - kernel compilation failed when accessing compile-time arg 27 (only 0-26 exist). The ring_distributed_sdpa_program_factory is missing the broadcast_provided_mask_heads argument that was added to the shared reader_interleaved.cpp kernel.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20688579878/job/59393475202"
+  ],
+  [
+    "Compile-time error in SDPA reader kernel: 'Index out of range' when accessing compile-time arg 27 (only 27 args available, indices 0-26). The kernel was updated to expect 22 compile-time args before TensorAccessorArgs, but ring_distributed_sdpa_program_factory still provides only 21, causing a mismatch.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20688579878/job/59393475270"
+  ],
+  [
+    "Compile-time assertion failure: kernel tries to access compile-time argument index 27, but only 27 arguments (indices 0-26) are provided. The ring distributed SDPA program factory is missing the new `broadcast_provided_mask_heads` argument that was added to the reader kernel.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20688579878/job/59393475205"
+  ],
+  [
+    "Compile-time error: Index out of range (27 < 27) when instantiating TensorAccessorArgs<27> for attention_sink_args in reader_interleaved.cpp:38. The SDPA reader kernel attempts to access compile-time arg index 27, but only 27 args exist (indices 0-26).",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20688579878/job/59393475332"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/program/program.cpp:159: tt::exception\ninfo:\nFailed to generate binaries for reader_interleaved TT_THROW @ /project/tt_metal/jit_build/build.cpp:55: tt::exception\ninfo:\nncrisc build failed. Log: /opt/venv/lib/python3.10/site-packages/ttnn/tt_metal/hw/inc/api/compile_time_args.h:25:23: error: static assertion failed: Index out of range\n   25 |     static_assert(Idx < kernel_compile_time_args.size(), \"Index out of range\");\n      |                   ~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nnote: the comparison reduces to '(27 < 27)'",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20688579878/job/59393475240"
+  ],
+  [
+    "Compile-time assertion failure in SDPA reader kernel: 'Index out of range' - kernel expects 28 compile-time arguments but ring_distributed_sdpa_program_factory.cpp only provides 27. The commit added a new argument at index 16 but forgot to update this factory.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20688579878/job/59393475235"
+  ],
+  [
+    "AssertionError: One or more ops did not meet performance targets. Check logs for details.\nHaloDeviceOperation_0 kernel: 5318.0 ns is smaller than target (6953.6) ns\nMoveDeviceOperation_0 kernel: 5566.0 ns is smaller than target (7336.4) ns\nPool2D_0 kernel: 15228.0 ns is smaller than target (17207.4) ns",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20676962654/job/59366041043"
+  ],
+  [
+    "AssertionError: 0.9794545421501466 - PCC below threshold: expected >= 0.98, actual = 0.9794545421501466",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20684193955/job/59382544817"
+  ],
+  [
+    "AssertionError: 0.9758728235188486 - PCC value below threshold of 0.976",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20680260367/job/59373673343"
+  ],
+  [
+    "RuntimeError: Timed out after waiting 300000ms ms for arc core (0, 10) to start\nRuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20679646279/job/59372235200"
+  ],
+  [
+    "Error:Test BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/4096/manual_time expected value 6.50us but got 46.14us (609.80% worse)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20679621383/job/59372175461"
+  ],
+  [
+    "AssertionError: At least one of Perplexity 12.793345178975759, Top1-Acc 0.47314453125, or Top5-Acc 0.7171630859375 is worse (higher for perplexity or lower for acc) than {'ppl': 12.74, 'top1_acc': 0.47, 'top5_acc': 0.71}",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20677071957/job/59366316136"
+  ],
+  [
+    "AssertionError: At least one of Perplexity 10.000272120636957, Top1-Acc 0.507476806640625, or Top5-Acc 0.74627685546875 is worse (higher for perplexity or lower for acc) than {'ppl': 9.97, 'top1_acc': 0.5, 'top5_acc': 0.74}",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20677071957/job/59366316121"
+  ],
+  [
+    "AssertionError: Padded prefill end idx 2048 exceeds max seq len 1024",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20677071957/job/59366316130"
+  ],
+  [
+    "AttributeError: 'TtModelArgs' object has no attribute 'is_mixture_of_experts'\nmodels/demos/t3000/mixtral8x7b/reference/model.py:180",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20677071957/job/59366316115"
+  ],
+  [
+    "AssertionError: Expected inference time: 0.0338 Actual inference time: 0.04073667526245117",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20675782356/job/59363384394"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20674503801/job/59360440323"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20674535056/job/59360519400"
+  ],
+  [
+    "TT_THROW @ test_tt_fabric.cpp:308: tt::exception\nSome tests failed golden comparison validation. See summary above.\nTotal failed tests: 1\nFailed tests:\n  - TorusAllToAllMulticast [FAIL]",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20674663438/job/59360819200"
+  ],
+  [
+    "Device 10: Virtual core (x=21,y=25), Port status: 0x1, Retrain count: 0x5, Rx link up: 0x0 | TT_THROW: Device 10: Timed out while waiting for active ethernet core (x=21,y=25) to become active again. Try resetting the board. | ERROR: Workload execution timed out after 30 seconds, cluster is not in a healthy state. | ✗ Found Unhealthy Links. Generating Failure Report (Only Pinging Detected Links). Num Unhealthy Links: 4 | Total Faulty Links: 4 (Data Mismatch on TRACE and LINKING_BOARD ports)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20674523616/job/59360496183"
+  ],
+  [
+    "Device 0: Timeout (10000 ms) waiting for physical cores to finish: (x=13,y=4). Device 0 init: failed to initialize FW! ARC postcode: 0xffffffff (expected 0xc0de____). This indicates the device's ARC processor failed to initialize, which is a hardware/infrastructure issue, not a code regression.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20673251275/job/59357617206"
+  ],
+  [
+    "AVG DEVICE KERNEL SAMPLES/S 19643.13337442022 is outside of expected range (19649.122807017542, 20451.12781954887). Expected: 20050.125313283206 samples/sec (equivalent to 1.596 ms per layer). Performance regression of ~400 samples/sec (2% slower).",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20673954809/job/59359212213"
+  ],
+  [
+    "Whisper decode throughput dropped from 310.0 to 263.82 tokens/s (15% regression). The performance check failed with: decode_t/s (263.821049955577) is lower than expected 310.0",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20672033300/job/59354719594"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\nbacktrace:\n --- tt::tt_metal::buffer_dispatch::copy_completion_queue_data_into_user_space(...)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20669505418/job/59348117252"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20669505418/job/59348117250"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20669219799/job/59347313199"
+  ],
+  [
+    "AssertionError: Some performance metrics are outside of expected range, see above for details.\nERROR: AVG DEVICE KERNEL DURATION [ns] 21597561.0 is outside of expected range (21597565.07, 22255358.93)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20668500120/job/59345609911"
+  ],
+  [
+    "FAIL Inference Time (sec): 0.0083 > 0.0082 (1.2% worse than expected - performance regression)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20665709946/job/59337967999"
+  ],
+  [
+    "Test hung during execution and timed out after 20 minutes. Last output: dump_fast_dispatch.py dispatch table at 19:23:29. Error: Metal timeout detected (metal_context.cpp:1727). The action 'Run quick tests' has timed out after 20 minutes.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20664875780/job/59335281693"
+  ],
+  [
+    "C++ exception with description \"Device is incorrectly initialized. If this is a harvested Wormhole machine, it is likely that NOC Translation Tables are not enabled on device. These need to be enabled for the silicon driver to run.\" thrown in the test body.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20653757747/job/59303024130"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\nbacktrace:\n --- tt::tt_metal::buffer_dispatch::copy_completion_queue_data_into_user_space(tt::tt_metal::ReadBufferDescriptor const&, int, unsigned short, unsigned int, tt::tt_metal::SystemMemoryManager&, std::atomic<bool>&)\n --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20652917550/job/59300857453"
+  ],
+  [
+    "Segmentation fault (exit code 139) during TestCluster.SocDescriptorSerialize in ./build/test/umd/api/api_tests",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20652917550/job/59300854278"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20652045009/job/59298622798"
+  ],
+  [
+    "Job exceeded 6-hour GitHub Actions timeout during setup phase. Test never started. Annotations show: 'The job has exceeded the maximum execution time of 6h0m0s'. Log shows vllm/ttnn installation completed but test script never ran (no vllm_result.json generated).",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20647990006/job/59288398800"
+  ],
+  [
+    "2026-01-02 02:13:24.119 | error    |           Metal | Timeout detected (metal_context.cpp:1727)\n2026-01-02 02:13:24.119 | info     |           Metal | Serializing Inspector RPC data (metal_context.cpp:1730)\n2026-01-02 02:13:24.120 | info     |           Metal | Executing command: /opt/venv/bin/python3 /__w/tt-metal/tt-metal/docker-job/tools/tt-triage.py --disable-progress 1>&2 (metal_context.cpp:1737)",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20648028663/job/59288472740"
+  ],
+  [
+    "RuntimeError: Timed out after waiting 300000ms for arc core (0, 10) to start. Secondary error: TT_THROW @ system_memory_manager.cpp:514 - TIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20635061292/job/59258915207"
+  ],
+  [
+    "decode_t/s (303.5347585068967) is lower than expected 310.0\ndecode_t/s/u (303.5347585068967) is lower than expected 310.0\nAssertionError: Prefill or decode perf is either lower or higher than {'prefill_time_to_token': 0.06, 'decode_t/s/u': 310.0, 'decode_t/s': 310.0}",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20634423995/job/59257454853"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception - TIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20634423995/job/59257458946"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20634423995/job/59257458952"
+  ],
+  [
+    "RuntimeError: TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:514: tt::exception\\ninfo:\\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20633617762/job/59255642942"
+  ],
+  [
+    "AssertionError: Expected inference time: 0.0338 Actual inference time: 0.03476452827453613",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20631390163/job/59249965552"
+  ],
+  [
+    "Test hung for 30 minutes waiting for lock 'NON_MMIO_3_PCIe' during device initialization. The deadlock occurs in the UMD layer (robust_mutex.cpp:405) immediately after firmware initialization, preventing test execution.",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20631411988/job/59250029388"
+  ],
+  [
+    "TT_THROW: Fabric Router Sync: Timeout after 10000 ms. Device X: Expected status 0xa2b2c2d2, got 0x<various>",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20629807087/job/59246163918"
+  ],
+  [
+    "TIMEOUT: device timeout in fetch queue wait, potential hang detected",
+    "https://github.com/tenstorrent/tt-metal/actions/runs/20629389070/job/59245169856"
+  ]
+]
