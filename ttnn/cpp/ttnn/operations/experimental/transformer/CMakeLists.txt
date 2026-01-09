@@ -97,8 +97,8 @@ target_sources(
         nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.cpp
         fused_distributed_rmsnorm/rmsnorm_pre_all_gather.cpp
         fused_distributed_rmsnorm/rmsnorm_post_all_gather.cpp
-        fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.cpp
-        fused_distributed_rmsnorm/device/multicore/rmsnorm_pre_all_gather_op_multi_core.cpp
+        fused_distributed_rmsnorm/device/fused_rmsnorm_pre_all_gather_device_operation.cpp
+        fused_distributed_rmsnorm/device/fused_rmsnorm_pre_all_gather_program_factory.cpp
         fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_device_operation.cpp
         fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_program_factory.cpp
         rotary_embedding/device/rotary_embedding_device_operation.cpp
