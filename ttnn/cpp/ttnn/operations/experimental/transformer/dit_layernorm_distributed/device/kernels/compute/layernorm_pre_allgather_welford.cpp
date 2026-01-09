@@ -95,6 +95,7 @@ void MAIN {
         transpose_wh_tile(cb_x2, 0, dst0);
         transpose_wh_tile(cb_x2, 1, dst1);
         cb_pop_front(cb_x2, 2);
+        cb_reserve_back(cb_out, 2);
 
         tile_regs_commit();
         tile_regs_wait();
