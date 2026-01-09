@@ -79,4 +79,6 @@ struct FabricTelemetryStaticOnly {
 struct FabricTelemetry {
     StaticInfo static_info;
     DynamicInfo dynamic_info;
+    uint32_t postcode;
+    uint32_t scratch[7];
 };
