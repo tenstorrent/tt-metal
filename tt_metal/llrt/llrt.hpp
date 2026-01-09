@@ -22,32 +22,6 @@
 // llrt = lower-level runtime
 namespace tt::llrt {
 
-using RamSrcAddr = unsigned int;
-using RamDstAddr = unsigned int;
-using SrcL1Core = CoreCoord;
-using SrcL1Cores = std::vector<SrcL1Core>;
-using DstL1Core = CoreCoord;
-using DstL1Cores = std::vector<DstL1Core>;
-using SrcChannelId = int;
-using DstChannelId = int;
-using DramBufferSize = unsigned int;
-using DramSrcAddr = unsigned int;
-using DramDstAddr = unsigned int;
-using L1Addr = std::uint32_t;
-using SrcAddr = std::uint32_t;
-using DestAddr = std::uint32_t;
-using LoadFirmwareFlag = bool;
-using CountOffset = unsigned int;
-using NCHW = std::array<std::uint32_t, 4>;
-using RSUV = std::array<std::uint32_t, 4>;
-using BYTES_PER_DATUM = std::uint32_t;
-using TRANSACTION_SIZE = std::uint32_t;
-using NUM_TRANSACTIONS = std::uint32_t;
-using NUM_REPETITIONS = std::uint32_t;
-
-using WorkerCore = tt_cxy_pair;
-using WorkerCores = std::vector<WorkerCore>;
-
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name only.
 const ll_api::memory& get_risc_binary(
