@@ -94,6 +94,7 @@ Tensor to_layout_impl(
         bool use_multicore_tilize = true;
 
         if (not requires_padding_change(tensor, layout)) {
+            std::cout << "here1" << std::endl;
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
                 return ttnn::untilize(
@@ -122,6 +123,7 @@ Tensor to_layout_impl(
             throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
         }
         if (layout == ttnn::ROW_MAJOR_LAYOUT) {
+            std::cout << "here2" << std::endl;
             TT_FATAL(
                 !dtype.has_value() || dtype.value() == tensor_arg.dtype(),
                 "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device!");
@@ -135,6 +137,22 @@ Tensor to_layout_impl(
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.logical_shape()[index] - 1;
             }
+
+            // 1. Bring tensor to host (forces sync)
+            auto host_tensor = tt::tt_metal::tensor_impl::to_host(tensor);
+
+            // 2. Extract data
+            auto data = host_tensor.to_vector<float>();
+
+            std::cout << tensor.dtype() << std::endl;
+
+            // 3. Print first element
+            if (!data.empty()) {
+                for (auto i = 0; i < 32; i++) {
+                    std::cout << "data[" << i << "] = " << data[i] << std::endl;
+                }
+            }
+
             tensor = ttnn::untilize_with_unpadding(
                 tensor,
                 output_tensor_end,
@@ -142,16 +160,51 @@ Tensor to_layout_impl(
                 use_multicore_untilize,
                 true /*use_pack_untilize*/,
                 sub_core_grids);
-            return ttnn::reshape(
+
+            // 1. Bring tensor to host (forces sync)
+            host_tensor = tt::tt_metal::tensor_impl::to_host(tensor);
+
+            // 2. Extract data
+            data = host_tensor.to_vector<float>();
+
+            std::cout << tensor.dtype() << std::endl;
+
+            // 3. Print first element
+            if (!data.empty()) {
+                for (auto i = 0; i < 32; i++) {
+                    std::cout << "data[" << i << "] = " << data[i] << std::endl;
+                }
+            }
+
+            tensor = ttnn::reshape(
                 tensor,
                 ttnn::Shape{output_shape},
                 std::nullopt /*Memory Config*/,
                 std::nullopt /*pad value*/,
                 TileReshapeMapMode::CACHE,
                 sub_core_grids);
+
+            // 1. Bring tensor to host (forces sync)
+            host_tensor = tt::tt_metal::tensor_impl::to_host(tensor);
+
+            // 2. Extract data
+            data = host_tensor.to_vector<float>();
+
+            std::cout << tensor.dtype() << std::endl;
+
+            // 3. Print first element
+            if (!data.empty()) {
+                for (auto i = 0; i < 32; i++) {
+                    std::cout << "data[" << i << "] = " << data[i] << std::endl;
+                }
+            }
+
+            return tensor;
         }
         if (layout == ttnn::TILE_LAYOUT) {
+            std::cout << "here3" << std::endl;
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+                std::cout << "here3.1" << std::endl;
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
                 SmallVector<std::array<uint32_t, 2>> padding = {
@@ -163,6 +216,7 @@ Tensor to_layout_impl(
                 tensor = ttnn::pad(tensor, padding, 0, true, std::nullopt);
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
+                std::cout << "here3.2" << std::endl;
                 PadValue pad_value_variant;
                 if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {
                     pad_value_variant = 0.0f;
