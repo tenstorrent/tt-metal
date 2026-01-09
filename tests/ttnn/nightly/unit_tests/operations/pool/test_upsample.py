@@ -313,7 +313,7 @@ def test_panoptic_upsample_sliced(
     ],
 )
 @pytest.mark.parametrize("scale_h, scale_w", [(2.0, 2.0), (1.5, 1.5), (2.5, 2.5), (0.5, 0.5), (0.75, 0.75), (2.0, 1.5)])
-@pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT])  # , ttnn.ShardStrategy.BLOCK])
+@pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
 def test_upsample_nearest_float_sharded(device, input_shape, scale_h, scale_w, shard_strategy):
     """Test upsample with float scale factors using sharded memory."""
     torch_result, output_tensor = upsample_multicore_common(
