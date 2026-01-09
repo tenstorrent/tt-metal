@@ -87,7 +87,8 @@ install(
 )
 
 # Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
-tt_set_library_rpath(tt_stl)
+#tt_set_library_rpath(tt_stl)
+tt_set_installable_library_rpath(tt_stl)
 
 # Install the library file manually using install(CODE) to work around CMake's
 # install(TARGETS) LIBRARY path resolution bug when LIBRARY_OUTPUT_DIRECTORY is set.
