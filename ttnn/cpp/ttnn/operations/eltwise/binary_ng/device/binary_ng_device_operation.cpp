@@ -367,10 +367,33 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     if (attributes.memory_config.is_sharded()) {
         const auto& memory_layout = attributes.memory_config.memory_layout();
         const auto& buffer_type = attributes.memory_config.buffer_type();
-        const auto& shard_spec = attributes.memory_config.shard_spec();
+        auto shard_spec_opt = attributes.memory_config.shard_spec();
+
+        // If no shard spec is provided, inherit from input tensor
+        if (!shard_spec_opt.has_value()) {
+            if (input_tensor_a.is_sharded()) {
+                // Adjust shard spec from input A to match output shape
+                const auto& padded_a_shape = input_tensor_a.padded_shape();
+                const auto& padded_out_shape =
+                    input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+                shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
+                    *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
+            } else if (tensor_b.has_value() && tensor_b->is_sharded()) {
+                // Adjust shard spec from input B to match output shape
+                const auto& padded_b_shape = tensor_b->padded_shape();
+                const auto& padded_out_shape =
+                    tensor_b->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+                shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
+                    *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
+            } else {
+                TT_THROW("Output memory config is sharded but has no shard spec, and no input tensors are sharded");
+            }
+        }
+
         return TensorSpec(
             output_shape,
-            TensorLayout(output_dtype, PageConfig(Layout::TILE), MemoryConfig(memory_layout, buffer_type, shard_spec)));
+            TensorLayout(
+                output_dtype, PageConfig(Layout::TILE), MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
     // If not sharded, use the memory config from input a that is interleaved
@@ -518,7 +541,20 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         }
     } else if (memory_config.has_value()) {
         mem_config_actual = *memory_config;
-        log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");
+        // If the provided memory config is sharded but doesn't have a shard spec, inherit from input
+        if (mem_config_actual.is_sharded() && !mem_config_actual.shard_spec().has_value()) {
+            if (input_tensor_a.is_sharded()) {
+                mem_config_actual = compute_mem_config_actual(input_tensor_a, input_tensor_b.logical_shape());
+                log_debug(tt::LogOp, "BinaryNgDeviceOperation: Inheriting shard spec from input tensor A");
+            } else if (input_tensor_b.is_sharded()) {
+                mem_config_actual = compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
+                log_debug(tt::LogOp, "BinaryNgDeviceOperation: Inheriting shard spec from input tensor B");
+            } else {
+                TT_THROW("Output memory config is sharded but has no shard spec, and no input tensors are sharded");
+            }
+        } else {
+            log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");
+        }
     } else {
         mem_config_actual = output_tensor->memory_config();
         log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using memory config from output tensor since it is provided");
