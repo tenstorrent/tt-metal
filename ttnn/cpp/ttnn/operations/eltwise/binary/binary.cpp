@@ -569,6 +569,8 @@ Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     // std::cout << "fast_and_approximate_mode: " << fast_and_approximate_mode.value_or(false) << std::endl;
+    bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
+    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
     return detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -580,7 +582,7 @@ Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        fast_and_approximate_mode.value_or(false),
+        fast_and_approx,
         sub_core_grids);
 }
 
@@ -597,6 +599,8 @@ Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
     const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    bool is_block_fmt_inp = (is_block_float(lhs.dtype()));
+    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
     return detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -608,7 +612,7 @@ Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        fast_and_approximate_mode.value_or(false),
+        fast_and_approx,
         sub_core_grids);
 }
 
@@ -852,6 +856,8 @@ Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
     std::optional<bool> use_legacy,
     std::optional<bool> fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
+    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
     return BinaryOperationWithFastApprox<binary_op_type>::invoke(
         lhs,
         rhs,
@@ -862,7 +868,7 @@ Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        fast_and_approximate_mode.value_or(false),
+        fast_and_approx,
         sub_core_grids);
 }
 
@@ -876,6 +882,8 @@ Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
     std::optional<bool> use_legacy,
     std::optional<bool> fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    bool is_block_fmt_inp = (is_block_float(lhs.dtype()));
+    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
     return BinaryOperationWithFastApprox<binary_op_type>::invoke(
         lhs,
         rhs,
@@ -886,7 +894,7 @@ Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        fast_and_approximate_mode.value_or(false),
+        fast_and_approx,
         sub_core_grids);
 }
 

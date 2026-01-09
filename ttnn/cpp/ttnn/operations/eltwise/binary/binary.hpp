@@ -88,7 +88,7 @@ struct MulOperationWithFastApprox {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<bool>& fast_and_approximate_mode = true,
+        const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
