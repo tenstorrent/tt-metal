@@ -5,7 +5,7 @@ from typing import Any, Optional, Tuple
 import torch
 
 import ttnn
-from models.tt_symbiote.core.utils import TORCH_TO_TTNN, torch_dtype_to_ttnn_dtype
+from models.tt_symbiote.core.utils import TORCH_TO_TTNN, ensure_tile_layout, torch_dtype_to_ttnn_dtype
 
 # ========== Helper Functions ==========
 
@@ -68,20 +68,6 @@ def _prepare_binary_inputs(
     return tensor1, tensor2, deallocate1, deallocate2, device
 
 
-def _ensure_tile_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
-    """Convert tensor to TILE_LAYOUT if needed.
-
-    Args:
-        tensor: TTNN tensor to convert
-
-    Returns:
-        Tensor in TILE_LAYOUT
-    """
-    if tensor.layout != ttnn.TILE_LAYOUT:
-        return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return tensor
-
-
 def _cleanup_tensors(*tensor_deallocate_pairs):
     """Deallocate temporary tensors.
 
@@ -138,8 +124,8 @@ def handle_mul(func, args, kwargs):
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
-    ttnn_tensor1 = _ensure_tile_layout(input_tensor1.to_ttnn)
-    ttnn_tensor2 = _ensure_tile_layout(input_tensor2.to_ttnn)
+    ttnn_tensor1 = ensure_tile_layout(input_tensor1.to_ttnn)
+    ttnn_tensor2 = ensure_tile_layout(input_tensor2.to_ttnn)
 
     res = TorchTTNNTensor(ttnn.multiply(ttnn_tensor1, ttnn_tensor2))
     _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
@@ -152,8 +138,8 @@ def handle_sub(func, args, kwargs):
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
-    ttnn_tensor1 = _ensure_tile_layout(input_tensor1.to_ttnn)
-    ttnn_tensor2 = _ensure_tile_layout(input_tensor2.to_ttnn)
+    ttnn_tensor1 = ensure_tile_layout(input_tensor1.to_ttnn)
+    ttnn_tensor2 = ensure_tile_layout(input_tensor2.to_ttnn)
 
     res = TorchTTNNTensor(ttnn.subtract(ttnn_tensor1, ttnn_tensor2))
     _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
@@ -177,8 +163,8 @@ def handle_add(func, args, kwargs):
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
-    ttnn_tensor1 = _ensure_tile_layout(input_tensor1.to_ttnn)
-    ttnn_tensor2 = _ensure_tile_layout(input_tensor2.to_ttnn)
+    ttnn_tensor1 = ensure_tile_layout(input_tensor1.to_ttnn)
+    ttnn_tensor2 = ensure_tile_layout(input_tensor2.to_ttnn)
 
     res = TorchTTNNTensor(ttnn.add(ttnn_tensor1, ttnn_tensor2))
     _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
@@ -339,8 +325,8 @@ def handle_bmm(func, args, kwargs):
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
-    ttnn_tensor1 = _ensure_tile_layout(input_tensor1.to_ttnn)
-    ttnn_tensor2 = _ensure_tile_layout(input_tensor2.to_ttnn)
+    ttnn_tensor1 = ensure_tile_layout(input_tensor1.to_ttnn)
+    ttnn_tensor2 = ensure_tile_layout(input_tensor2.to_ttnn)
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -739,8 +725,8 @@ def handle_where(func, args, kwargs):
         input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
     if condition.to_ttnn.device() != input_tensor1.to_ttnn.device():
         condition.ttnn_tensor = ttnn.to_device(condition.to_ttnn, device)
-    input_tensor1.ttnn_tensor = _ensure_tile_layout(input_tensor1.to_ttnn)
-    input_tensor2.ttnn_tensor = _ensure_tile_layout(input_tensor2.to_ttnn)
+    input_tensor1.ttnn_tensor = ensure_tile_layout(input_tensor1.to_ttnn)
+    input_tensor2.ttnn_tensor = ensure_tile_layout(input_tensor2.to_ttnn)
     result = TorchTTNNTensor(ttnn.where(condition.to_ttnn, input_tensor1.to_ttnn, input_tensor2.to_ttnn))
 
     if deallocate_a:
