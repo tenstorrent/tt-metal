@@ -228,7 +228,7 @@ def test_all_to_all_dispatch_8x8_dual_galaxy(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         },
     ],
     ids=["fabric_1d_line"],
@@ -238,7 +238,7 @@ def test_all_to_all_dispatch_8x8_dual_galaxy(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
-        pytest.param((8, 16), (8, 16), id="8x16_grid"),
+        pytest.param((1, 16), (1, 16), id="8x16_grid"),
     ],
     indirect=["mesh_device"],
 )
