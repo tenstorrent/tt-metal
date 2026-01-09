@@ -7,6 +7,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include <tt-metalium/base_types.hpp>
 
 namespace ttnn::operations::experimental::moe {
 
@@ -16,7 +17,9 @@ struct ExecuteMoE {
         const ttnn::Tensor& w0_tensor,
         const ttnn::Tensor& w1_tensor,
         const ttnn::Tensor& w2_tensor,
-        const ttnn::Tensor& output_tensor);
+        const ttnn::Tensor& output_tensor,
+        MathFidelity math_fidelity = MathFidelity::LoFi,
+        bool fp32_dest_acc_en = true);
 };
 
 }  // namespace ttnn::operations::experimental::moe
