@@ -522,6 +522,15 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
     noc_nonposted_writes_acked[noc] = nonposted_writes_acked;
     noc_nonposted_atomics_acked[noc] = nonposted_atomics_acked;
     noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
+
+    uint32_t ctrl_reg_0 = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CTRL);
+    uint32_t ctrl_reg_1 = NOC_CMD_BUF_READ_REG(noc, 1, NOC_CTRL);
+    uint32_t ctrl_reg_2 = NOC_CMD_BUF_READ_REG(noc, 2, NOC_CTRL);
+    uint32_t ctrl_reg_3 = NOC_CMD_BUF_READ_REG(noc, 3, NOC_CTRL);
+    NOC_CMD_BUF_WRITE_REG(noc, 0, NOC_CTRL, ctrl_reg_0 & ~NOC_CMD_VC_LINKED);
+    NOC_CMD_BUF_WRITE_REG(noc, 1, NOC_CTRL, ctrl_reg_1 & ~NOC_CMD_VC_LINKED);
+    NOC_CMD_BUF_WRITE_REG(noc, 2, NOC_CTRL, ctrl_reg_2 & ~NOC_CMD_VC_LINKED);
+    NOC_CMD_BUF_WRITE_REG(noc, 3, NOC_CTRL, ctrl_reg_3 & ~NOC_CMD_VC_LINKED);
 }
 
 template <NocBarrierType barrier_type, uint32_t status_register>
