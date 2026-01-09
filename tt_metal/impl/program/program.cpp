@@ -146,6 +146,7 @@ namespace tt::tt_metal {
 using detail::ProgramImpl;
 
 namespace {
+std::atomic<bool> enable_persistent_kernel_cache = false;
 
 void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
     // ZoneScoped;
@@ -190,6 +191,13 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     return compile_hash;
 }
 }  // namespace
+namespace detail {
+
+void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
+
+void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
+
+}  // namespace detail
 
 namespace experimental {
 
@@ -1439,7 +1447,12 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
                     kernel->register_kernel_elf_paths_with_watcher(*device);
 
-                    if (detail::HashLookup::inst().add(kernel_hash)) {
+                    if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
+                        if (not detail::HashLookup::inst().exists(kernel_hash)) {
+                            detail::HashLookup::inst().add(kernel_hash);
+                            detail::HashLookup::inst().add_generated_bin(kernel_hash);
+                        }
+                    } else if (detail::HashLookup::inst().add(kernel_hash)) {
                         GenerateBinaries(device, build_options, kernel);
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }

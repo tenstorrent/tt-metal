@@ -714,6 +714,14 @@ def ensure_devices_tg():
     assert len(device_ids) == 32, f"Expected 32 devices, got {len(device_ids)}"
 
 
+@pytest.fixture()
+def clear_compile_cache():
+    yield
+    import ttnn
+
+    ttnn.device.DisablePersistentKernelCache()
+
+
 @pytest.fixture(autouse=True)
 def reset_default_device(request):
     import ttnn
