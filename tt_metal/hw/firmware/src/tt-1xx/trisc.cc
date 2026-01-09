@@ -62,10 +62,9 @@ uint32_t op_info_offset __attribute__((used)) = 0;
 
 const uint8_t thread_id = COMPILE_FOR_TRISC;
 
-#define GET_TRISC_RUN_EVAL(x, t) x##t
-#define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
 volatile tt_l1_ptr uint8_t* const trisc_run =
-    &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
+    &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))
+         ->subordinate_sync.map[COMPILE_FOR_TRISC + 1];  // first entry is for NCRISC
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 }  // namespace ckernel
 

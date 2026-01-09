@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "dprint_pages.h"
 #include "api/numeric/bfloat16.h"
 
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"

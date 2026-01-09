@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
 #include "ttnn/types.hpp"
@@ -42,7 +42,10 @@ ttnn::Tensor composite_reduce_scatter(
     tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel);
 
 ttnn::Tensor composite_all_gather(
     ttnn::Tensor input_tensor,

@@ -19,7 +19,6 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("RISCV1");
-#pragma GCC unroll 256
         for (uint32_t i = 0; i < num_transactions; i++) {
             noc.async_read(
                 unicast_endpoint,

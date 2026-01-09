@@ -450,7 +450,8 @@ void ComputeMeshRouterBuilder::configure_connection(
     peer_compute.establish_connections_to_router(*this, intra_mesh_filter);
 
     // Configure NOC VC based on link index (must be same for both routers)
-    auto edm_noc_vc = erisc_builder_->config.DEFAULT_NOC_VC + (link_idx % erisc_builder_->config.NUM_EDM_NOC_VCS);
+    auto edm_noc_vc = tt::tt_fabric::FabricEriscDatamoverConfig::DEFAULT_NOC_VC +
+                      (link_idx % tt::tt_fabric::FabricEriscDatamoverConfig::NUM_EDM_NOC_VCS);
     erisc_builder_->config.edm_noc_vc = edm_noc_vc;
     peer_compute.erisc_builder_->config.edm_noc_vc = edm_noc_vc;
 
@@ -542,14 +543,11 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
         const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
 
-        bool vc1_serviced = false;
-        if (!is_inter_mesh_ && intermesh_config.requires_vc1_full_mesh) {
-            // Intra-mesh router with full mesh VC1
-            vc1_serviced = true;
-        } else if (is_inter_mesh_ && intermesh_config.requires_vc1_mesh_pass_through) {
-            // Inter-mesh router with pass-through VC1
-            vc1_serviced = true;
-        }
+        // VC1 is serviced when:
+        // - Intra-mesh router with full mesh VC1, or
+        // - Inter-mesh router with pass-through VC1
+        bool vc1_serviced = (!is_inter_mesh_ && intermesh_config.requires_vc1_full_mesh) ||
+                            (is_inter_mesh_ && intermesh_config.requires_vc1_mesh_pass_through);
 
         if (vc1_serviced) {
             defines["FABRIC_2D_VC1_SERVICED"] = "";

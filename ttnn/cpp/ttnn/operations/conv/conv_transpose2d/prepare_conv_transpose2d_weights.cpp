@@ -234,11 +234,23 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             conv_config_,
             compute_config_,
             op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL});
-    } else {
-        Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-        Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
+    }
+    Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape({in_channels, out_channels / groups, kernel_size[0], kernel_size[1]}),
+            tt::tt_metal::TensorLayout(
+                weight_dtype,
+                tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{
+                    TensorMemoryLayout::INTERLEAVED,
+                    BufferType::DRAM,
+                })),
+        device);
+    std::optional<Tensor> dummy_bias_tensor = std::nullopt;
+    if (has_bias) {
+        dummy_bias_tensor = tt::tt_metal::create_device_tensor(
             tt::tt_metal::TensorSpec(
-                ttnn::Shape({in_channels, out_channels / groups, kernel_size[0], kernel_size[1]}),
+                ttnn::Shape({1, 1, 1, out_channels}),
                 tt::tt_metal::TensorLayout(
                     weight_dtype,
                     tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
@@ -247,116 +259,102 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
                         BufferType::DRAM,
                     })),
             device);
-        std::optional<Tensor> dummy_bias_tensor = std::nullopt;
-        if (has_bias) {
-            dummy_bias_tensor = tt::tt_metal::create_device_tensor(
-                tt::tt_metal::TensorSpec(
-                    ttnn::Shape({1, 1, 1, out_channels}),
-                    tt::tt_metal::TensorLayout(
-                        weight_dtype,
-                        tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
-                        MemoryConfig{
-                            TensorMemoryLayout::INTERLEAVED,
-                            BufferType::DRAM,
-                        })),
-                device);
-        }
-        auto [output_height, output_width] = calculate_ct2d_output_image_size(
-            {input_height, input_width}, kernel_size, stride, padding_n4, {0, 0}, dilation);
-        auto convt2d_slice_attr = get_conv_transpose2d_slice_attr(
-            batch_size,
-            input_height,
-            input_width,
-            in_channels,
-            out_channels,
-            kernel_size,
-            stride,
-            padding_n4,
-            {0, 0},  // output_padding assumed to be 0 for weight preparation
-            dilation,
-            groups,
-            input_layout,
-            input_dtype,
-            conv_output_dtype,
-            std::ref(dummy_weight_tensor),
-            has_bias ? std::make_optional(std::ref(dummy_bias_tensor.value())) : std::nullopt,
-            conv_config,
-            compute_config,
-            device,
-            mirror_kernel);
-        auto dram_slice_config = op_slicing::determine_slice_config(
-            convt2d_slice_attr.get(),
-            ttnn::Shape{batch_size, input_height, input_width, in_channels},
-            ttnn::Shape{batch_size, output_height, output_width, out_channels},
-            dram_slice_config_,
-            conv_config.output_layout,
-            device);
-        log_info(
-            tt::LogOp,
-            "Auto determined DRAM Slice Config in Prepare Conv_Transpose2d Weights as {} for {}",
-            dram_slice_config,
-            convt2d_slice_attr->name());
-
-        uint32_t slice_rounding_value = 1;
-        if (conv_config.output_layout == tt::tt_metal::Layout::TILE &&
-            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
-            // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
-            slice_rounding_value = tt::constants::TILE_HEIGHT;
-        }
-
-        const uint32_t output_sliced_dim =
-            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
-
-        TT_FATAL(
-            dram_slice_config.num_slices <= output_sliced_dim,
-            " Number of slices {} should be less or equal than the dimension being sliced {} in Conv2D DRAM Slicing",
-            dram_slice_config.num_slices,
-            output_sliced_dim);
-
-        const uint32_t min_output_slice_size =
-            tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
-            slice_rounding_value;
-        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
-            output_height = min_output_slice_size;
-        } else {
-            output_width = min_output_slice_size;
-        }
-        auto [input_slice_start, input_slice_end] =
-            convt2d_slice_attr->get_input_slice({0, 0}, {output_height, output_width});
-        input_memory_config = convt2d_slice_attr->get_input_memory_config(
-            {0, 0},                        // Slice Start
-            {output_height, output_width}  // Slice End
-        );
-        auto [input_height_slice_start, input_width_slice_start] = input_slice_start;
-        auto [input_height_slice_end, input_width_slice_end] = input_slice_end;
-        auto input_height_sliced = input_height_slice_end - input_height_slice_start;
-        auto input_width_sliced = input_width_slice_end - input_width_slice_start;
-        auto dims = compute_conv_transpose2d_dimensions(
-            input_height_sliced, input_width_sliced, kernel_size, stride, padding, {0, 0}, dilation);
-
-        return prepare_conv_weights(
-            mirrored_weight_tensor,
-            input_memory_config,
-            dram_slice_config.num_slices > 1 ? Layout::ROW_MAJOR : input_layout,
-            weights_format,
-            in_channels,
-            out_channels,
-            batch_size,
-            dims.full_input_height,  // Use full_input dimensions, not original
-            dims.full_input_width,   // Use full_input dimensions, not original
-            kernel_size,
-            ConvTranspose2dDimensions::CONV2D_STRIDE,   // stride is always 1x1 for conv2d micro-op
-            ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
-            dilation,
-            has_bias,
-            groups_for_prep,  // Use 1 if groups > 1 since grouped conversion is already done
-            device,
-            input_dtype,
-            output_dtype,
-            conv_config_,
-            compute_config_,
-            op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL});
     }
+    auto [output_height, output_width] = calculate_ct2d_output_image_size(
+        {input_height, input_width}, kernel_size, stride, padding_n4, {0, 0}, dilation);
+    auto convt2d_slice_attr = get_conv_transpose2d_slice_attr(
+        batch_size,
+        input_height,
+        input_width,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding_n4,
+        {0, 0},  // output_padding assumed to be 0 for weight preparation
+        dilation,
+        groups,
+        input_layout,
+        input_dtype,
+        conv_output_dtype,
+        std::ref(dummy_weight_tensor),
+        has_bias ? std::make_optional(std::ref(dummy_bias_tensor.value())) : std::nullopt,
+        conv_config,
+        compute_config,
+        device,
+        mirror_kernel);
+    auto dram_slice_config = op_slicing::determine_slice_config(
+        convt2d_slice_attr.get(),
+        ttnn::Shape{batch_size, input_height, input_width, in_channels},
+        ttnn::Shape{batch_size, output_height, output_width, out_channels},
+        dram_slice_config_,
+        conv_config.output_layout,
+        device);
+    log_info(
+        tt::LogOp,
+        "Auto determined DRAM Slice Config in Prepare Conv_Transpose2d Weights as {} for {}",
+        dram_slice_config,
+        convt2d_slice_attr->name());
+
+    uint32_t slice_rounding_value = 1;
+    if (conv_config.output_layout == tt::tt_metal::Layout::TILE &&
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+        // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        slice_rounding_value = tt::constants::TILE_HEIGHT;
+    }
+
+    const uint32_t output_sliced_dim =
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+
+    TT_FATAL(
+        dram_slice_config.num_slices <= output_sliced_dim,
+        " Number of slices {} should be less or equal than the dimension being sliced {} in Conv2D DRAM Slicing",
+        dram_slice_config.num_slices,
+        output_sliced_dim);
+
+    const uint32_t min_output_slice_size =
+        tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
+        slice_rounding_value;
+    if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
+        output_height = min_output_slice_size;
+    } else {
+        output_width = min_output_slice_size;
+    }
+    auto [input_slice_start, input_slice_end] =
+        convt2d_slice_attr->get_input_slice({0, 0}, {output_height, output_width});
+    input_memory_config = convt2d_slice_attr->get_input_memory_config(
+        {0, 0},                        // Slice Start
+        {output_height, output_width}  // Slice End
+    );
+    auto [input_height_slice_start, input_width_slice_start] = input_slice_start;
+    auto [input_height_slice_end, input_width_slice_end] = input_slice_end;
+    auto input_height_sliced = input_height_slice_end - input_height_slice_start;
+    auto input_width_sliced = input_width_slice_end - input_width_slice_start;
+    auto dims = compute_conv_transpose2d_dimensions(
+        input_height_sliced, input_width_sliced, kernel_size, stride, padding, {0, 0}, dilation);
+
+    return prepare_conv_weights(
+        mirrored_weight_tensor,
+        input_memory_config,
+        dram_slice_config.num_slices > 1 ? Layout::ROW_MAJOR : input_layout,
+        weights_format,
+        in_channels,
+        out_channels,
+        batch_size,
+        dims.full_input_height,  // Use full_input dimensions, not original
+        dims.full_input_width,   // Use full_input dimensions, not original
+        kernel_size,
+        ConvTranspose2dDimensions::CONV2D_STRIDE,   // stride is always 1x1 for conv2d micro-op
+        ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
+        dilation,
+        has_bias,
+        groups_for_prep,  // Use 1 if groups > 1 since grouped conversion is already done
+        device,
+        input_dtype,
+        output_dtype,
+        conv_config_,
+        compute_config_,
+        op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL});
 }
 
 ttnn::Tensor prepare_conv_transpose2d_bias(

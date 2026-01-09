@@ -336,10 +336,9 @@ static std::vector<Tensor> pool2d_L1(
             "Expected two output tensors when return_indices is true, but got {}.",
             output_tensors.size());
         return output_tensors;
-    } else {
-        TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
-        return output_tensors;
     }
+    TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
+    return output_tensors;
 }
 
 class Pool2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
@@ -709,9 +708,8 @@ static std::vector<Tensor> pool2d_DRAM(
     }
     if (return_indices) {
         return {dram_output_tensor, dram_output_indices_tensor};
-    } else {
-        return {dram_output_tensor};
     }
+    return {dram_output_tensor};
 }
 
 // Enum to represent the execution path for pool2d operations
@@ -779,31 +777,30 @@ static std::vector<Tensor> pool2d(
             return_indices,
             dtype,
             output_layout);
-    } else {
-        return pool2d_DRAM(
-            input_tensor,
-            pool_type,
-            batch_size,
-            input_h,
-            input_w,
-            channels,
-            kernel_size,
-            stride,
-            padding,
-            dilation,
-            ceil_mode,
-            count_include_pad,
-            divisor_override,
-            memory_config,
-            dram_slice_config,
-            applied_shard_scheme,
-            compute_kernel_config,
-            deallocate_input,
-            reallocate_halo_output,
-            return_indices,
-            dtype,
-            output_layout);
     }
+    return pool2d_DRAM(
+        input_tensor,
+        pool_type,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        ceil_mode,
+        count_include_pad,
+        divisor_override,
+        memory_config,
+        dram_slice_config,
+        applied_shard_scheme,
+        compute_kernel_config,
+        deallocate_input,
+        reallocate_halo_output,
+        return_indices,
+        dtype,
+        output_layout);
 }
 
 std::vector<Tensor> MaxPool2DOp::invoke(

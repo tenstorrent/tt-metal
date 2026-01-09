@@ -45,7 +45,7 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape
 }
 
 ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
-    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector));
+    return invoke(tensor, detail::infer_dims_for_reshape(tensor, shape_vector));
 }
 
 }  // namespace ttnn::operations::data_movement
