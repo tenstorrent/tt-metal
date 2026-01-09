@@ -120,7 +120,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         program,
         grid,
         input_single_tile_size,
-        num_tiles_per_shard,  //* (extra_shards ? num_shards_per_core + 1 : num_shards_per_core),
+        num_tiles_per_shard * (extra_shards ? num_shards_per_core + 1 : num_shards_per_core),
         input_cb_data_format,
         src0_buffer);
 
@@ -130,7 +130,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         program,
         grid,
         output_single_tile_size,
-        num_tiles_per_shard,  // * (extra_shards ? num_shards_per_core + 1 : num_shards_per_core),
+        num_tiles_per_shard * (extra_shards ? num_shards_per_core + 1 : num_shards_per_core),
         output_cb_data_format,
         dst_buffer);
 
@@ -222,8 +222,10 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
             unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
         }
         std::string compute_kernel;
+        // if(1) {
         if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
             (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
+            std::cout << "Using slow untilize." << std::endl;
             log_debug(tt::LogOp, "Using slow untilize.");
             compute_kernel = std::string(
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
@@ -231,6 +233,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
             unpack_to_dest_mode[src0_cb_index] =
                 UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
         } else {
+            std::cout << "Using fast pack untilize." << std::endl;
             log_debug(tt::LogOp, "Using fast pack untilize.");
             compute_kernel = std::string(
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
@@ -251,23 +254,24 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         uint32_t core_count = 0;
         for (auto core : cores) {
             uint32_t num_tiles_to_process;
-            // if(core_count < extra_shards) {
-            //     num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * (num_shards_per_core + 1);
-            // } else {
-            //     num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * num_shards_per_core;
-            // }
+            if (core_count < extra_shards) {
+                num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * (num_shards_per_core + 1);
+            } else {
+                num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * num_shards_per_core;
+            }
             std::cout << "core_count: " << core_count << std::endl;
             std::cout << "num_tiles_per_block: " << num_tiles_per_block << std::endl;
             std::cout << "num_blocks_per_shard: " << num_blocks_per_shard << std::endl;
+            std::cout << "num_shards_per_core: " << num_shards_per_core << std::endl;
 
-            num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard;
+            // num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * num_shards_per_core;
             std::cout << "num_tiles_to_process: " << num_tiles_to_process << std::endl;
             // Reader run-time args
             // uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_shard;
             std::vector<uint32_t> reader_run_time_args = {num_tiles_to_process};
 
             // Compute run-time args
-            std::vector<uint32_t> compute_run_time_args = {num_tiles_to_process};
+            std::vector<uint32_t> compute_run_time_args = {num_blocks_per_shard * num_shards_per_core};
 
             // Compute run-time args
             // Writer run-time args
