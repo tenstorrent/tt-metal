@@ -34,11 +34,11 @@ bool is_coord_in_mesh_with_offset(
     }
     for (size_t i = 0; i < parent_coord.dims(); i++) {
         if (parent_coord[i] < offset[i]) {
-            return false;  // Would result in negative coordinate
+            return false;
         }
         auto translated = parent_coord[i] - offset[i];
         if (translated >= mesh_shape[i]) {
-            return false;  // Out of bounds
+            return false;
         }
     }
     return true;
@@ -48,11 +48,11 @@ bool is_coord_in_mesh_with_offset(
 
 // Internal function that handles coordinate translation when routing to submeshes.
 // The offset represents the submesh's origin in the parent mesh's coordinate system.
+// Seems inefficient because this is called for every CQ in a submesh, so the check will be the same for every CQ.
 void EnqueueMeshWorkloadWithOffset(
     MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, const MeshCoordinate& offset) {
     auto* mesh_device = mesh_cq.device();
 
-    // Check if this mesh has any programs in the workload (using translated coordinates)
     bool has_programs_for_device = false;
     for (const auto& [device_range, program] : mesh_workload.get_programs()) {
         for (const auto& parent_coord : device_range) {
