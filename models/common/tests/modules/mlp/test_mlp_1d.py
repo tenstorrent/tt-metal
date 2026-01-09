@@ -526,21 +526,21 @@ def test_mlp_1d_vs_reference(
     # Initialize only the MLP submodule deterministically (cached for speed).
     _get_or_init_mlp_weights(hf_model_name, reference_mlp)
 
-    # Build MLP1D TT model and load the same weights in
+    # Build MLP1D TT model and load the same weights as the reference model
     # TT expects weights in TTNN layout (in_features, out_features) - transpose from PyTorch layout
     if hasattr(reference_mlp, "gate_proj"):
-        w1_torch = reference_mlp.gate_proj.weight.T.contiguous()  # (dim, hidden_dim)
-        w3_torch = reference_mlp.up_proj.weight.T.contiguous()  # (dim, hidden_dim)
+        w1_torch = reference_mlp.gate_proj.weight.T  # (dim, hidden_dim)
+        w3_torch = reference_mlp.up_proj.weight.T  # (dim, hidden_dim)
     elif hasattr(reference_mlp, "gate_up_proj"):
         # Handle models like Phi-3/Phi-4 that use fused gate_up_proj
         gate_up_weight = reference_mlp.gate_up_proj.weight
         hidden_dim = gate_up_weight.shape[0] // 2
-        w1_torch = gate_up_weight[:hidden_dim, :].T.contiguous()
-        w3_torch = gate_up_weight[hidden_dim:, :].T.contiguous()
+        w1_torch = gate_up_weight[:hidden_dim, :].T  # (dim, hidden_dim)
+        w3_torch = gate_up_weight[hidden_dim:, :].T  # (dim, hidden_dim)
     else:
         raise AttributeError(f"Reference MLP {type(reference_mlp)} has no gate_proj or gate_up_proj")
 
-    w2_torch = reference_mlp.down_proj.weight.T.contiguous()  # (hidden_dim, dim)
+    w2_torch = reference_mlp.down_proj.weight.T  # (hidden_dim, dim)
     dim = w1_torch.shape[0]
     torch_input = torch.randn(batch_size, 1, seq_len, dim, dtype=torch.bfloat16)
 
@@ -621,9 +621,9 @@ def test_mlp_1d_config_prefill_override(ttnn_mesh_device: ttnn.MeshDevice):
             param.copy_(torch.randn_like(param))
 
     # Prepare weights
-    w1_torch = reference_mlp.gate_proj.weight.T.contiguous()
-    w2_torch = reference_mlp.down_proj.weight.T.contiguous()
-    w3_torch = reference_mlp.up_proj.weight.T.contiguous()
+    w1_torch = reference_mlp.gate_proj.weight.T
+    w2_torch = reference_mlp.down_proj.weight.T
+    w3_torch = reference_mlp.up_proj.weight.T
 
     # Create LazyWeights (no disk cache)
     ttnn.SetDefaultDevice(ttnn_mesh_device)

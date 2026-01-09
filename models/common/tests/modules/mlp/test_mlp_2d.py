@@ -372,9 +372,9 @@ def test_mlp_2d_vs_reference(
     cluster_shape = list(ttnn_mesh_device.shape)
 
     # TT expects weights in (input_dim, output_dim) layout.
-    w1_torch = reference_mlp.gate_proj.weight.T.contiguous()  # (dim, hidden_dim)
-    w3_torch = reference_mlp.up_proj.weight.T.contiguous()  # (dim, hidden_dim)
-    w2_torch = reference_mlp.down_proj.weight.T.contiguous()  # (hidden_dim, dim)
+    w1_torch = reference_mlp.gate_proj.weight.T  # (dim, hidden_dim)
+    w3_torch = reference_mlp.up_proj.weight.T  # (dim, hidden_dim)
+    w2_torch = reference_mlp.down_proj.weight.T  # (hidden_dim, dim)
     # [INFO] PyTorch's nn.Linear operates on the last dimension regardless of tensor rank.
     torch_input = torch.randn(batch_size, 1, seq_len, dim, dtype=torch.bfloat16)
 
