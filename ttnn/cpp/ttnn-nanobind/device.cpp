@@ -17,6 +17,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/array.h>
+#include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
@@ -37,7 +38,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
-#include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -347,12 +347,6 @@ void device_module(nb::module_& m_device) {
 
         )doc");
 
-    m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(
-        Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
-    )doc");
-    m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
-        Disables kernel compilation cache from being persistent across runs
-    )doc");
     m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
         Clear the in-memory kernel compilation hash lookup cache.
 
@@ -462,9 +456,9 @@ void device_module(nb::module_& m_device) {
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
         "ReadDeviceProfiler",
-        [](MeshDevice* device) {
+        [](MeshDevice* mesh_device) {
             ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
-            tt::tt_metal::ReadMeshDeviceProfilerResults(*device, ProfilerReadState::NORMAL, prof_metadata);
+            tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device, ProfilerReadState::NORMAL, prof_metadata);
         },
         nb::arg("device"),
         R"doc(

@@ -349,8 +349,12 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             worker_subdevice_id_opt,
             out_memory_config,
             std::nullopt,
+            std::nullopt,
             num_preferred_links,
-            topology_);
+            topology_,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt);
     }
     interleaved_tensor.deallocate();
     ttnn::Tensor gathered;
@@ -367,15 +371,15 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             topology_,
             worker_subdevice_id_opt,
             cluster_axis.value(),
+            /*use_optimal_ccl_for_llama*/ false,
             use_llama_sharded,
-            /*use_all_gather_async_llama_sharded*/ false,
             barrier_semaphores.value()[1],
             /*chunks_per_sync*/ std::nullopt,
             /*num_workers_per_link*/ std::nullopt,
             /*num_buffers_per_channel*/ std::nullopt,
             /*reverse_order*/ false,
             /*sub_core_grid*/ std::nullopt,
-            /*mesh_device*/ nullptr);
+            /*mesh_device*/ &mesh_device);
     } else {
         gathered = ttnn::all_gather(
             scattered_tensor,

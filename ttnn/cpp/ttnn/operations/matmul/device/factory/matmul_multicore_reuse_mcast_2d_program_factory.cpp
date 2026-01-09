@@ -17,6 +17,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;

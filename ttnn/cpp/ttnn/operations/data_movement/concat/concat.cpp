@@ -188,11 +188,11 @@ MassagedConcat build_non_aligned_last_dim_concat(
             auto storage_type = tensor.storage_type();
             if (storage_type == tt::tt_metal::StorageType::DEVICE) {
                 return tensor.padded_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
-            } else {
-                TT_THROW(
-                    "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type {}",
-                    tensor.storage_type());
             }
+            TT_THROW(
+                "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type"
+                " {}",
+                tensor.storage_type());
         });
     };
 

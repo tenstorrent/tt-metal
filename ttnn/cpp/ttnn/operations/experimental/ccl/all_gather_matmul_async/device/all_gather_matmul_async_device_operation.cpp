@@ -138,7 +138,7 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
         operation_attributes.all_gather_async_attributes.sub_device_id.has_value(),
         operation_attributes.all_gather_async_attributes.sub_device_id.has_value()
             ? input_tensor.device()->worker_cores(
-                  shard_builder::HalProgrammableCoreType::TENSIX,
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX,
                   operation_attributes.all_gather_async_attributes.sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         operation_attributes.all_gather_async_attributes.cluster_axis,
@@ -154,12 +154,14 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-std::tuple<
-    AllGatherMatmulAsyncDeviceOperation::operation_attributes_t,
-    AllGatherMatmulAsyncDeviceOperation::tensor_args_t>
-AllGatherMatmulAsyncDeviceOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+}  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::all_gather_matmul_async::AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t
+all_gather_matmul_async(
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -181,11 +183,13 @@ AllGatherMatmulAsyncDeviceOperation::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    using OperationType =
+        ttnn::operations::experimental::ccl::all_gather_matmul_async::AllGatherMatmulAsyncDeviceOperation;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     /* All Gather setup */
     const auto [all_gather_async_operation_attributes, all_gather_async_tensor_args] =
-        all_gather_async::AllGatherAsyncDeviceOperation::invoke(
+        ttnn::operations::experimental::ccl::all_gather_async::AllGatherAsyncDeviceOperation::invoke(
             input_tensor,
             persistent_output_buffer,
             dim,
@@ -203,11 +207,12 @@ AllGatherMatmulAsyncDeviceOperation::invoke(
             num_buffers_per_channel,
             /*reverse_order=*/false,
             /*sub_core_grid=*/std::nullopt,
-            /*mesh_device=*/nullptr);
+            /*optional_mesh_device=*/nullptr);
 
     // Create the all gather output tensor used as input (activation) to the matmul
-    ttnn::Tensor all_gather_out_tensor = all_gather_async::AllGatherAsyncDeviceOperation::create_output_tensors(
-        all_gather_async_operation_attributes, all_gather_async_tensor_args);
+    ttnn::Tensor all_gather_out_tensor =
+        ttnn::operations::experimental::ccl::all_gather_async::AllGatherAsyncDeviceOperation::create_output_tensors(
+            all_gather_async_operation_attributes, all_gather_async_tensor_args);
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
@@ -236,7 +241,7 @@ AllGatherMatmulAsyncDeviceOperation::invoke(
             /*global_cb=*/std::nullopt},
         {});
 
-    operation_attributes_t operation_attributes{
+    auto operation_attributes = OperationType::operation_attributes_t{
         /* All Gather Params */
         all_gather_async_operation_attributes,
         all_gather_async_tensor_args,
@@ -246,14 +251,14 @@ AllGatherMatmulAsyncDeviceOperation::invoke(
         all_gather_core_grid_offset,
     };
 
-    tensor_args_t tensor_args{
+    auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,
         bias,
         persistent_output_buffer,
     };
 
-    return {operation_attributes, tensor_args};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async
+}  // namespace ttnn::prim

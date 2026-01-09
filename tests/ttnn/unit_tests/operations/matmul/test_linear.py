@@ -11,6 +11,8 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.common.utility_functions import torch_random, is_wormhole_b0
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize("batch_sizes", [(1,)])
 @pytest.mark.parametrize("m_size", [384])

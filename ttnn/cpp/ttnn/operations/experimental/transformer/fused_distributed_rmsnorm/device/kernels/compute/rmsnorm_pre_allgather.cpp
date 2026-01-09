@@ -17,7 +17,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
-#include "debug/dprint_pages.h"
+#include "api/debug/dprint_pages.h"
 
 namespace NAMESPACE {
 void MAIN {

@@ -182,12 +182,12 @@ public:
     std::vector<chan_id_t> get_intramesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
 
     // The following apis should probably be private, and exposed only to some Metal runtime objects
-    void set_routing_mode(uint16_t mode);
-    uint16_t get_routing_mode() const;
-
     void initialize_fabric_context(tt_fabric::FabricConfig fabric_config);
 
     FabricContext& get_fabric_context() const;
+
+    // Get all fabric defines for kernel compilation (used by tt_metal.cpp)
+    std::map<std::string, std::string> get_fabric_kernel_defines() const;
 
     void clear_fabric_context();
 
@@ -219,6 +219,13 @@ public:
     // Returns true if valid, false otherwise.
     bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;
 
+    // Returns true if any of the local mesh bindings correspond to a switch mesh
+    bool is_local_host_on_switch_mesh() const;
+
+    // Returns physical chip IDs for all devices belonging to switch meshes on this host
+    // Returns empty vector if no switch meshes are on this host
+    std::vector<ChipId> get_switch_mesh_device_ids() const;
+
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
 private:
@@ -232,7 +239,6 @@ private:
 
     void init_control_plane_auto_discovery();
 
-    uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
@@ -274,7 +280,7 @@ private:
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates
     chan_id_t get_downstream_eth_chan_id(
-        chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
+        chan_id_t src_routing_plane_id, const std::vector<chan_id_t>& candidate_target_chans) const;
 
     ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
 
@@ -314,7 +320,7 @@ private:
     // UDM-specific helper to write per-worker connection info to each worker core's L1
     void write_udm_fabric_connections_to_tensix_cores(
         ChipId physical_chip_id,
-        const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_worker_connections,
+        const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_mux_connections,
         const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_dispatcher_connections) const;
 
     void assign_direction_to_fabric_eth_chan(
@@ -360,7 +366,7 @@ private:
         MeshId my_mesh_id,
         MeshId neighbor_mesh_id,
         const RequestedIntermeshPorts& requested_intermesh_ports,
-        const std::vector<uint64_t>& src_exit_node_chips);
+        const std::vector<uint64_t>& src_exit_node_chips) const;
 
     // Multi-Host Intermesh Connectivity Helper Function:
     // Have each host send their port descriptors to the controller host, for intermesh connectivity generation.

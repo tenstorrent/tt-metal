@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_default_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
@@ -268,18 +268,20 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
                 }},
             shared_vars.matmul_shared_variables);
 
-        ttnn::all_gather_async_minimal_default_helper_override_runtime_arguments(
+        auto& all_gather_async_shared_variables = shared_vars.all_gather_async_shared_variables;
+        const auto& all_gather_async_attributes = operation_attributes.all_gather_async_attributes;
+        all_gather_async_minimal_default_helper_override_runtime_arguments(
             program,
-            shared_vars.all_gather_async_shared_variables.reader_kernel_id,
-            shared_vars.all_gather_async_shared_variables.writer_kernel_id,
-            shared_vars.all_gather_async_shared_variables.all_cores,
-            operation_attributes.all_gather_async_attributes.num_links,
-            shared_vars.all_gather_async_shared_variables.num_directions_per_link,
-            shared_vars.all_gather_async_shared_variables.num_workers_per_direction,
-            shared_vars.all_gather_async_shared_variables.num_mux_cores_per_direction_per_link,
-            shared_vars.all_gather_async_shared_variables.num_cores_per_link,
-            operation_attributes.all_gather_async_attributes.barrier_semaphore,
-            operation_attributes.all_gather_async_attributes.semaphore,
+            all_gather_async_shared_variables.reader_kernel_id,
+            all_gather_async_shared_variables.writer_kernel_id,
+            all_gather_async_shared_variables.all_cores,
+            all_gather_async_attributes.num_links,
+            all_gather_async_shared_variables.num_directions_per_link,
+            all_gather_async_shared_variables.num_workers_per_direction,
+            all_gather_async_shared_variables.num_mux_cores_per_direction_per_link,
+            all_gather_async_shared_variables.num_cores_per_link,
+            all_gather_async_attributes.barrier_semaphore,
+            all_gather_async_attributes.semaphore,
             tensor_args.input_tensor,
             tensor_return_value[0]);
     }

@@ -52,7 +52,7 @@ run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
     fi
 
     local DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
-    local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"
+    local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
     local MESH_DEVICE="DUAL"
 
     local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests"
@@ -60,6 +60,13 @@ run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
         bash -c "source ./python_env/bin/activate && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
+
+    # Run test_demo_dual test on DUAL galaxy setup
+    local TEST_DEMO_DUAL="pytest -svvv models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual"
+
+    tt-run --rank-binding "$RANK_BINDING_YAML" \
+        --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
+        bash -c "source ./python_env/bin/activate && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_DEMO_DUAL" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1

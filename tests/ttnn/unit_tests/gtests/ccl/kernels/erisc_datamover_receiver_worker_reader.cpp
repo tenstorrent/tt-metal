@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <array>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
 void kernel_main() {
