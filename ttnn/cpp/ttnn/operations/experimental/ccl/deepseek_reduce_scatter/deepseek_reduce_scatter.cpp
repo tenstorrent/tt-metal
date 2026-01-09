@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "reduce_scatter_minimal_async.hpp"
-#include "device/reduce_scatter_minimal_async_op_device_operation.hpp"
-#include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "deepseek_reduce_scatter.hpp"
+#include "device/deepseek_reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
-ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
+ttnn::Tensor ExecuteDeepseekReduceScatter::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const int32_t dim,
@@ -29,51 +28,21 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
 
     // Calculate ring size based on cluster_axis
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-    TT_FATAL(
-        num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
+    TT_FATAL(num_devices > 1, "deepseek_reduce_scatter op will only work for num_devices > 1, but has {}", num_devices);
 
     // Convert Ring to Linear for 2-device configs where wrapping is not possible
     ttnn::ccl::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
     log_debug(
-        tt::LogOp,
-        "reduce_scatter_minimal_async: num_devices = {}, usable_topology = {}",
-        num_devices,
-        usable_topology);
-
-    // Use composite reduce scatter for edge cases (e.g., tile dimensions not evenly divisible)
-    if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
-        log_debug(tt::LogOp, "reduce_scatter_minimal_async: using composite_reduce_scatter");
-        return composite_common::composite_reduce_scatter(
-            input_tensor,
-            dim,
-            num_links,
-            usable_topology,
-            memory_config,
-            sub_device_id,
-            cluster_axis,
-            chunks_per_sync,
-            num_workers_per_link,
-            num_buffers_per_channel);
-    }
+        tt::LogOp, "deepseek_reduce_scatter: num_devices = {}, usable_topology = {}", num_devices, usable_topology);
 
     bool using_persistent_buffers = persistent_output_buffers.has_value();
 
     std::optional<ttnn::Tensor> optional_intermediate_tensor = std::nullopt;
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt;
 
-    if (using_persistent_buffers) {
-        const auto& buffers = persistent_output_buffers.value();
-        if (!buffers.empty()) {
-            optional_intermediate_tensor = buffers[0];
-        }
-        if (buffers.size() >= 2) {
-            optional_output_tensor = buffers[1];
-        }
-    }
-
     // Call the prim operation
-    auto result = ttnn::prim::reduce_scatter_minimal_async(
+    auto result = ttnn::prim::deepseek_reduce_scatter(
         input_tensor,
         optional_intermediate_tensor,
         optional_output_tensor,

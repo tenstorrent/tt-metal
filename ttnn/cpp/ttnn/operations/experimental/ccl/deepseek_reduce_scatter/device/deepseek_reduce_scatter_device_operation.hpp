@@ -4,21 +4,20 @@
 
 #pragma once
 
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/deepseek_reduce_scatter_device_operation_types.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/deepseek_reduce_scatter_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
+namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
 
-struct ReduceScatterMinimalAsyncDeviceOperation {
-    using operation_attributes_t = reduce_scatter_minimal_async::detail::operation_attributes_t;
-    using tensor_args_t = reduce_scatter_minimal_async::detail::tensor_args_t;
-    using spec_return_value_t = reduce_scatter_minimal_async::detail::spec_return_value_t;
-    using tensor_return_value_t = reduce_scatter_minimal_async::detail::tensor_return_value_t;
-    using program_factory_t = std::variant<RingReduceScatterMeshWorkloadFactory, LineReduceScatterMeshWorkloadFactory>;
+struct DeepseekReduceScatterDeviceOperation {
+    using operation_attributes_t = deepseek_reduce_scatter::detail::operation_attributes_t;
+    using tensor_args_t = deepseek_reduce_scatter::detail::tensor_args_t;
+    using spec_return_value_t = deepseek_reduce_scatter::detail::spec_return_value_t;
+    using tensor_return_value_t = deepseek_reduce_scatter::detail::tensor_return_value_t;
+    using program_factory_t = std::variant<DeepseekReduceScatterMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -33,13 +32,13 @@ struct ReduceScatterMinimalAsyncDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
+}  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterMinimalAsyncDeviceOperation::
+ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation::
     tensor_return_value_t
-    reduce_scatter_minimal_async(
+    deepseek_reduce_scatter(
         const ttnn::Tensor& input_tensor,
         const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
         const std::optional<ttnn::Tensor>& optional_output_tensor,

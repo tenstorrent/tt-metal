@@ -4,20 +4,19 @@
 
 #pragma once
 
-#include "reduce_scatter_minimal_async_op_device_operation_types.hpp"
+#include "deepseek_reduce_scatter_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
+namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
 
-// Use ReduceScatterProgramArtifacts as the shared variables type for consistency
-using RingReduceScatterSharedVariables = ReduceScatterProgramArtifacts;
+// Use DeepseekReduceScatterProgramArtifacts as the shared variables type for consistency
+using DeepseekReduceScatterSharedVariables = DeepseekReduceScatterProgramArtifacts;
 
-struct RingReduceScatterMeshWorkloadFactory {
-    using shared_variables_t = RingReduceScatterSharedVariables;
+struct DeepseekReduceScatterMeshWorkloadFactory {
+    using shared_variables_t = DeepseekReduceScatterSharedVariables;
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
@@ -40,7 +39,7 @@ struct RingReduceScatterMeshWorkloadFactory {
 };
 
 // Builder function for ring topology - creates program artifacts
-ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
+DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
@@ -57,14 +56,13 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset);
 
 // Override runtime arguments helper for ring topology
-void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+void deepseek_reduce_scatter_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,
@@ -80,4 +78,4 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const Tensor& intermed,
     const Tensor& output);
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
+}  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail

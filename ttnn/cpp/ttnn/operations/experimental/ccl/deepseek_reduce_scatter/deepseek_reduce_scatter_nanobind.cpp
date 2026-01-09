@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "reduce_scatter_minimal_async_nanobind.hpp"
+#include "deepseek_reduce_scatter_nanobind.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -13,7 +13,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/deepseek_reduce_scatter.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -23,7 +23,7 @@ namespace ttnn::operations::experimental::ccl {
 namespace {
 
 template <typename ccl_operation_t>
-void bind_reduce_scatter_minimal_async(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
+void bind_deepseek_reduce_scatter(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
     bind_registered_operation(
         mod,
         operation,
@@ -79,12 +79,12 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod, const ccl_operation_t& 
 
 }  // namespace
 
-void bind_reduce_scatter_minimal_async(nb::module_& mod) {
-    bind_reduce_scatter_minimal_async(
+void bind_deepseek_reduce_scatter(nb::module_& mod) {
+    bind_deepseek_reduce_scatter(
         mod,
-        ttnn::experimental::reduce_scatter_minimal_async,
+        ttnn::experimental::deepseek_reduce_scatter,
         R"doc(
-        Performs an reduce-scatter operation on multi-device :attr:`input_tensor` across all devices.
+        Performs a reduce-scatter operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.

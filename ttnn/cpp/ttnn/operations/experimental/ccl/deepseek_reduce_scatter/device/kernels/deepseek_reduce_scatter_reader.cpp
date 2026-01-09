@@ -31,7 +31,6 @@ constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
 constexpr uint32_t slice_C = get_compile_time_arg_val(11);
 constexpr uint32_t slice_Ht = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
-constexpr uint32_t fuse_op = get_compile_time_arg_val(14);
 constexpr uint32_t dim = get_compile_time_arg_val(15);
 
 void kernel_main() {
@@ -100,18 +99,10 @@ void kernel_main() {
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
 
-    ReduceScatterOpReceiver matmul_receiver;
-    if constexpr (fuse_op) {
-        matmul_receiver = ReduceScatterOpReceiver(arg_idx);
-    }
-
     uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
 
     for (uint32_t b = 0; b < input_tensor_B; b++) {
-        if constexpr (fuse_op) {
-            matmul_receiver.wait_for_matmul_batch(b);
-        }
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
         uint32_t batch_offset = input_batch_num_pages * b;
 

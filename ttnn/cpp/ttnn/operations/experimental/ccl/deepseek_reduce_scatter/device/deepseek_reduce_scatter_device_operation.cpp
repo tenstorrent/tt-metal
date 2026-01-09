@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "reduce_scatter_minimal_async_op_device_operation.hpp"
+#include "deepseek_reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
@@ -10,19 +10,14 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
+namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
 
-ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
-ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
+DeepseekReduceScatterDeviceOperation::program_factory_t DeepseekReduceScatterDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-        return RingReduceScatterMeshWorkloadFactory{};
-    }
-    TT_FATAL(operation_attributes.topology == ttnn::ccl::Topology::Linear, "Topology must be Ring or Linear");
-    return LineReduceScatterMeshWorkloadFactory{};
+    return DeepseekReduceScatterMeshWorkloadFactory{};
 }
 
-void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
+void DeepseekReduceScatterDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Lightweight validation for cache hits
     const auto& input_tensor = tensor_args.input_tensor;
@@ -30,12 +25,12 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
 }
 
-void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
+void DeepseekReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
     // Common validation
-    reduce_scatter_common_validates(
+    deepseek_reduce_scatter_common_validates(
         input_tensor,
         operation_attributes.topology,
         operation_attributes.dim,
@@ -80,7 +75,7 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.semaphore.size());
 }
 
-spec_return_value_t ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs(
+spec_return_value_t DeepseekReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto inter_shape = input_tensor.logical_shape();
@@ -122,7 +117,7 @@ spec_return_value_t ReduceScatterMinimalAsyncDeviceOperation::compute_output_spe
     };
 }
 
-tensor_return_value_t ReduceScatterMinimalAsyncDeviceOperation::create_output_tensors(
+tensor_return_value_t DeepseekReduceScatterDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto tensor_specs = compute_output_specs(operation_attributes, tensor_args);
     const auto& input_tensor = tensor_args.input_tensor;
@@ -138,7 +133,7 @@ tensor_return_value_t ReduceScatterMinimalAsyncDeviceOperation::create_output_te
     return {intermediate_buffer, output_buffer};
 }
 
-tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(
+tt::stl::hash::hash_t DeepseekReduceScatterDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
@@ -169,7 +164,7 @@ tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_
 }
 
 // Common validation function implementation
-void reduce_scatter_common_validates(
+void deepseek_reduce_scatter_common_validates(
     const ttnn::Tensor& input_tensor,
     ttnn::ccl::Topology topology,
     uint32_t dim,
@@ -265,13 +260,13 @@ void reduce_scatter_common_validates(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
+}  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterMinimalAsyncDeviceOperation::
+ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation::
     tensor_return_value_t
-    reduce_scatter_minimal_async(
+    deepseek_reduce_scatter(
         const ttnn::Tensor& input_tensor,
         const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
         const std::optional<ttnn::Tensor>& optional_output_tensor,
@@ -289,8 +284,8 @@ ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::Reduc
         std::optional<uint32_t> chunks_per_sync,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel) {
-    using OperationType = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
-        ReduceScatterMinimalAsyncDeviceOperation;
+    using OperationType =
+        ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation;
     const auto resolved_sub_device_id = sub_device_id.value_or(input_tensor.device()->get_sub_device_ids().at(0));
 
     auto operation_attributes = OperationType::operation_attributes_t{

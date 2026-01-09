@@ -8,5 +8,5 @@
 
 namespace ttnn::operations::experimental::ccl {
 namespace nb = nanobind;
-void bind_reduce_scatter_minimal_async(nb::module_& mod);
+void bind_deepseek_reduce_scatter(nb::module_& mod);
 }  // namespace ttnn::operations::experimental::ccl

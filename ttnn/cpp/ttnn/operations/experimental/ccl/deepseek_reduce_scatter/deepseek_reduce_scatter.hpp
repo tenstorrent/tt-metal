@@ -7,12 +7,11 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {
 
-struct ExecuteReduceScatterMinimalAsync {
+struct ExecuteDeepseekReduceScatter {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
@@ -34,9 +33,9 @@ struct ExecuteReduceScatterMinimalAsync {
 
 namespace experimental {
 
-constexpr auto reduce_scatter_minimal_async = ttnn::register_operation<
-    "ttnn::experimental::reduce_scatter_minimal_async",
-    ttnn::operations::experimental::ccl::ExecuteReduceScatterMinimalAsync>();
+constexpr auto deepseek_reduce_scatter = ttnn::register_operation<
+    "ttnn::experimental::deepseek_reduce_scatter",
+    ttnn::operations::experimental::ccl::ExecuteDeepseekReduceScatter>();
 
 }  // namespace experimental
 }  // namespace ttnn

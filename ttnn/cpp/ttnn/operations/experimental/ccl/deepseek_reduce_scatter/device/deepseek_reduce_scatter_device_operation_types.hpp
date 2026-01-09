@@ -16,10 +16,10 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
+namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
 
 // Shared struct for program artifacts - used for caching kernel handles and core info
-struct ReduceScatterProgramArtifacts {
+struct DeepseekReduceScatterProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id;
     tt::tt_metal::KernelHandle writer_kernel_id;
     std::vector<tt::tt_metal::CoreCoord> all_cores;
@@ -76,7 +76,7 @@ using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 using tensor_return_value_t = std::vector<Tensor>;
 
 // Common validation function
-void reduce_scatter_common_validates(
+void deepseek_reduce_scatter_common_validates(
     const ttnn::Tensor& input_tensor,
     ttnn::ccl::Topology topology,
     uint32_t dim,
@@ -85,4 +85,4 @@ void reduce_scatter_common_validates(
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor);
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
+}  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail
