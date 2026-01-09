@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
@@ -121,30 +123,59 @@ class DecoderBlock1DBase(DecoderBlockBase):
         log_tensor(x, "decoder_block_input", "x", {"row_idx": row_idx})
         log_tensor(position_idxs, "decoder_block_input", "position_idxs", {"row_idx": row_idx})
 
+        def x_to_torch(x: ttnn.Tensor) -> torch.Tensor:
+            return ttnn.to_torch(
+                x, mesh_composer=ttnn.ConcatMesh2dToTensor(x.device(), dims=(0, -1), mesh_shape=x.device().shape)
+            )
+
+        x_torch = x_to_torch(x)
+
+        def comp_pcc_and_assert(x_torch: torch.Tensor, x1_torch: torch.Tensor, name: str = ""):
+            passing, pcc_message = comp_pcc(x_torch, x1_torch)
+            logger.info(f"FROM {name} -> PCC: {pcc_message}")
+            assert passing, f"FROM {name} -> PCC value is lower than 0.99 for some of the outputs. Check Warnings!"
+
         # MLA norm
         mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
         log_tensor(
             mla_norm_in, "mla_norm_reshard", "mla_norm_in", {"config": cfg["mla_norm_reshard"], "row_idx": row_idx}
         )
+        ttnn.synchronize_device(x.device())
+        comp_pcc_and_assert(x_torch, x_to_torch(x), "x")
+        comp_pcc_and_assert(x_torch, x_to_torch(mla_norm_in), "mla_norm_in")
 
         mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
         log_tensor(mla_norm_out, "mla_norm", "mla_norm_out", {"row_idx": row_idx})
+        mla_norm_in_torch = x_to_torch(mla_norm_in)
+        mla_norm_out_torch = x_to_torch(mla_norm_out)
+        # comp_pcc_and_assert(mla_norm_out_torch, torch.nn.functional.rms_norm(mla_norm_in_torch), "mla_norm_out vs mla_norm_in")
+
         ttnn.deallocate(mla_norm_in)
+        ttnn.synchronize_device(x.device())
+        comp_pcc_and_assert(x_torch, x_to_torch(x), "x")
 
         # MLA
         mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
         log_tensor(
             mla_norm_out, "mla_reshard", "mla_norm_out_resharded", {"config": cfg["mla_reshard"], "row_idx": row_idx}
         )
+        ttnn.synchronize_device(x.device())
+        comp_pcc_and_assert(x_torch, x_to_torch(x), "x")
 
         mla_out = MLA1D.forward_decode(mla_norm_out, position_idxs, row_idx, cfg["mla"], rope_tensors, page_table)
         log_tensor(mla_out, "mla", "mla_out", {"row_idx": row_idx})
         ttnn.deallocate(mla_norm_out)
+        ttnn.synchronize_device(x.device())
+        comp_pcc_and_assert(x_torch, x_to_torch(x), "x")
 
         # MLA Residual
-        x_before_residual = x  # Keep reference for logging
+        # x_before_residual = x  # Keep reference for logging
         x += mla_out
         log_tensor(x, "mla_residual", "x_after_mla_residual", {"operation": "x += mla_out", "row_idx": row_idx})
+        ttnn.synchronize_device(x.device())
+        x_after_residual_torch = x_to_torch(x)
+        mla_out_torch = x_to_torch(mla_out)
+        comp_pcc_and_assert(x_torch + mla_out_torch, x_after_residual_torch, "x_after_mla_residual")
         ttnn.deallocate(mla_out)
 
         # MLP norm
@@ -152,29 +183,39 @@ class DecoderBlock1DBase(DecoderBlockBase):
         log_tensor(
             mlp_norm_in, "mlp_norm_reshard", "mlp_norm_in", {"config": cfg["mlp_norm_reshard"], "row_idx": row_idx}
         )
+        ttnn.synchronize_device(x.device())
+        comp_pcc_and_assert(x_torch, x_to_torch(x))
 
         mlp_norm_out = DistributedRMSNorm.forward_decode(mlp_norm_in, cfg["mlp_norm"])
         log_tensor(mlp_norm_out, "mlp_norm", "mlp_norm_out", {"row_idx": row_idx})
         ttnn.deallocate(mlp_norm_in)
+        ttnn.synchronize_device(x.device())
+        comp_pcc_and_assert(x_torch, x_to_torch(x))
 
         # MLP
         mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
         log_tensor(
             mlp_norm_out, "mlp_reshard", "mlp_norm_out_resharded", {"config": cfg["mlp_reshard"], "row_idx": row_idx}
         )
+        ttnn.synchronize_device(x.device())
+        comp_pcc_and_assert(x_torch, x_to_torch(x), "x")
 
         mlp_out = cls.forward_mlp_decode(mlp_norm_out, row_idx, cfg["mlp"])
         log_tensor(mlp_out, "mlp", "mlp_out", {"row_idx": row_idx})
         ttnn.deallocate(mlp_norm_out)
+        ttnn.synchronize_device(x.device())
+        comp_pcc_and_assert(x_torch, x_to_torch(x), "x")
 
         # MLP Residual
-        x += mlp_out
-        log_tensor(x, "mlp_residual", "x_after_mlp_residual", {"operation": "x += mlp_out", "row_idx": row_idx})
+        x2 = x + mlp_out  # TODO: Was in-place before
+        log_tensor(x2, "mlp_residual", "x_after_mlp_residual", {"operation": "x += mlp_out", "row_idx": row_idx})
         ttnn.deallocate(mlp_out)
+        ttnn.deallocate(x)
+        ttnn.synchronize_device(x2.device())
 
         # Log final output
-        log_tensor(x, "decoder_block_output", "final_output", {"row_idx": row_idx})
-        return x
+        log_tensor(x2, "decoder_block_output", "final_output", {"row_idx": row_idx})
+        return x2
 
     @classmethod
     @abstractmethod

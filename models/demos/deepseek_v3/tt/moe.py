@@ -180,7 +180,7 @@ class MoE(SharedStateAddOn, AbstractModule):
     def decode_model_config(
         cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=topk_fallback)
+        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=True)
 
     @classmethod
     def prefill_model_config(

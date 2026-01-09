@@ -273,22 +273,27 @@ def run_test_forward_pass_decoder2d(
     rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
 
-    # Forward pass
-    logger.info("Running TTNN forward pass")
+    iterations = 4
+    results = []
+    for i in range(iterations):
+        # Forward pass
+        logger.info(f"Running TTNN forward pass {i}")
 
-    if mode == "prefill":
-        tt_output = DecoderBlockClass.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_table)
-    else:
-        tt_output = DecoderBlockClass.forward_decode(
-            tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table
+        if mode == "prefill":
+            tt_output = DecoderBlockClass.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_table)
+        else:
+            tt_output = DecoderBlockClass.forward_decode(
+                tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table
+            )
+
+        tt_output_torch = ttnn.to_torch(
+            tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
         )
+        results.append(tt_output_torch)
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
-    )
-
-    # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
+    for i, tt_output_torch in enumerate(results):
+        logger.info(f"Checking PCC for iteration {i}")
+        assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
 
 
 @pytest.mark.parametrize(

@@ -47,9 +47,6 @@ class TensorLogger:
             tensor_name: Name/description of the tensor
             additional_info: Optional additional information to log
         """
-        if not self.enable_logging:
-            return
-
         try:
             metadata = self._extract_tensor_metadata(tensor, step_name, tensor_name, additional_info)
             self._write_log_entry(metadata)
