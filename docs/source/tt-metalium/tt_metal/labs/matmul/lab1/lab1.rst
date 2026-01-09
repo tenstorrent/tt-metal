@@ -58,17 +58,22 @@ When accessing element ``A[i][j]`` in a matrix with ``N`` columns, the memory ad
 Cache-Friendly Access Patterns
 ==============================
 
-Modern CPUs fetch data in cache lines of consecutive words, so accessing nearby addresses is much faster than scattered accesses.
-Accessing matrix elements in row-major order (left-to-right, top-to-bottom) is cache-friendly because consecutive elements in a row are already loaded in the cache.
-Conversely, accessing matrix elements column-by-column is cache-unfriendly because each access may involve a different cache line.
+Modern CPUs fetch data in cache lines of consecutive words, so accessing nearby addresses is much faster
+than scattered accesses. Accessing matrix elements in row-major order (left-to-right, top-to-bottom) is
+cache-friendly because consecutive elements in a row are already loaded in the cache.
+Conversely, accessing matrix elements column-by-column is inefficient because each access may
+trigger a cache miss by requesting a different cache line.
 
 Implications for Matrix Multiplication
 --------------------------------------
 
-In the standard matrix multiplication algorithm ``C = A * B``, where ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``, and assuming ``i``, ``j``, ``k`` loop order:
+In the standard matrix multiplication algorithm ``C = A * B``, where ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``,
+and assuming ``i``, ``j``, ``k`` loop order:
 
-* Accessing matrix ``A`` is cache-friendly because consecutive elements in memory are accessed one after another for two consecutive values of inner loop iterator ``k``.
-* Accessing matrix ``B`` is not cache-friendly because memory accesses skip a whole matrix row for two consecutive values of ``k``.
+* Accessing matrix ``A`` is cache-friendly because consecutive elements in memory are accessed
+one after another for two consecutive values of the inner loop iterator ``k``.
+* Accessing matrix ``B`` may degrade performance because memory accesses skip an entire matrix row
+for two consecutive values of ``k``.
 
 This asymmetry significantly impacts performance and motivates various optimization techniques such as loop reordering or tiling.
 
@@ -80,7 +85,7 @@ This linearity allows significant computational flexibility, such as:
 
 1. Loop Reordering: Changing the order of loops does not affect the result, but can impact performance on architectures with cache hierarchies.
 2. Loop Tiling: A subset of the resulting matrix can be calculated at a time, improving cache locality and performance.
-3. Parallelization: Different matrix regions can be computed concurrently.
+3. Parallelization: Different matrix regions can be computed simultaneously.
 
 Note that changing the operation order can affect the result because floating-point arithmetic is not associative.
 In this lab, we ignore this issue, but be aware of it when matrix values differ greatly in magnitude.
@@ -140,8 +145,10 @@ Tiled Version
 Exercise 1: Tiled Matrix Multiplication
 =======================================
 
-In this part of the lab, you will implement two versions of matrix multiplication: a straightforward triply-nested loop, and a tiled version.
+In this part of the lab, you will implement two versions of matrix multiplication:
+a straightforward triply-nested loop, and a tiled version.
 The triply-nested loop version is simply a reference implementation provided at the beginning of the lab.
+For this exercise, write standard C++ code that can be compiled and run on any general-purpose CPU.
 
 The tiled version should be implemented as follows:
 
@@ -243,9 +250,10 @@ Tile-Based Architecture
 
 The Tenstorrent architecture is a tile-based architecture.
 This means that the data is processed in tiles, which are commonly ``32x32`` blocks of data.
-Similar to vector architectures, which can perform an operation on one or more vectors of data using a single instruction,
-a Tensix core can perform matrix operations on one or more tiles in one instruction.
-For example, a Tensix core can perform a matrix multiplication on two tiles each having ``32x32`` elements and produce a ``32x32`` result tile in one instruction.
+Similar to vector architectures, which can perform an operation on one or more vectors of data efficiently,
+a Tensix core can perform matrix operations on one or more tiles efficiently.
+For example, when performing a matrix multiplication, Tensix core treats each ``32x32`` tile as a single operand
+and computes their matrix product as a ``32x32`` result tile, issuing a short sequence of hardware instructions.
 
 Memory Layout and Tiling
 ------------------------
@@ -421,18 +429,19 @@ pipelined execution across the hardware. Different kernel types are mapped to th
 
 The Tensix core consists of four major parts:
 
-1. Internal SRAM (L1) memory - Stores input/output tiles in circular buffers for fast access by the Tensix engine.
+1. Internal SRAM (L1) memory - Stores input/output tiles in circular buffers for fast access by the Tensix Engine.
    It also holds program code for all RISC-V processors within the core.
 2. Two routers - Manage data movement between internal SRAM (L1) memory, device DRAM, and other Tensix cores.
-3. Tensix engine - Hardware accelerator that efficiently performs matrix and vector computations on tiles.
-4. Five RISC-V Processors that control the Tensix engine and routers:
+3. Tensix Engine - Hardware accelerator that efficiently performs matrix and vector computations on tiles.
+4. Five RISC-V Processors that control the Tensix Engine and routers:
 
    - RISC-V 0 and RISC-V 4 - These processors control routers to exchange data between the Internal SRAM and device DRAM (or other Tensix cores).
      Either of these can be used for a reader or writer kernel.
-   - RISC-V 1 through RISC-V 3 - These processors control the Tensix engine through specialized Tensix instructions.
+   - RISC-V 1 through RISC-V 3 - These processors control the Tensix Engine through specialized Tensix instructions.
      Note that these RISC-V processors don't perform actual tile computations.
-     Instead, they serve as microcontrollers directing the operations of the Tensix engine. One RISC-V processor is responsible for issuing commands to
-     the compute engine, while the other two are responsible for transferring tile data between circular buffers in SRAM and Tensix engine registers.
+     Instead, they serve as microcontrollers directing the operations of the Tensix Engine.
+     One RISC-V processor is responsible for issuing commands to the compute engine, while the other two
+     are responsible for transferring tile data between circular buffers in SRAM and Tensix Engine registers.
      Compute kernel code defines functionality for all three of these processors.
 
 
@@ -573,44 +582,55 @@ The function can be summarized by the following pseudo-code:
        write_result_to_output_circular_buffer()
    }
 
-The kernel reads the number of tiles to process as a compile-time argument, enabling compiler optimizations such as loop unrolling.
+The kernel reads the number of tiles to process as a compile-time argument, enabling compiler optimizations such as
+loop unrolling.
 
-An important architectural detail is that the compute kernel actually runs on three different RISC-V processors within the Tensix core:
-an unpacker, a compute processor, and a packer.
-The compiler automatically generates appropriate code for each of these three processors from the same source code, relieving the programmer
-from having to write different code for each processor.
-The unpacker handles reading data from circular buffers, the compute processor performs the actual arithmetic operations using the
-Floating-Point Unit (FPU) of the Tensix engine, and the packer writes results back to circular buffers.
+An important architectural detail is that the compute kernel actually runs on three different RISC-V processors
+within the Tensix core: an unpacker (RISC-V 1 in Figure 5), a compute processor (RISC-V 2), and a packer (RISC-V 3).
+The compiler automatically generates appropriate code for each of these three processors from the same source code,
+relieving the programmer from having to write different code for each processor.
+The unpacker controls reading data from circular buffers, the compute processor issues the actual arithmetic operations
+using the Floating-Point Unit (FPU) of the Tensix Engine, and the packer controls writing results back to circular buffers.
 It is worth repeating that these RISC-V processors don't perform actual computations or packing/unpacking operations.
-They simply issue commands to the Tensix engine to perform the actual computations and packing/unpacking operations.
+They simply issue commands to the Tensix Engine to perform the actual computations and packing/unpacking operations.
 
 The compute kernel uses circular buffers ``c_0`` and ``c_1`` for the two input tensors and ``c_16`` for the output tensor.
 There are 32 circular buffers in total (0-31), and the exact indices used are up to programmer's discretion, provided they are used consistently
 (i.e. reader and writer kernels must use the corresponding indices as the compute kernel).
 
-The kernel initializes the FPU for elementwise binary operations, first calling ``binary_op_init_common``
-to set up the general binary operation infrastructure, followed by ``add_tiles_init`` to configure the FPU specifically for addition.
+The kernel initializes the Tensix Engine for elementwise binary operations, first calling ``binary_op_init_common``
+to set up the general binary operation hardware infrastructure, followed by ``add_tiles_init`` to configure the FPU
+specifically for addition.
 This initialization only needs to be done once before the main loop, since all tiles use the same operation.
 
 The main processing loop iterates over all tiles.
-For each tile, the kernel first waits for one tile to become available in each input circular buffer using blocking calls to ``cb_wait_front``.
-These blocking calls ensure that the reader kernel has finished transferring the data before the compute kernel attempts to use it.
-The kernel then acquires access to the destination register array using ``tile_regs_acquire`` and calls ``add_tiles`` to perform the elementwise addition.
-The destination register array is a special storage area in the FPU that can hold multiple tiles and serves as the temporary
-output location for FPU computations. The acquire operation also initializes all tiles in the destination register array to zero,
-which is not important for our example, but is useful for operations like matrix multiplication where results accumulate.
+For each tile, the kernel first waits for one tile to become available in each input circular buffer using
+blocking calls to ``cb_wait_front``.
+These blocking calls ensure that the compute kernel doesn't attempt to use the data before the reader kernel
+has finished transferring it.
+The compute kernel then acquires access to the destination register array using ``tile_regs_acquire``
+and calls ``add_tiles`` to perform the elementwise addition.
+The destination register array is a special storage area in the Tensix Engine that can hold multiple tiles
+and serves as the temporary output location for FPU computations. The acquire operation also
+initializes all tiles in the destination register array to zero, which is not important for
+this example program, but is useful for operations like matrix multiplication where results accumulate.
 
-After the computation completes, the kernel marks the input tiles as consumed using ``cb_pop_front`` to free space in the circular buffers,
-then releases the destination register using ``tile_regs_commit`` to signal that the compute core has finished writing, which allows the packer to read the result.
+After the computation completes, the kernel marks the input tiles as consumed using ``cb_pop_front``
+to free space in the circular buffers, then releases the destination register using ``tile_regs_commit``
+to signal that the compute core has finished writing, which allows the packer to read the result.
 
 The packer core for its part waits for the destination register to be ready using ``tile_regs_wait``,
-ensures there is space in the output circular buffer, and then copies the result from the destination register to the output circular buffer using ``pack_tile``.
-Finally, it marks the output tile as ready using ``cb_push_back`` and releases the destination register using ``tile_regs_release``.
+ensures there is space in the output circular buffer using ``cb_reserve_back``, and then copies the
+result from the destination register to the output circular buffer using ``pack_tile``.
+Finally, it marks the output tile as ready using ``cb_push_back`` and releases the destination
+register using ``tile_regs_release``.
 
-While it may seem like some of these operations are redundant (e.g. waiting on the destination register when it has seemingly just been released),
-it is important to remember that compute kernel code is executed on three different RISC-V processors.
-This synchronization mechanism using acquire, commit, wait, and release ensures that the three RISC processors coordinate properly,
-with the compute processor writing results and the packer processor reading them without conflicts.
+While it may seem like some of these operations are redundant (e.g. waiting on the destination register
+when it has seemingly just been released), it is important to remember that compute kernel code is executed
+on three different RISC-V processors. This synchronization mechanism using acquire, commit, wait,
+and release ensures that the three RISC processors coordinate properly, with the compute processor
+writing results to the intermediate destination register array, and the packer processor reading
+them from it without conflicts.
 
 
 Writer Kernel Code
@@ -635,8 +655,8 @@ This coordination between the compute and writer kernels enables pipelined execu
 Example Program Summary
 =======================
 
-It is useful to wrap up this example description by emphasizing one more time the nature of the Metalium programming model and
-division of tasks and data between host and device.
+It is useful to wrap up this example description by emphasizing one more time the nature of the
+TT-Metalium programming model and division of tasks and data between host and device.
 At a high level, all kernel code (``read_tiles.cpp``, ``write_tiles.cpp``, ``tiles_add.cpp``)
 executes on the device, and all its C++ objects are created on the device.
 Specifically:
@@ -652,13 +672,15 @@ Conversely, all code in ``lab_eltwise_binary.cpp`` executes on the host, and all
 (either in CPU registers or host DRAM). Obvious examples include vectors of data and various local variables.
 However, some host-side objects contain information about data and code on the device. Specifically:
 
-* ``Tensor`` objects are created on the host and contain information about the tensor shape and layout, but actual tensor data is stored in device DRAM.
+* ``Tensor`` objects are created on the host and contain information about the tensor shape and layout,
+  but actual tensor data is stored in device DRAM.
 
-* ``TensorAccessorArgs`` objects exist on both host and device, but they are different underlying types, defined in different headers
-  (``tt_metal/api/tt-metalium/tensor_accessor_args.hpp`` for host-side and ``tt_metal/hw/inc/api/tensor/tensor_accessor_args.h`` for device-side).
+* ``TensorAccessorArgs`` objects exist on both host and device, but they are different underlying types,
+  defined in different headers (``tt_metal/api/tt-metalium/tensor_accessor_args.hpp`` for host-side
+  and ``tt_metal/hw/inc/api/tensor/tensor_accessor_args.h`` for device-side).
 
-* Integers ``src0_addr``, ``src1_addr``, and ``dst_addr`` in the ``eltwise_add_tensix()`` function are host-side integers, but they contain addresses
-  of the input and output tensor data in device DRAM.
+* Integers ``src0_addr``, ``src1_addr``, and ``dst_addr`` in the ``eltwise_add_tensix()`` function
+  are host-side integers, but they contain addresses of the input and output tensor data in device DRAM.
 
 * Kernel code and their arguments are JIT-compiled on the host, but then transferred to the device for execution.
 
@@ -1103,7 +1125,7 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    so your code only needs to generate indices in the right order.
 
 #. Update the compute kernel to perform matrix multiplication rather than elementwise addition.
-   To initialize the Tensix engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
+   To initialize the Tensix Engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
    Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
    applicable to elementwise operations, not to matrix multiplication).
    To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.

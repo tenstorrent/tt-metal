@@ -26,7 +26,7 @@ void MAIN {
     // We will instruct FPU to store the result in the destination register array at index 0.
     constexpr uint32_t dst_reg_idx = 0;
 
-    // Initialize the FPU to perform an elementwise binary operation using circular buffers c_in0, c_in1 and c_out0.
+    // Initialize the Tensix Engine to perform an elementwise binary operation using circular buffers c_in0, c_in1 and c_out0.
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     // Initialize FPU for elementwise add operation specifically. This function is called any time we want to switch
     // operation to a different elementwise operation. Since we are only adding tiles, this function is called
