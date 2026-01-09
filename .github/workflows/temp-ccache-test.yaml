@@ -91,6 +91,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
