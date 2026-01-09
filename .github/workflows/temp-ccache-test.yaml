@@ -96,6 +96,11 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Fix pip cache permissions
+        run: |
+          mkdir -p /github/home/.cache/pip
+          chmod -R 777 /github/home/.cache
+
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
