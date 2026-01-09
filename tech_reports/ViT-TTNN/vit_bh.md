@@ -1045,7 +1045,7 @@ Input: hidden_states [b, seqL, dim]
     │
     ▼
 ┌─────────────────────────────────────┐
-│  Move to DRAM (L1 pressure relief)  │
+│  Move to DRAM                       │
 └─────────────────────────────────────┘
     │
     ▼
@@ -1105,7 +1105,7 @@ Unlike the standard 224×224 implementation which uses `ttnn.transformer.split_q
 ```
 
 **Key differences from `split_query_key_value_and_split_heads`:**
-- Outputs directly to DRAM, avoiding L1 pressure
+- Outputs directly to DRAM
 - `transpose_k_heads=False` because SDPA handles the K transpose internally
 - Supports grouped-query attention (GQA) via `num_kv_heads` parameter (not used in ViT)
 
