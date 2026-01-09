@@ -85,7 +85,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         "Output channels must be divisible by groups. Got output channels {} and groups {}",
         args.output_channels,
         args.groups);
-    // TT_FATAL(args.groups == 1, "Groups must be 1. got {}", args.groups);
     // assert padding on T is zero
     TT_FATAL(
         args.padding[0] == 0,
