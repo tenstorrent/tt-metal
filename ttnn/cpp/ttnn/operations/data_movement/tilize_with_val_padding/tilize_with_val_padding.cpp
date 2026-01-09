@@ -78,7 +78,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
                 output_dtype.value_or(input_tensor.dtype()),
                 PageConfig(Layout::TILE),
                 memory_config.value_or(input_tensor.memory_config())));
-        return allocate_tensor_on_device(spec, input_tensor.device());
+        return create_device_tensor(spec, input_tensor.device());
     }
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -128,7 +128,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
                 output_dtype.value_or(input_tensor.dtype()),
                 PageConfig(Layout::TILE),
                 memory_config.value_or(input_tensor.memory_config())));
-        return allocate_tensor_on_device(spec, input_tensor.device());
+        return create_device_tensor(spec, input_tensor.device());
     }
 
     return invoke(
@@ -165,7 +165,7 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
                 output_dtype.value_or(input_tensor.dtype()),
                 PageConfig(Layout::TILE),
                 memory_config.value_or(input_tensor.memory_config())));
-        return allocate_tensor_on_device(spec, input_tensor.device());
+        return create_device_tensor(spec, input_tensor.device());
     }
 
     PadValue pad_value;

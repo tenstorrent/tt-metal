@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bcast_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::data_movement::bcast {
 
@@ -264,9 +266,10 @@ BcastDeviceOperation::create_op_performance_model(
         {input_tensor0, input_tensor1}, tensor_return_value, ideal_dev_clock_cycles);
     return result;
 }
+}  // namespace ttnn::operations::data_movement::bcast
 
-std::tuple<BcastDeviceOperation::operation_attributes_t, BcastDeviceOperation::tensor_args_t>
-BcastDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::bcast::BcastDeviceOperation::tensor_return_value_t bcast(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     ttnn::BcastOpMath bcast_op,
@@ -274,11 +277,11 @@ BcastDeviceOperation::invoke(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool in_place,
     const std::optional<Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::bcast::BcastDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .math_op = bcast_op, .dim = bcast_dim, .output_mem_config = output_mem_config, .in_place = in_place},
-        tensor_args_t{
-            .input_a = input_tensor_a, .input_b = input_tensor_b, .preallocated_output = preallocated_output}};
+        OperationType::tensor_args_t{
+            .input_a = input_tensor_a, .input_b = input_tensor_b, .preallocated_output = preallocated_output});
 }
-
-}  // namespace ttnn::operations::data_movement::bcast
+}  // namespace ttnn::prim

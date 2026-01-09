@@ -35,14 +35,12 @@ project(
         CXX
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
-message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
-
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-# FIXME: Why are we setting these ourselves?
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG -fno-omit-frame-pointer")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG -fno-omit-frame-pointer")
 
-# Defining build types is the pervue of the top-level project
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
+
+# Defining build types is the purview of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
     include(sanitizers)
 endif()
@@ -98,8 +96,7 @@ endif()
 include(compilers)
 CHECK_COMPILERS()
 
-# TODO(afuller): Re-enable this after we sort out compatibility with old tools.
-# include(linking)
+include(linking)
 
 # We're not currently using C++20 modules, so don't bother scanning for them
 set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
@@ -167,6 +164,7 @@ target_link_libraries(
 add_compile_options(
     "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC
+    -pipe # use pipes instead of tmp files
     -fvisibility-inlines-hidden
     -Wall
     -Werror

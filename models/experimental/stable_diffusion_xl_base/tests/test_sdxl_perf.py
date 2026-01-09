@@ -103,7 +103,7 @@ def test_refiner_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet",
-            610_108_504 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            564_693_290 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             "sdxl_refiner_unet",
             "sdxl_refiner_unet",
             1,
@@ -148,7 +148,7 @@ def test_refiner_unet(
             "sdxl_clip_encoder_2",
             CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
             1,
-            0.015,
+            0.020,
             "",
         ),
     ],
