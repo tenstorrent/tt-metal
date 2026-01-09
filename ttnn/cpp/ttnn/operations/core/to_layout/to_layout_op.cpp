@@ -217,6 +217,20 @@ Tensor to_layout_impl(
                 } else {
                     pad_value_variant = (uint32_t)0;
                 }
+
+                // 1. Bring tensor to host (forces sync)
+                auto host_tensor = tt::tt_metal::tensor_impl::to_host(tensor);
+
+                // 2. Extract data
+                auto data = host_tensor.to_vector<float>();
+
+                std::cout << tensor.dtype() << std::endl;
+
+                // 3. Print first element
+                if (!data.empty()) {
+                    std::cout << "data[" << "0" << "] = " << data[0] << std::endl;
+                }
+
                 tensor = ttnn::tilize_with_val_padding(
                     tensor,
                     Shape(padded_output_shape),
@@ -225,18 +239,46 @@ Tensor to_layout_impl(
                     dtype,
                     use_multicore_tilize,
                     sub_core_grids);
+
+                // 1. Bring tensor to host (forces sync)
+                host_tensor = tt::tt_metal::tensor_impl::to_host(tensor);
+
+                // 2. Extract data
+                data = host_tensor.to_vector<float>();
+
+                std::cout << tensor.dtype() << std::endl;
+
+                // 3. Print first element
+                if (!data.empty()) {
+                    std::cout << "data[" << "0" << "] = " << data[0] << std::endl;
+                }
             }
             if (original_rank == 1) {
-                return ttnn::reshape(
+                tensor = ttnn::reshape(
                     tensor,
                     original_shape,
                     std::nullopt /*Memory Config*/,
                     std::nullopt /*pad value*/,
                     TileReshapeMapMode::CACHE,
                     sub_core_grids);
+
+                // 1. Bring tensor to host (forces sync)
+                auto host_tensor = tt::tt_metal::tensor_impl::to_host(tensor);
+
+                // 2. Extract data
+                auto data = host_tensor.to_vector<float>();
+
+                std::cout << tensor.dtype() << std::endl;
+
+                // 3. Print first element
+                if (!data.empty()) {
+                    std::cout << "data[" << "0" << "] = " << data[0] << std::endl;
+                }
+
+                return tensor;
             }
 
-            return ttnn::reshape(
+            tensor = ttnn::reshape(
                 tensor,
                 output_shape,
                 padded_output_shape,
@@ -244,6 +286,21 @@ Tensor to_layout_impl(
                 std::nullopt, /*Pad Value*/
                 TileReshapeMapMode::CACHE,
                 sub_core_grids);
+
+            // 1. Bring tensor to host (forces sync)
+            auto host_tensor = tt::tt_metal::tensor_impl::to_host(tensor);
+
+            // 2. Extract data
+            auto data = host_tensor.to_vector<float>();
+
+            std::cout << tensor.dtype() << std::endl;
+
+            // 3. Print first element
+            if (!data.empty()) {
+                std::cout << "data[" << "0" << "] = " << data[0] << std::endl;
+            }
+
+            return tensor;
         }
         TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
     }

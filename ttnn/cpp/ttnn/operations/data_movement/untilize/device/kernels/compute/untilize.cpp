@@ -32,7 +32,7 @@ void MAIN {
 
         untilize_block(src_cb_id, per_core_block_tile_cnt, out_cb_id);
 
-        DPRINT_UNPACK({ DPRINT << "out_cb is" << TSLICE(out_cb_id, 0, SliceRange::h0_w0_32()) << ENDL(); });
+        DPRINT_PACK({ DPRINT << "out_cb is" << TSLICE(out_cb_id, 0, SliceRange::h0_w0_32()) << ENDL(); });
 
         cb_push_back(out_cb_id, per_core_block_tile_cnt);
         cb_pop_front(src_cb_id, per_core_block_tile_cnt);
