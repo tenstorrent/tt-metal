@@ -205,13 +205,6 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         tt::tt_metal::StorageType::DEVICE, input_memory_config, dram_slice_config_);
     Tensor mirrored_weight_tensor = transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel);
     if (path == ConvT2dExecutionPath::L1) {
-        // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
-        // "full_input" dimensions (after halo/padding expansion), not the original input dimensions.
-        // Note: prepare_conv_transpose2d_weights is called from Python and doesn't receive output_padding,
-        // so we assume output_padding = 0 for weight preparation (the actual conv op handles output_padding)
-        auto dims = compute_conv_transpose2d_dimensions(
-            input_height, input_width, kernel_size, stride, padding, {0, 0}, dilation);
-
         return prepare_conv_weights(
             mirrored_weight_tensor,
             input_memory_config,
@@ -220,8 +213,8 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             in_channels,
             out_channels,
             batch_size,
-            dims.full_input_height,  // Use full_input dimensions, not original
-            dims.full_input_width,   // Use full_input dimensions, not original
+            input_height,
+            input_width,
             kernel_size,
             ConvTranspose2dDimensions::CONV2D_STRIDE,   // stride is always 1x1 for conv2d micro-op
             ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
@@ -320,18 +313,10 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     } else {
         output_width = min_output_slice_size;
     }
-    auto [input_slice_start, input_slice_end] =
-        convt2d_slice_attr->get_input_slice({0, 0}, {output_height, output_width});
     input_memory_config = convt2d_slice_attr->get_input_memory_config(
         {0, 0},                        // Slice Start
         {output_height, output_width}  // Slice End
     );
-    auto [input_height_slice_start, input_width_slice_start] = input_slice_start;
-    auto [input_height_slice_end, input_width_slice_end] = input_slice_end;
-    auto input_height_sliced = input_height_slice_end - input_height_slice_start;
-    auto input_width_sliced = input_width_slice_end - input_width_slice_start;
-    auto dims = compute_conv_transpose2d_dimensions(
-        input_height_sliced, input_width_sliced, kernel_size, stride, padding, {0, 0}, dilation);
 
     return prepare_conv_weights(
         mirrored_weight_tensor,
@@ -341,8 +326,8 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         in_channels,
         out_channels,
         batch_size,
-        dims.full_input_height,  // Use full_input dimensions, not original
-        dims.full_input_width,   // Use full_input dimensions, not original
+        input_height,
+        input_width,
         kernel_size,
         ConvTranspose2dDimensions::CONV2D_STRIDE,   // stride is always 1x1 for conv2d micro-op
         ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
@@ -377,12 +362,6 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     const std::optional<const conv2d::Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_) {
-    // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
-    // full_input dimensions. Calculate these dimensions for bias preparation.
-    // Note: bias preparation doesn't receive output_padding, so we assume output_padding = 0
-    auto dims =
-        compute_conv_transpose2d_dimensions(input_height, input_width, kernel_size, stride, padding, {0, 0}, dilation);
-
     return prepare_conv_bias(
         bias_tensor,
         input_memory_config,
@@ -390,8 +369,8 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
         in_channels,
         out_channels,
         batch_size,
-        dims.full_input_height,  // Use full_input dimensions
-        dims.full_input_width,   // Use full_input dimensions
+        input_height,
+        input_width,
         kernel_size,
         ConvTranspose2dDimensions::CONV2D_STRIDE,   // stride is always 1x1 for conv2d micro-op
         ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
