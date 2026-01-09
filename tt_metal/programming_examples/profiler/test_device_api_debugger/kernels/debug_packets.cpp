@@ -4,6 +4,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/endpoints.h"
 
 void kernel_main() {
     riscv_wait(START_DELAY);
