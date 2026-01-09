@@ -504,4 +504,6 @@ def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:
         return ttnn.MeshShape(1, 2)
     elif system_name == "N150":
         return ttnn.MeshShape(1, 1)
-    raise ValueError(f"Unsupported system name: {system_name}. Supported values are T3K, DUAL, QUAD, and TG.")
+    raise ValueError(
+        f"Unsupported system name: {system_name}. Supported values are TG, DUAL, QUAD, T3K, N300, and N150."
+    )
