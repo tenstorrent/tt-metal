@@ -399,8 +399,8 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
         uint32_t buf_size = num_pages * config.page_size;
         vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
 
-        for (uint32_t i = 0; i < src.size(); i++) {
-            src[i] = rand();
+        for (unsigned int& val : src) {
+            val = rand();
         }
 
         BufferType buftype = BufferType::DRAM;
@@ -624,11 +624,7 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(
 
             buffers.push_back(distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get()));
             srcs.push_back(generate_arange_vector(buffers[i]->size()));
-            if (use_void_star_api) {
-                distributed::WriteShard(cqs[i], buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
-            } else {
-                distributed::WriteShard(cqs[i], buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
-            }
+            distributed::WriteShard(cqs[i], buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
         }
 
         for (uint i = 0; i < cqs.size(); i++) {

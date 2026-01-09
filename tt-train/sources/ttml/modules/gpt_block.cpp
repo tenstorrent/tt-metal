@@ -52,7 +52,6 @@ autograd::TensorPtr GPTBlock::operator()(const autograd::TensorPtr& input, const
     x = (*ln2)(x);
     x = (*mlp)(x);
     x = ops::add(x, residual);
-    ttml::autograd::ctx().get_profiler().read_results(&ttml::autograd::ctx().get_device(), "gpt_block");
 
     return x;
 }

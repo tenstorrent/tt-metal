@@ -239,9 +239,8 @@ NlpCreateHeadsBoltzDeviceOperation::program_factory_t NlpCreateHeadsBoltzDeviceO
     const auto& input_tensor = tensor_args.input_tensor_q;
     if (input_tensor.is_sharded()) {
         return Sharded{};
-    } else {
-        return Interleaved{};
     }
+    return Interleaved{};
 }
 
 }  // namespace ttnn::operations::experimental::transformer
