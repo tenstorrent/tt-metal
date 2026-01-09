@@ -193,6 +193,7 @@ protected:
     CoreCoord core_with_max_runtime_args_;   // For validation
     std::map<std::string, std::string>
         defines_;  // preprocessor defines. this is to be able to generate generic instances.
+    const bool watcher_assert_enabled_;
     std::set<CoreCoord> logical_cores_;
 
     // Build key -> binaries (moved from KernelImpl)

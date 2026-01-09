@@ -127,24 +127,30 @@ DispatchWriteOffsets get_dispatch_write_offset(HalProgrammableCoreType core_type
 
 };  // namespace
 
+inline bool is_watcher_assert_enabled() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+           !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
+}
+
 uint32_t configure_rta_offsets_for_kernel_groups(
     uint32_t /*programmable_core_type_index*/,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
-    uint32_t base_offset) {
+    uint32_t base_offset,
+    bool watcher_assert_enabled) {
     const auto& hal = MetalContext::instance().hal();
     // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
     // whereas the RTA allocation is separate for DM0/DM1/COMPUTE.
     std::vector<uint32_t> max_rtas(DISPATCH_CLASS_MAX);
     uint32_t max_unique_rta_size = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    const bool watcher_assert_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-                                        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
 
     for (auto& kg : kernel_groups) {
+        // Initialize RTA/CRTA offsets to sentinel when watcher enabled. Launch message memory
+        // may contain stale data from previous dispatches. Can't use 0 as "no args" since 0 is
+        // a valid L1 offset. Sentinel (0xBEEF) distinguishes "no args" from "args at offset 0"
         if (watcher_assert_enabled) {
             auto rta_offsets = kg->launch_msg.view().kernel_config().rta_offset();
-            // Initialize all RTA and CRTA offsets to sentinel (no args)
             for (size_t i = 0; i < rta_offsets.size(); i++) {
                 kg->launch_msg.view().kernel_config().rta_offset()[i].rta_offset() = RTA_CRTA_NO_ARGS_SENTINEL;
                 kg->launch_msg.view().kernel_config().rta_offset()[i].crta_offset() = RTA_CRTA_NO_ARGS_SENTINEL;
@@ -203,13 +209,11 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t crta_base_offset,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
+    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes,
+    bool watcher_assert_enabled) {
     const auto& hal = MetalContext::instance().hal();
     // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
     // whereas the CRTA allocation is separate for DM0/DM1/COMPUTE.
-    // TODO: add comments
-    const bool watcher_assert_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-                                        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
     std::vector<uint32_t> max_crtas(DISPATCH_CLASS_MAX, 0);
 
     // Find the max # common RTAs across all kernels for each dispatch class
@@ -273,11 +277,18 @@ uint32_t finalize_rt_args(
     uint32_t& rta_offset,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
+    const bool watcher_assert_enabled = is_watcher_assert_enabled();
     uint32_t max_unique_rta_size = program_dispatch::configure_rta_offsets_for_kernel_groups(
-        programmable_core_type_index, kernels, kernel_groups, base_offset);
+        programmable_core_type_index, kernels, kernel_groups, base_offset, watcher_assert_enabled);
     uint32_t crta_base_offset = base_offset + max_unique_rta_size;
     uint32_t total_crta_size = program_dispatch::configure_crta_offsets_for_kernel_groups(
-        programmable_core_type_index, kernels, kernel_groups, crta_base_offset, crta_offsets, crta_sizes);
+        programmable_core_type_index,
+        kernels,
+        kernel_groups,
+        crta_base_offset,
+        crta_offsets,
+        crta_sizes,
+        watcher_assert_enabled);
 
     uint32_t offset = max_unique_rta_size + total_crta_size;
 
@@ -525,7 +536,7 @@ void generate_runtime_args_cmds(
             std::uniform_int_distribution<int> dist(0, 65535);
             for (uint32_t count = 0; count < total_words; count++) {
                 uint16_t rnd = static_cast<uint16_t>(dist(gen));
-                const uint32_t known_garbage = 0xBEEF0000 | rnd;
+                const uint32_t known_garbage = WATCHER_RTA_UNSET_PATTERN | rnd;
                 command_start_ptr[count] = known_garbage;
             }
         }
@@ -601,7 +612,8 @@ BatchedTransfers assemble_runtime_args_commands(
     ProgramCommandSequence& program_command_sequence,
     ProgramImpl& program,
     IDevice* device,
-    const CommandConstants& constants) {
+    const CommandConstants& constants,
+    bool watcher_assert_enabled) {
     BatchedTransfers transfers = {};
     using RtaDataPair =
         std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>;
@@ -728,9 +740,6 @@ BatchedTransfers assemble_runtime_args_commands(
     }
 
     program_command_sequence.runtime_args_command_sequences.reserve(command_count);
-    // If watcher assert is enabled, use the payload with CRTA count as header in the payload
-    const bool watcher_assert_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-                                        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
 
     if (use_kernel_group_crta_multicast) {
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -747,6 +756,7 @@ BatchedTransfers assemble_runtime_args_commands(
                      extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
                     auto noc_xy_addr = device->get_noc_multicast_encoding(
                         constants.noc_index, std::get<CoreRange>(transfer_info.cores));
+                    // Use watcher-aware accessor which includes count word when watcher enabled
                     auto& crta_payload = watcher_assert_enabled
                                              ? kernel->get_watcher_common_runtime_args()  // [count | args...]
                                              : kernel->common_runtime_args();
@@ -792,6 +802,7 @@ BatchedTransfers assemble_runtime_args_commands(
                                 auto kernel = program.get_kernel(device_local_kernel_handle);
                                 if (!kernel->cores_with_runtime_args().empty()) {
                                     auto dispatch_class = kernel->dispatch_class();
+                                    // Use watcher-aware accessor which includes count word when watcher enabled
                                     auto& runtime_args_data = watcher_assert_enabled
                                                                   ? kernel->get_watcher_runtime_args(core_coord)
                                                                   : kernel->runtime_args(core_coord);
@@ -861,15 +872,10 @@ BatchedTransfers assemble_runtime_args_commands(
                     if (kernel->dispatch_class() != dispatch_class) {
                         continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                     }
-
-                    // TODO: add comments
-                    const bool watcher_assert_enabled =
-                        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-                        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
-                    auto& common_rt_args =
-                        watcher_assert_enabled
-                            ? kernel->get_watcher_common_runtime_args()  // watcher only: [arg count, args0, arg1 ...]
-                            : kernel->common_runtime_args();
+                    // Use watcher-aware accessor which includes count word when watcher enabled
+                    auto& common_rt_args = watcher_assert_enabled
+                                               ? kernel->get_watcher_common_runtime_args()  // [count | args...]
+                                               : kernel->common_runtime_args();
                     if (common_rt_args.empty()) {
                         continue;
                     }
@@ -1815,8 +1821,9 @@ void assemble_device_commands(
     constants.max_prefetch_command_size =
         MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).max_prefetch_command_size();
     constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
+    const bool watcher_assert_enabled = is_watcher_assert_enabled();
     BatchedTransfers batched_transfers =
-        assemble_runtime_args_commands(program_command_sequence, program, device, constants);
+        assemble_runtime_args_commands(program_command_sequence, program, device, constants, watcher_assert_enabled);
 
     // Assemble config buffer
     DeviceCommandCalculator program_config_buffer_calculator;

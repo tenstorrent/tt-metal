@@ -909,9 +909,10 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                         auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                         for (auto kernel_id : kg->kernel_ids) {
                             const auto& kernel = program.impl().get_kernel(kernel_id);
-                            const auto& rt_args = watcher_assert_enabled
-                                                      ? kernel->get_watcher_runtime_args(logical_core)
-                                                      : kernel->runtime_args(logical_core);
+                            const auto& rt_args =
+                                watcher_assert_enabled
+                                    ? kernel->get_watcher_runtime_args(logical_core)  // [count | args...]
+                                    : kernel->runtime_args(logical_core);
 
                             // RTA/CRTA offsets are the same for all binaries of the kernel, pick any binary.
                             uint32_t processor_index = hal.get_processor_index(
@@ -936,10 +937,8 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                             }
 
                             const auto& common_rt_args =
-                                watcher_assert_enabled
-                                    ? kernel->get_watcher_common_runtime_args()  // watcher only: [arg count, args0,
-                                                                                 // arg1 ...]
-                                    : kernel->common_runtime_args();
+                                watcher_assert_enabled ? kernel->get_watcher_common_runtime_args()  // [count | args...]
+                                                       : kernel->common_runtime_args();
                             if (!common_rt_args.empty()) {
                                 auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset();
                                 log_trace(

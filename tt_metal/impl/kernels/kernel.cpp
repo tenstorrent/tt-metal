@@ -114,7 +114,10 @@ Kernel::Kernel(
     named_compile_time_args_(named_compile_args),
 
     core_with_max_runtime_args_({0, 0}),
-    defines_(defines) {
+    defines_(defines),
+    watcher_assert_enabled_(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()) {
     this->register_kernel_with_watcher();
 
     size_t max_x = 0, max_y = 0;
@@ -392,9 +395,7 @@ std::vector<uint32_t>& Kernel::get_watcher_runtime_args(const CoreCoord& logical
         "Cannot get runtime args for kernel {} that is not placed on core {}",
         this->name(),
         logical_core.str());
-    if ((!tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() ||
-         tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()) ||
-        core_to_runtime_args_[logical_core.x][logical_core.y].empty()) {
+    if (!watcher_assert_enabled_ || core_to_runtime_args_[logical_core.x][logical_core.y].empty()) {
         return core_to_runtime_args_[logical_core.x][logical_core.y];
     }
 
@@ -430,9 +431,7 @@ std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runti
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
 std::vector<uint32_t>& Kernel::get_watcher_common_runtime_args() {
-    if ((!tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() ||
-         tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()) ||
-        common_runtime_args_.empty()) {
+    if (!watcher_assert_enabled_ || common_runtime_args_.empty()) {
         return common_runtime_args_;
     }
 
