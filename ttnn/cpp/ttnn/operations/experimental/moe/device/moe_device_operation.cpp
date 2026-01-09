@@ -21,17 +21,15 @@ void MoEDeviceOperation::validate_on_program_cache_miss(
 
 MoEDeviceOperation::spec_return_value_t MoEDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    return TensorSpec(
-        input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), input_tensor.memory_config()));
+    // Use the output tensor's spec since it's passed in with the correct sharded memory config
+    const auto& output_tensor = tensor_args.output_tensor;
+    return output_tensor.tensor_spec();
 }
 
 MoEDeviceOperation::tensor_return_value_t MoEDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
+    // Return the preallocated output tensor (already sharded with correct memory config)
+    return tensor_args.output_tensor;
 }
 
 std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tensor_args_t> MoEDeviceOperation::invoke(
@@ -39,9 +37,11 @@ std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tenso
     const Tensor& w0_tensor,
     const Tensor& w1_tensor,
     const Tensor& w2_tensor,
-    const Tensor& output_tensor) {
+    const Tensor& output_tensor,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en) {
     return {
-        operation_attributes_t{},
+        operation_attributes_t{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en},
         tensor_args_t{
             .input_tensor = input_tensor,
             .w0_tensor = w0_tensor,
