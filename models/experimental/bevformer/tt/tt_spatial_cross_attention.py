@@ -147,6 +147,9 @@ class TTSpatialCrossAttention:
                 query_pos = ttnn.from_torch(query_pos, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             query = ttnn.add(query, query_pos)
 
+        if use_signpost:
+            signpost(header="SCA Tensor Conversion Complete")
+
         bs, num_query, _ = query.shape
         # Extract number of depth levels for 3D point sampling
         # Each BEV query samples points at multiple Z-coordinates (depth levels) in 3D space
@@ -173,6 +176,12 @@ class TTSpatialCrossAttention:
             # No valid points, return original query
             logger.warning("No valid points found in SCA, returning residual")
             return inp_residual
+
+        if use_signpost:
+            signpost(header="SCA Valid Query Detection Complete")
+
+        if use_signpost:
+            signpost(header="SCA Rebatching Start")
 
         # Create rebatched tensors
         queries_rebatch = ttnn.zeros(
@@ -214,6 +223,9 @@ class TTSpatialCrossAttention:
                         ref_rebatch_torch, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
                     )
 
+        if use_signpost:
+            signpost(header="SCA Rebatching Complete")
+
         slots = ttnn.zeros_like(query)
 
         num_cams, L, bs_key, embed_dims_key = key.shape
@@ -233,6 +245,9 @@ class TTSpatialCrossAttention:
             reference_points_rebatch, (bs * self.num_cams, max_len, num_depth_levels, 2)
         )
 
+        if use_signpost:
+            signpost(header="SCA Calling Deformable Attention")
+
         queries_output = self.deformable_attention(
             query=queries_batched,
             key=key_reshaped,
@@ -247,6 +262,12 @@ class TTSpatialCrossAttention:
             queries_output = ttnn.from_torch(
                 queries_output, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
+
+        if use_signpost:
+            signpost(header="SCA Deformable Attention Complete")
+
+        if use_signpost:
+            signpost(header="SCA Feature Aggregation Start")
 
         # Reshape output back to [bs, num_cams, max_len, embed_dims]
         queries_output = ttnn.reshape(queries_output, (bs, self.num_cams, max_len, self.embed_dims))
@@ -266,6 +287,9 @@ class TTSpatialCrossAttention:
 
         slots = ttnn.from_torch(slots_torch, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
+        if use_signpost:
+            signpost(header="SCA Feature Aggregation Complete")
+
         # Count valid queries per camera
         count = bev_mask_torch.sum(-1) > 0  # [num_cams, B, num_query]
         count = count.permute(1, 2, 0).sum(-1)  # [B, num_query]
@@ -281,6 +305,9 @@ class TTSpatialCrossAttention:
         if hasattr(self.params, "output_proj") and self.params.output_proj is not None:
             slots = ttnn.to_layout(slots, ttnn.TILE_LAYOUT)
             slots = ttnn.linear(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
+
+        if use_signpost:
+            signpost(header="SCA Adding Residual")
 
         # Residual connection
         output = ttnn.add(slots, inp_residual)

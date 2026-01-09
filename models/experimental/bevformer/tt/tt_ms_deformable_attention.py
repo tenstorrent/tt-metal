@@ -187,7 +187,6 @@ class TTMSDeformableAttention:
             identity = query
 
         # Add query positional encoding
-        breakpoint()
         if query_pos is not None:
             if isinstance(query_pos, torch.Tensor):
                 query_pos = ttnn.from_torch(query_pos, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
@@ -195,6 +194,9 @@ class TTMSDeformableAttention:
 
         if use_signpost:
             signpost(header="TT MS Deformable Attn Module Start")
+
+        if use_signpost:
+            signpost(header="MSDA Tensor Conversion Complete")
 
         # Handle batch_first format
         if not self.batch_first:
@@ -214,6 +216,9 @@ class TTMSDeformableAttention:
         total_keys = spatial_shapes.prod(dim=1).sum()
         assert total_keys == num_keys, f"Inconsistent keys: {total_keys} != {num_keys}"
 
+        if use_signpost:
+            signpost(header="MSDA Value Projection Start")
+
         # Project value and reshape to multi-head format
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
         value = ttnn.linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
@@ -226,6 +231,9 @@ class TTMSDeformableAttention:
 
         value = ttnn.reshape(value, (bs, num_keys, self.num_heads, self.head_dim))
 
+        if use_signpost:
+            signpost(header="MSDA Sampling Offset Generation")
+
         # Generate sampling offsets
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
         sampling_offsets = ttnn.linear(
@@ -234,6 +242,9 @@ class TTMSDeformableAttention:
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs * num_queries * self.num_heads, self.num_levels, self.num_points, 2)
         )
+
+        if use_signpost:
+            signpost(header="MSDA Attention Weight Generation")
 
         # Generate attention weights
         attention_weights = ttnn.linear(
@@ -247,6 +258,9 @@ class TTMSDeformableAttention:
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_queries, self.num_heads, self.num_levels, self.num_points)
         )
+
+        if use_signpost:
+            signpost(header="MSDA Sampling Location Calculation")
 
         # Handle different reference point formats
         if reference_points.shape[-1] == 2:
@@ -298,10 +312,16 @@ class TTMSDeformableAttention:
             device=self.device,
         )
 
+        if use_signpost:
+            signpost(header="MSDA Core Attention Complete")
+
         # Apply output projection
         if hasattr(self.params, "output_proj"):
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
             output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
+
+        if use_signpost:
+            signpost(header="MSDA Adding Residual")
 
         # Add residual connection
         output = ttnn.add(output, identity)

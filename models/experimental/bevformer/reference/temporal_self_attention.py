@@ -117,7 +117,7 @@ class TemporalSelfAttention(nn.Module):
         if value is None:
             # For temporal self-attention, just use query as value (no temporal information)
             # This is a simplified version that avoids temporal complexity for now
-            value = query
+            value = query.clone()
 
         if identity is None:
             identity = query
