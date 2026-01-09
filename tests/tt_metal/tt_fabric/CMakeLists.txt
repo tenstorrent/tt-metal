@@ -245,3 +245,40 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+
+# ---- Test: bandwidth telemetry validation ----
+add_executable(
+    test_bandwidth_telemetry_validation
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_bandwidth_telemetry_validation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/run_unicast_once.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/common/perf_helpers.cpp
+)
+
+target_link_libraries(
+    test_bandwidth_telemetry_validation
+    PRIVATE
+        tt_metal
+        gtest
+        test_common_libs
+)
+
+add_dependencies(test_bandwidth_telemetry_validation tt_metal)
+
+target_include_directories(
+    test_bandwidth_telemetry_validation
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+)
+
+set_target_properties(
+    test_bandwidth_telemetry_validation
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
