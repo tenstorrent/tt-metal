@@ -726,6 +726,23 @@ struct LowLatencyRoutingFieldsT {
         return result;
     }
 
+    /**
+     * Swap two volatile routing field instances.
+     * Used in kernels that alternate packet headers for load balancing (e.g., bidirectional fabric writes).
+     */
+    static void swap_volatile(
+        volatile LowLatencyRoutingFieldsT<ExtensionWords>* a, volatile LowLatencyRoutingFieldsT<ExtensionWords>* b) {
+        uint32_t temp_value = a->value;
+        a->value = b->value;
+        b->value = temp_value;
+
+        for (uint32_t i = 0; i < ExtensionWords; i++) {
+            uint32_t temp_buf = a->route_buffer[i];
+            a->route_buffer[i] = b->route_buffer[i];
+            b->route_buffer[i] = temp_buf;
+        }
+    }
+
 } __attribute__((packed));
 
 // Partial specialization for 16-hop mode
@@ -750,6 +767,16 @@ struct LowLatencyRoutingFieldsT<0> {
         LowLatencyRoutingFieldsT<0> result;
         result.value = buffer[0];
         return result;
+    }
+
+    /**
+     * Swap two volatile routing field instances.
+     * Used in kernels that alternate packet headers for load balancing (e.g., bidirectional fabric writes).
+     */
+    static void swap_volatile(volatile LowLatencyRoutingFieldsT<0>* a, volatile LowLatencyRoutingFieldsT<0>* b) {
+        uint32_t temp = a->value;
+        a->value = b->value;
+        b->value = temp;
     }
 } __attribute__((packed));
 
