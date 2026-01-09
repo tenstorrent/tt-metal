@@ -7,7 +7,6 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "common.cpp"
-#include "api/debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {

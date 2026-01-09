@@ -14,7 +14,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
-#include <iostream>
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -24,7 +24,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
-    std::cout << "AAAAAAAAAc creating program" << std::endl;
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
@@ -87,10 +86,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         uint32_t num_cores = grid.num_cores();
         num_shards_per_core = total_shards / num_cores;
         extra_shards = total_shards % num_cores;
-        std::cout << "BBBBB num_shards_per_core: " << num_shards_per_core << std::endl;
-        std::cout << "BBBBB extra_shards: " << extra_shards << std::endl;
-        std::cout << "BBBBB num_cores: " << num_cores << std::endl;
-        std::cout << "BBBBB total_shards: " << total_shards << std::endl;
         log_debug(
             tt::LogOp,
             "ND sharding: total_shards={}, cores={}, base_shards_per_core={}, extra={} (first extra cores get +1 "
@@ -99,19 +94,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
             num_cores,
             num_shards_per_core,
             extra_shards);
-
-        // std::cout << "shard_vol: " << shard_vol << std::endl;
-        // auto layout_to_string = [](tt::tt_metal::TensorMemoryLayout l) {
-        //     switch (l) {
-        //         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:   return "INTERLEAVED";
-        //         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:return "HEIGHT_SHARDED";
-        //         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED: return "WIDTH_SHARDED";
-        //         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return "BLOCK_SHARDED";
-        //     }
-        //     return "UNKNOWN";
-        // };
-
-        // std::cout << "memlayout: " << layout_to_string(a.memory_config().memory_layout()) << std::endl;
     }
 
     // Input CB
@@ -222,10 +204,8 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
             unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
         }
         std::string compute_kernel;
-        // if(1) {
         if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
             (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
-            std::cout << "Using slow untilize." << std::endl;
             log_debug(tt::LogOp, "Using slow untilize.");
             compute_kernel = std::string(
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
@@ -233,7 +213,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
             unpack_to_dest_mode[src0_cb_index] =
                 UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
         } else {
-            std::cout << "Using fast pack untilize." << std::endl;
             log_debug(tt::LogOp, "Using fast pack untilize.");
             compute_kernel = std::string(
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
@@ -259,23 +238,13 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
             } else {
                 num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * num_shards_per_core;
             }
-            std::cout << "core_count: " << core_count << std::endl;
-            std::cout << "num_tiles_per_block: " << num_tiles_per_block << std::endl;
-            std::cout << "num_blocks_per_shard: " << num_blocks_per_shard << std::endl;
-            std::cout << "num_shards_per_core: " << num_shards_per_core << std::endl;
-
-            // num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * num_shards_per_core;
-            std::cout << "num_tiles_to_process: " << num_tiles_to_process << std::endl;
             // Reader run-time args
-            // uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_shard;
             std::vector<uint32_t> reader_run_time_args = {num_tiles_to_process};
 
             // Compute run-time args
             std::vector<uint32_t> compute_run_time_args = {num_blocks_per_shard * num_shards_per_core};
 
-            // Compute run-time args
             // Writer run-time args
-            // uint32_t num_tiles_to_write = num_tiles_per_block * num_blocks_per_shard;
             std::vector<uint32_t> writer_run_time_args = {num_tiles_to_process};
 
             tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
@@ -294,7 +263,6 @@ void UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory
     const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
-    std::cout << "AAAAAAAAAc overriding runtime arguments" << std::endl;
     auto& program = cached_program.program;
     auto& cb_src0 = cached_program.shared_variables.cb_src0;
     auto& cb_output = cached_program.shared_variables.cb_output;

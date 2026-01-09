@@ -5,7 +5,6 @@
 #include <cstdint>
 
 #include "compute_kernel_api/untilize.h"
-#include "api/debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -19,21 +18,13 @@ void MAIN {
     untilize_init(src_cb_id);
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
-        DPRINT << "START processing block " << b << ENDL();
-        DPRINT << "before wait_front" << ENDL();
         cb_wait_front(src_cb_id, per_core_block_tile_cnt);
-        DPRINT << "after wait_front" << ENDL();
         cb_reserve_back(out_cb_id, per_core_block_tile_cnt);
-        DPRINT << "after reserve_back" << ENDL();
 
         untilize_block(src_cb_id, per_core_block_tile_cnt, out_cb_id);
-        DPRINT << "after untilize_block" << ENDL();
+
         cb_push_back(out_cb_id, per_core_block_tile_cnt);
-        DPRINT << "after push_back" << ENDL();
         cb_pop_front(src_cb_id, per_core_block_tile_cnt);
-        DPRINT << "after pop_front" << ENDL();
-        DPRINT << "done processing block " << b << ENDL();
     }
-    DPRINT << "done processing all blocks" << ENDL();
 }
 }  // namespace NAMESPACE
