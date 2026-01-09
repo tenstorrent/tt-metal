@@ -22,6 +22,7 @@ static constexpr uint32_t TENSIX_PROFILER_CHECK =
 static_assert(TENSIX_LAUNCH_CHECK == 0);
 static_assert(TENSIX_PROFILER_CHECK == 0);
 static_assert(sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+static_assert(offsetof(subordinate_map_t, dm1) == 0);
 
 static_assert(sizeof(tt::tt_fabric::routing_l1_info_t) == MEM_ROUTING_TABLE_SIZE, "Struct size mismatch!");
 static_assert(
