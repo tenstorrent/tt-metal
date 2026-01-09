@@ -23,6 +23,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.tensor_logger import log_tensor
 
 
 class MoEDecoderBlock1D(DecoderBlock1DBase):
@@ -221,16 +222,54 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
     @classmethod
     @abstractmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, row_idx: int, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        # Log input to MoE forward
+        log_tensor(x, "moe_forward_input", "x", {"row_idx": row_idx})
+
         num_tokens_to_route = x.shape[-3] * x.shape[-2]
         DP_FACTOR = cfg["moe"][row_idx]["num_dispatch_devices"]
         DP_SIZE = even_int_div(num_tokens_to_route, DP_FACTOR)
         # Apply data parallelism only if the number of tokens per dispatch device is a multiple of the tile size
         apply_dp = DP_SIZE % ttnn.TILE_SIZE == 0
+
+        log_tensor(
+            x,
+            "moe_before_dp",
+            "x_before_dp",
+            {
+                "apply_dp": apply_dp,
+                "num_tokens_to_route": num_tokens_to_route,
+                "DP_FACTOR": DP_FACTOR,
+                "DP_SIZE": DP_SIZE,
+                "row_idx": row_idx,
+            },
+        )
+
         if apply_dp:
             x_dp = cls.apply_data_parallelism(x, row_idx, **cfg["apply_dp"])
-        mlp_out = MoE.forward_decode(x_dp if apply_dp else x, cfg["moe"][row_idx])
+            log_tensor(x_dp, "apply_data_parallelism", "x_dp", {"config": cfg["apply_dp"], "row_idx": row_idx})
+            x_for_moe = x_dp
+        else:
+            x_for_moe = x
+
+        mlp_out = MoE.forward_decode(x_for_moe, cfg["moe"][row_idx])
+        log_tensor(mlp_out, "moe_forward", "moe_output", {"row_idx": row_idx})
+
         if apply_dp:
             ttnn.deallocate(x_dp)
             mlp_out = cls.revert_data_parallelism(mlp_out, row_idx, cfg)
-        mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"])
+            log_tensor(mlp_out, "revert_data_parallelism", "mlp_out_reverted", {"row_idx": row_idx})
+
+        # SharedExpert forward
+        shared_expert_out = SharedExpert.forward_decode(x, cfg["shared_expert"])
+        log_tensor(shared_expert_out, "shared_expert", "shared_expert_out", {"row_idx": row_idx})
+
+        # Combine MoE and SharedExpert outputs
+        mlp_out += shared_expert_out
+        log_tensor(
+            mlp_out,
+            "moe_combined",
+            "moe_plus_shared_expert",
+            {"operation": "mlp_out += shared_expert_out", "row_idx": row_idx},
+        )
+
         return mlp_out
