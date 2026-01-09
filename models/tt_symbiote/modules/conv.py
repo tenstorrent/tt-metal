@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 import ttnn
-from models.tt_cnn.tt.builder import Conv2dConfiguration, TtConv2d
+from models.tt_cnn.tt.builder import Conv2dConfiguration, MaxPool2dConfiguration, TtConv2d, TtMaxPool2d
 from models.tt_symbiote.core.module import TTNNModule
 from models.tt_symbiote.modules.activation import TTNNReLU
 from models.tt_symbiote.modules.tensor import TTNNPermute, TTNNReshape
@@ -34,6 +34,42 @@ class NHWCConvPytorch(nn.Module):
         """Forward pass through Conv2d with NHWC input/output."""
         x = x.permute(0, 3, 1, 2)  # NHWC to NCHW
         x = self.conv(x)
+        x = x.permute(0, 2, 3, 1)  # NCHW to NHWC
+        return x
+
+
+class NHWCMaxpoolPytorch(nn.Module):
+    """A wrapper around nn.MaxPool2d to handle NHWC input/output."""
+
+    def __init__(
+        self,
+        maxpool: nn.MaxPool2d,
+    ) -> None:
+        super().__init__()
+        self.maxpool = maxpool
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through MaxPool2d with NHWC input/output."""
+        x = x.permute(0, 3, 1, 2)  # NHWC to NCHW
+        x = self.maxpool(x)
+        x = x.permute(0, 2, 3, 1)  # NCHW to NHWC
+        return x
+
+
+class NHWCUpsamplePytorch(nn.Module):
+    """A wrapper around nn.Upsample to handle NHWC input/output."""
+
+    def __init__(
+        self,
+        upsample: nn.Upsample,
+    ) -> None:
+        super().__init__()
+        self.upsample = upsample
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through Upsample with NHWC input/output."""
+        x = x.permute(0, 3, 1, 2)  # NHWC to NCHW
+        x = self.upsample(x)
         x = x.permute(0, 2, 3, 1)  # NCHW to NHWC
         return x
 
@@ -517,3 +553,104 @@ class TTNNViTEmbeddings(TTNNModule):
             embedding_output, self.position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
         )
         return embedding_output
+
+
+class TTNNMaxPool2dNHWC(TTNNModule):
+    """TTNN-accelerated MaxPool2d layer."""
+
+    def __init__(
+        self,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        slice_config=None,
+    ) -> None:
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.slice_config = slice_config
+        self.reshape = TTNNReshape()
+
+    @classmethod
+    def from_torch(cls, maxpool: nn.MaxPool2d, slice_config=None) -> "TTNNMaxPool2dNHWC":
+        """Create TTNNMaxPool2dNHWC from PyTorch MaxPool2d layer."""
+        new_maxpool = TTNNMaxPool2dNHWC(
+            kernel_size=maxpool.kernel_size,
+            stride=maxpool.stride,
+            padding=maxpool.padding,
+            dilation=maxpool.dilation,
+            slice_config=slice_config,
+        )
+        assert isinstance(new_maxpool.kernel_size, int), "Only integer kernel_size is supported in TTNNMaxPool2dNHWC."
+        assert isinstance(new_maxpool.stride, int), "Only integer stride is supported in TTNNMaxPool2dNHWC."
+        assert isinstance(new_maxpool.padding, int), "Only integer padding is supported in TTNNMaxPool2dNHWC."
+        assert isinstance(new_maxpool.dilation, int), "Only integer dilation is supported in TTNNMaxPool2dNHWC."
+        new_maxpool._fallback_torch_layer = NHWCMaxpoolPytorch(maxpool)
+        return new_maxpool
+
+    def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
+        """Forward pass through linear layer."""
+        batch_size, input_height, input_width, channels = input_tensor.shape
+        config = MaxPool2dConfiguration(
+            input_height=input_height,
+            input_width=input_width,
+            channels=channels,
+            batch_size=batch_size,
+            kernel_size=[self.kernel_size, self.kernel_size],
+            stride=[self.stride, self.stride],
+            padding=[self.padding, self.padding],
+            dilation=[self.dilation, self.dilation],
+            slice_strategy=self.slice_config,
+        )
+        output_h = (input_height + 2 * self.padding - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
+        output_w = (input_width + 2 * self.padding - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
+        h_w = (output_h, output_w)
+        layer = TtMaxPool2d(config, input_tensor.device())
+        if reshape_output:
+            out = layer(input_tensor)
+            out = self.reshape(out, [batch_size, h_w[0], h_w[1], -1])
+            return out
+        return layer(input_tensor)
+
+
+class TTNNUpsampleNHWC(TTNNModule):
+    """TTNN-accelerated Upsample layer."""
+
+    def __init__(
+        self,
+        scale_factor,
+        mode="nearest",
+    ) -> None:
+        super().__init__()
+        self.scale_factor = scale_factor
+        self.mode = mode
+
+    @classmethod
+    def from_torch(cls, upsample: nn.Upsample) -> "TTNNUpsampleNHWC":
+        """Create TTNNUpsampleNHWC from PyTorch Upsample layer."""
+        new_upsample = TTNNUpsampleNHWC(
+            scale_factor=upsample.scale_factor,
+            mode=upsample.mode,
+        )
+        assert upsample.mode in [
+            "nearest",
+            "bilinear",
+        ], "Only 'nearest' and 'bilinear' modes are supported in TTNNUpsampleNHWC."
+        new_upsample._fallback_torch_layer = NHWCUpsamplePytorch(upsample)
+        return new_upsample
+
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Forward pass through Upsample layer."""
+        batch_size, input_height, input_width, channels = input_tensor.shape
+        output_height = input_height * self.scale_factor
+        output_width = input_width * self.scale_factor
+        input_tensor = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor = ttnn.upsample(
+            input_tensor,
+            scale_factor=int(self.scale_factor),
+            mode=self.mode,
+        )
+        return input_tensor
