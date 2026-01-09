@@ -106,7 +106,7 @@ TEST_F(MeshDeviceFixture, TensixTestSFPIKernelCcacheSupport) {
         const std::string elf_file_path = build_state.get_target_out_path(full_kernel_name);
         ASSERT_TRUE(std::filesystem::exists(elf_file_path)) << "First compilation should produce ELF file";
 
-        const auto t0 = std::filesystem::last_write_time(elf_file_path);
+        [[maybe_unused]] const auto t0 = std::filesystem::last_write_time(elf_file_path);
 
         // Clear in-memory cache but keep filesystem artifacts (including ccache)
         detail::ClearKernelCache();
