@@ -215,7 +215,6 @@ jobs:
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
               "use-vllm-v1": true,
               "multimodal": false,
-              "additional-server-args": "--enable-prefix-caching",
               "additional-benchmark-args": "--random-prefix-len 128",
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
