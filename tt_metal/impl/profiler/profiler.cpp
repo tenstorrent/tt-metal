@@ -680,12 +680,9 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
     // Convert to json
     std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> json_events_by_op;
     for (auto& [program_execution_uid, markers] : coalesced_events_by_op) {
-        // Track matched trailers to skip them when processing (avoid erasing during iteration)
-        std::set<std::tuple<uint64_t, ChipId, uint64_t, uint64_t, tracy::RiscType, uint16_t>> matched_trailers;
-
-        for (auto marker_it = markers.begin(); marker_it != markers.end(); ++marker_it) {
-            if (std::holds_alternative<tracy::TTDeviceMarker>(*marker_it)) {
-                auto device_marker = std::get<tracy::TTDeviceMarker>(*marker_it);
+        for (auto& marker_it : markers) {
+            if (std::holds_alternative<tracy::TTDeviceMarker>(marker_it)) {
+                auto device_marker = std::get<tracy::TTDeviceMarker>(marker_it);
 
                 if (isMarkerAZoneEndpoint(device_marker)) {
                     tracy::TTDeviceMarkerType zone_phase =
@@ -756,9 +753,9 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
 
                     json_events_by_op[program_execution_uid].push_back(data);
                 }
-            } else if (std::holds_alternative<FabricEventMarkers>(*marker_it)) {
+            } else if (std::holds_alternative<FabricEventMarkers>(marker_it)) {
                 // coalesce fabric event markers into a single logical trace event with extra 'fabric_send' metadata
-                auto fabric_event_markers = std::get<FabricEventMarkers>(*marker_it);
+                auto fabric_event_markers = std::get<FabricEventMarkers>(marker_it);
 
                 auto first_fabric_write_marker = fabric_event_markers.fabric_write_markers[0];
                 auto fabric_routing_fields_marker = fabric_event_markers.fabric_routing_fields_marker;
@@ -1805,7 +1802,6 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
     };
 
     auto device_marker_it = device_markers.begin();
-    // log_info(tt::LogMetal, "Processing {} device markers", device_markers.size());
     while (device_marker_it != device_markers.end()) {
         tracy::TTDeviceMarker marker = *device_marker_it;
         tracy::MarkerDetails marker_details = this->getMarkerDetails(marker.marker_id);
