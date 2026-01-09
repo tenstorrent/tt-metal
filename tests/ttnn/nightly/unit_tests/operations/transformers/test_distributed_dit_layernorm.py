@@ -123,7 +123,6 @@ def run_distributed_dit_layernorm(
             tt_weight = chunk_and_shard_tensor(weight_2d, num_simulated_devices, device, -1, dtype)
             tt_bias = chunk_and_shard_tensor(bias_2d, num_simulated_devices, device, -1, dtype)
 
-    # Run pre_allgather on each chunk to get per-device stats
     tt_stats = []
     for tt_inp_chunk in tt_inp:
         tt_stats.append(
@@ -220,12 +219,21 @@ def test_distributed_dit_layernorm_use_cases(
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
 @pytest.mark.parametrize(
     "seqlen",
-    [32, 64, 128, 2048, 2080, 2560, 2688, 2816, 3072, 4096],
-    # ids=["seqlen32", "seqlen64", "seqlen128", "seqlen2048", "seqlen4096"],
+    [4096],
 )
-# @pytest.mark.parametrize("hidden_dim", [64, 128, 256, 320, 384, 512, 2432], ids=["hidden_dim64", "hidden_dim128", "hidden_dim256", "hidden_dim320", "hidden_dim384", "hidden_dim512", "hidden_dim2432"])
-# @pytest.mark.parametrize("hidden_dim", [32*i for i in range(1, 17)])
-@pytest.mark.parametrize("hidden_dim", [32], ids=["hidden_dim32"])
+@pytest.mark.parametrize(
+    "hidden_dim",
+    [64, 128, 256, 320, 384, 512, 2432],
+    ids=[
+        "hidden_dim64",
+        "hidden_dim128",
+        "hidden_dim256",
+        "hidden_dim320",
+        "hidden_dim384",
+        "hidden_dim512",
+        "hidden_dim2432",
+    ],
+)
 @pytest.mark.parametrize("use_affine", [True], ids=["with_affine"])
 @pytest.mark.parametrize(
     "weight_bias_layout",
