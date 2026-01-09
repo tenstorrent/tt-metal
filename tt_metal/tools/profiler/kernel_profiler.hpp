@@ -152,13 +152,6 @@ inline __attribute__((always_inline)) uint32_t get_id(uint32_t id, PacketTypes t
     return ((id & 0xFFFF) | ((type << 16) & 0x7FFFF));
 }
 
-// Create a NOC_DEBUG timer_id that encodes the NocDebugType
-// Format: bits [0:7] reserved (set to 0), bits [8:15] NocDebugType, bits [16:18] NOC_DEBUG packet type
-inline __attribute__((always_inline)) uint32_t get_noc_debug_id(NocDebugType debug_type) {
-    return ((static_cast<uint8_t>(debug_type) & NOC_DEBUG_TYPE_MASK) << NOC_DEBUG_TYPE_SHIFT) |
-           ((NOC_DEBUG << 16) & 0x7FFFF);
-}
-
 template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 inline __attribute__((always_inline)) bool bufferHasRoom(uint32_t additional_slots = 0) {
     bool bufferHasRoom = false;
@@ -614,13 +607,31 @@ inline __attribute__((always_inline)) void flush_to_dram_if_full(uint32_t additi
     }
 }
 
-template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
-inline __attribute__((always_inline)) void timeStampedData(uint64_t data) {
-    if (bufferHasRoom<dispatch>()) {
-        mark_time_at_index_inlined(wIndex, get_const_id(data_id, TS_DATA));
+template <
+    uint32_t data_id,
+    DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH,
+    PacketTypes packet_type = kernel_profiler::PacketTypes::TS_DATA,
+    typename... Args>
+inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args... trailers) {
+    constexpr uint32_t total_data_count = 1 + sizeof...(trailers);
+    constexpr uint32_t expected_size = kernel_profiler::TimestampedDataSize<packet_type>::size;
+
+    static_assert(
+        expected_size == 0 || total_data_count == expected_size,
+        "Number of arguments does not match expected size for this PacketType");
+
+    constexpr uint32_t additional_slots = sizeof...(trailers);
+
+    if (bufferHasRoom<dispatch>(additional_slots)) {
+        mark_time_at_index_inlined(wIndex, get_const_id(data_id, packet_type));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+
         profiler_data_buffer[myRiscID].data[wIndex++] = data >> 32;
         profiler_data_buffer[myRiscID].data[wIndex++] = (data << 32) >> 32;
+
+        ((profiler_data_buffer[myRiscID].data[wIndex++] = trailers >> 32,
+          profiler_data_buffer[myRiscID].data[wIndex++] = (trailers << 32) >> 32),
+         ...);
     }
 }
 
@@ -630,19 +641,6 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
         mark_time_at_index_inlined(wIndex, get_id(event_id, TS_EVENT));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
     }
-}
-
-template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
-inline __attribute__((always_inline)) void recordNocDebugHeader(uint64_t data, NocDebugType debug_type) {
-    mark_time_at_index_inlined(wIndex, get_noc_debug_id(debug_type));
-    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-    profiler_data_buffer[myRiscID].data[wIndex++] = data >> 32;
-    profiler_data_buffer[myRiscID].data[wIndex++] = (data << 32) >> 32;
-}
-
-inline __attribute__((always_inline)) void writeNocDebugTrailer(uint64_t trailer_data) {
-    profiler_data_buffer[myRiscID].data[wIndex++] = trailer_data >> 32;
-    profiler_data_buffer[myRiscID].data[wIndex++] = (trailer_data << 32) >> 32;
 }
 
 inline __attribute__((always_inline)) void increment_trace_count() {

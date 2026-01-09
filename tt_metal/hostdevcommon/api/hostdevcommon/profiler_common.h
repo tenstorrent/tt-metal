@@ -62,21 +62,24 @@ enum ControlBuffer {
     DRAM_PROFILER_ADDRESS_T2_0,
 };
 
-enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, NOC_DEBUG };
+enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, TS_DATA_16B };
 
-enum NocDebugType : uint8_t {
-    NOC_TX = 0,  // NOC transfer event: 1 trailer containing dst_addr
+// Number of expected uint64_t data values for each PacketType
+template <PacketTypes packet_type>
+struct TimestampedDataSize {
+    // No checks
+    static constexpr std::uint32_t size = 0;
 };
 
-constexpr uint8_t getNocDebugTrailerCount(NocDebugType type) {
-    switch (type) {
-        case NOC_TX: return 1;  // dst_addr trailer
-        default: return 0;
-    }
-}
+template <>
+struct TimestampedDataSize<TS_DATA> {
+    static constexpr std::uint32_t size = 1;
+};
 
-constexpr uint32_t NOC_DEBUG_TYPE_SHIFT = 8;
-constexpr uint32_t NOC_DEBUG_TYPE_MASK = 0xFF;
+template <>
+struct TimestampedDataSize<TS_DATA_16B> {
+    static constexpr std::uint32_t size = 2;
+};
 
 // TODO: use data types in profile_msg_t rather than addresses/sizes
 constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;

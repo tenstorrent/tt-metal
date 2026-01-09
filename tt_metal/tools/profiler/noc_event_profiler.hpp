@@ -48,24 +48,9 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> decode_noc_id_into_coord(uint32_t id,
         interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc) >> NOC_COORD_REG_OFFSET);
 }
 
-// Create a trailer with the appropriate type based on the original event type
-FORCE_INLINE KernelProfilerNocEventMetadata
-createNocEventTrailer(KernelProfilerNocEventMetadata::NocEventType noc_event_type, uint32_t dst_addr) {
-    static_assert(
-        KernelProfilerNocEventMetadata::NocEventType::WRITE_ >
-            KernelProfilerNocEventMetadata::NocEventType::READ_DRAM_SHARDED_WITH_STATE,
-        "WRITE events must be greater than READ events");
-    KernelProfilerNocEventMetadata::NocEventType trailer_type;
-    if (noc_event_type >= KernelProfilerNocEventMetadata::NocEventType::WRITE_) {
-        trailer_type = KernelProfilerNocEventMetadata::NocEventType::WRITE_TRAILER;
-    } else {
-        trailer_type = KernelProfilerNocEventMetadata::NocEventType::READ_TRAILER;
-    }
-
+FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t dst_addr) {
     KernelProfilerNocEventMetadata ev_md;
-    auto& local_noc_event_trailer = ev_md.data.local_event_trailer;
-    local_noc_event_trailer.noc_xfer_type = trailer_type;
-    local_noc_event_trailer.dst_addr = dst_addr;
+    ev_md.data.local_event_dst_trailer.dst_addr = dst_addr;
     return ev_md;
 }
 
@@ -90,17 +75,16 @@ FORCE_INLINE void recordNocEvent(
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
     if constexpr (kernel_profiler::NON_DROPPING) {
-        constexpr kernel_profiler::NocDebugType debug_type = kernel_profiler::NOC_TX;
-        constexpr uint8_t trailer_count = kernel_profiler::getNocDebugTrailerCount(debug_type);
+        KernelProfilerNocEventMetadata dst_data = createNocEventDstTrailer(dst_addr);
 
+        // Two markers: one for the event data and one for the dst_data
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2 +
-            trailer_count * kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE);
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
 
-        kernel_profiler::recordNocDebugHeader<kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64(), debug_type);
-
-        KernelProfilerNocEventMetadata trailer = createNocEventTrailer(noc_event_type, dst_addr);
-        kernel_profiler::writeNocDebugTrailer(trailer.asU64());
+        kernel_profiler::timeStampedData<
+            STATIC_ID,
+            kernel_profiler::DoingDispatch::DISPATCH,
+            kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
     } else {
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
         kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
