@@ -54,10 +54,8 @@ static Tensor conv3d_group_weight_zero_pad_helper(
     const ttnn::Shape& original_2d_shape,  // [H_total, oC_pg]
     const ttnn::Shape& output_2d_shape,    // [H_total, oC_total]
     uint32_t num_groups,
-    // uint32_t iC_per_group_block,           // 必须等于 Python 中的 C_in_block (如 32)
+    uint32_t iC_per_group_block,
     DataType output_dtype) {
-    uint32_t iC_per_group_block = 32;
-
     auto pad_weight = [&original_2d_shape, &output_2d_shape, num_groups, iC_per_group_block](
                           const tt::tt_metal::HostBuffer& conv_weight_tensor_host_buffer) {
         auto src_buffer = tt::tt_metal::host_buffer::get_as<T>(conv_weight_tensor_host_buffer);
@@ -97,7 +95,7 @@ padded with 0 - then the entire weight tensor is convolved with the input tensor
 input tensor was divided into num_groups for each groupped filter
 */
 Tensor convert_conv_weight_tensor_to_grouped_layout(
-    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
+    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype, uint32_t iC_per_group_block) {
     ttnn::Shape original_shape = conv_weight_tensor.logical_shape();
     uint32_t h_in = original_shape[0];
     uint32_t w_in = original_shape[1];
@@ -109,7 +107,8 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 
     const static std::unordered_map<
         DataType,
-        std::function<Tensor(const Tensor&, const ttnn::Shape&, const ttnn::Shape&, uint32_t, DataType)>>
+        std::function<Tensor(
+            const Tensor&, const ttnn::Shape&, const ttnn::Shape&, uint32_t iC_per_group_block, uint32_t, DataType)>>
         to_w_tile_layout_map = {
             {DataType::INT32, &conv3d_group_weight_zero_pad_helper<int32_t>},
             {DataType::FLOAT32, &conv3d_group_weight_zero_pad_helper<float>},
@@ -121,7 +120,13 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
         };
 
     return convert_tensor_to_tiled_layout_common(
-        conv_weight_tensor, output_dtype, to_w_tile_layout_map, original_shape, output_shape, num_groups);
+        conv_weight_tensor,
+        output_dtype,
+        to_w_tile_layout_map,
+        original_shape,
+        output_shape,
+        num_groups,
+        iC_per_group_block);
 }
 
 static ttnn::Tensor prepare_conv_weights_internal(
@@ -130,8 +135,8 @@ static ttnn::Tensor prepare_conv_weights_internal(
 
     if (params.groups > 0) {
         weight_tensor_ = weight_tensor_.cpu();
-        weight_tensor_ =
-            convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
+        weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(
+            weight_tensor_, params.groups, weight_tensor_.dtype(), params.iC_per_group_block);
         weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
     }
     weight_tensor_ = ttnn::to_layout(weight_tensor_, Layout::TILE);

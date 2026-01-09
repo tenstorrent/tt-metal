@@ -103,7 +103,7 @@ void bind_conv3d(nb::module_& mod) {
                             )doc")
             .def(nb::init<>())
             .def(
-                nb::init<DataType, Layout, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
+                nb::init<DataType, Layout, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
                 nb::kw_only(),
                 nb::arg("weights_dtype") = DataType::BFLOAT16,
                 nb::arg("output_layout") = Layout::ROW_MAJOR,
@@ -112,6 +112,7 @@ void bind_conv3d(nb::module_& mod) {
                 nb::arg("H_out_block") = 1,
                 nb::arg("C_out_block") = 0,
                 nb::arg("C_in_block") = 0,
+                nb::arg("iC_per_group_block") = 32,
                 nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
 
     py_conv3d_config.def_rw("weights_dtype", &Conv3dConfig::weights_dtype, "");
@@ -121,6 +122,7 @@ void bind_conv3d(nb::module_& mod) {
     py_conv3d_config.def_rw("H_out_block", &Conv3dConfig::H_out_block, "");
     py_conv3d_config.def_rw("C_out_block", &Conv3dConfig::C_out_block, "");
     py_conv3d_config.def_rw("C_in_block", &Conv3dConfig::C_in_block, "");
+    py_conv3d_config.def_rw("iC_per_group_block", &Conv3dConfig::iC_per_group_block, "");
     py_conv3d_config.def_rw("compute_with_storage_grid_size", &Conv3dConfig::compute_with_storage_grid_size, "");
 
     py_conv3d_config.def("__repr__", [](const Conv3dConfig& config) { return fmt::format("{}", config); });

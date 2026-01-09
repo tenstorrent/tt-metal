@@ -61,7 +61,7 @@ def prepare_weights(conv3d_module, C, out_channels, groups, device, C_in_block=0
         layout=ttnn.TILE_LAYOUT,
         pad_value=0,
     )
-    return tt_weight, tt_bias
+    return tt_weight, tt_bias, C_in_block
 
 
 def reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device):
@@ -77,6 +77,7 @@ def create_conv3d_config(
     H_out_block=1,
     C_out_block=0,
     C_in_block=0,
+    iC_per_group_block=32,
     compute_with_storage_grid_size=(1, 1),
 ):
     """Create Conv3d configuration."""
@@ -88,6 +89,7 @@ def create_conv3d_config(
         H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
+        iC_per_group_block=iC_per_group_block,
         compute_with_storage_grid_size=compute_with_storage_grid_size,
     )
 
@@ -143,10 +145,15 @@ def run_conv3d_test(
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, groups, device, C_in_block=0)
+    tt_weight, tt_bias, iC_per_group_block = prepare_weights(
+        conv3d_module, C, out_channels, groups, device, C_in_block=0
+    )
 
     # Create config and run TTNN conv3d
-    config = create_conv3d_config(compute_with_storage_grid_size=grid_size)
+    config = create_conv3d_config(
+        iC_per_group_block=iC_per_group_block,
+        compute_with_storage_grid_size=grid_size,
+    )
 
     tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,

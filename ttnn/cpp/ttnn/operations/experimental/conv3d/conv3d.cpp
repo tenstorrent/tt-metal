@@ -30,10 +30,16 @@ ttnn::Tensor ExecuteConv3d::invoke(
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    Conv3dWeightsBiasPrepConfig weight_prep_config;
-    weight_prep_config.groups = groups_;
-    ttnn::Tensor weight_tensor_prepared =
-        prepare_conv_weights(weight_tensor, weight_prep_config, input_tensor.device());
+    ttnn::Tensor weight_tensor_prepared = weight_tensor;
+
+    if (groups_ > 1) {
+        Conv3dWeightsBiasPrepConfig weight_prep_config;
+        {
+            weight_prep_config.groups = groups_;
+            weight_prep_config.iC_per_group_block = config.iC_per_group_block;
+        }
+        weight_tensor_prepared = prepare_conv_weights(weight_tensor, weight_prep_config, input_tensor.device());
+    }
 
     return ttnn::prim::conv3d(
         input_tensor,
