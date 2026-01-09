@@ -6,22 +6,16 @@
 
 from .tt.ttnn_owl_vit import (
     OwlViTTTNNConfig,
-    update_model_config,
-    owl_vit_for_object_detection,
-    owl_vit_vision_model,
-    owl_vit_vision_encoder,
-    owl_vit_box_head,
-    owl_vit_class_head,
-    custom_preprocessor,
+    run_vision_encoder_layer,
+    run_text_encoder_layer,
+    run_box_head,
+    run_class_head,
 )
 
 __all__ = [
     "OwlViTTTNNConfig",
-    "update_model_config",
-    "owl_vit_for_object_detection",
-    "owl_vit_vision_model",
-    "owl_vit_vision_encoder",
-    "owl_vit_box_head",
-    "owl_vit_class_head",
-    "custom_preprocessor",
+    "run_vision_encoder_layer",
+    "run_text_encoder_layer",
+    "run_box_head",
+    "run_class_head",
 ]

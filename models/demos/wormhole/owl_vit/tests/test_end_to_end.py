@@ -32,6 +32,17 @@ import ttnn
 
 sys.path.insert(0, "/root/tt-metal")
 
+from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import (
+    OwlViTTTNNConfig,
+    run_box_head,
+    run_class_head,
+    run_text_encoder_layer,
+    run_vision_encoder_layer,
+)
+
+# Instantiate config
+ttnn_config = OwlViTTTNNConfig()
+
 
 # =============================================================================
 # Model Configuration Constants
@@ -536,9 +547,6 @@ def run_vision_encoder_on_device(
     Run vision encoder forward pass on TTNN device.
     Uses PyTorch for patch embeddings, runs transformer on device.
     """
-    num_heads = VISION_NUM_HEADS
-    head_dim = VISION_HEAD_DIM
-
     # Get embeddings from PyTorch
     with torch.no_grad():
         vision_embeddings = pytorch_model.owlvit.vision_model.embeddings(pixel_values)
@@ -556,7 +564,7 @@ def run_vision_encoder_on_device(
 
     # Process encoder layers
     for layer_params in parameters["vision"]["encoder_layers"]:
-        hidden_states = _run_encoder_layer(hidden_states, layer_params, num_heads, head_dim, dram_config)
+        hidden_states = run_vision_encoder_layer(hidden_states, layer_params, ttnn_config, dram_config)
 
     # Post-layernorm
     output = ttnn.layer_norm(
@@ -589,9 +597,6 @@ def run_text_encoder_on_device(
         hidden_states: Encoder output [batch, seq_len, hidden_size]
         eos_positions: Position of EOS token for each sequence (for pooling)
     """
-    hidden_size = TEXT_HIDDEN_SIZE
-    num_heads = TEXT_NUM_HEADS
-    head_dim = TEXT_HEAD_DIM
     batch_size, seq_len = input_ids.shape
 
     # Convert input_ids to ttnn for embedding lookup
@@ -645,9 +650,7 @@ def run_text_encoder_on_device(
 
     # Process encoder layers with causal attention
     for layer_idx, layer_params in enumerate(parameters["text"]["encoder_layers"]):
-        hidden_states = _run_text_encoder_layer(
-            hidden_states, layer_params, causal_mask_tt, num_heads, head_dim, dram_config
-        )
+        hidden_states = run_text_encoder_layer(hidden_states, layer_params, causal_mask_tt, ttnn_config, dram_config)
         if layer_idx == 0 or (layer_idx + 1) % 4 == 0:
             logger.info(f"Completed text encoder layer {layer_idx + 1}/{len(parameters['text']['encoder_layers'])}")
 
@@ -666,408 +669,6 @@ def run_text_encoder_on_device(
     eos_positions = (input_ids == 49407).int().argmax(dim=-1)
 
     return output, eos_positions
-
-
-def _run_encoder_layer(hidden_states, layer_params, num_heads, head_dim, memory_config):
-    """Run a single vision encoder layer."""
-    # Layer norm 1
-    residual = hidden_states
-    hidden_states = ttnn.layer_norm(
-        hidden_states,
-        weight=layer_params["layer_norm1"]["weight"],
-        bias=layer_params["layer_norm1"]["bias"],
-        epsilon=1e-5,
-        memory_config=memory_config,
-    )
-
-    # Self-attention with fused QKV
-    qkv = ttnn.linear(
-        hidden_states,
-        layer_params["self_attn"]["qkv"]["weight"],
-        bias=layer_params["self_attn"]["qkv"]["bias"],
-        memory_config=memory_config,
-        dtype=ttnn.bfloat16,
-    )
-    ttnn.deallocate(hidden_states)
-
-    query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
-        qkv,
-        memory_config=memory_config,
-        num_heads=num_heads,
-    )
-    ttnn.deallocate(qkv)
-
-    attention_scores = ttnn.matmul(query, key, memory_config=memory_config)
-    ttnn.deallocate(query)
-    ttnn.deallocate(key)
-
-    attention_scores = ttnn.mul(attention_scores, 1.0 / (head_dim**0.5))
-    attention_probs = ttnn.softmax(attention_scores, dim=-1)
-    ttnn.deallocate(attention_scores)
-
-    context = ttnn.matmul(attention_probs, value, memory_config=memory_config)
-    ttnn.deallocate(attention_probs)
-    ttnn.deallocate(value)
-
-    context = ttnn.transformer.concatenate_heads(context, memory_config=memory_config)
-
-    attn_output = ttnn.linear(
-        context,
-        layer_params["self_attn"]["out_proj"]["weight"],
-        bias=layer_params["self_attn"]["out_proj"]["bias"],
-        memory_config=memory_config,
-        dtype=ttnn.bfloat16,
-    )
-    ttnn.deallocate(context)
-
-    hidden_states = ttnn.add(residual, attn_output)
-    ttnn.deallocate(residual)
-    ttnn.deallocate(attn_output)
-
-    # Layer norm 2
-    residual = hidden_states
-    hidden_states = ttnn.layer_norm(
-        hidden_states,
-        weight=layer_params["layer_norm2"]["weight"],
-        bias=layer_params["layer_norm2"]["bias"],
-        epsilon=1e-5,
-        memory_config=memory_config,
-    )
-
-    # MLP
-    mlp_hidden = ttnn.linear(
-        hidden_states,
-        layer_params["mlp"]["fc1"]["weight"],
-        bias=layer_params["mlp"]["fc1"]["bias"],
-        memory_config=memory_config,
-        dtype=ttnn.bfloat16,
-    )
-    ttnn.deallocate(hidden_states)
-    mlp_hidden = ttnn.gelu(mlp_hidden)
-
-    mlp_output = ttnn.linear(
-        mlp_hidden,
-        layer_params["mlp"]["fc2"]["weight"],
-        bias=layer_params["mlp"]["fc2"]["bias"],
-        memory_config=memory_config,
-        dtype=ttnn.bfloat16,
-    )
-    ttnn.deallocate(mlp_hidden)
-
-    hidden_states = ttnn.add(residual, mlp_output)
-    ttnn.deallocate(residual)
-    ttnn.deallocate(mlp_output)
-
-    return hidden_states
-
-
-def _run_text_encoder_layer(hidden_states, layer_params, causal_mask, num_heads, head_dim, memory_config):
-    """Run a single text encoder layer with causal attention using native TTNN."""
-    # Layer norm 1
-    residual = hidden_states
-    hidden_states = ttnn.layer_norm(
-        hidden_states,
-        weight=layer_params["layer_norm1"]["weight"],
-        bias=layer_params["layer_norm1"]["bias"],
-        epsilon=1e-5,
-        memory_config=memory_config,
-    )
-
-    # Self-attention with fused QKV (same pattern as vision encoder)
-    qkv = ttnn.linear(
-        hidden_states,
-        layer_params["self_attn"]["qkv"]["weight"],
-        bias=layer_params["self_attn"]["qkv"]["bias"],
-        memory_config=memory_config,
-        dtype=ttnn.bfloat16,
-    )
-    ttnn.deallocate(hidden_states)
-
-    query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
-        qkv,
-        memory_config=memory_config,
-        num_heads=num_heads,
-    )
-    ttnn.deallocate(qkv)
-
-    # Compute attention scores
-    attention_scores = ttnn.matmul(query, key, memory_config=memory_config)
-    ttnn.deallocate(query)
-    ttnn.deallocate(key)
-
-    # Scale
-    attention_scores = ttnn.mul(attention_scores, 1.0 / (head_dim**0.5))
-
-    # Apply causal mask
-    attention_scores = ttnn.add(attention_scores, causal_mask)
-
-    # Softmax
-    attention_probs = ttnn.softmax(attention_scores, dim=-1)
-    ttnn.deallocate(attention_scores)
-
-    # Context
-    context = ttnn.matmul(attention_probs, value, memory_config=memory_config)
-    ttnn.deallocate(attention_probs)
-    ttnn.deallocate(value)
-
-    # Concatenate heads
-    context = ttnn.transformer.concatenate_heads(context, memory_config=memory_config)
-
-    # Output projection
-    attn_output = ttnn.linear(
-        context,
-        layer_params["self_attn"]["out_proj"]["weight"],
-        bias=layer_params["self_attn"]["out_proj"]["bias"],
-        memory_config=memory_config,
-        dtype=ttnn.bfloat16,
-    )
-    ttnn.deallocate(context)
-
-    # Residual connection
-    hidden_states = ttnn.add(residual, attn_output)
-    ttnn.deallocate(residual)
-    ttnn.deallocate(attn_output)
-
-    # Layer norm 2
-    residual = hidden_states
-    hidden_states = ttnn.layer_norm(
-        hidden_states,
-        weight=layer_params["layer_norm2"]["weight"],
-        bias=layer_params["layer_norm2"]["bias"],
-        epsilon=1e-5,
-        memory_config=memory_config,
-    )
-
-    # MLP
-    mlp_hidden = ttnn.linear(
-        hidden_states,
-        layer_params["mlp"]["fc1"]["weight"],
-        bias=layer_params["mlp"]["fc1"]["bias"],
-        memory_config=memory_config,
-        dtype=ttnn.bfloat16,
-    )
-    ttnn.deallocate(hidden_states)
-    mlp_hidden = ttnn.gelu(mlp_hidden)
-
-    mlp_output = ttnn.linear(
-        mlp_hidden,
-        layer_params["mlp"]["fc2"]["weight"],
-        bias=layer_params["mlp"]["fc2"]["bias"],
-        memory_config=memory_config,
-        dtype=ttnn.bfloat16,
-    )
-    ttnn.deallocate(mlp_hidden)
-
-    # Final residual
-    hidden_states = ttnn.add(residual, mlp_output)
-    ttnn.deallocate(residual)
-    ttnn.deallocate(mlp_output)
-
-    return hidden_states
-
-
-def run_box_head_on_device(
-    image_features: ttnn.Tensor,
-    parameters: Dict[str, Any],
-    memory_config,
-) -> ttnn.Tensor:
-    """Run box prediction head on device (legacy - skips CLS token)."""
-    # Convert to torch to do the slice (skip CLS token), then back to device
-    features_torch = ttnn.to_torch(image_features)
-
-    # Skip CLS token (first token)
-    patch_features_torch = features_torch[:, 1:, :]  # [batch, 576, 768]
-
-    # Transfer back to device
-    patch_features = ttnn.from_torch(
-        patch_features_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=image_features.device(),
-    )
-
-    # MLP: hidden -> hidden -> hidden -> 4
-    hidden = ttnn.linear(
-        patch_features,
-        parameters["box_head"]["dense0"]["weight"],
-        bias=parameters["box_head"]["dense0"]["bias"],
-        memory_config=memory_config,
-    )
-    hidden = ttnn.gelu(hidden)
-
-    hidden = ttnn.linear(
-        hidden,
-        parameters["box_head"]["dense1"]["weight"],
-        bias=parameters["box_head"]["dense1"]["bias"],
-        memory_config=memory_config,
-    )
-    hidden = ttnn.gelu(hidden)
-
-    pred_boxes = ttnn.linear(
-        hidden,
-        parameters["box_head"]["dense2"]["weight"],
-        bias=parameters["box_head"]["dense2"]["bias"],
-        memory_config=memory_config,
-    )
-
-    pred_boxes = ttnn.sigmoid(pred_boxes)
-
-    return pred_boxes
-
-
-def run_box_head_on_device_v2(
-    patch_features: ttnn.Tensor,
-    parameters: Dict[str, Any],
-    memory_config,
-) -> ttnn.Tensor:
-    """Run box prediction head on device (features already processed, CLS removed)."""
-    # MLP: hidden -> hidden -> hidden -> 4
-    hidden = ttnn.linear(
-        patch_features,
-        parameters["box_head"]["dense0"]["weight"],
-        bias=parameters["box_head"]["dense0"]["bias"],
-        memory_config=memory_config,
-    )
-    hidden = ttnn.gelu(hidden)
-
-    hidden = ttnn.linear(
-        hidden,
-        parameters["box_head"]["dense1"]["weight"],
-        bias=parameters["box_head"]["dense1"]["bias"],
-        memory_config=memory_config,
-    )
-    hidden = ttnn.gelu(hidden)
-
-    pred_boxes = ttnn.linear(
-        hidden,
-        parameters["box_head"]["dense2"]["weight"],
-        bias=parameters["box_head"]["dense2"]["bias"],
-        memory_config=memory_config,
-    )
-
-    # Add box_bias before sigmoid (critical for accurate predictions)
-    pred_boxes = ttnn.add(pred_boxes, parameters["box_bias"])
-    pred_boxes = ttnn.sigmoid(pred_boxes)
-
-    return pred_boxes
-
-
-def run_class_head_on_device(
-    image_features: ttnn.Tensor,
-    text_embeds: torch.Tensor,  # Keep on CPU for now
-    parameters: Dict[str, Any],
-    device: ttnn.Device,
-    memory_config,
-) -> ttnn.Tensor:
-    """Run class prediction head on device."""
-    # Convert to torch to do the slice (skip CLS token)
-    features_torch = ttnn.to_torch(image_features)
-    batch_size, seq_len, hidden_size = features_torch.shape
-
-    # Skip CLS token (first token)
-    patch_features_torch = features_torch[:, 1:, :]  # [batch, 576, 768]
-
-    # Transfer back to device
-    patch_features = ttnn.from_torch(
-        patch_features_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
-
-    # Project patch features
-    patch_projected = ttnn.linear(
-        patch_features,
-        parameters["class_head"]["dense0"]["weight"],
-        bias=parameters["class_head"]["dense0"]["bias"],
-        memory_config=memory_config,
-    )
-
-    # Normalize
-    patch_norm = ttnn.layer_norm(
-        patch_projected,
-        weight=None,
-        bias=None,
-        epsilon=1e-5,
-        memory_config=memory_config,
-    )
-
-    # Transfer text embeds to device
-    text_embeds_tt = ttnn.from_torch(
-        text_embeds,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
-
-    # Compute similarity: patch_features @ text_embeds^T
-    text_embeds_t = ttnn.transpose(text_embeds_tt, -2, -1)
-    logits = ttnn.matmul(patch_norm, text_embeds_t, memory_config=memory_config)
-
-    return logits
-
-
-def run_class_head_on_device_v2(
-    patch_features: ttnn.Tensor,
-    text_embeds: torch.Tensor,
-    parameters: Dict[str, Any],
-    device: ttnn.Device,
-    memory_config,
-) -> ttnn.Tensor:
-    """Run class prediction head on device matching PyTorch's logic."""
-    # Project patch features
-    image_class_embeds = ttnn.linear(
-        patch_features,
-        parameters["class_head"]["dense0"]["weight"],
-        bias=parameters["class_head"]["dense0"]["bias"],
-        memory_config=memory_config,
-    )
-
-    # L2 normalize image embeddings (PyTorch uses linalg.norm)
-    # Convert to torch for normalization
-    image_embeds_torch = ttnn.to_torch(image_class_embeds).float()
-    image_norm = torch.nn.functional.normalize(image_embeds_torch, p=2, dim=-1, eps=1e-6)
-
-    # L2 normalize text embeddings
-    text_norm = torch.nn.functional.normalize(text_embeds.squeeze(0).float(), p=2, dim=-1, eps=1e-6)
-
-    # Compute similarity: image_embeds @ text_embeds^T
-    # image_norm: [batch, 576, 512], text_norm: [2, 512]
-    pred_logits = torch.einsum("bpd,qd->bpq", image_norm, text_norm)
-
-    # Apply logit_shift and logit_scale
-    # These are learned projections from image features
-    patch_features_torch = ttnn.to_torch(patch_features).float()
-
-    # logit_shift: Linear(768, 1) - output [batch, 576, 1]
-    shift_weight = ttnn.to_torch(parameters["class_head"]["logit_shift"]["weight"]).float()
-    shift_bias = ttnn.to_torch(parameters["class_head"]["logit_shift"]["bias"]).float()
-    # shift_weight is stored as [768, 1] (transposed during loading)
-    logit_shift = torch.matmul(patch_features_torch, shift_weight.squeeze(0)) + shift_bias.squeeze()
-
-    # logit_scale: Linear(768, 1) + ELU + 1
-    scale_weight = ttnn.to_torch(parameters["class_head"]["logit_scale"]["weight"]).float()
-    scale_bias = ttnn.to_torch(parameters["class_head"]["logit_scale"]["bias"]).float()
-    logit_scale = torch.matmul(patch_features_torch, scale_weight.squeeze(0)) + scale_bias.squeeze()
-    logit_scale = torch.nn.functional.elu(logit_scale) + 1
-
-    # logit_shift and logit_scale are [batch, 576, 1], pred_logits is [batch, 576, 2]
-    # Need to expand for broadcasting
-    logit_shift = logit_shift.unsqueeze(-1) if logit_shift.dim() == 2 else logit_shift
-    logit_scale = logit_scale.unsqueeze(-1) if logit_scale.dim() == 2 else logit_scale
-
-    # Apply: (logits + shift) * scale
-    pred_logits = (pred_logits + logit_shift) * logit_scale
-
-    # Transfer back to device
-    logits = ttnn.from_torch(
-        pred_logits,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
-
-    return logits
 
 
 def run_owl_vit_end_to_end(
@@ -1158,12 +759,17 @@ def run_owl_vit_end_to_end(
 
     # Run detection heads - pass normalized features (already has CLS token removed)
     logger.info("Running box head on device...")
-    pred_boxes = run_box_head_on_device_v2(vision_normalized, parameters, dram_config)
+    pred_boxes = run_box_head(vision_normalized, parameters, dram_config)
     logger.info(f"Pred boxes shape: {pred_boxes.shape}")
 
     logger.info("Running class head on device...")
-    logits = run_class_head_on_device_v2(
-        vision_normalized, text_embeds_torch.unsqueeze(0), parameters, device, dram_config
+    logits = run_class_head(
+        vision_normalized,
+        text_embeds_torch,
+        parameters,
+        device,
+        dram_config,
+        ttnn_config,
     )
     logger.info(f"Logits shape: {logits.shape}")
 

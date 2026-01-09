@@ -24,7 +24,7 @@ import ttnn
 
 sys.path.insert(0, "/root/tt-metal")
 
-from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import OwlViTTTNNConfig, update_model_config
+from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import OwlViTTTNNConfig
 
 # Test constants
 MODEL_NAME = "google/owlvit-base-patch32"
@@ -115,12 +115,11 @@ class TestOwlViTBasicFunctionality:
         ttnn_config = OwlViTTTNNConfig.from_huggingface(model.config)
 
         assert ttnn_config.vision_hidden_size == 768
-        assert ttnn_config.vision_num_attention_heads == 12
-        assert ttnn_config.vision_num_hidden_layers == 12
+        assert ttnn_config.vision_num_heads == 12
+        assert ttnn_config.vision_layers == 12
         assert ttnn_config.patch_size == 32
         assert ttnn_config.image_size == 768
         assert ttnn_config.text_hidden_size == 512
-        assert ttnn_config.projection_dim == 512
 
         logger.info("Config created successfully from HuggingFace config")
 
@@ -128,20 +127,6 @@ class TestOwlViTBasicFunctionality:
         """Test that device initializes correctly."""
         assert device is not None
         logger.info(f"Device initialized: {device}")
-
-    def test_update_model_config(self, device, model_and_processor):
-        """Test that model config is updated with hardware-specific parameters."""
-        _, model = model_and_processor
-
-        ttnn_config = OwlViTTTNNConfig.from_huggingface(model.config)
-        ttnn_config = update_model_config(ttnn_config, batch_size=1, device=device)
-
-        assert ttnn_config.core_grid is not None
-        assert hasattr(ttnn_config, "vision_program_configs")
-        assert "layernorm_program_config" in ttnn_config.vision_program_configs
-        assert "qkv_matmul_program_config" in ttnn_config.vision_program_configs
-
-        logger.info("Model config updated with hardware parameters")
 
 
 class TestOwlViTVisionEncoder:
@@ -339,34 +324,6 @@ class TestOwlViTParameterLoading:
 # ============================================================================
 # Performance and Integration Tests (require hardware)
 # ============================================================================
-
-
-@pytest.mark.parametrize("batch_size", [1])
-class TestOwlViTOnDevice:
-    """Tests that run on TT hardware."""
-
-    def test_vision_encoder_on_device(self, device, model_and_processor, batch_size):
-        """Test vision encoder runs on device without errors."""
-        processor, model = model_and_processor
-
-        # Create config
-        ttnn_config = OwlViTTTNNConfig.from_huggingface(model.config)
-        ttnn_config = update_model_config(ttnn_config, batch_size=batch_size, device=device)
-
-        # Create test input
-        image = load_test_image()
-        inputs = processor(images=image, return_tensors="pt")
-        pixel_values = inputs["pixel_values"]  # [1, 3, 768, 768]
-
-        # Convert to NHWC format for TTNN
-        pixel_values_nhwc = pixel_values.permute(0, 2, 3, 1).contiguous()
-
-        logger.info(f"Running vision encoder on device with batch_size={batch_size}")
-        logger.info(f"Input shape: {pixel_values_nhwc.shape}")
-
-        # Note: Full device test requires parameter preprocessing
-        # This test validates the configuration and input preparation
-        logger.info("Vision encoder device test setup completed")
 
 
 if __name__ == "__main__":

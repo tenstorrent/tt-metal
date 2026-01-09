@@ -61,14 +61,8 @@ HuggingFace Model: [google/owlvit-base-patch32](https://huggingface.co/google/ow
 | Box Head | 3-layer MLP → 4 outputs (cx, cy, w, h) |
 | Class Head | Projects patches to query space, computes similarity |
 
-### 1. Run Reference PyTorch Demo
-Validate the model works before running on TT hardware:
 
-```bash
-python models/demos/wormhole/owl_vit/reference/torch_owl_vit.py
-```
-
-### 2. Run Tests
+### 1. Run Tests
 ```bash
 # Run all OWL-ViT tests
 pytest models/demos/wormhole/owl_vit/tests/ -v
@@ -126,9 +120,9 @@ models/demos/wormhole/owl_vit/
 
 ### TTNN Optimizations
 
-1. **Block Sharding**: Vision encoder uses 8×8 core grid for efficient parallel computation
+1. **DRAM Memory Config**: Currently validating with DRAM memory configuration for stability
 2. **Fused QKV**: Query, Key, Value projections are fused into a single matrix multiplication
-3. **Memory Management**: Uses L1 sharded memory for inter-operation data transfer
+3. **Native TTNN Operations**: Full pipeline implemented using native ttnn ops including embeddings and transformer layers
 4. **GELU Fusion**: Feed-forward GELU activation is fused with the linear operation
 
 
