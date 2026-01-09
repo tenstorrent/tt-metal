@@ -169,21 +169,24 @@ int main(int argc, char* argv[]) {
         crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                              launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset);
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
-        // Add comments for both cases i.e. RTA offsets and memory init
-        // Treat 0xBEEF#### pattern as 0 (indicates uninitialized/unset RTAs for this core)
+        // Initialize RTA count from L1 memory
+        // Set to 0 if: 1. offset is sentinel (no args set)
+        //              2. memory contains known garbage pattern 0xBEEF#### (uninitialized slot)
         if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].rta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
             ((rta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
             rta_count = 0;
         } else {
             rta_count = rta_l1_base[0];
-            rta_l1_base = rta_l1_base + 1;
+            rta_l1_base += 1;  // Skip count word
         }
 
+        // Initialize CRTA count from L1 memory
+        // Set to 0 if offset is sentinel (no common args set)
         if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset == RTA_CRTA_NO_ARGS_SENTINEL) {
             crta_count = 0;
         } else {
             crta_count = crta_l1_base[0];
-            crta_l1_base += 1;
+            crta_l1_base += 1;  // Skip count word
         }
 #endif
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;

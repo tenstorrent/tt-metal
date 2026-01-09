@@ -187,7 +187,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
                 .defines = {{"MAX_RTA_IDX", "0"}}});  // Kernel will try to read RTA[0]
 
         SetRuntimeArgs(program, kernel, cores_with_rtas, default_rtas);
-        // cores_without_rtas has NO RTAs set - 0xBEEF pattern -> rta_count = 0 -> assert
+        // cores_without_rtas has NO RTAs set - 0xBEEF#### pattern -> rta_count = 0 -> assert
 
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device, workload);
