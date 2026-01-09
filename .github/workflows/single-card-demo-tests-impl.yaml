@@ -28,7 +28,7 @@ on:
       mlperf-read-only:
         required: false
         type: boolean
-        default: false
+        default: true
         description: "Set to false to allow write access to MLPerf mount"
       enable-ops-recording:
         required: false
