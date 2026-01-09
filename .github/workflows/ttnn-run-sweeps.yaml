@@ -415,4 +415,914 @@ on:
           - eltwise.unary_backward.elu_bw.elu_bw
           - eltwise.unary_backward.exp_bw.exp_bw
           - eltwise.unary_backward.exp_bw.exp_bw_sharded
-          - eltwise.unary_backward.fill_bw.fill
+          - eltwise.unary_backward.fill_bw.fill_bw
+          - eltwise.unary_backward.fill_bw.fill_bw_sharded
+          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw
+          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw_sharded
+          - eltwise.unary_backward.floor_bw.floor_bw
+          - eltwise.unary_backward.frac_bw.frac_bw
+          - eltwise.unary_backward.frac_bw.frac_bw_sharded
+          - eltwise.unary_backward.hardshrink_bw
+          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
+          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw_sharded
+          - eltwise.unary_backward.hardswish_bw.hardswish_bw
+          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
+          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw_sharded
+          - eltwise.unary_backward.i0_bw.i0_bw
+          - eltwise.unary_backward.i0_bw.i0_bw_sharded
+          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
+          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw_sharded
+          - eltwise.unary_backward.lgamma_bw.lgamma_bw
+          - eltwise.unary_backward.lgamma_bw.lgamma_bw_sharded
+          - eltwise.unary_backward.log10_bw.log10_bw
+          - eltwise.unary_backward.log_bw.log_bw
+          - eltwise.unary_backward.log_bw.log_bw_sharded
+          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw
+          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw_sharded
+          - eltwise.unary_backward.logit_bw
+          - eltwise.unary_backward.mul_bw.mul_bw
+          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
+          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw_sharded
+          - eltwise.unary_backward.neg_bw.neg_bw
+          - eltwise.unary_backward.neg_bw.neg_bw_sharded
+          - eltwise.unary_backward.pow_bw.pow_bw
+          - eltwise.unary_backward.pow_bw.pow_bw_sharded
+          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
+          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw_sharded
+          - eltwise.unary_backward.rdiv_bw.rdiv_bw
+          - eltwise.unary_backward.rdiv_bw.rdiv_bw_sharded
+          - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary_backward.relu6_bw.relu6_bw_sharded
+          - eltwise.unary_backward.relu_bw.relu_bw
+          - eltwise.unary_backward.relu_bw.relu_bw_sharded
+          - eltwise.unary_backward.round_bw.round_bw
+          - eltwise.unary_backward.rpow_bw.rpow_bw
+          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
+          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
+          - eltwise.unary_backward.selu_bw.selu_bw
+          - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
+          - eltwise.unary_backward.silu_bw.silu_bw
+          - eltwise.unary_backward.sin_bw.sin_bw
+          - eltwise.unary_backward.sinh_bw.sinh_bw
+          - eltwise.unary_backward.softplus_bw.softplus_bw
+          - eltwise.unary_backward.softplus_bw.softplus_bw_sharded
+          - eltwise.unary_backward.softshrink_bw
+          - eltwise.unary_backward.sqrt_bw.sqrt_bw
+          - eltwise.unary_backward.sqrt_bw.sqrt_bw_sharded
+          - eltwise.unary_backward.square_bw.square_bw
+          - eltwise.unary_backward.sub_bw.sub_bw
+          - eltwise.unary_backward.sub_bw.sub_bw_sharded
+          - eltwise.unary_backward.tan_bw.tan_bw
+          - eltwise.unary_backward.tan_bw.tan_bw_sharded
+          - eltwise.unary_backward.tanh_bw.tanh_bw
+          - eltwise.unary_backward.tanh_bw.tanh_bw_sharded
+          - eltwise.unary_backward.tanhshrink_bw.tanhshrink_bw
+          - eltwise.unary_backward.threshold_bw.threshold_bw
+          - eltwise.unary_backward.threshold_bw.threshold_bw_sharded
+          - eltwise.unary_backward.trunc_bw.trunc_bw
+          - eltwise.unary_backward.trunc_bw.trunc_bw_sharded
+          - eltwise.unary_complex.angle.angle
+          - eltwise.unary_complex.angle_bw.angle_bw
+          - eltwise.unary_complex.conj
+          - eltwise.unary_complex.conj_bw
+          - eltwise.unary_complex.is_imag
+          - eltwise.unary_complex.is_real
+          - eltwise.unary_complex.polar.polar
+          - eltwise.unary_complex.polar_bw.polar_bw
+          - eltwise.unary_complex.reciprocal.reciprocal
+          - eltwise.unary_complex.reciprocal.reciprocal_sharded
+          - eltwise.unary_complex.reciprocal_bw
+          - embedding.embedding
+          - embedding_bw.embedding_bw
+          - fused.layer_norm_traces
+          - fused.softmax_traces
+          - losses.l1_loss
+          - losses.mse_loss
+          - matmul.full.matmul_default_block_sharded
+          - matmul.full.matmul_default_height_sharded
+          - matmul.full.matmul_default_interleaved
+          - matmul.full.matmul_default_width_sharded
+          - matmul.generality.linear
+          - matmul.generality.matmul
+          - matmul.short.matmul
+          - matmul.short.matmul_create_program_config
+          - matmul.short.matmul_default
+          - matmul.short.matmul_default_sharded
+          - matmul.short.matmul_traces
+          - matmul.short.matmul_user_program_config
+          - matmul.short.matmul_user_program_config_mcast_1d
+          - matmul.short.matmul_user_program_config_mcast_2d
+          - matmul.sparse.sparse_matmul
+          - matmul.sparse.batched_sparse_matmul
+          - pool2d.full.max_pool2d_large_dims
+          - pool2d.full.max_pool2d_params
+          - pool2d.short.avg_pool2d_short_sweep
+          - pool2d.short.max_pool2d_short_sweep
+          - pool2d.global_avg_pool2d
+          - pool2d.max_pool2d
+          - normalization.batch_norm.batch_norm
+          - normalization.generality.layernorm
+          - normalization.generality.softmax
+          - normalization.generality.softmax_fused
+          - normalization.softmax.softmax
+          - normalization.softmax.softmax_sharded
+          - reduction.argmax.argmax
+          - reduction.argmax.argmax_output
+          - reduction.backward.prod_bw.prod_bw
+          - reduction.cross_entropy_loss.cross_entropy_loss
+          - reduction.generality.argmax
+          - reduction.generality.reduction_all_ranks
+          - reduction.mean.mean
+          - reduction.prod
+          - reduction.std.std
+          - reduction.sum
+          - reduction.topk.topk
+          - reduction.topk.topk_output
+          - reduction.traces.argmax_traces
+          - reduction.traces.max_traces
+          - reduction.traces.mean_traces
+          - reduction.traces.sum_traces
+          - reduction.traces.topk_traces
+          - reduction.var.var
+          - tilize
+          - tilize_with_val_padding
+          - transformer.attention_softmax.attention_softmax
+          - transformer.attention_softmax.attention_softmax_
+          - transformer.concatenate_heads.concatenate_heads
+          - transformer.rotary_embedding.rotary_embedding
+          - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads
+          - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads_kv_input
+          - untilize
+          - untilize_with_unpadding
+      suite_name:
+        description: "Which sweep suite to run?"
+        type: string
+      skip_on_timeout:
+        description: "Skip remaining tests in running suite after first timeout?"
+        type: boolean
+        default: true
+      upload_results:
+        description: "Upload sweep results to Superset?"
+        type: boolean
+        default: true
+      measure_device_perf:
+        description: "Measure device performance using device profiler (--device-perf flag)."
+        type: boolean
+        default: true
+      measure_e2e_perf:
+        description: "Measure end-to-end performance with cold/cached comparison (--perf-with-cache flag)"
+        type: boolean
+        default: false
+      measure_memory:
+        description: "Capture peak L1 memory usage using graph trace (--measure-memory flag)."
+        type: boolean
+        default: false
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+        default: "wormhole_b0"
+      runner-label:
+        description: "Single sweep only"
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - P100a
+          - P150b
+          - n300-llmbox
+          - topology-6u
+          - BH-LLMBox
+          - BH-DeskBox
+          - BH-LoudBox
+        default: "N150"
+      log-level:
+        description: "Log level for sweep execution. INFO level may overwhelm runners for long sweeps."
+        required: true
+        type: choice
+        options:
+          - DEBUG
+          - INFO
+          - WARNING
+          - CRITICAL
+        default: "INFO"
+
+  schedule:
+    - cron: "30 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:30 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
+    - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
+    - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
+    - cron: "0 4 * * *" # This cron schedule runs the workflow at 4:00 AM UTC daily (model traced runs)
+concurrency:
+  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name }}
+
+jobs:
+  display-workflow-options:
+    name: 📋 Display workflow options
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Display selected workflow options
+        run: |
+          echo "::group::🔧 Workflow Configuration Options"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                    TTNN Run Sweeps Configuration            │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Sweep Name:           ${{ github.event.inputs.sweep_name || 'ALL SWEEPS (Nightly)' }}"
+          echo "│ Suite Name:           ${{ github.event.inputs.suite_name || 'Not specified' }}"
+          echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
+          echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
+          echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
+          echo "│ Measure E2E Perf:     ${{ github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
+          echo "│ Measure Memory:       ${{ github.event.inputs.measure_memory == 'true' && 'true' || 'false' }}"
+          echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
+          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
+          echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+
+          echo "::group::📊 Workflow Context Information"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch/Ref: ${{ github.ref_name }}"
+          echo "::endgroup::"
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: "22.04"
+      tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
+  ttnn-generate-sweeps:
+    name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}
+    needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Entry 1: Manual dispatch with single sweep only
+          - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
+            generate_mode: all
+          # Entry 2: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - N150 for non-CCL modules
+          - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+            runner_label: N150
+            generate_mode: non_ccl
+          # Entry 3: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - n300-llmbox for CCL modules only
+          - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+            runner_label: n300-llmbox
+            generate_mode: ccl_only
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: tt-sweeps
+          POSTGRES_PASSWORD: tt.sweeps
+          POSTGRES_DB: tt-model-traces
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 30
+    runs-on: >-
+      ${{
+        (matrix.runner_label == 'topology-6u' || matrix.runner_label == 'BH-LLMBox' || matrix.runner_label == 'BH-DeskBox' || matrix.runner_label == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.runner_label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.runner_label)
+      }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: 🔌 Setup Local Database
+        timeout-minutes: 5
+        env:
+          PGPASSWORD: tt.sweeps
+        run: |
+          echo "::group::🔧 Database Setup"
+
+          if ! python3 -c "import psycopg2" 2>/dev/null; then
+            pip install -q psycopg2-binary
+          fi
+
+          echo "⏳ Waiting for postgres service..."
+          for i in {1..30}; do
+            if pg_isready -h postgres -p 5432 -U tt-sweeps >/dev/null 2>&1; then
+              echo "✅ Postgres ready"
+              break
+            fi
+            sleep 2
+          done
+
+          echo "♻ Restoring database..."
+          pg_restore \
+            -h postgres -p 5432 -U tt-sweeps -d tt-model-traces \
+            --clean --if-exists --no-owner --no-privileges \
+            model_tracer/ttnn_operations_db.sql
+
+          echo "🔍 Verifying schema..."
+          psql -h postgres -U tt-sweeps -d tt-model-traces -c "SELECT COUNT(*) FROM operations;"
+          psql -h postgres -U tt-sweeps -d tt-model-traces -c "SELECT COUNT(*) FROM configurations;"
+
+          echo "✅ Database ready"
+          echo "::endgroup::"
+
+      - name: Verify DB
+        run: |
+          python3 - << 'EOF'
+          import psycopg2
+          conn = psycopg2.connect("postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces")
+          cur = conn.cursor()
+          cur.execute("SELECT COUNT(*) FROM operations")
+          print("Operations:", cur.fetchone()[0])
+          cur.execute("SELECT COUNT(*) FROM configurations")
+          print("Configurations:", cur.fetchone()[0])
+          conn.close()
+          EOF
+      - name: Run ttnn sweeps generation (single sweep)
+        if: |
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' &&
+          github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' &&
+          github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' &&
+          matrix.generate_mode == 'all'
+        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main --explicit
+      - name: Run ttnn sweeps generation (all sweeps - model traced)
+        if: |
+          ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') ||
+           (github.event_name == 'schedule' && github.event.schedule == '0 4 * * *')) &&
+          matrix.generate_mode == 'all'
+        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced --dump-file --tag ci-main --explicit
+      - name: Run ttnn sweeps generation (all sweeps)
+        if: |
+          ((github.event_name == 'schedule' && github.event.schedule != '0 4 * * *') ||
+           (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)') ||
+           (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')) &&
+          (matrix.generate_mode == 'non_ccl' || matrix.generate_mode == 'ccl_only')
+        run: |
+          # Determine which modules to skip based on generate_mode
+          SKIP_MODULES_FLAG=""
+          if [[ "${{ matrix.generate_mode }}" == "non_ccl" ]]; then
+            # Skip all CCL modules when generating on N150
+            SKIP_MODULES_FLAG="--skip-modules ccl.generality.all_broadcast,ccl.generality.all_gather,ccl.generality.all_reduce,ccl.generality.all_to_all_combine,ccl.generality.all_to_all_dispatch,ccl.generality.all_to_all,ccl.generality.point_to_point,ccl.generality.reduce_scatter"
+          elif [[ "${{ matrix.generate_mode }}" == "ccl_only" ]]; then
+            # Generate only CCL modules on n300-llmbox by skipping all non-CCL modules
+            # Use single-line Python command to avoid YAML parsing issues with multiline strings
+            NON_CCL_MODULES=$(python3 -c "import pathlib; sweeps_dir = pathlib.Path('tests/sweep_framework/sweeps'); all_modules = [str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') for py_file in sorted(sweeps_dir.glob('**/*.py')) if '__init__' not in str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') and not str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.').startswith('ccl.')]; print(','.join(all_modules))") || {
+              echo "Error: Failed to compute non-CCL modules"
+              exit 1
+            }
+            if [[ -z "$NON_CCL_MODULES" ]]; then
+              echo "Error: No non-CCL modules found - this would skip all modules"
+              exit 1
+            fi
+            SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
+          fi
+
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main --explicit $SKIP_MODULES_FLAG
+      - name: Upload sweep vectors
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-vectors-${{ matrix.generate_mode }}
+          path: /work/tests/sweep_framework/vectors_export/
+          retention-days: 1
+  ttnn-compute-module-matrix:
+    name: Compute module matrix
+    needs: ttnn-generate-sweeps
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' }}
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Show run identifiers
+        run: |
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: sweeps-vectors-*
+          path: /tmp/vectors-download
+          merge-multiple: true
+      - name: Merge vector artifacts
+        shell: bash
+        run: |
+          # Create final vectors directory
+          mkdir -p /tmp/vectors
+          # Move all JSON files from subdirectories to /tmp/vectors
+          find /tmp/vectors-download -name "*.json" -exec mv {} /tmp/vectors/ \;
+      - id: set-matrix
+        shell: bash
+        run: |
+          python - <<'PY' > /tmp/matrix.json
+          import os, json, sys
+          d = '/tmp/vectors'
+          modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
+
+          # Helper for chunking modules into batches
+          def chunk_modules(items, size):
+              return [",".join(items[i:i+size]) for i in range(0, len(items), size)] if items else []
+
+          ccl_modules = [m for m in modules if m.startswith('ccl.')]
+
+          schedule_expr = "${{ github.event.schedule }}"
+          event_name = "${{ github.event_name }}"
+          sweep_name = "${{ github.event.inputs.sweep_name }}"
+          measure_device_perf = "${{ github.event.inputs.measure_device_perf }}"
+
+          # Use smaller batch size for comprehensive runs (Wed/Sat schedule or manual comprehensive dispatch)
+          # Also use smaller batch size when device performance measurement is enabled to avoid timeouts
+          # Use larger batch size for nightly runs (Mon/Tue/Thu/Fri schedule or manual nightly dispatch)
+          device_perf_enabled = event_name == "schedule" or measure_device_perf == "true"
+          if schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)" or device_perf_enabled:
+              BATCH_SIZE = 3  # Smaller batches for comprehensive runs or when device performance measurement is enabled (must stay under 256 total batches due to GitHub Actions limit)
+          else:
+              BATCH_SIZE = 10  # Larger batches for nightly runs
+
+          # Create batches for all modules
+          regular_batches = chunk_modules(modules, BATCH_SIZE)
+
+          # Maintain backwards-compatible batch list output
+          batches = list(regular_batches)
+
+          # Generate CCL-only batches for dedicated runners
+          ccl_batches = chunk_modules(ccl_modules, BATCH_SIZE)
+
+          is_comprehensive = schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)"
+          is_model_traced = schedule_expr == "0 4 * * *" or sweep_name == "ALL SWEEPS (Model Traced)"
+          # For model_traced runs, use "model_traced" suite only
+          # For nightly runs, use "nightly" suite
+          # For comprehensive runs, don't override suite_name
+          if is_model_traced:
+              wormhole_suite_name = "model_traced"
+          elif is_comprehensive:
+              wormhole_suite_name = None
+          else:
+              wormhole_suite_name = "nightly"
+
+          include_entries = []
+
+          wormhole_template = {
+              "test_group_name": "wormhole-n150-sweeps",
+              "arch": "wormhole_b0",
+              "runs_on": "tt-ubuntu-2204-n150-stable",
+              "tt_smi_cmd": "tt-smi -r",
+          }
+
+          for batch in regular_batches:
+              include_entries.append({
+                  **wormhole_template,
+                  "module_selector": batch,
+                  "batch_display": batch,
+                  "suite_name": wormhole_suite_name,
+              })
+
+          if ccl_batches:
+              n300_template = {
+                  "test_group_name": "n300-llmbox-ccl",
+                  "arch": "wormhole_b0",
+                  "runs_on": "tt-ubuntu-2204-n300-llmbox-viommu-stable",
+                  "tt_smi_cmd": "tt-smi -r",
+              }
+              for batch in ccl_batches:
+                  include_entries.append({
+                      **n300_template,
+                      "module_selector": batch,
+                      "batch_display": f"ccl:{batch}",
+                      "suite_name": "generality_suite_fabric_1d",
+                  })
+
+          total_batches = len(batches)
+          if total_batches > 256:
+              print(f"Total batch count ({total_batches}) exceeds GitHub Actions matrix limit of 256. Please adjust BATCH_SIZE or reduce the number of modules.", file=sys.stderr)
+              sys.exit(1)
+
+          total_matrix_entries = len(include_entries)
+          if total_matrix_entries > 256:
+              print(f"Total matrix entry count ({total_matrix_entries}) exceeds GitHub Actions matrix limit of 256. Please adjust batching logic or reduce modules.", file=sys.stderr)
+              sys.exit(1)
+
+          result = {
+              "module": modules,
+              "batches": batches,
+              "ccl_batches": ccl_batches,
+              "include": include_entries,
+          }
+          print(json.dumps(result))
+          PY
+          echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
+  ttnn-run-single-sweep:
+    name: Run single sweep
+    needs:
+      - ttnn-generate-sweeps
+      - build-artifact
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' }}
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: ttnn sweep tests ${{ github.event.inputs['arch'] || 'wormhole_b0' }} ${{ github.event.inputs['runner-label'] || 'N150' }}
+            arch: ${{ github.event.inputs['arch'] || 'wormhole_b0' }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: ${{ inputs.log-level }}
+        TT_LOGGER_LEVEL: ${{ inputs.log-level }}
+        GITHUB_ACTIONS: true
+        TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: >-
+        --device /dev/tenstorrent
+        --device /dev/ipmi0
+        --privileged
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 720
+    runs-on: >-
+      ${{
+        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LLMBox' || matrix.test-group.runner_label == 'BH-DeskBox' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
+      }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: 📋 Display single sweep configuration
+        run: |
+          echo "::group::🔧 Single Sweep Execution - Configuration"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                 Single Sweep Configuration                  │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Target Sweep:         ${{ github.event.inputs.sweep_name }}"
+          echo "│ Suite Name:           ${{ github.event.inputs.suite_name || 'Default' }}"
+          echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
+          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
+          echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
+          echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
+          echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
+          echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+      - name: Download sweep vectors
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: sweeps-vectors-*
+          path: /work/tests/sweep_framework/vectors_export
+          merge-multiple: true
+      - name: Run ttnn sweeps (single sweep) ${{ github.event.inputs.runner_label }} ${{ github.event.inputs.sweep_name }} ${{ github.event.inputs.suite_name }}
+        run: |
+          SUITE_NAME="${{ github.event.inputs.suite_name }}"
+
+          SKIP_ON_TIMEOUT_FLAG=""
+          if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
+            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
+          fi
+
+          DEVICE_PERF_FLAG=""
+          if [[ "${{ github.event.inputs.measure_device_perf }}" == "true" ]]; then
+            DEVICE_PERF_FLAG="--device-perf"
+          fi
+
+          MEMORY_FLAG=""
+          if [[ "${{ github.event.inputs.measure_memory }}" == "true" ]]; then
+            MEMORY_FLAG="--measure-memory"
+          fi
+
+          E2E_PERF_FLAG=""
+          if [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]]; then
+            E2E_PERF_FLAG="--perf-with-cache"
+          fi
+
+          CMD=(
+            python3 tests/sweep_framework/sweeps_runner.py
+            --module-name ${{ github.event.inputs.sweep_name }}
+            --vector-source vectors_export
+            --result-dest results_export
+            --tag ci-main
+            --summary
+          )
+
+          if [[ -n "$SKIP_ON_TIMEOUT_FLAG" ]]; then
+            CMD+=("$SKIP_ON_TIMEOUT_FLAG")
+          fi
+
+          if [[ -n "$DEVICE_PERF_FLAG" ]]; then
+            CMD+=("$DEVICE_PERF_FLAG")
+          fi
+
+          if [[ -n "$E2E_PERF_FLAG" ]]; then
+            CMD+=("$E2E_PERF_FLAG")
+          fi
+
+          if [[ -n "$SUITE_NAME" ]]; then
+            CMD+=(--suite-name "$SUITE_NAME")
+          fi
+
+          if [[ -n "$MEMORY_FLAG" ]]; then
+            CMD+=("$MEMORY_FLAG")
+          fi
+
+          "${CMD[@]}"
+      - name: Upload sweep results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-run-result
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1
+  ttnn-run-sweeps-parallel:
+    name: Run sweeps in parallel (${{ matrix.test_group_name }}, ${{ matrix.batch_display }})
+    needs:
+      - ttnn-generate-sweeps
+      - build-artifact
+      - ttnn-compute-module-matrix
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' }}
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).include }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 720
+    runs-on: ${{ matrix.runs_on }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: 📋 Display parallel sweep configuration
+        run: |
+          echo "::group::🔧 Parallel Sweeps Execution - Configuration"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│              Parallel Sweeps Configuration                  │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Run Mode:             Parallel Execution (${{ matrix.test_group_name }})"
+          echo "│ Batch:                ${{ matrix.batch_display }}"
+          echo "│ Module Selector:      ${{ matrix.module_selector }}"
+          echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
+          echo "│ Architecture:         ${{ matrix.arch }}"
+          echo "│ Runner:               ${{ matrix.runs_on }}"
+          echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') }}"
+          echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') }}"
+          echo "│ Measure E2E Perf:     ${{ github.event_name != 'schedule' && github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
+          echo "│ Measure Memory:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_memory == 'true' && 'true' || 'false') }}"
+          echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.upload_results == 'true' && 'true' || 'false') }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+      - name: Download sweep vectors
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: sweeps-vectors-*
+          path: /work/tests/sweep_framework/vectors_export
+          merge-multiple: true
+      - name: Run ttnn sweeps (batch)
+        run: |
+          MODULE_SELECTOR="${{ matrix.module_selector }}"
+          SUITE_NAME="${{ matrix.suite_name }}"
+
+          # Set skip-on-timeout flag based on input (default to true for all scheduled runs)
+          SKIP_ON_TIMEOUT_FLAG=""
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            # For scheduled runs: skip on timeout for both nightly and comprehensive runs
+            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
+          elif [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
+            # For manual dispatch: use the input parameter
+            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
+          fi
+
+          # Enable device performance for scheduled runs and when requested on manual dispatch
+          DEVICE_PERF_FLAG=""
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            DEVICE_PERF_FLAG="--device-perf"
+          elif [[ "${{ github.event.inputs.measure_device_perf }}" == "true" ]]; then
+            DEVICE_PERF_FLAG="--device-perf"
+          fi
+
+          # Enable e2e performance for manual dispatch only (not scheduled runs)
+          E2E_PERF_FLAG=""
+          if [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]]; then
+            E2E_PERF_FLAG="--perf-with-cache"
+          fi
+
+          # Enable memory measurement for scheduled runs and when requested on manual dispatch
+          MEMORY_FLAG=""
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            MEMORY_FLAG="--measure-memory"
+          elif [[ "${{ github.event.inputs.measure_memory }}" == "true" ]]; then
+            MEMORY_FLAG="--measure-memory"
+          fi
+
+          CMD=(
+            python3 tests/sweep_framework/sweeps_runner.py
+            --module-name "$MODULE_SELECTOR"
+            --vector-source vectors_export
+            --result-dest results_export
+            --tag ci-main
+            --summary
+          )
+
+          if [[ -n "$SKIP_ON_TIMEOUT_FLAG" ]]; then
+            CMD+=("$SKIP_ON_TIMEOUT_FLAG")
+          fi
+
+          if [[ -n "$DEVICE_PERF_FLAG" ]]; then
+            CMD+=("$DEVICE_PERF_FLAG")
+          fi
+
+          if [[ -n "$E2E_PERF_FLAG" ]]; then
+            CMD+=("$E2E_PERF_FLAG")
+          fi
+
+          if [[ -n "$MEMORY_FLAG" ]]; then
+            CMD+=("$MEMORY_FLAG")
+          fi
+
+          if [[ -n "$SUITE_NAME" ]]; then
+            CMD+=(--suite-name "$SUITE_NAME")
+          fi
+
+          "${CMD[@]}"
+      - name: Compute artifact suffix
+        shell: bash
+        run: |
+          DISPLAY_LABEL="${{ matrix.batch_display }}"
+          SUITE_LABEL="${{ matrix.suite_name }}"
+          GROUP_LABEL="${{ matrix.test_group_name }}"
+          FINGERPRINT="$GROUP_LABEL|$DISPLAY_LABEL"
+          if [[ -n "$SUITE_LABEL" ]]; then
+            FINGERPRINT="$FINGERPRINT|$SUITE_LABEL"
+          fi
+          echo "BATCH_SUFFIX=$(echo -n "$FINGERPRINT" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
+      - name: Upload sweep results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1
+  ttnn-homogenize-run-result:
+    name: Homogenize run result
+    needs:
+      - build-artifact
+      - ttnn-run-sweeps-parallel
+    if: ${{ !cancelled() && needs.ttnn-run-sweeps-parallel.result != 'skipped' && needs.ttnn-run-sweeps-parallel.result != 'cancelled' }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download all sweep results
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: sweeps-results*
+          path: /work/tests/sweep_framework/results_export
+          merge-multiple: true
+      - name: Homogenize sweep results
+        run: |
+          # Determine run type based on schedule or input
+          RUN_TYPE="nightly"
+          if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+            RUN_TYPE="comprehensive"
+          elif [[ "${{ github.event.schedule }}" == "0 4 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Model Traced)" ]]; then
+            RUN_TYPE="model_traced"
+          fi
+          python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
+      - name: Upload runs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-run-result
+          path: /work/tests/sweep_framework/results_export/oprun_*.json
+          retention-days: 7
+  ttnn-upload-results:
+    name: Upload sweep results to SFTP server
+    needs:
+      - ttnn-homogenize-run-result
+      - ttnn-run-single-sweep
+    if: ${{ !cancelled() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (needs.ttnn-homogenize-run-result.result != 'cancelled' || needs.ttnn-run-single-sweep.result != 'cancelled') && (github.event_name == 'schedule' || github.event.inputs.upload_results) }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository (actions only)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/actions
+      - name: Download sweep results
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: sweeps-run-result
+          path: tests/sweep_framework/results_export
+      - name: List all downloaded files
+        run: |
+          ls -hal tests/sweep_framework/results_export
+      - name: Upload via SFTP
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: ${{ github.workspace }}
