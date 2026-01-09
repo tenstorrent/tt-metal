@@ -34,6 +34,11 @@ void AllocatorImpl::validate_bank_assignments() const {
 
 void AllocatorImpl::init_one_bank_per_channel() {
     // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
+    TT_FATAL(
+        config_->trace_region_size % config_->num_dram_channels == 0,
+        "config_->trace_region_size {} should be multiple of config_->num_dram_channels {}",
+        config_->trace_region_size,
+        config_->num_dram_channels);
     auto trace_region_size_per_bank = config_->trace_region_size / config_->num_dram_channels;
     DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - trace_region_size_per_bank;
     std::vector<int64_t> bank_offsets(config_->num_dram_channels);
