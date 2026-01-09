@@ -537,9 +537,8 @@ void WatcherServer::Impl::poll_watcher_data() {
             if (rtoptions.get_test_mode_enabled()) {
                 server_killed_due_to_error_ = true;
                 break;
-            } else {
-                throw e;
             }
+            throw e;
         }
 
         fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());

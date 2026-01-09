@@ -392,6 +392,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
 };
 // clang-format on
 
+// TODO: Move into MetalContext or DeviceManager.
 std::vector<FDKernel*> node_id_to_kernel;
 detail::ProgramCompileGroup command_queue_compile_group;
 std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores;
@@ -427,15 +428,12 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_id
     auto populate_single_device = [&]() {
         if (num_hw_cqs == 1) {
             return single_chip_arch_1cq;
-        } else {
-            // TODO: determine whether dispatch_s is inserted at this level, instead of inside
-            // Device::dispatch_s_enabled().
-            if (MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type() == CoreType::WORKER) {
-                return single_chip_arch_2cq_dispatch_s;
-            } else {
-                return single_chip_arch_2cq;
-            }
+        }  // TODO: determine whether dispatch_s is inserted at this level, instead of inside
+           // Device::dispatch_s_enabled().
+        if (MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type() == CoreType::WORKER) {
+            return single_chip_arch_2cq_dispatch_s;
         }
+        return single_chip_arch_2cq;
     };
 
     if (remote_devices.empty()) {

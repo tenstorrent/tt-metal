@@ -37,7 +37,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
-#include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -137,8 +136,7 @@ void py_device_module_types(nb::module_& m_device) {
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
         .def_ro("num_banks", &tt::tt_metal::detail::MemoryView::num_banks)
         .def_ro("total_bytes_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_per_bank)
-        .def_ro(
-            "total_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_allocated_per_bank)
+        .def_ro("total_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_allocated_per_bank)
         .def_ro("total_bytes_free_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_free_per_bank)
         .def_ro(
             "largest_contiguous_bytes_free_per_bank",
@@ -348,12 +346,6 @@ void device_module(nb::module_& m_device) {
 
         )doc");
 
-    m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(
-        Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
-    )doc");
-    m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
-        Disables kernel compilation cache from being persistent across runs
-    )doc");
     m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
         Clear the in-memory kernel compilation hash lookup cache.
 

@@ -286,9 +286,8 @@ uint32_t SystemMemoryManager::get_completion_queue_limit(const uint8_t cq_id) co
 uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) const {
     if (this->bypass_enable) {
         return this->bypass_buffer_write_offset;
-    } else {
-        return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
     }
+    return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id) const {

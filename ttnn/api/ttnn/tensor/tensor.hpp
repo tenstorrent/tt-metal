@@ -306,9 +306,6 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
-// Allocates a tensor on device.
-Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-
 // Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
 // shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
@@ -322,6 +319,8 @@ Tensor to_dtype(const Tensor& tensor, DataType dtype);
 }  // namespace ops
 
 }  // namespace tt::tt_metal
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor);
 
 namespace ttnn {
 

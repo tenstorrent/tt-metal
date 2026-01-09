@@ -122,6 +122,7 @@ enum class EnvVarID {
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
+    TT_METAL_DEVICE_DEBUG_DUMP_ENABLED,            // Enable experimental debug dump mode for profiler
 
     // ========================================
     // WATCHER SYSTEM
@@ -151,6 +152,7 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,    // Track initialization closely
     TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,       // Warn on write exceptions
     TT_METAL_RISCV_DEBUG_INFO,                         // Enable RISC-V debug info
+    TT_METAL_JIT_ANALYTICS,                            // Enable JIT analytics
     TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
     TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
@@ -844,6 +846,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_DEVICE_DEBUG_DUMP_ENABLED
+        // Enable and sets the polling interval in seconds for experimental debug dump mode for profiler. In this mode,
+        // the profiler infrastructure will be used to continuously dump debug packets to a file. Default: false (debug
+        // dump mode disabled) Usage: export TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1
+        case EnvVarID::TT_METAL_DEVICE_DEBUG_DUMP_ENABLED: {
+            if (is_env_enabled(value)) {
+                this->profiler_enabled = true;
+                this->profiler_noc_events_enabled = true;
+                this->experimental_device_debug_dump_interval_seconds = std::stoi(value);
+            }
+            break;
+        }
+
         // TT_METAL_GTEST_NUM_HW_CQS
         // Number of hardware command queues to use in tests.
         // Default: 1
@@ -1068,6 +1083,21 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_JIT_ANALYTICS_
+        // Enable JIT compiler state information. Disable state by default; override with 1.
+        // Default: '0', or disable
+        // Usage: export TT_METAL_JIT_ANALYTICS=1  # in disable state by default
+        case EnvVarID::TT_METAL_JIT_ANALYTICS: {
+            jit_analytics_enabled = false;
+            if (value) {
+                if (strcmp(value, "1") == 0) {
+                    jit_analytics_enabled = true;
+                }
+            }
+            this->set_jit_analytics_enabled(jit_analytics_enabled);
+            break;
+        }
+
         // TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS
         // Sets the RPC server address for the inspector. Format: "host:port" or just "host" (uses default port).
         // Default: localhost:50051
@@ -1253,6 +1283,11 @@ void RunTimeOptions::InitializeFromEnvVars() {
     // TT_METAL_RISCV_DEBUG_INFO: Inherit from inspector if not explicitly set
     if (std::getenv("TT_METAL_RISCV_DEBUG_INFO") == nullptr) {
         HandleEnvVar(EnvVarID::TT_METAL_RISCV_DEBUG_INFO, nullptr);
+    }
+
+    // TT_METAL_JIT_ANALYTICS: Inherit from inspector if not explicitly set
+    if (std::getenv("TT_METAL_JIT_ANALYTICS") == nullptr) {
+        HandleEnvVar(EnvVarID::TT_METAL_JIT_ANALYTICS, nullptr);
     }
     ParseWatcherEnv();
 }

@@ -17,9 +17,8 @@ RepeatDeviceOperation::program_factory_t RepeatDeviceOperation::select_program_f
     bool is_last_dim = operation_attributes.m_is_last_dim;
     if (is_last_dim) {
         return program::RepeatProgramFactoryLastDim{};
-    } else {
-        return program::RepeatProgramFactoryHigherDim{};
     }
+    return program::RepeatProgramFactoryHigherDim{};
 }
 
 void RepeatDeviceOperation::validate_on_program_cache_miss(

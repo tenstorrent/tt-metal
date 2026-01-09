@@ -24,8 +24,19 @@ class RunTimeOptions;
 
 namespace tt_metal {
 
+namespace detail {
+void ReadDeviceProfilerResultsInternal(
+    distributed::MeshDevice* mesh_device,
+    IDevice* device,
+    const std::vector<CoreCoord>& virtual_cores,
+    ProfilerReadState state,
+    const std::optional<ProfilerOptionalMetadata>& metadata);
+}  // namespace detail
+
+void LaunchIntervalBasedProfilerReadThread(const std::vector<IDevice*>& active_devices);
 uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions);
 uint32_t get_profiler_dram_bank_size_per_risc_bytes();
+uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions);
 
 struct ProfilerStateManager {
 public:
@@ -34,7 +45,8 @@ public:
     ~ProfilerStateManager() = default;
 
     void cleanup_device_profilers();
-
+    void start_debug_dump_thread(
+        std::vector<IDevice*> active_devices, std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map);
     uint32_t calculate_optimal_num_threads_for_device_profiler_thread_pool() const;
 
     void mark_trace_begin(ChipId device_id, uint32_t trace_id);
@@ -50,6 +62,7 @@ public:
     static constexpr CoreCoord SYNC_CORE = {0, 0};
 
     std::unordered_map<ChipId, DeviceProfiler> device_profiler_map;
+    mutable std::recursive_mutex device_profiler_map_mutex;
 
     std::map<ChipId, std::vector<std::set<experimental::ProgramAnalysisData>>> device_programs_perf_analyses_map;
 
@@ -64,6 +77,11 @@ public:
 
     std::mutex log_file_write_mutex;
     std::mutex programs_perf_report_write_mutex;
+
+    std::thread debug_dump_thread;
+    std::mutex debug_dump_thread_mutex;
+    std::atomic<bool> stop_debug_dump_thread = false;
+    std::condition_variable stop_debug_dump_thread_cv;
 };
 
 }  // namespace tt_metal

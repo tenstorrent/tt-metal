@@ -12,19 +12,19 @@ DistributionMode compute_distribution_mode(
     if (!mesh_shape_override.has_value()) {
         // Note that when no shape is supplied, row-major order is equivalent to submesh.
         return DistributionMode::SUBMESH;
-    } else if (mesh_shape_override->dims() != device_shape.dims()) {
+    }
+    if (mesh_shape_override->dims() != device_shape.dims()) {
         // Shapes have different dimensions, so a reshape will be required.
         return DistributionMode::ROW_MAJOR;
-    } else {
-        // Check if `shape` fits within the mesh device. If it does, we can use submesh distribution. Otherwise,
-        // a reshape will be required, and shards will be distributed in row-major order over the mesh device.
-        for (size_t i = 0; i < mesh_shape_override->dims(); ++i) {
-            if ((*mesh_shape_override)[i] > device_shape[i]) {
-                return DistributionMode::ROW_MAJOR;
-            }
-        }
-        return DistributionMode::SUBMESH;
     }
+    // Check if `shape` fits within the mesh device. If it does, we can use submesh distribution. Otherwise,
+    // a reshape will be required, and shards will be distributed in row-major order over the mesh device.
+    for (size_t i = 0; i < mesh_shape_override->dims(); ++i) {
+        if ((*mesh_shape_override)[i] > device_shape[i]) {
+            return DistributionMode::ROW_MAJOR;
+        }
+    }
+    return DistributionMode::SUBMESH;
 }
 std::vector<tt::tt_metal::distributed::MeshCoordinate> compute_distribution_to_mesh_mapping(
     const tt::tt_metal::distributed::MeshShape& distribution_shape,

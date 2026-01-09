@@ -27,7 +27,8 @@ bool is_fabric_2d() {
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology) {
     if (topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Linear) {
         return tt::tt_fabric::Topology::Linear;
-    } else if (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Ring) {
+    }
+    if (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Ring) {
         return tt::tt_fabric::Topology::Ring;
     }
     return topology;
@@ -52,25 +53,24 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
             device_coords.at(device_coords.size() - 1)[cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
         if (first_index_is_0 && last_index_is_mesh_shape_minus_1) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
-        } else {
+        }
+        return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+    }
+    if (mesh_shape[0] == 2 || mesh_shape[1] == 2) {
+        return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+    }
+    TT_FATAL(!device_coords.empty(), "device_coords is empty");
+    for (int i = 0; i < device_coords.front().dims(); i++) {
+        if (device_coords.front()[i] != 0) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
-        }
-    } else {
-        if (mesh_shape[0] == 2 || mesh_shape[1] == 2) {
-            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
-        }
-        TT_FATAL(!device_coords.empty(), "device_coords is empty");
-        for (int i = 0; i < device_coords.front().dims(); i++) {
-            if (device_coords.front()[i] != 0) {
-                return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
-            }
-        }
-        for (int i = 0; i < device_coords.back().dims(); i++) {
-            if (device_coords.back()[i] != mesh_shape[i] - 1) {
-                return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
-            }
         }
     }
+    for (int i = 0; i < device_coords.back().dims(); i++) {
+        if (device_coords.back()[i] != mesh_shape[i] - 1) {
+            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+        }
+    }
+
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
 }
 
@@ -83,11 +83,11 @@ tt::tt_fabric::Topology get_usable_topology(
         auto boundary_mode = get_boundary_mode(tensor, topology_, cluster_axis);
         if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
             return topology_;
-        } else if (topology_ == tt::tt_fabric::Topology::Torus) {
-            return tt::tt_fabric::Topology::Mesh;
-        } else {
-            return tt::tt_fabric::Topology::Linear;
         }
+        if (topology_ == tt::tt_fabric::Topology::Torus) {
+            return tt::tt_fabric::Topology::Mesh;
+        }
+        return tt::tt_fabric::Topology::Linear;
     }
     return topology_;
 }
@@ -110,10 +110,9 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
         TT_FATAL(ring_size > 0, "ring_size is 0");
         log_debug(tt::LogOp, "Topological dimension {}", ring_size);
         return ring_size;
-    } else {
-        log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
-        return device_coords.size();
     }
+    log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
+    return device_coords.size();
 }
 
 uint32_t get_linearized_index_from_physical_coord(
@@ -144,16 +143,15 @@ uint32_t get_linearized_index_from_physical_coord(
             physical_coord,
             physical_coord[cluster_axis.value()] - min_value);
         return physical_coord[cluster_axis.value()] - min_value;
-    } else {
-        auto it = std::find(device_coords.begin(), device_coords.end(), physical_coord);
-        TT_FATAL(it != device_coords.end(), "physical_coord not found in device_coords");
-        log_debug(
-            tt::LogOp,
-            "Physical linearized index for physical_coord: {} is {}",
-            physical_coord,
-            static_cast<uint32_t>(std::distance(device_coords.begin(), it)));
-        return static_cast<uint32_t>(std::distance(device_coords.begin(), it));
     }
+    auto it = std::find(device_coords.begin(), device_coords.end(), physical_coord);
+    TT_FATAL(it != device_coords.end(), "physical_coord not found in device_coords");
+    log_debug(
+        tt::LogOp,
+        "Physical linearized index for physical_coord: {} is {}",
+        physical_coord,
+        static_cast<uint32_t>(std::distance(device_coords.begin(), it)));
+    return static_cast<uint32_t>(std::distance(device_coords.begin(), it));
 }
 
 std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
@@ -188,31 +186,28 @@ std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
                 physical_coord,
                 potential_neighbor);
             return potential_neighbor;
-        } else {
-            log_debug(
-                tt::LogOp,
-                "Physical coord {} Potential neighbor {} is not found in device_coords",
-                physical_coord,
-                potential_neighbor);
-            return std::nullopt;
         }
-    } else {
-        uint32_t physical_linearized_index =
-            get_linearized_index_from_physical_coord(tensor, physical_coord, cluster_axis);
-        int potential_neighbor_idx = (int)physical_linearized_index + offset;
-        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
-            potential_neighbor_idx = (potential_neighbor_idx + device_coords.size()) % device_coords.size();
-        } else if (potential_neighbor_idx < 0 || potential_neighbor_idx >= static_cast<int>(device_coords.size())) {
-            log_debug(
-                tt::LogOp,
-                "Potential neighbor idx {} is out of range for device_coords size {}",
-                potential_neighbor_idx,
-                device_coords.size());
-            return std::nullopt;
-        }
-        log_debug(tt::LogOp, "Potential neighbor idx {} is found in device_coords", potential_neighbor_idx);
-        return device_coords.at(potential_neighbor_idx);
+        log_debug(
+            tt::LogOp,
+            "Physical coord {} Potential neighbor {} is not found in device_coords",
+            physical_coord,
+            potential_neighbor);
+        return std::nullopt;
     }
+    uint32_t physical_linearized_index = get_linearized_index_from_physical_coord(tensor, physical_coord, cluster_axis);
+    int potential_neighbor_idx = (int)physical_linearized_index + offset;
+    if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+        potential_neighbor_idx = (potential_neighbor_idx + device_coords.size()) % device_coords.size();
+    } else if (potential_neighbor_idx < 0 || potential_neighbor_idx >= static_cast<int>(device_coords.size())) {
+        log_debug(
+            tt::LogOp,
+            "Potential neighbor idx {} is out of range for device_coords size {}",
+            potential_neighbor_idx,
+            device_coords.size());
+        return std::nullopt;
+    }
+    log_debug(tt::LogOp, "Potential neighbor idx {} is found in device_coords", potential_neighbor_idx);
+    return device_coords.at(potential_neighbor_idx);
 }
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
@@ -226,18 +221,16 @@ LineTopology::LineTopology(size_t line_size, size_t line_index) : _line_size(lin
 bool LineTopology::is_first_device_in_line(ttnn::ccl::LineDirection direction) const {
     if (direction == ttnn::ccl::LineDirection::FORWARD) {
         return _line_index == 0;
-    } else {
-        TT_ASSERT(direction == ttnn::ccl::LineDirection::BACKWARD);
-        return _line_index == _line_size - 1;
     }
+    TT_ASSERT(direction == ttnn::ccl::LineDirection::BACKWARD);
+    return _line_index == _line_size - 1;
 }
 bool LineTopology::is_last_device_in_line(ttnn::ccl::LineDirection direction) const {
     if (direction == ttnn::ccl::LineDirection::BACKWARD) {
         return _line_index == 0;
-    } else {
-        TT_ASSERT(direction == ttnn::ccl::LineDirection::FORWARD);
-        return _line_index == _line_size - 1;
     }
+    TT_ASSERT(direction == ttnn::ccl::LineDirection::FORWARD);
+    return _line_index == _line_size - 1;
 }
 
 bool LineTopology::is_at_end_of_line() const { return _line_index == 0 || _line_index == _line_size - 1; }
@@ -249,9 +242,8 @@ size_t LineTopology::line_index() const { return _line_index; }
 size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::LineDirection direction) const {
     if (direction == ttnn::ccl::LineDirection::FORWARD) {
         return (_line_size - _line_index) - 1;
-    } else {
-        return _line_index;
     }
+    return _line_index;
 }
 
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
@@ -432,7 +424,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
 }
 
 RingTopology::RingTopology(
-    IDevice const* device,
+    const IDevice* device,
     Topology topology,
     std::optional<uint32_t> sender_device_id,
     std::optional<uint32_t> receiver_device_id,
@@ -461,7 +453,7 @@ RingTopology::RingTopology(
         // Get the cores for the sender and receiver worker cores
         if (!is_linear || ring_index != ring_size - 1) {
             uint32_t receiver_device = receiver_device_id.value();
-            auto const& sockets = device->get_ethernet_sockets(receiver_device);
+            const auto& sockets = device->get_ethernet_sockets(receiver_device);
             TT_FATAL(
                 sender_socket_idx < sockets.size(),
                 "Sender socket index out of bounds. Device has {} ethernet cores but tried to access core at "
@@ -474,7 +466,7 @@ RingTopology::RingTopology(
         }
         if (!is_linear || ring_index != 0) {
             uint32_t sender_device = sender_device_id.value();
-            auto const& sockets = device->get_ethernet_sockets(sender_device);
+            const auto& sockets = device->get_ethernet_sockets(sender_device);
             TT_FATAL(
                 receiver_socket_idx < sockets.size(),
                 "Receiver socket index out of bounds. Device has {} ethernet cores but tried to access core at "
@@ -525,20 +517,19 @@ tt::tt_metal::Tile CclOpTensorConfig::get_tile() const { return this->tile; }
 
 uint32_t CclOpTensorConfig::get_buffer_start_address() const { return this->buffer_start_address; }
 
-CclOpInterleavedTensorConfig::CclOpInterleavedTensorConfig(Tensor const& input_tensor) :
+CclOpInterleavedTensorConfig::CclOpInterleavedTensorConfig(const Tensor& input_tensor) :
     CclOpTensorConfig(input_tensor) {}
 
-CclOpShardedTensorConfig::CclOpShardedTensorConfig(Tensor const& tensor) :
+CclOpShardedTensorConfig::CclOpShardedTensorConfig(const Tensor& tensor) :
     CclOpTensorConfig(tensor), shard_spec(tensor.shard_spec().value()) {}
 
 const tt::tt_metal::ShardSpec& CclOpShardedTensorConfig::get_shard_spec() const { return this->shard_spec; }
 
-std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_config(Tensor const& tensor) {
+std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_config(const Tensor& tensor) {
     if (tensor.is_sharded()) {
         return std::make_unique<CclOpShardedTensorConfig>(tensor);
-    } else {
-        return std::make_unique<CclOpInterleavedTensorConfig>(tensor);
     }
+    return std::make_unique<CclOpInterleavedTensorConfig>(tensor);
 }
 
 void generate_edm_kernels_for_ring_or_linear_topology(
@@ -606,7 +597,7 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level = std::nullopt) {
     edm_builder.dump_to_log();
 
-    std::vector<uint32_t> const edm_kernel_rt_args = edm_builder.get_runtime_args();
+    const std::vector<uint32_t> edm_kernel_rt_args = edm_builder.get_runtime_args();
     // Ethernet Kernels
     const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
     log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
@@ -620,17 +611,13 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     if (opt_level.has_value()) {
         kernel_config.opt_level = opt_level.value();
     }
-    auto eth_sender_kernel = tt::tt_metal::CreateKernel(
-        program,
-        kernel_path,
-        eth_core,
-        kernel_config);
+    auto eth_sender_kernel = tt::tt_metal::CreateKernel(program, kernel_path, eth_core, kernel_config);
 
     tt::tt_metal::SetRuntimeArgs(program, eth_sender_kernel, eth_core, edm_kernel_rt_args);
 
     std::stringstream ss;
     ss << "EDM ARGS:\n";
-    for (auto const& s : edm_kernel_rt_args) {
+    for (const auto& s : edm_kernel_rt_args) {
         ss << "\t" << s << "\n";
     }
     log_trace(tt::LogOp, "{}", ss.str());
@@ -670,8 +657,7 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     uint32_t edm_buffer_addr = config.get_buffers_base_address(num_channels);
     TT_ASSERT(edm_sem_addr > 0);
     TT_ASSERT(edm_buffer_addr > 0);
-    const uint32_t channel_buffer_size =
-        config.compute_buffer_size(num_channels, num_buffers_per_channel, page_size);
+    const uint32_t channel_buffer_size = config.compute_buffer_size(num_channels, num_buffers_per_channel, page_size);
     for (std::size_t c = 0; c < num_channels; ++c) {
         edm_sem_addresses.at(c) = edm_sem_addr;
         edm_sem_addr += ccl::EriscDatamoverConfig::semaphore_size;
@@ -698,8 +684,8 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
 
 template <class DERIVED_SLICER_T>
 RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensorSlicer(
-    Tensor const& input_tensor,
-    Tensor const& output_tensor,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
     int slice_dim,
     uint32_t ring_index,
     uint32_t ring_size,
@@ -781,8 +767,8 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
 }
 
 RingReduceScatterTensorSlicer::RingReduceScatterTensorSlicer(
-    Tensor const& input_tensor,
-    Tensor const& output_tensor,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
     int slice_dim,
     uint32_t ring_index,
     uint32_t ring_size,
@@ -797,11 +783,11 @@ RingReduceScatterTensorSlicer::RingReduceScatterTensorSlicer(
         ring_size,
         total_num_workers,
         max_slice_size_in_bytes,
-        half_cb_n_pages){};
+        half_cb_n_pages) {};
 
 RingReduceScatterWrappedTensorSlicer::RingReduceScatterWrappedTensorSlicer(
-    Tensor const& input_tensor,
-    Tensor const& output_tensor,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
     int slice_dim,
     uint32_t ring_index,
     uint32_t ring_size,
@@ -816,10 +802,10 @@ RingReduceScatterWrappedTensorSlicer::RingReduceScatterWrappedTensorSlicer(
         ring_size,
         total_num_workers,
         max_slice_size_in_bytes,
-        half_cb_n_pages){};
+        half_cb_n_pages) {};
 
 std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::compute_worker_slice_offsets(
-    std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape) {
+    const std::vector<tt_xy_pair>& worker_slice_shapes, const tt_xy_pair& tensor_slice_shape) {
     std::vector<tt_xy_pair> worker_slice_offsets;
     worker_slice_offsets.reserve(worker_slice_shapes.size());
 
@@ -827,7 +813,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::compute_worker_slice_offs
     std::size_t offset_y = 0;
     std::size_t last_worker_size_y = worker_slice_shapes.at(0).y;  // for validation
     bool first_in_row = true;
-    for (tt_xy_pair const& worker_slice_shape : worker_slice_shapes) {
+    for (const tt_xy_pair& worker_slice_shape : worker_slice_shapes) {
         worker_slice_offsets.emplace_back(offset_x, offset_y);
 
         TT_ASSERT(offset_y < tensor_slice_shape.y);
@@ -848,13 +834,13 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::compute_worker_slice_offs
 }
 
 static std::vector<tt_xy_pair> compute_worker_slice_offsets_for_wrapped_tensor_slicer(
-    std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape) {
+    const std::vector<tt_xy_pair>& worker_slice_shapes, const tt_xy_pair& tensor_slice_shape) {
     std::vector<tt_xy_pair> worker_slice_offsets;
     worker_slice_offsets.reserve(worker_slice_shapes.size());
 
     std::uint32_t flattened_idx = 0;
 
-    for (tt_xy_pair const& worker_slice_shape : worker_slice_shapes) {
+    for (const tt_xy_pair& worker_slice_shape : worker_slice_shapes) {
         // Convert from flat to (x, y) coordinates
         std::size_t offset_x = flattened_idx % tensor_slice_shape.x;
         std::size_t offset_y = flattened_idx / tensor_slice_shape.x;
@@ -871,14 +857,14 @@ static std::vector<tt_xy_pair> compute_worker_slice_offsets_for_wrapped_tensor_s
 }
 
 std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::compute_worker_slice_offsets(
-    std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape) {
+    const std::vector<tt_xy_pair>& worker_slice_shapes, const tt_xy_pair& tensor_slice_shape) {
     return compute_worker_slice_offsets_for_wrapped_tensor_slicer(worker_slice_shapes, tensor_slice_shape);
 }
 
 template <class DERIVED_SLICER_T>
 std::vector<tt_xy_pair>
 RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::create_worker_slice_shapes_for_row_major_layout(
-    tt_xy_pair const& tensor_slice_shape_in_elems, uint32_t num_workers, uint32_t max_slice_size_in_elements) {
+    const tt_xy_pair& tensor_slice_shape_in_elems, uint32_t num_workers, uint32_t max_slice_size_in_elements) {
     std::vector<tt_xy_pair> worker_slice_shapes;
     worker_slice_shapes.reserve(num_workers);
 
@@ -1031,7 +1017,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
     // benefits to nailing it are marginal we expect uniform chunk sizes and just truncate the largest chunk to fit
     // the max size and then apply that shape to all workers slice shapes
     tt_xy_pair largest_worker_slice_shape = {0, 0};
-    for (auto const& worker_slice_shape : worker_slice_shapes) {
+    for (const auto& worker_slice_shape : worker_slice_shapes) {
         if (largest_worker_slice_shape.x * largest_worker_slice_shape.y < worker_slice_shape.x * worker_slice_shape.y) {
             largest_worker_slice_shape = worker_slice_shape;
         }
@@ -1057,7 +1043,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
         largest_worker_slice_shape.x,
         largest_worker_slice_shape.y);
     log_trace(tt::LogOp, "max_slice_size_in_tiles={}", max_slice_size_in_tiles);
-    auto get_padded_worker_slice_size_in_tiles = [](tt_xy_pair const& worker_slice_shape, uint32_t half_cb_n_pages) {
+    auto get_padded_worker_slice_size_in_tiles = [](const tt_xy_pair& worker_slice_shape, uint32_t half_cb_n_pages) {
         return tt::round_up(worker_slice_shape.x * worker_slice_shape.y, half_cb_n_pages);
     };
 
@@ -1117,7 +1103,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
     std::for_each(
         worker_slice_shapes.begin(),
         worker_slice_shapes.end(),
-        [max_slice_size_in_pages](tt_xy_pair const& worker_slice_shape) {
+        [max_slice_size_in_pages](const tt_xy_pair& worker_slice_shape) {
             TT_ASSERT(worker_slice_shape.x * worker_slice_shape.y <= max_slice_size_in_pages);
         });
     return worker_slice_shapes;
@@ -1153,8 +1139,9 @@ std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slic
     // Assign slices by assuming that the input tensor is flattened into a 1D Shape
     // Cast to double before division to ensure ceil() rounds up properly.
     // Example: 10 tiles / 3 workers: was ceil(3)=3, now ceil(3.33)=4 tiles per worker.
-    std::size_t optim_worker_slice_len_tiles = static_cast<std::size_t>(
-        ceil(static_cast<double>(total_num_tiles) / num_workers));  // Ceil so that the remainder worker will have a smaller slice
+    std::size_t optim_worker_slice_len_tiles = static_cast<std::size_t>(ceil(
+        static_cast<double>(total_num_tiles) /
+        num_workers));  // Ceil so that the remainder worker will have a smaller slice
 
     if (max_slice_size_in_tiles < optim_worker_slice_len_tiles) {  // Each worker will have a full slice
         for (uint32_t w = 0; w < num_workers; ++w) {
@@ -1271,7 +1258,7 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
         TT_ASSERT(worker_slice_shape.x > 0, "Invalid worker slice shape. x = 0 but it must be > 0");
         TT_ASSERT(worker_slice_shape.y > 0, "Invalid worker slice shape. y = 0 but it must be > 0");
 
-        auto const& tensor_slice = TensorSlice(
+        const auto& tensor_slice = TensorSlice(
             tensor_shape,
             slice_shape,
             tensor_slice_offset_adjusted,
@@ -1406,7 +1393,7 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
         TT_ASSERT(worker_slice_shape.x > 0, "Invalid worker slice shape. x = 0 but it must be > 0");
         TT_ASSERT(worker_slice_shape.y > 0, "Invalid worker slice shape. y = 0 but it must be > 0");
 
-        auto const& tensor_slice = TensorSlice(
+        const auto& tensor_slice = TensorSlice(
             tensor_shape,
             slice_shape,
             tensor_slice_offset_adjusted,
@@ -1530,7 +1517,7 @@ ccl::InterleavedTensorWorkerSlice GenericWrappedTensorSlicer::get_worker_slice(s
 }
 
 std::vector<tt_xy_pair> GenericWrappedTensorSlicer::compute_worker_slice_offsets(
-    std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape) {
+    const std::vector<tt_xy_pair>& worker_slice_shapes, const tt_xy_pair& tensor_slice_shape) {
     return compute_worker_slice_offsets_for_wrapped_tensor_slicer(worker_slice_shapes, tensor_slice_shape);
 }
 
@@ -1597,16 +1584,12 @@ GenericWrappedTensorSlicerV2::GenericWrappedTensorSlicerV2(
     int slice_dim,
     uint32_t partition_index,
     uint32_t partition_size,
-    uint32_t total_num_workers)
-{
+    uint32_t total_num_workers) {
     this->initialize(input_tensor, slice_dim, partition_index, partition_size, total_num_workers);
 }
 
 Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_shape(
-    Shape4D<uint32_t> const& input_shape,
-    int slice_dim,
-    uint32_t partition_size) {
-
+    const Shape4D<uint32_t>& input_shape, int slice_dim, uint32_t partition_size) {
     // Calculate the size of the slice along the given dimension
     uint32_t dim_size = input_shape[slice_dim];
     uint32_t slice_size = dim_size / partition_size;
@@ -1614,7 +1597,11 @@ Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_shape(
     // Start with full shape
     Shape4D<uint32_t> slice_shape(input_shape[0], input_shape[1], input_shape[2], input_shape[3]);
 
-    TT_FATAL(slice_dim >= 0 && slice_dim < 4, "Invalid slice dimension. Must be between 0 and 3 but got {}. This should have been normalized to fit within the range", slice_dim);
+    TT_FATAL(
+        slice_dim >= 0 && slice_dim < 4,
+        "Invalid slice dimension. Must be between 0 and 3 but got {}. This should have been normalized to fit within "
+        "the range",
+        slice_dim);
     slice_shape[slice_dim] = slice_size;
 
     return slice_shape;
@@ -1628,7 +1615,11 @@ Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_offset(
     uint32_t dim_size = input_shape[slice_dim];
     uint32_t slice_size = dim_size / partition_size;
 
-    TT_FATAL(slice_dim >= 0 && slice_dim < 4, "Invalid slice dimension. Must be between 0 and 3 but got {}. This should have been normalized to fit within the range", slice_dim);
+    TT_FATAL(
+        slice_dim >= 0 && slice_dim < 4,
+        "Invalid slice dimension. Must be between 0 and 3 but got {}. This should have been normalized to fit within "
+        "the range",
+        slice_dim);
     offset[slice_dim] = partition_index * slice_size;
 
     return offset;
@@ -1639,8 +1630,7 @@ void GenericWrappedTensorSlicerV2::initialize(
     int slice_dim,
     uint32_t partition_index,
     uint32_t partition_size,
-    uint32_t total_num_workers)
-{
+    uint32_t total_num_workers) {
     // Configure layout parameters
     this->row_major = (input_tensor.layout() == Layout::ROW_MAJOR);
     this->input_page_size = input_tensor.buffer()->page_size();
@@ -1652,7 +1642,11 @@ void GenericWrappedTensorSlicerV2::initialize(
 
     // Record the input tensor shape
     auto input_shape = input_tensor.padded_shape();
-    this->tensor_shape = Shape4D<uint32_t>(input_shape[0], input_shape[1], input_shape[2]/tt::constants::TILE_HEIGHT, input_shape[3]/tt::constants::TILE_WIDTH);
+    this->tensor_shape = Shape4D<uint32_t>(
+        input_shape[0],
+        input_shape[1],
+        input_shape[2] / tt::constants::TILE_HEIGHT,
+        input_shape[3] / tt::constants::TILE_WIDTH);
 
     // Calculate tensor slice shape
     this->tensor_slice_shape = calculate_tensor_slice_shape(this->tensor_shape, slice_dim, partition_size);
@@ -1671,17 +1665,18 @@ ttnn::ccl::v2::TensorSlice GenericWrappedTensorSlicerV2::get_worker_slice_v2(std
     assert(global_worker_index < this->worker_slice_shapes.size());
     assert(global_worker_index < this->worker_slice_offsets.size());
     return ttnn::ccl::v2::TensorSlice(
-        this->tensor_shape, // tensor_shape
-        this->tensor_slice_shape, // tensor_slice_shape
-        this->tensor_slice_offset, // tensor_slice_offset
-        this->worker_slice_shapes[global_worker_index], // worker_slice_shape
-        this->worker_slice_offsets[global_worker_index] // worker_slice_offset
+        this->tensor_shape,                              // tensor_shape
+        this->tensor_slice_shape,                        // tensor_slice_shape
+        this->tensor_slice_offset,                       // tensor_slice_offset
+        this->worker_slice_shapes[global_worker_index],  // worker_slice_shape
+        this->worker_slice_offsets[global_worker_index]  // worker_slice_offset
     );
 }
 
 /* Worker slices and offsets are 4D shapes but flattened to 1D in the last dimension*/
 
-std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::compute_worker_slice_offsets(std::vector<Shape4D<uint32_t>> const& worker_slice_shapes) {
+std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::compute_worker_slice_offsets(
+    const std::vector<Shape4D<uint32_t>>& worker_slice_shapes) {
     Shape4D<uint32_t> offset(0, 0, 0, 0);
     std::vector<Shape4D<uint32_t>> worker_slice_offsets;
     worker_slice_offsets.reserve(worker_slice_shapes.size());
@@ -1693,27 +1688,27 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::compute_worker_slic
 }
 
 std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice_shapes_for_tile_layout(
-        Shape4D<uint32_t> const& tensor_slice_shape_in_tiles,
-        uint32_t num_workers)
-{
+    const Shape4D<uint32_t>& tensor_slice_shape_in_tiles, uint32_t num_workers) {
     std::vector<Shape4D<uint32_t>> worker_slice_shapes;
     worker_slice_shapes.reserve(num_workers);
-    const uint32_t total_num_tiles = tensor_slice_shape_in_tiles.x * tensor_slice_shape_in_tiles.y * tensor_slice_shape_in_tiles.z * tensor_slice_shape_in_tiles.w;
+    const uint32_t total_num_tiles = tensor_slice_shape_in_tiles.x * tensor_slice_shape_in_tiles.y *
+                                     tensor_slice_shape_in_tiles.z * tensor_slice_shape_in_tiles.w;
     if (num_workers > total_num_tiles) {
         log_warning(
-            tt::LogOp,
-            "More workers instantiated than is work to be done. Some workers will be idle and do nothing");
+            tt::LogOp, "More workers instantiated than is work to be done. Some workers will be idle and do nothing");
         for (uint32_t w = 0; w < total_num_tiles; ++w) {
-            worker_slice_shapes.emplace_back(1,1,1,1);
+            worker_slice_shapes.emplace_back(1, 1, 1, 1);
         }
         for (uint32_t w = total_num_tiles; w < num_workers; ++w) {
-            worker_slice_shapes.emplace_back(0,0,0,0);
+            worker_slice_shapes.emplace_back(0, 0, 0, 0);
         }
         return worker_slice_shapes;
     }
 
     // Assign slices by assuming that the input tensor is flattened into a 1D Shape
-    std::size_t optim_worker_slice_len_tiles = std::ceil(static_cast<float>(total_num_tiles) / num_workers); // Ceil so that the remainder worker will have a smaller slice
+    std::size_t optim_worker_slice_len_tiles = std::ceil(
+        static_cast<float>(total_num_tiles) /
+        num_workers);  // Ceil so that the remainder worker will have a smaller slice
 
     log_trace(tt::LogOp, "---- GenericWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout ---- ");
     log_trace(tt::LogOp, "total_num_tiles: {}", total_num_tiles);
@@ -1727,7 +1722,7 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     }
     // If there is a remainder worker, we need to adjust the last worker's slice shape to be smaller
     if (remainder_worker_len_tiles > 0) {
-        worker_slice_shapes.back() = Shape4D<uint32_t>(1,1,1,remainder_worker_len_tiles);
+        worker_slice_shapes.back() = Shape4D<uint32_t>(1, 1, 1, remainder_worker_len_tiles);
     }
 
     log_trace(tt::LogOp, "--------------------------------");
@@ -1802,12 +1797,12 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
         }
     } else if (tt::tt_fabric::is_1d_fabric_config(fabric_config)) {
         if (forward_device_coord) {
-            forward_args[0] = 0; // dst_mesh_id, unused
-            forward_args[1] = 1; // distance_in_hops
+            forward_args[0] = 0;  // dst_mesh_id, unused
+            forward_args[1] = 1;  // distance_in_hops
         }
         if (backward_device_coord) {
-            backward_args[0] = 0; // dst_mesh_id, unused
-            backward_args[1] = 1; // distance_in_hops
+            backward_args[0] = 0;  // dst_mesh_id, unused
+            backward_args[1] = 1;  // distance_in_hops
         }
     } else {
         TT_THROW("Unsupported fabric config");
@@ -1861,7 +1856,8 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
             if (coord) {
                 const auto& dev_coord = *coord;
                 auto device_fabric_node_id = mesh_device->get_fabric_node_id(dev_coord);
-                auto eth_chan_dir = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, device_fabric_node_id);
+                auto eth_chan_dir =
+                    tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, device_fabric_node_id);
                 args[0] = *device_fabric_node_id.mesh_id;
                 args[1] = device_fabric_node_id.chip_id;
                 args[2 + static_cast<std::uint8_t>(eth_chan_dir.value())] = num_targets;
