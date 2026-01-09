@@ -149,21 +149,17 @@ def test_to_for_01_rank_on_device(device, shape, layout, dtype, pad_value):
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_to_torch_with_mesh_composer_none(shape, layout):
+def test_to_torch_with_mesh_composer_none(device, shape, layout):
     """Regression test for issue #31136: to_torch with mesh_composer=None on device-sharded tensor"""
     torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
 
-    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape((1, 1)))
-
     ttnn_tensor = ttnn.from_torch(
         torch_input_tensor,
-        device=mesh_device,
+        device=device,
         dtype=ttnn.bfloat16,
         layout=layout,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
     )
 
     torch_output_tensor = ttnn_tensor.to_torch(mesh_composer=None)
 
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
-    ttnn.close_mesh_device(mesh_device)
