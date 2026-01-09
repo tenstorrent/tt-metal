@@ -23,24 +23,11 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // Get the cores for the program
-    auto cores = tt::tt_metal::CoreRangeSet({tt::tt_metal::CoreRange({0, 0}, {7, 7})});
-
-    // Get input tensor info for sharded CB configuration
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_shard_spec = input_tensor.shard_spec().value();
-    const auto& shard_shape = input_shard_spec.shape;
-
-    // Calculate tiles per core for sharded input
-    // shard_shape is [height, width] in elements
-    uint32_t shard_height_tiles = shard_shape[0] / tt::constants::TILE_HEIGHT;
-    uint32_t shard_width_tiles = shard_shape[1] / tt::constants::TILE_WIDTH;
-    uint32_t input_tiles_per_core = shard_height_tiles * shard_width_tiles;
-
-    // Get input data format and tile size
-    tt::DataFormat input_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_tile_size = tt::tile_size(input_df);
-    tt::DataFormat w0_tensor_df = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.w0_tensor.dtype());
-    uint32_t w0_tile_size = tt::tile_size(w0_tensor_df);
+    std::vector<tt::tt_metal::CoreCoord> cores_vec = {
+        tt::tt_metal::CoreCoord({0, 9}),
+        // tt::tt_metal::CoreCoord({4, 0}),
+    };
+    auto cores = tt::tt_metal::CoreRangeSet(cores_vec);
 
     // Create CBs for the program
     // CBs used in the MOE operation
@@ -59,55 +46,19 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         ----------------------------------------------------------------------------------------
     */
 
-    // Define the CB configuration as a map: name -> tuple<CBIndex, DataFormat, bytes_per_tile, tiles_per_cb>
-    // Note: cb_s2c_in is handled separately as it's a sharded CB
-    tt::DataFormat intermediate_df =
-        operation_attributes.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    uint32_t intermediate_tile_size = tt::tile_size(w0_tensor_df);
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t, uint32_t>> cb_specs = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, w0_tensor_df, w0_tile_size, 2},
-        {"cb_c2c_mm0", tt::CBIndex::c_2, intermediate_df, intermediate_tile_size, 1},
-        {"cb_c2c_mm1", tt::CBIndex::c_3, intermediate_df, intermediate_tile_size, 1},
-        {"cb_c2w_elt", tt::CBIndex::c_4, intermediate_df, intermediate_tile_size, 1},
-        {"cb_r2c_in2", tt::CBIndex::c_5, w0_tensor_df, w0_tile_size, 1},
-        {"cb_c2w_mm2", tt::CBIndex::c_6, w0_tensor_df, w0_tile_size, 1}};
+    // Define the CB configuration as a map: name -> tuple<CBIndex, DataFormat, tiles_per_cb>
+    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t>> cb_specs = {
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, 2},
+        {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Bfp8_b, 2},
+        {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Bfp8_b, 1},
+        {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Bfp8_b, 1},
+        {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Bfp8_b, 1},
+        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Bfp8_b, 2},
+        {"cb_c2w_mm2", tt::CBIndex::c_6, tt::DataFormat::Bfp8_b, 1}};
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles;
-
-    // Create sharded CB for input (cb_s2c_in at CBIndex::c_1)
-    // This CB points directly to the sharded input tensor's L1 buffer
-    auto cb_s2c_in_config =
-        tt::tt_metal::CircularBufferConfig(input_tiles_per_core * input_tile_size, {{tt::CBIndex::c_1, input_df}})
-            .set_page_size(tt::CBIndex::c_1, input_tile_size)
-            .set_globally_allocated_address(*input_tensor.buffer());
-    cb_handles["cb_s2c_in"] = tt::tt_metal::CreateCircularBuffer(program, cores, cb_s2c_in_config);
-
-    // Get output tensor info for sharded CB configuration
-    const auto& output_tensor = tensor_args.output_tensor;
-    const auto& output_shard_spec = output_tensor.shard_spec().value();
-    const auto& output_shard_shape = output_shard_spec.shape;
-
-    // Calculate tiles per core for sharded outpu1
-    // output_shard_shape is [height, width] in elements - should be (32, 32) = 1 tile per core
-    uint32_t output_shard_height_tiles = output_shard_shape[0] / tt::constants::TILE_HEIGHT;
-    uint32_t output_shard_width_tiles = output_shard_shape[1] / tt::constants::TILE_WIDTH;
-    uint32_t output_tiles_per_core = output_shard_height_tiles * output_shard_width_tiles;
-
-    // Get output data format and tile size
-    tt::DataFormat output_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    uint32_t output_tile_size = tt::tile_size(output_df);
-
-    // Create sharded CB for output (cb_c2w_out at CBIndex::c_7)
-    // This CB points directly to the sharded output tensor's L1 buffer
-    // Each core has one tile (32x32) of the output
-    auto cb_c2w_out_config =
-        tt::tt_metal::CircularBufferConfig(output_tiles_per_core * output_tile_size, {{tt::CBIndex::c_7, output_df}})
-            .set_page_size(tt::CBIndex::c_7, output_tile_size)
-            .set_globally_allocated_address(*output_tensor.buffer());
-    cb_handles["cb_c2w_out"] = tt::tt_metal::CreateCircularBuffer(program, cores, cb_c2w_out_config);
-
-    // Create other CBs
-    for (const auto& [name, index, dtype, bytes_per_tile, tiles_per_cb] : cb_specs) {
+    for (const auto& [name, index, dtype, tiles_per_cb] : cb_specs) {
+        uint32_t bytes_per_tile = tt::tile_size(dtype);
         auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, dtype}})
                              .set_page_size(index, bytes_per_tile);
 
@@ -172,13 +123,6 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
         }
-    }
-
-    auto all_worker_cores_ordered =
-        tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
-            tt::tt_metal::NOC::RISCV_0_default);
-    for (const auto& core : all_worker_cores_ordered) {
-        log_warning(tt::LogOp, "Worker core: {}", core.str());
     }
 
     return cached_program_t{std::move(program), MoESharedVariables{}};
