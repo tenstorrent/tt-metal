@@ -1,4 +1,4 @@
-# ViT in TT-NN for Blackhole
+# [skip ci] ViT in TT-NN for Blackhole
 
 Authors: Vishal Shenoy, Mohamed Bahnas (Original), Updated for Blackhole Architecture
 
@@ -22,7 +22,7 @@ Authors: Vishal Shenoy, Mohamed Bahnas (Original), Updated for Blackhole Archite
     - [5.1 Input](#51-input)
     - [5.2 Sharding parametrization](#52-sharding-parametrization)
     - [5.3 Layer Normalization (Layernorm)](#53-layer-normalization-layernorm)
-    - [5.4 Multi-Head Self-Attention](#54-multi-head-self-attention)
+    - [5.4 Multihead Self-Attention](#54-multihead-self-attention)
       - [5.4.1 Q,K,V Generation (Fused Linear)](#541-qkv-generation-fused-linear)
       - [5.4.2 Resharding (Core Grid Transition)](#542-resharding-core-grid-transition)
       - [5.4.3 Split into Q/K/V + Heads](#543-split-into-qkv--heads)
@@ -56,7 +56,7 @@ The [Vision Transformer](https://arxiv.org/pdf/2010.11929) (ViT) is a transforme
 
 The ViT architecture in TT-NN leverages the self-attention mechanism, originally designed for NLP tasks, to process image data by treating each image as a sequence of patches. This walkthrough explains the key components of the ViT model and demonstrates how the Tenstorrent TT-NN library implements these components efficiently on Blackhole architecture.
 
-For more details on the architecture, please refer to the [References](#7-references).
+For more details on the architecture, please refer to the [References](#8-references).
 
 ## 2. Blackhole Architecture Differences
 
@@ -210,7 +210,7 @@ def vit(
         bias=parameters.classifier.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        program_config=config.program_configs["classifer_matmul_program_config"],
+        program_config=config.program_configs["classifier_matmul_program_config"],
     )
 
     return classifier_output
@@ -441,9 +441,9 @@ def vit_layernorm_before(config, hidden_states, *, parameters):
 The multi-head self-attention (MHA) block computes:
 
 - Q, K, V projections from the input
-- attention scores \(QK^T\)
-- softmax probabilities \(P\)
-- context \(PV\)
+- attention scores QK^T
+- softmax probabilities P
+- context PV
 - projection back to `dim` via the self-output linear layer
 
 The Blackhole implementation uses:
@@ -571,7 +571,7 @@ ttnn.deallocate(key)
 ![attn](images_bh/attention.png)
 
 #### 5.4.5 Scale and Softmax
-The scores are scaled by \(1/\sqrt{head\_size}\) using an explicit multiply, then softmax is applied in-place:
+The scores are scaled by `1/sqrt(head_size)` using an explicit multiply, then softmax is applied in-place:
 
 ```python
 scale = 1.0 / (head_size**0.5)
