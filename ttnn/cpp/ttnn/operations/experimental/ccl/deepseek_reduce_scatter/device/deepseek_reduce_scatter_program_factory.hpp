@@ -68,9 +68,9 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     uint32_t num_workers_per_direction,
     uint32_t num_mux_cores_per_direction_per_link,
     uint32_t num_cores_per_link,
-    uint32_t num_links,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+    uint32_t num_links,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& intermediate_tensor,
     const ttnn::Tensor& output_tensor);
