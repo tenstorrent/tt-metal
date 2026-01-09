@@ -201,8 +201,6 @@ jobs:
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         HF_HUB_CACHE: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/hub' || '/mnt/MLPerf/huggingface/hub' }}
         TT_CACHE_HOME: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/tt_cache' || '/mnt/MLPerf/huggingface/tt_cache' }}
-        HF_DATASETS_CACHE: /tmp/hf_datasets_cache
-        TRANSFORMERS_OFFLINE: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
