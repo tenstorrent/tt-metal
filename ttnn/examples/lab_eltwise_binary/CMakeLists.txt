@@ -11,5 +11,5 @@ target_link_libraries(
     ttnn_example_lab_eltwise_binary
     PUBLIC
         TT::Metalium
-        TTNN::CPP
+        TTNN::TTNN
 )
