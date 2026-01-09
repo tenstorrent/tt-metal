@@ -122,7 +122,9 @@ tracy::TTDeviceMarkerType get_marker_type_from_packet_type(kernel_profiler::Pack
         case kernel_profiler::PacketTypes::ZONE_START: return tracy::TTDeviceMarkerType::ZONE_START;
         case kernel_profiler::PacketTypes::ZONE_END: return tracy::TTDeviceMarkerType::ZONE_END;
         case kernel_profiler::PacketTypes::ZONE_TOTAL: return tracy::TTDeviceMarkerType::ZONE_TOTAL;
-        case kernel_profiler::PacketTypes::TS_DATA: return tracy::TTDeviceMarkerType::TS_DATA;
+        // TS_DATA_16B contains additional metadata from trailers
+        case kernel_profiler::PacketTypes::TS_DATA: [[fallthrough]];
+        case kernel_profiler::PacketTypes::TS_DATA_16B: return tracy::TTDeviceMarkerType::TS_DATA;
         case kernel_profiler::PacketTypes::TS_EVENT: return tracy::TTDeviceMarkerType::TS_EVENT;
         default: TT_THROW("Invalid packet type");
     }
@@ -678,12 +680,9 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
     // Convert to json
     std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> json_events_by_op;
     for (auto& [program_execution_uid, markers] : coalesced_events_by_op) {
-        // Track matched trailers to skip them when processing (avoid erasing during iteration)
-        std::set<std::tuple<uint64_t, ChipId, uint64_t, uint64_t, tracy::RiscType, uint16_t>> matched_trailers;
-
-        for (auto marker_it = markers.begin(); marker_it != markers.end(); ++marker_it) {
-            if (std::holds_alternative<tracy::TTDeviceMarker>(*marker_it)) {
-                auto device_marker = std::get<tracy::TTDeviceMarker>(*marker_it);
+        for (auto& marker_it : markers) {
+            if (std::holds_alternative<tracy::TTDeviceMarker>(marker_it)) {
+                auto device_marker = std::get<tracy::TTDeviceMarker>(marker_it);
 
                 if (isMarkerAZoneEndpoint(device_marker)) {
                     tracy::TTDeviceMarkerType zone_phase =
@@ -747,64 +746,16 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                         data["dy"] = phys_coord.y;
                     }
 
-                    // Check if there's a trailer for this LocalNocEvent
-                    // Trailers have the same timestamp, core, risc, and marker_id = timer_id + 1
-                    // Due to sorting by (core_x, core_y, risc, timestamp, marker_id), trailers should be immediately
-                    // after their events Only check the immediate next marker to avoid scanning through many unrelated
-                    // markers
-                    auto next_marker_it = std::next(marker_it);
-                    if (next_marker_it != markers.end() &&
-                        std::holds_alternative<tracy::TTDeviceMarker>(*next_marker_it)) {
-                        auto next_device_marker = std::get<tracy::TTDeviceMarker>(*next_marker_it);
-                        // Check if this is the matching trailer (same timestamp, core, risc, chip_id, and marker_id +
-                        // 1)
-                        if (std::holds_alternative<EMD::LocalNocEventTrailer>(
-                                EMD(next_device_marker.data).getContents()) &&
-                            next_device_marker.timestamp == device_marker.timestamp &&
-                            next_device_marker.chip_id == device_marker.chip_id &&
-                            next_device_marker.core_x == device_marker.core_x &&
-                            next_device_marker.core_y == device_marker.core_y &&
-                            next_device_marker.risc == device_marker.risc &&
-                            next_device_marker.marker_id == device_marker.marker_id + 1) {
-                            // This is the trailer for this LocalNocEvent - merge dst_addr into the event data
-                            auto local_noc_event_trailer =
-                                std::get<EMD::LocalNocEventTrailer>(EMD(next_device_marker.data).getContents());
-                            uint32_t dst_addr = local_noc_event_trailer.dst_addr;
-                            data["dst_addr"] = dst_addr;
-                            // Mark this trailer as matched so we skip it when processing trailers
-                            matched_trailers.insert(std::make_tuple(
-                                next_device_marker.timestamp,
-                                next_device_marker.chip_id,
-                                next_device_marker.core_x,
-                                next_device_marker.core_y,
-                                next_device_marker.risc,
-                                next_device_marker.marker_id));
-                        }
+                    // Additional metadata from trailer data
+                    if (device_marker.meta_data.contains("dst_addr")) {
+                        data["dst_addr"] = device_marker.meta_data["dst_addr"];
                     }
 
                     json_events_by_op[program_execution_uid].push_back(data);
-                } else if (std::holds_alternative<EMD::LocalNocEventTrailer>(EMD(device_marker.data).getContents())) {
-                    // Check if this trailer was already matched and merged with its LocalNocEvent
-                    auto trailer_key = std::make_tuple(
-                        device_marker.timestamp,
-                        device_marker.chip_id,
-                        device_marker.core_x,
-                        device_marker.core_y,
-                        device_marker.risc,
-                        device_marker.marker_id);
-                    if (matched_trailers.contains(trailer_key)) {
-                        // This trailer was already merged - skip it
-                        continue;
-                    }
-                    // This trailer wasn't matched (shouldn't happen in normal operation)
-                    // Skip it to avoid duplicate entries
-                    continue;
-                } else {
-                    TT_THROW("Invalid event type found in noc trace packet!");
                 }
-            } else if (std::holds_alternative<FabricEventMarkers>(*marker_it)) {
+            } else if (std::holds_alternative<FabricEventMarkers>(marker_it)) {
                 // coalesce fabric event markers into a single logical trace event with extra 'fabric_send' metadata
-                auto fabric_event_markers = std::get<FabricEventMarkers>(*marker_it);
+                auto fabric_event_markers = std::get<FabricEventMarkers>(marker_it);
 
                 auto first_fabric_write_marker = fabric_event_markers.fabric_write_markers[0];
                 auto fabric_routing_fields_marker = fabric_event_markers.fabric_routing_fields_marker;
@@ -1589,19 +1540,6 @@ void DeviceProfiler::readRiscProfilerResults(
                             uint64_t timestamp = (uint64_t(time_H) << 32) | time_L;
                             uint64_t data = (uint64_t(data_H) << 32) | data_L;
 
-                            // Check if this is a LocalNocEvent (not a fabric event or other type)
-                            KernelProfilerNocEventMetadata event_check(data);
-                            bool is_local_noc_event = !KernelProfilerNocEventMetadata::isFabricEventType(
-                                                          event_check.data.raw_event.noc_xfer_type) &&
-                                                      !KernelProfilerNocEventMetadata::isFabricRoutingFields(
-                                                          event_check.data.raw_event.noc_xfer_type) &&
-                                                      !KernelProfilerNocEventMetadata::isLocalEventTrailer(
-                                                          event_check.data.raw_event.noc_xfer_type);
-
-                            // Multicast events don't have trailers (recordMulticastNocEvent doesn't write them)
-                            bool is_multicast_event = event_check.data.raw_event.noc_xfer_type ==
-                                                      KernelProfilerNocEventMetadata::NocEventType::WRITE_MULTICAST;
-
                             readDeviceMarkerData(
                                 device_markers_for_core_risc,
                                 runHostCounterRead,
@@ -1613,85 +1551,6 @@ void DeviceProfiler::readRiscProfilerResults(
                                 data,
                                 timer_id,
                                 timestamp);
-
-                            // Check if the next entry is a trailer (only when device debug dump is enabled)
-                            // When device debug dump is enabled (NON_DROPPING), trailers are guaranteed to be written
-                            // atomically immediately after LocalNocEvent data: Format: Timestamp -> LocalNocEvent ->
-                            // EventTrailer The device-side code ensures there's enough space for both before writing
-                            // either Note: Multicast events don't have trailers, so we skip the check for them
-                            if (getDeviceDebugDumpEnabled() && is_local_noc_event && !is_multicast_event) {
-                                // Check if trailer is within buffer bounds (use <= to include boundary case)
-                                // The trailer might be at the exact boundary if bufferEndIndex doesn't account for it
-                                uint32_t trailer_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
-                                if (trailer_index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE <=
-                                        (bufferRiscShift + bufferEndIndex) &&
-                                    trailer_index + 1 < static_cast<uint32_t>(data_buffer.size())) {
-                                    uint32_t next_data_H = data_buffer.at(trailer_index);
-                                    uint32_t next_data_L = data_buffer.at(trailer_index + 1);
-                                    uint64_t next_data = (uint64_t(next_data_H) << 32) | next_data_L;
-
-                                    // Check if this is a trailer by examining the event type in the data
-                                    KernelProfilerNocEventMetadata trailer_check(next_data);
-                                    if (KernelProfilerNocEventMetadata::isLocalEventTrailer(
-                                            trailer_check.data.raw_event.noc_xfer_type)) {
-                                        // This is a trailer - create a separate marker with the same timestamp
-                                        // Post-processing will match it with the preceding LocalNocEvent based on
-                                        // timestamp Use a modified timer_id to make trailers unique (TTDeviceMarker
-                                        // comparison uses marker_id) We add 1 to the timer_id to distinguish trailers
-                                        // from their corresponding LocalNocEvent
-                                        uint32_t trailer_timer_id = timer_id + 1;
-                                        readDeviceMarkerData(
-                                            device_markers_for_core_risc,
-                                            runHostCounterRead,
-                                            deviceTraceCounterRead,
-                                            opname,
-                                            device_id,
-                                            phys_coord,
-                                            riscType,
-                                            next_data,
-                                            trailer_timer_id,
-                                            timestamp);
-                                        // Skip past the trailer data so we don't try to read it as a timestamp marker
-                                        index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
-                                    } else {
-                                        // Expected trailer but didn't find one - this indicates a problem
-                                        TT_THROW(
-                                            "Expected trailer after LocalNocEvent when device debug dump is enabled. "
-                                            "Event type: {}, timestamp: {}, core: ({}, {}), risc: {}, bufferEndIndex: "
-                                            "{}, "
-                                            "current index: {}, bufferRiscShift: {}, trailer index: {}, next data: "
-                                            "0x{:016x}",
-                                            static_cast<int>(event_check.data.raw_event.noc_xfer_type),
-                                            timestamp,
-                                            worker_core.x,
-                                            worker_core.y,
-                                            enchantum::to_string(riscType),
-                                            bufferEndIndex,
-                                            index,
-                                            bufferRiscShift,
-                                            trailer_index,
-                                            next_data);
-                                    }
-                                } else {
-                                    // Expected trailer but buffer ended - this indicates a problem
-                                    // This should not happen if device-side atomic writes are working correctly
-                                    TT_THROW(
-                                        "Expected trailer after LocalNocEvent when device debug dump is enabled, but "
-                                        "buffer ended. "
-                                        "Event type: {}, timestamp: {}, core: ({}, {}), risc: {}, bufferEndIndex: {}, "
-                                        "current index: {}, bufferRiscShift: {}, trailer index: {}, buffer size: {}",
-                                        static_cast<int>(event_check.data.raw_event.noc_xfer_type),
-                                        timestamp,
-                                        worker_core.x,
-                                        worker_core.y,
-                                        enchantum::to_string(riscType),
-                                        bufferEndIndex,
-                                        index,
-                                        bufferRiscShift,
-                                        trailer_index,
-                                        data_buffer.size());
-                                }
-                            }
                             continue;
                         }
                         case kernel_profiler::TS_EVENT: {
@@ -1708,6 +1567,44 @@ void DeviceProfiler::readRiscProfilerResults(
                                 0,
                                 timer_id,
                                 (uint64_t(time_H) << 32) | time_L);
+                            break;
+                        }
+                        case kernel_profiler::TS_DATA_16B: {
+                            // Header
+                            uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                            uint32_t time_L = data_buffer.at(index + 1);
+                            index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+
+                            // First uint64_t data
+                            uint32_t data_H = data_buffer.at(index);
+                            uint32_t data_L = data_buffer.at(index + 1);
+                            index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+
+                            // Second uint64_t data
+                            uint32_t trailer_H = data_buffer.at(index);
+                            uint32_t trailer_L = data_buffer.at(index + 1);
+
+                            uint64_t timestamp = (uint64_t(time_H) << 32) | time_L;
+                            uint64_t data = (uint64_t(data_H) << 32) | data_L;
+                            uint64_t trailer = (uint64_t(trailer_H) << 32) | trailer_L;
+
+                            readTsData16BMarkerData(
+                                device_markers_for_core_risc,
+                                runHostCounterRead,
+                                deviceTraceCounterRead,
+                                opname,
+                                device_id,
+                                phys_coord,
+                                riscType,
+                                data,
+                                {trailer},
+                                timer_id,
+                                timestamp);
+                            break;
+                        }
+                        default: {
+                            TT_THROW("Invalid packet type {}", packet_type);
+                            break;
                         }
                     }
                 }
@@ -1810,6 +1707,75 @@ void DeviceProfiler::readDeviceMarkerData(
     updateFirstTimestamp(timestamp);
 }
 
+void DeviceProfiler::readTsData16BMarkerData(
+    std::set<tracy::TTDeviceMarker>& device_markers,
+    uint32_t run_host_id,
+    uint32_t device_trace_counter,
+    const std::string& op_name,
+    ChipId device_id,
+    const CoreCoord& physical_core,
+    tracy::RiscType risc_type,
+    uint64_t data,
+    const std::vector<uint64_t>& trailer_data,
+    uint32_t timer_id,
+    uint64_t timestamp) {
+    ZoneScoped;
+
+    using EMD = KernelProfilerNocEventMetadata;
+
+    nlohmann::json meta_data;
+
+    EMD event_metadata(data);
+    auto event_contents = event_metadata.getContents();
+
+    // Local Noc Event is expected to have one trailer with dst_addr
+    if (std::holds_alternative<EMD::LocalNocEvent>(event_contents)) {
+        const uint32_t total_data_size = trailer_data.size() + 1;
+        if (total_data_size != kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size) {
+            TT_THROW(
+                "TS_DATA_16B marker expected {} trailers, got {}",
+                kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size,
+                total_data_size);
+        }
+
+        EMD trailer_metadata(trailer_data[0]);
+        meta_data["dst_addr"] = trailer_metadata.getLocalNocEventDstTrailer().dst_addr;
+    } else {
+        TT_THROW("TS_DATA_16B marker contains unexpected event contents {:#X}", event_metadata.asU64());
+    }
+
+    const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
+    const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
+    const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
+
+    const auto& [_, new_marker_inserted] = device_markers.emplace(
+        run_host_id,
+        trace_id,
+        trace_id_count,
+        device_id,
+        physical_core.x,
+        physical_core.y,
+        risc_type,
+        timer_id,
+        timestamp,
+        data,
+        op_name,
+        marker_details.source_line_num,
+        marker_details.source_file,
+        marker_details.marker_name,
+        get_marker_type_from_packet_type(packet_type),
+        marker_details.marker_name_keyword_flags,
+        meta_data);
+
+    if (!new_marker_inserted) {
+        return;
+    }
+
+    device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
+
+    updateFirstTimestamp(timestamp);
+}
+
 struct DispatchMetaData {
     // Dispatch command queue command type
     std::string cmd_type;
@@ -1836,7 +1802,6 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
     };
 
     auto device_marker_it = device_markers.begin();
-    // log_info(tt::LogMetal, "Processing {} device markers", device_markers.size());
     while (device_marker_it != device_markers.end()) {
         tracy::TTDeviceMarker marker = *device_marker_it;
         tracy::MarkerDetails marker_details = this->getMarkerDetails(marker.marker_id);

@@ -10,7 +10,6 @@
 #include "modules/llama_block.hpp"
 #include "modules/rms_norm_module.hpp"
 #include "ops/rope_op.hpp"
-#include "ops/unary_ops.hpp"
 #include "serialization/safetensors.hpp"
 
 namespace {
@@ -185,18 +184,72 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     common::transformer::initialize_weights_gpt2(*this);
 }
 
-ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
-    auto tok_emb_out = (*tok_emb)(x);
-    auto out = tok_emb_out;  // llama does positional embedding in the attention blocks
-    for (auto& block : blocks) {
-        if (runner_type == RunnerType::MemoryEfficient) {
-            out = common::transformer::memory_efficient_runner(*block, out, mask);
-        } else if (runner_type == RunnerType::Default) {
-            out = (*block)(out, mask);
-        } else {
-            throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
+ttml::autograd::TensorPtr Llama::operator()(
+    const ttml::autograd::TensorPtr& x,
+    const ttml::autograd::TensorPtr& mask,
+    std::shared_ptr<common::transformer::KvCache> kv_cache,
+    const uint32_t new_tokens) {
+    // Pad input tokens to nearest multiple of 32 before embedding
+    constexpr uint32_t TILE_SIZE = 32;
+    auto x_shape = x->get_value().logical_shape();
+    uint32_t actual_seq_len = x_shape[-1];  // Last dimension is sequence length
+    uint32_t padded_seq_len = ((actual_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+
+    autograd::TensorPtr x_padded = x;
+    if (padded_seq_len != actual_seq_len) {
+        // Pad the sequence dimension (last dimension) with zeros
+        // Create a new tensor instead of modifying in-place
+        ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding = {
+            {0, 0},                               // batch dimension
+            {0, 0},                               // first spatial dimension
+            {0, 0},                               // second spatial dimension
+            {0, padded_seq_len - actual_seq_len}  // sequence dimension
+        };
+        auto x_padded_tensor = ttnn::pad(x->get_value(), padding, 0.0f, false, std::nullopt);
+        x_padded = autograd::create_tensor(x_padded_tensor);
+    }
+
+    auto tok_emb_out = (*tok_emb)(x_padded);
+
+    // Unpad after embedding to restore original sequence length
+    autograd::TensorPtr out = tok_emb_out;
+    if (padded_seq_len != actual_seq_len) {
+        // Slice back to original sequence length (sequence dimension is now at index 2)
+        // Create a new tensor instead of modifying in-place
+        ttnn::SmallVector<uint32_t> slice_start = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> slice_end = {
+            tok_emb_out->get_value().logical_shape()[0],
+            tok_emb_out->get_value().logical_shape()[1],
+            actual_seq_len,
+            tok_emb_out->get_value().logical_shape()[3]};
+        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        auto out_tensor = ttnn::slice(tok_emb_out->get_value(), slice_start, slice_end, step);
+        out = autograd::create_tensor(out_tensor);
+    }
+
+    // llama does positional embedding in the attention blocks
+
+    if (kv_cache) {
+        // Inference mode with KV cache
+        for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
+            auto& block = blocks[block_idx];
+            // Cast block to LlamaBlock to access the cache-aware operator
+            auto llama_block = std::dynamic_pointer_cast<ttml::modules::LlamaBlock>(block);
+            out = (*llama_block)(out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
+        }
+    } else {
+        // Training mode or inference without cache
+        for (auto& block : blocks) {
+            if (runner_type == RunnerType::MemoryEfficient) {
+                out = common::transformer::memory_efficient_runner(*block, out, mask);
+            } else if (runner_type == RunnerType::Default) {
+                out = (*block)(out, mask);
+            } else {
+                throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
+            }
         }
     }
+
     out = (*ln_fc)(out);
     auto logits = (*fc)(out);
     return logits;
