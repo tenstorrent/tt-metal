@@ -14,6 +14,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
+#include <iostream>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -24,6 +25,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    std::cout << "START OF PROGRAM FACTORY\n";
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
@@ -54,6 +56,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     uint32_t num_shards_per_core;
     uint32_t extra_shards;
     if (a.shard_spec().has_value()) {
+        std::cout << "Shard spec has value" << std::endl;
         const auto& shard_spec = a.shard_spec().value();
         shard_height = shard_spec.shape[0];
         shard_width = shard_spec.shape[1];
@@ -65,6 +68,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         num_shards_per_core = 1;
         extra_shards = 0;
     } else {
+        std::cout << "ND shard spec has value" << std::endl;
         const auto& nd_shard_spec = a.nd_shard_spec().value();
         shard_height = nd_shard_spec.shard_shape[-2];
         shard_width = nd_shard_spec.shard_shape[-1];
@@ -83,9 +87,14 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         for (int i = 0; i < nd_shard_spec.shard_shape.rank(); ++i) {
             total_shards *= tt::div_up(tensor_shape[i], nd_shard_spec.shard_shape[i]);
         }
+
         uint32_t num_cores = grid.num_cores();
         num_shards_per_core = total_shards / num_cores;
         extra_shards = total_shards % num_cores;
+        std::cout << "total_shards: " << total_shards << std::endl;
+        std::cout << "num_cores: " << grid.num_cores() << std::endl;
+        std::cout << "num_shards_per_core: " << num_shards_per_core << std::endl;
+        std::cout << "extra_shards: " << extra_shards << std::endl;
         log_debug(
             tt::LogOp,
             "ND sharding: total_shards={}, cores={}, base_shards_per_core={}, extra={} (first extra cores get +1 "
@@ -207,6 +216,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
             (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
             log_debug(tt::LogOp, "Using slow untilize.");
+            std::cout << "Using slow untilize." << std::endl;
             compute_kernel = std::string(
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
                 "untilize_variable_num_blocks.cpp");
@@ -214,6 +224,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
                 UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
         } else {
             log_debug(tt::LogOp, "Using fast pack untilize.");
+            std::cout << "Using fast pack untilize." << std::endl;
             compute_kernel = std::string(
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
                 "pack_untilize_variable_num_blocks.cpp");
@@ -233,16 +244,19 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         uint32_t core_count = 0;
         for (auto core : cores) {
             uint32_t num_tiles_to_process;
+            uint32_t num_blocks_to_process;
             if (core_count < extra_shards) {
-                num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * (num_shards_per_core + 1);
+                num_blocks_to_process = num_blocks_per_shard * (num_shards_per_core + 1);
+                num_tiles_to_process = num_tiles_per_block * num_blocks_to_process;
             } else {
-                num_tiles_to_process = num_tiles_per_block * num_blocks_per_shard * num_shards_per_core;
+                num_blocks_to_process = num_blocks_per_shard * num_shards_per_core;
+                num_tiles_to_process = num_tiles_per_block * num_blocks_to_process;
             }
             // Reader run-time args
             std::vector<uint32_t> reader_run_time_args = {num_tiles_to_process};
 
             // Compute run-time args
-            std::vector<uint32_t> compute_run_time_args = {num_blocks_per_shard * num_shards_per_core};
+            std::vector<uint32_t> compute_run_time_args = {num_blocks_to_process};
 
             // Writer run-time args
             std::vector<uint32_t> writer_run_time_args = {num_tiles_to_process};

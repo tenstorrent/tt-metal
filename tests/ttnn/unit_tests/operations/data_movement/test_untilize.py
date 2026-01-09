@@ -1416,17 +1416,16 @@ def test_untilize_same_volume_different_shapes(device, dtype, use_multicore, sha
         assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
 
 
-def test_untilize_nd_shard_spec(device):
-    # device_id = 0
-    # device = ttnn.open_device(device_id=device_id)
+def test_untilize_nd_shard_spec(device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize):
+    """
+    Test untilize with ND shard spec.
+    """
     torch.manual_seed(0)
-
-    # This is the exact tensor in the sharding tech report
-    core_ranges = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 3))})
+    core_ranges = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(core_start), ttnn.CoreCoord(core_end))})
 
     nd_spec = ttnn.TensorSpec(
-        shape=[4, 512, 768], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
-    ).sharded_across_dims([0, 1], core_ranges)
+        shape=shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+    ).sharded_across_dims(shard_across_dims, core_ranges)
     print("Shard shape:", nd_spec.memory_config.nd_shard_spec.shard_shape)
 
     torch_tensor = torch.randn(tuple(nd_spec.shape))
@@ -1438,10 +1437,34 @@ def test_untilize_nd_shard_spec(device):
     print("ND shard spec:", ttnn_tensor.memory_config().nd_shard_spec)
     print("Attempting ttnn.untilize on ND sharded tensor...")
 
-    untilized_tensor = ttnn.untilize(ttnn_tensor)
+    untilized_tensor = ttnn.untilize(ttnn_tensor, use_pack_untilize=use_pack_untilize)
     print("Successfully untilized ND sharded tensor!")
     print("Output layout:", untilized_tensor.layout)
     assert_with_pcc(torch_tensor, ttnn.to_torch(untilized_tensor), 0.9999)
 
-    # finally:
-    #     ttnn.close_device(device)
+
+@pytest.mark.parametrize("shape", [[4, 512, 768]])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    ("core_start", "core_end"),
+    [((0, 0), (1, 3)), ((0, 0), (1, 2)), ((0, 0), (3, 3)), ((0, 0), (4, 4)), ((1, 1), (2, 3))],
+)
+@pytest.mark.parametrize("shard_across_dims", [[0, 1], [0, 1, 2]])
+@pytest.mark.parametrize("use_pack_untilize", [True, False])
+def test_untilize_nd_shard_spec_3D(device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize):
+    test_untilize_nd_shard_spec(device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize)
+
+
+@pytest.mark.parametrize("shape", [[64, 3, 256, 256]])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    ("core_start", "core_end"),
+    [
+        ((0, 0), (7, 7)),
+        ((0, 0), (7, 6)),
+    ],
+)
+@pytest.mark.parametrize("shard_across_dims", [[0, 1], [0, 1, 2], [0, 1, 2, 3]])
+@pytest.mark.parametrize("use_pack_untilize", [True, False])
+def test_untilize_nd_shard_spec_4D(device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize):
+    test_untilize_nd_shard_spec(device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize)
