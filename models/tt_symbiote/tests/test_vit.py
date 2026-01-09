@@ -5,13 +5,12 @@ from torch import nn
 from transformers import AutoModelForImageClassification
 from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTIntermediate, ViTLayer, ViTOutput, ViTSelfAttention
 
-import ttnn
 from models.tt_symbiote.core.run_config import DispatchManager
-from models.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.tt_symbiote.modules.attention import TTNNViTSelfAttention
 from models.tt_symbiote.modules.conv import TTNNViTEmbeddings
 from models.tt_symbiote.modules.linear import TTNNLinear, TTNNViTIntermediate
 from models.tt_symbiote.modules.normalization import TTNNLayerNorm
+from models.tt_symbiote.modules.tensor import TTNNAdd
 from models.tt_symbiote.utils.device_management import set_device
 from models.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -56,6 +55,7 @@ class RewrittenViTOutput(nn.Module):
     def __init__(self, old_layer) -> None:
         super().__init__()
         self.dense = old_layer.dense
+        self.add = TTNNAdd()
 
     @classmethod
     def from_torch(cls, old_layer: ViTOutput):
@@ -65,7 +65,7 @@ class RewrittenViTOutput(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
-        hidden_states = TorchTTNNTensor(hidden_states.to_ttnn + input_tensor.to_ttnn)
+        hidden_states = self.add(hidden_states, input_tensor)
 
         return hidden_states
 
@@ -82,6 +82,7 @@ class RewrittenViTLayer(nn.Module):
         self.output = RewrittenViTOutput.from_torch(old_layer.output)
         self.layernorm_before = old_layer.layernorm_before
         self.layernorm_after = old_layer.layernorm_after
+        self.add = TTNNAdd()
 
     @classmethod
     def from_torch(cls, old_layer: ViTLayer):
@@ -103,9 +104,7 @@ class RewrittenViTLayer(nn.Module):
         attention_output = self_attention_outputs[0]
         outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
         # first residual connection
-        if hidden_states.to_ttnn.device() != attention_output.to_ttnn.device():
-            hidden_states.ttnn_tensor = ttnn.to_device(hidden_states.to_ttnn, attention_output.to_ttnn.device())
-        hidden_states = TorchTTNNTensor(attention_output.to_ttnn + hidden_states.to_ttnn)
+        hidden_states = self.add(attention_output, hidden_states)
 
         # in ViT, layernorm is also applied after self-attention
         layer_output = self.layernorm_after(hidden_states)
@@ -145,6 +144,7 @@ def test_vit(device):
     torch.set_grad_enabled(False)  # Disables autograd overhead
     input_tensor = torch.randn(1, 224, 224, 4)
     model(input_tensor)
+    DispatchManager.clear_timings()
     result = model(input_tensor)
-    print(result.logits)
     DispatchManager.save_stats_to_file("vit_timing_stats.csv")
+    print(result.logits)
