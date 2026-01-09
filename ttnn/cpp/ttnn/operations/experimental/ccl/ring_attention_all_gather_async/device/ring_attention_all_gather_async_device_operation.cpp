@@ -141,31 +141,37 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     std::vector<Tensor> output_tensors;
     const auto& persistent_output_buffer = tensor_args.persistent_output_buffer;
-    if (!persistent_output_buffer.empty()) {
+    if (!persistent_output_buffer.empty() && persistent_output_buffer[0].has_value()) {
         output_tensors.reserve(persistent_output_buffer.size());
         for (const auto& buffer : persistent_output_buffer) {
-            if (buffer.has_value()) {
-                output_tensors.push_back(buffer.value());
-            }
+            TT_FATAL(buffer.has_value(), "If using optional output tensors, all output tensors must have a value");
+            output_tensors.emplace_back(buffer.value());
         }
-    } else {
-        const auto& input_tensors = tensor_args.input_tensor;
-        auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-        output_tensors.reserve(output_specs.size());
-        for (const auto& output_spec : output_specs) {
-            output_tensors.emplace_back(create_device_tensor(output_spec, input_tensors[0].device()));
-        }
+        return output_tensors;
+    }
+    const auto& input_tensors = tensor_args.input_tensor;
+    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    output_tensors.reserve(output_specs.size());
+    for (const auto& output_spec : output_specs) {
+        output_tensors.emplace_back(create_device_tensor(output_spec, input_tensors[0].device()));
     }
     return output_tensors;
 }
 
 tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "compute_program_hash is called");
     const auto& input_tensors = tensor_args.input_tensor;
     auto input_shape = input_tensors[0].padded_shape();
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
+
+    bool has_sub_device_id = operation_attributes.sub_device_id.has_value();
+    auto worker_cores = has_sub_device_id ? input_tensors[0].device()->worker_cores(
+                                                tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                                                operation_attributes.sub_device_id.value())
+                                          : CoreRangeSet(CoreRange({0, 0}, {0, 0}));
 
     return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsyncDeviceOperation>(
         operation_attributes.dim,
@@ -173,11 +179,9 @@ tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_progra
         operation_attributes.ring_size,
         operation_attributes.output_mem_config,
         operation_attributes.topology,
-        operation_attributes.sub_device_id.has_value(),
-        operation_attributes.sub_device_id.has_value()
-            ? input_tensors[0].device()->worker_cores(
-                  tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value())
-            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        operation_attributes.cluster_axis,
+        has_sub_device_id,
+        worker_cores,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -192,16 +196,16 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
     std::vector<Tensor>& persistent_output_buffer,
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    uint32_t cluster_axis,
+    const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    ttnn::ccl::Topology topology,
-    uint32_t num_links,
+    const ttnn::ccl::Topology topology,
+    const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
-        "all-gather invoked with cluster_axis API withou 2D mesh, which is currently unsupported");
+        "all-gather invoked with cluster_axis API without 2D mesh, which is currently unsupported");
     uint32_t ring_size = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     int32_t rank = input_tensors[0].logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
