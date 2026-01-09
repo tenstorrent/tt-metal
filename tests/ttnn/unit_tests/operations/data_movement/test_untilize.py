@@ -1419,7 +1419,6 @@ def test_untilize_same_volume_different_shapes(device, dtype, use_multicore, sha
 def test_untilize_nd_shard_spec(device):
     # device_id = 0
     # device = ttnn.open_device(device_id=device_id)
-
     torch.manual_seed(0)
 
     # This is the exact tensor in the sharding tech report
@@ -1444,6 +1443,5 @@ def test_untilize_nd_shard_spec(device):
     print("Output layout:", untilized_tensor.layout)
     assert_with_pcc(torch_tensor, ttnn.to_torch(untilized_tensor), 0.9999)
 
-
-# finally:
-#     ttnn.close_device(device)
+    # finally:
+    #     ttnn.close_device(device)
