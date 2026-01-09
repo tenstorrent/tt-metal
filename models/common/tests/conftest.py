@@ -1,65 +1,142 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+
 import pytest
 
 import ttnn
 
 
-@pytest.fixture(scope="session")
+def pytest_collection_modifyitems(config, items):
+    """Deselect tests where ttnn_mesh_device fixture doesn't match mesh_shape param.
+
+    This enables tests to use cross-product parametrization (all meshes × all cases)
+    while only running the valid combinations, without noisy skip messages.
+    """
+    selected = []
+    deselected = []
+
+    for item in items:
+        if not hasattr(item, "callspec"):
+            selected.append(item)
+            continue
+
+        params = item.callspec.params
+        fixture_mesh = params.get("ttnn_mesh_device")
+        required_mesh = params.get("mesh_shape")
+
+        # Keep test if no mesh_shape param or if meshes match
+        if required_mesh is None or fixture_mesh == required_mesh:
+            selected.append(item)
+        else:
+            deselected.append(item)
+
+    items[:] = selected
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+
+
+@pytest.fixture(scope="module")
 def ttnn_mesh_device(request):
     """Create and yield a mesh device for a given mesh shape, cleanup on teardown."""
     if not hasattr(request, "param"):
-        pytest.skip("mesh_device fixture called without parametrization")
+        pytest.skip(f"{__file__}: mesh_device fixture called without parametrization")
 
-    mesh_shape = request.param
-    # Pre-check: if no devices at all, skip without invoking C++ open
+    if ttnn.device.is_blackhole():
+        pytest.skip(f"{__file__}: Blackhole device is not supported for this test yet")
+
+    # request.param is either a Sequence of ints or a dict with fabric_config and etc.
+    params = getattr(request, "param", tuple())
+    if isinstance(params, tuple):
+        mesh_shape = params
+        updated_params = dict()
+    else:
+        try:
+            updated_params = params.copy()
+            mesh_shape = updated_params.pop("mesh_shape")
+        except Exception as e:
+            pytest.skip(f"{__file__}: mesh_shape is required: {e}")
+
+    # Pre-check: if no devices at all, skip without invoking C++ open.
+    # Some environments can throw here (e.g. transient driver/UMD issues); treat as "device unavailable".
     try:
         num_pcie = ttnn.get_num_pcie_devices()
-        if isinstance(num_pcie, int) and num_pcie == 0:
-            pytest.skip("No TT devices detected on this system")
-    except Exception:
-        # If query fails, continue to attempt opening; downstream try/except will skip
-        pass
+    except Exception as e:
+        pytest.skip(f"{__file__}: Unable to query TT devices on this system: {e}")
+
+    if isinstance(num_pcie, int) and num_pcie == 0:
+        pytest.skip(f"{__file__}: No TT devices detected on this system")
 
     # Pre-check: skip shapes that cannot fit into the SystemMesh to avoid native exceptions
-    try:
-        sys_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()  # type: ignore[attr-defined]
-        sys_shape = tuple(sys_desc.shape())
-        req_shape = tuple(mesh_shape)
-        allowed = _allowed_req_shapes_for_system(sys_shape)
-        if req_shape not in allowed:
-            pytest.skip(
-                f"Requested mesh {req_shape} unsupported on system {sys_shape}. " f"Allowed for this system: {allowed}"
-            )
-    except Exception:
-        # If descriptor unavailable, fall through and try to open
+    sys_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()  # type: ignore[attr-defined]
+    sys_shape = tuple(sys_desc.shape())
+    req_shape = tuple(mesh_shape)
+    allowed = _allowed_req_shapes_for_system(sys_shape)
+    if req_shape not in allowed:
+        pytest.skip(
+            f"{__file__}: Requested mesh {req_shape} unsupported on system {sys_shape}. "
+            f"Allowed for this system: {allowed}"
+        )
+
+    parent_shape = _pick_parent_shape_for_submesh(sys_shape, req_shape)
+
+    # config fabric config
+    fabric_config = updated_params.pop("fabric_config", None)
+    if parent_shape == (1, 1):
+        # Single device does not need fabric config.
         pass
+    else:
+        # Provide default fabric config for the mesh we actually open (full system mesh).
+        num_devices = parent_shape[0] * parent_shape[1]
+        if fabric_config is None:
+            if num_devices >= 8:
+                fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
+            else:
+                fabric_config = ttnn.FabricConfig.FABRIC_1D
+        # set all other input arguments to default values by top-level conftest.py
+        ttnn.set_fabric_config(
+            fabric_config, ttnn.FabricReliabilityMode.STRICT_INIT, None, ttnn.FabricTensixConfig.DISABLED
+        )
 
-    try:
-        device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_shape))
-    except Exception:
-        pytest.skip("Mesh device unavailable or unsupported for this configuration")
+    # config dispatch core to default values by conftest.py
+    updated_params["dispatch_core_config"] = ttnn.DispatchCoreConfig(type=None, axis=None, fabric_tensix_config=None)
 
+    # If a test requests a submesh of a larger system mesh (e.g. request 2x4 on a 8x4 system),
+    # fabric cannot be initialized on only the subset of devices. In that case, open the full
+    # system mesh first, then return the "first" submesh. We intentionally rely on the default
+    # offset behavior here (i.e. no explicit offset selection).
+    parent_device = None
+    submesh_device = None
     try:
-        yield device
+        if req_shape != parent_shape:
+            parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
+            submesh_device = parent_device.create_submesh(ttnn.MeshShape(req_shape))
+            yield submesh_device
+        else:
+            parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
+            yield parent_device
+    except Exception as e:
+        pytest.skip(f"{__file__}: Mesh device unavailable or unsupported for this configuration: {e}")
     finally:
-        ttnn.close_mesh_device(device)
+        if submesh_device is not None:
+            ttnn.close_mesh_device(submesh_device)
+        if parent_device is not None:
+            ttnn.close_mesh_device(parent_device)
+        if fabric_config:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        del parent_device
 
 
 def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int, int]]:
-    """Recursively derive allowed requested shapes by traversing the candidate graph.
-
-    We start from both orientations of the system shape and walk the
-    `_CANDIDATE_REQ_SHAPES` graph, collecting reachable shapes. Finally,
-    we keep only shapes that physically fit within the system shape (allowing rotation).
-    """
+    # todo)) Different cluster has potentially different physical interconnects (in terms of number of links, topology, etc.).
+    #        Thus, a tuple of ints may not be enough to fingerprint the parent/system mesh device. We need to use a more sophisticated fingerprinting mechanism so we can base the allowed list of (sub)mesh shapes on the parent/system mesh device.
+    # [INFO] The most robust way to identify the underlying system is to use ttnn.cluster.get_cluster_type(), which returns a ClusterType enum that precisely identifies your hardware configuration. cluster.cpp:16-37
 
     _CANDIDATE_REQ_SHAPES = {
         (1, 1): ((1, 1),),
         (1, 2): ((1, 2), (1, 1)),
-        (1, 8): ((1, 8), (2, 4), (1, 2), (1, 1)),
-        (2, 4): ((2, 4), (1, 8), (1, 2), (1, 1)),
+        (2, 4): ((2, 4), (1, 8), (1, 4), (1, 2), (1, 1)),
+        (8, 4): ((8, 4), (4, 8), (1, 8), (1, 4), (1, 2), (1, 1)),
         # [INFO] add more system shapes here
     }
 
@@ -70,3 +147,31 @@ def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int,
             allowed.add(mesh_shape)
 
     return allowed
+
+
+def _pick_parent_shape_for_submesh(system_shape: tuple[int, int], requested_shape: tuple[int, int]) -> tuple[int, int]:
+    # For multi-device workloads we always open the full system mesh (fabric cannot be launched on a subset),
+    # but we may choose the *orientation* of the full mesh such that the requested submesh fits with the
+    # default offset (i.e. "first submesh").
+    if requested_shape == (1, 1):
+        return (1, 1)
+
+    # If the request uses all devices, treat it as a "full-mesh view" shape and open the parent mesh in that view.
+    # This enables shapes like (1,32) on a system whose SystemMeshDescriptor reports (8,4).
+    system_num_devices = system_shape[0] * system_shape[1]
+    requested_num_devices = requested_shape[0] * requested_shape[1]
+    if requested_num_devices == system_num_devices:
+        return requested_shape
+
+    if requested_shape[0] <= system_shape[0] and requested_shape[1] <= system_shape[1]:
+        return system_shape
+
+    rotated = (system_shape[1], system_shape[0])
+    if requested_shape[0] <= rotated[0] and requested_shape[1] <= rotated[1]:
+        return rotated
+
+    # No orientation can fit this request without an explicit offset / mapping.
+    pytest.skip(
+        f"{__file__}: Requested submesh {requested_shape} does not fit within system mesh {system_shape} "
+        f"(or its rotated view {rotated}) with default offset."
+    )
