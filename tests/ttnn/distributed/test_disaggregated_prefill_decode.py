@@ -139,12 +139,15 @@ def run_prefill_node(device, model, model_args, kv_cache, tokens, socket_config,
     # Also send the sequence length and next token as metadata
     # (In practice, you'd use a separate control channel)
     # Use actual_seq_len for metadata (before padding)
-    metadata = torch.tensor([actual_seq_len, next_token.item()], dtype=torch.int32)
+    # Convert to float32 first, then to BFLOAT16 for transmission
+    metadata = torch.tensor([float(actual_seq_len), float(next_token.item())], dtype=torch.float32)
     metadata_tt = ttnn.from_torch(
         metadata.unsqueeze(0).unsqueeze(0),
         device=device,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
     )
+    logger.info(f"Sending metadata: seq_len={actual_seq_len}, next_token={next_token.item()}")
     ttnn.experimental.send_async(metadata_tt, send_socket)
 
     logger.info("KV cache sent to decode node")
@@ -187,14 +190,27 @@ def run_decode_node(device, model, model_args, kv_cache, socket_config, tokenize
     # Take first slice since tensor is replicated across mesh
     metadata = metadata_full[:, :, :, : metadata_full.shape[3] // 2] if metadata_full.shape[3] > 2 else metadata_full
 
-    seq_len = int(metadata[0, 0, 0, 0].item())
-    current_token = int(metadata[0, 0, 0, 1].item())
+    # Debug: log the metadata tensor shape and first few values
+    logger.info(f"Metadata tensor shape: {metadata.shape}")
+    logger.info(f"Metadata tensor first values: {metadata[0, 0, 0, :8].tolist()}")
 
+    # Extract metadata from the first tile (data is in the first row of the first tile)
+    # The tensor shape is [1, 1, 32, 32] but we only sent 2 values, so they're at [0, 0, 0, 0] and [0, 0, 0, 1]
+    seq_len = int(round(metadata[0, 0, 0, 0].item()))
+    current_token = int(round(metadata[0, 0, 0, 1].item()))
+
+    logger.info(
+        f"Received metadata: seq_len={seq_len}, current_token={current_token} ({tokenizer.decode([current_token])})"
+    )
     logger.info(f"Received KV cache. Starting decode from position {seq_len}")
 
     # Decode loop
     generated_tokens = [current_token]
     current_pos = seq_len
+
+    logger.info(
+        f"Starting decode loop. Initial token: {current_token} ({tokenizer.decode([current_token])}) at pos={current_pos}"
+    )
 
     for step in range(max_new_tokens):
         # Prepare decode input (single token)
@@ -217,15 +233,19 @@ def run_decode_node(device, model, model_args, kv_cache, socket_config, tokenize
         logits_cpu = model.process_output_decode(tt_logits.cpu(), 1, S=1)
         next_token = torch.argmax(logits_cpu[:, -1], dim=-1).item()
 
+        logger.info(f"Step {step}: Generated token {next_token} ({tokenizer.decode([next_token])})")
+
         generated_tokens.append(next_token)
         current_token = next_token
         current_pos += 1
 
         # Check for EOS
         if next_token == tokenizer.eos_token_id:
+            logger.info(f"EOS token detected at step {step}")
             break
 
     # Decode tokens to text
+    logger.info(f"All generated tokens: {generated_tokens}")
     generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
     logger.info(f"Generated text: {generated_text}")
 
@@ -278,7 +298,7 @@ def run_disaggregated_prefill_decode():
     socket_config = setup_kv_cache_sockets(device, mesh_shape, model_args.n_layers)
 
     # The prompt to process
-    prompt = "The capital of France is"
+    prompt = "Quick brown fox"
 
     logger.info(f"Prompt: '{prompt}'")
 
