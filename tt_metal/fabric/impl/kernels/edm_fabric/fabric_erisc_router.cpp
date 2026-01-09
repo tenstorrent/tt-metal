@@ -2079,15 +2079,15 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     if (did_nothing_count++ > SWITCH_INTERVAL) {
                         did_nothing_count = 0;
 
-                        // run_retrain_sync();
-                        run_routing_without_noc_sync();
+                        run_retrain_sync();
+                        // run_routing_without_noc_sync();
                     }
                 }
             } else {
                 if (did_nothing_count++ > SWITCH_INTERVAL) {
                     did_nothing_count = 0;
-                    // run_retrain_sync();
-                    run_routing_without_noc_sync();
+                    run_retrain_sync();
+                    // run_routing_without_noc_sync();
                 }
             }
         }
