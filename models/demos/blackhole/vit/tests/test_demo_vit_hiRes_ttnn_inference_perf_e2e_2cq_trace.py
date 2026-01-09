@@ -57,7 +57,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
         signpost(header="start")
 
     profiler.start("run")
-    outputs = pipeline.enqueue(host_inputs).pop_all()
+    pipeline.enqueue(host_inputs).pop_all()
     profiler.end("run")
 
     if use_signpost:
