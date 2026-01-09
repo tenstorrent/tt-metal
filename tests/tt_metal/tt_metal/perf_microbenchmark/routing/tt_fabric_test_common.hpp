@@ -93,6 +93,46 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDi
         torus_topology_to_fabric_config_map;
 
 public:
+    bool validate_device_frequencies_for_performance_tests() {
+        // Skip if already validated - device frequencies are cached for the lifetime of the fixture
+        if (frequency_validated_) {
+            return true;
+        }
+
+        uint32_t expected_freq = get_expected_baseline_frequency_mhz();
+        uint32_t tolerance = get_frequency_tolerance_mhz();
+
+        std::vector<std::pair<FabricNodeId, uint32_t>> failed_devices;
+        for (const auto& device_id : get_global_node_ids()) {
+            uint32_t actual_freq = get_device_frequency_mhz(device_id);
+            int32_t diff = static_cast<int32_t>(actual_freq) - static_cast<int32_t>(expected_freq);
+            if (std::abs(diff) > static_cast<int32_t>(tolerance)) {
+                failed_devices.emplace_back(device_id, actual_freq);
+            }
+        }
+
+        if (!failed_devices.empty()) {
+            log_error(tt::LogTest, "=== DEVICE FREQUENCY VALIDATION FAILED ===");
+            log_error(tt::LogTest, "Cannot run performance benchmarks - frequency mismatch detected");
+            log_error(tt::LogTest, "Expected: {}MHz ± {}MHz", expected_freq, tolerance);
+            log_error(tt::LogTest, "Failed devices ({} total):", failed_devices.size());
+            for (const auto& [dev_id, actual] : failed_devices) {
+                int32_t diff = static_cast<int32_t>(actual) - static_cast<int32_t>(expected_freq);
+                log_error(tt::LogTest, "  Device {}: {}MHz (diff: {:+}MHz)", dev_id, actual, diff);
+            }
+            return false;
+        }
+
+        log_info(
+            tt::LogTest,
+            "Device frequency validation passed: {} devices at {}MHz ± {}MHz",
+            get_global_node_ids().size(),
+            expected_freq,
+            tolerance);
+        frequency_validated_ = true;
+        return true;
+    }
+
     void init(std::optional<PhysicalMeshConfig> physical_mesh_config = std::nullopt) {
         if (physical_mesh_config.has_value()) {
             initialize_and_validate_custom_physical_config(physical_mesh_config.value());
@@ -1550,6 +1590,26 @@ public:
     }
 
 private:
+    // Helper methods for device frequency validation (performance testing)
+    static uint32_t get_expected_baseline_frequency_mhz() {
+        auto arch = tt::tt_metal::hal::get_arch();
+        switch (arch) {
+            case tt::ARCH::WORMHOLE_B0: return 1000;
+            case tt::ARCH::BLACKHOLE: return 1350;
+            default: TT_THROW("Unsupported architecture for performance testing: {}", arch);
+        }
+    }
+
+    static uint32_t get_frequency_tolerance_mhz() {
+        // Note: these tolerances are initally set as placeholders and should be calibrated based on empirical data
+        auto arch = tt::tt_metal::hal::get_arch();
+        switch (arch) {
+            case tt::ARCH::WORMHOLE_B0: return 10;
+            case tt::ARCH::BLACKHOLE: return 20;
+            default: TT_THROW("Unsupported architecture for performance testing: {}", arch);
+        }
+    }
+
     Topology topology_{0};
     MeshShape mesh_shape_;
     std::set<MeshId> available_mesh_ids_;
@@ -1567,6 +1627,7 @@ private:
     bool are_devices_open_ = false;
     bool wrap_around_mesh_ = false;
     mutable std::map<FabricNodeId, uint32_t> device_frequency_cache_;
+    mutable bool frequency_validated_ = false;
 
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
         const auto local_mesh_id = MeshId{std::stoi(std::getenv("TT_MESH_ID"))};
