@@ -1054,6 +1054,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         requires_forced_assignment_to_noc1(),
         is_intermesh_router_on_edge,
         is_intramesh_router_on_edge,
+
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 
