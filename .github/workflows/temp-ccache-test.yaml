@@ -134,13 +134,13 @@ jobs:
             head -50 /tmp/ttnn_ccache_run1.log
             echo ""
             echo "=== Result keys (ccache primary hash) - first 30 ==="
-            grep -E "(Result key|Primary hash|Hash key)" /tmp/ttnn_ccache_run1.log | head -30 | tee /tmp/ttnn_run1_ccache_keys.txt
+            grep -E "(Result key|Primary hash|Hash key)" /tmp/ttnn_ccache_run1.log | head -30 | tee /tmp/ttnn_run1_ccache_keys.txt || true
             echo ""
             echo "=== Files included in hash - sample ==="
-            grep -E "Hashing.*\.(cpp|hpp|h):" /tmp/ttnn_ccache_run1.log | head -20
+            grep -E "Hashing.*\.(cpp|hpp|h):" /tmp/ttnn_ccache_run1.log | head -20 || true
             echo ""
             echo "=== Compiler command lines - sample ==="
-            grep -E "Command line|Compiler:" /tmp/ttnn_ccache_run1.log | head -10
+            grep -E "Command line|Compiler:" /tmp/ttnn_ccache_run1.log | head -10 || true
           else
             echo "⚠️  ccache debug log not found - CCACHE_DEBUG and CCACHE_LOGFILE may not be working"
             echo "This could mean:"
@@ -216,7 +216,7 @@ jobs:
             echo "Log size: $(wc -l /tmp/ttnn_ccache_run2.log | awk '{print $1}') lines"
             echo ""
             echo "=== Result keys (ccache primary hash) - first 30 ==="
-            grep -E "(Result key|Primary hash|Hash key)" /tmp/ttnn_ccache_run2.log | head -30 | tee /tmp/ttnn_run2_ccache_keys.txt
+            grep -E "(Result key|Primary hash|Hash key)" /tmp/ttnn_ccache_run2.log | head -30 | tee /tmp/ttnn_run2_ccache_keys.txt || true
           fi
           echo ""
           echo "=== Git commit information ==="
@@ -310,7 +310,7 @@ jobs:
             echo "Log size: $(wc -l /tmp/ttnn_ccache_run3.log | awk '{print $1}') lines"
             echo ""
             echo "=== Result keys (ccache primary hash) - first 30 ==="
-            grep -E "(Result key|Primary hash|Hash key)" /tmp/ttnn_ccache_run3.log | head -30 | tee /tmp/ttnn_run3_ccache_keys.txt
+            grep -E "(Result key|Primary hash|Hash key)" /tmp/ttnn_ccache_run3.log | head -30 | tee /tmp/ttnn_run3_ccache_keys.txt || true
           fi
           echo ""
           echo "=== Git commit information ==="
