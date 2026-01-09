@@ -494,7 +494,7 @@ class TT_CCL:
             buffers_dict = (
                 {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    # "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                     "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
@@ -502,7 +502,7 @@ class TT_CCL:
                 if not self.is_qwen
                 else {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
@@ -562,12 +562,12 @@ class TT_CCL:
             buffers_dict = (
                 {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    # "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                     "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                     "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
-                    "WO_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
+                    # "WO_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
                     "FF1_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
                     "FF3_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
                     "FF2_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
@@ -575,12 +575,12 @@ class TT_CCL:
                 if not self.is_qwen
                 else {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
-                    "WO_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
+                    # "WO_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
                     "FF1_batched": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
                     "FF3_batched": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
                     "FF2_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
