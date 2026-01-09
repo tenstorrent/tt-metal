@@ -118,6 +118,12 @@ void configure_local_kernels(
     std::unordered_map<ChipId, std::vector<CoreCoord>> kernel_coords;
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
+    // Single ERISC Execution for BH for now, since ERISC0 needs to manage link recovery
+    auto erisc_id = tt::tt_metal::DataMovementProcessor::RISCV_0;
+    auto noc_id = tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE
+                      ? tt::tt_metal::NOC::NOC_1
+                      : tt::tt_metal::NOC::NOC_0;
+
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         auto curr_chip_id = ctx.asic_id_to_chip_id[*asic_id];
         auto curr_chip = ctx.devices[curr_chip_id];
@@ -168,7 +174,8 @@ void configure_local_kernels(
                         fwd ? sender_kernel_path : receiver_kernel_path,
                         curr_coord,
                         tt::tt_metal::EthernetConfig{
-                            .noc = tt::tt_metal::NOC::NOC_0,
+                            .noc = noc_id,
+                            .processor = erisc_id,
                             .compile_args = fwd ? std::vector<uint32_t>{packet_size_bytes, packet_size_words}
                                                 : std::vector<uint32_t>{}});
 
@@ -177,7 +184,8 @@ void configure_local_kernels(
                         fwd ? receiver_kernel_path : sender_kernel_path,
                         neighbor_coord,
                         tt::tt_metal::EthernetConfig{
-                            .noc = tt::tt_metal::NOC::NOC_0,
+                            .noc = noc_id,
+                            .processor = erisc_id,
                             .compile_args = fwd ? std::vector<uint32_t>{}
                                                 : std::vector<uint32_t>{packet_size_bytes, packet_size_words}});
                     tt::tt_metal::SetRuntimeArgs(
@@ -223,6 +231,12 @@ void configure_cross_host_kernels(
     const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     const uint32_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
+    // Single ERISC Execution for BH for now, since ERISC0 needs to manage link recovery
+    auto erisc_id = tt::tt_metal::DataMovementProcessor::RISCV_0;
+    auto noc_id = tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE
+                      ? tt::tt_metal::NOC::NOC_1
+                      : tt::tt_metal::NOC::NOC_0;
+
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     for (const auto& host_neighbor : ctx.physical_system_descriptor.get_host_neighbors(host_name)) {
         const auto& exit_nodes = ctx.physical_system_descriptor.get_connecting_exit_nodes(host_name, host_neighbor);
@@ -245,7 +259,7 @@ void configure_cross_host_kernels(
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
                     my_coord,
                     tt::tt_metal::EthernetConfig{
-                        .noc = tt::tt_metal::NOC::NOC_0, .compile_args = {packet_size_bytes, packet_size_words}});
+                        .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes, packet_size_words}});
                 tt::tt_metal::SetRuntimeArgs(
                     my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
             } else {
@@ -256,7 +270,7 @@ void configure_cross_host_kernels(
                     my_program,
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
                     my_coord,
-                    tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0});
+                    tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id});
                 tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
             }
         }
