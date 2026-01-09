@@ -77,9 +77,8 @@ FORCE_INLINE void recordNocEvent(
     if constexpr (kernel_profiler::NON_DROPPING) {
         KernelProfilerNocEventMetadata dst_data = createNocEventDstTrailer(dst_addr);
 
-        // Two markers: one for the event data and one for the dst_data
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
 
         kernel_profiler::timeStampedData<
             STATIC_ID,
