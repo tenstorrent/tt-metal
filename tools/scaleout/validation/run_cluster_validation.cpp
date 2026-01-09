@@ -109,9 +109,7 @@ cxxopts::Options create_validation_options() {
 }
 
 cxxopts::Options create_link_reset_options() {
-    cxxopts::Options options(
-        "run_cluster_validation link_reset",
-        "Restart a specific cable/link on the cluster.");
+    cxxopts::Options options("run_cluster_validation link_reset", "Restart a specific cable/link on the cluster.");
 
     options.add_options()("host", "Host name of the source ASIC", cxxopts::value<std::string>())(
         "tray-id", "Tray ID of the source ASIC", cxxopts::value<uint32_t>())(
@@ -277,22 +275,16 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
         auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(input_args.gsd_path.value());
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
-    } else {
-        log_output_rank0("Running Physical Discovery");
-        constexpr bool run_discovery = true;
-        auto& context = tt::tt_metal::MetalContext::instance();
-        const auto& driver = context.get_cluster().get_driver();
-        auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-            driver,
-            context.get_distributed_context_ptr(),
-            &context.hal(),
-            context.rtoptions(),
-            run_discovery
-        );
-        log_output_rank0("Physical Discovery Complete");
-        log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
-        return physical_system_descriptor;
     }
+    log_output_rank0("Running Physical Discovery");
+    constexpr bool run_discovery = true;
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto& driver = context.get_cluster().get_driver();
+    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
+        driver, context.get_distributed_context_ptr(), &context.hal(), context.rtoptions(), run_discovery);
+    log_output_rank0("Physical Discovery Complete");
+    log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
+    return physical_system_descriptor;
 }
 
 AsicTopology run_connectivity_validation(
@@ -337,6 +329,10 @@ void set_config_vars() {
     if (getenv("TT_MESH_ID") == nullptr) {
         setenv("TT_MESH_ID", "0", 1);
     }
+    // Disable 2-ERISC mode for Blackhole
+    if (getenv("TT_METAL_DISABLE_MULTI_AERISC") == nullptr) {
+        setenv("TT_METAL_DISABLE_MULTI_AERISC", "1", 1);
+    }
 }
 
 }  // namespace tt::scaleout_tools
@@ -351,7 +347,6 @@ int main(int argc, char* argv[]) {
         print_usage_info(input_args.mode);
         return 0;
     }
-
     bool eth_connections_healthy = true;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 

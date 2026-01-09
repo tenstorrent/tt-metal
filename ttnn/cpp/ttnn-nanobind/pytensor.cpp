@@ -26,6 +26,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
@@ -158,10 +159,9 @@ Tensor create_typed_tt_tensor_from_py_data(
             output = output.to_device(device, tensor_spec.memory_config(), cq_id);
         }
         return output;
-    } else {
-        return Tensor::from_span(
-            tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
     }
+    return Tensor::from_span(
+        tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
 }
 
 Tensor create_tt_tensor_from_py_data(
@@ -290,9 +290,8 @@ Tensor convert_python_tensor_to_tt_tensor(
                 "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
                 optional_layout.value());
             return Layout::TILE;
-        } else {
-            return optional_layout.value_or(Layout::ROW_MAJOR);
         }
+        return optional_layout.value_or(Layout::ROW_MAJOR);
     }();
 
     // Important: `nb::object` copying and destruction must be done while holding GIL, which nanobind ensures for a
@@ -1496,7 +1495,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, int N, int C, int H, int W) {
-                return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
+                return ttnn::reshape(self, ttnn::SmallVector<int>{N, C, H, W});
             },
             R"doc(
                 Reshapes TT tensor
@@ -1517,9 +1516,7 @@ void pytensor_module(nb::module_& mod) {
             )doc")
         .def(
             "reshape",
-            [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
-                return ttnn::reshape(self, infer_dims_for_reshape(self, shape));
-            },
+            [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor { return ttnn::reshape(self, shape); },
             R"doc(
                 Reshapes TT tensor
 

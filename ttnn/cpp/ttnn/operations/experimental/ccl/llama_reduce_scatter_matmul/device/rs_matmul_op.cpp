@@ -63,11 +63,10 @@ Matmul_RS::spec_return_value_t Matmul_RS::compute_output_specs(
              tensor_args.second_weight_tensor.value()},
             {});
         return {matmul_output_specs.at(0), matmul_output_specs.at(1), reduce_scatter_output_spec};
-    } else {
-        ttnn::TensorSpec matmul_output_specs = operation_attributes.matmul.compute_output_specs(
-            {tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {})[0];
-        return {matmul_output_specs, reduce_scatter_output_spec};
     }
+    ttnn::TensorSpec matmul_output_specs = operation_attributes.matmul.compute_output_specs(
+        {tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {})[0];
+    return {matmul_output_specs, reduce_scatter_output_spec};
 }
 
 Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
@@ -77,11 +76,10 @@ Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
         LlamaReduceScatterDeviceOperation::create_output_tensors(operation_attributes.rs_op, tensor_args.rs);
     if (tensor_args.second_weight_tensor.has_value()) {
         return {tensor_args.matmul_output_tensors.at(0), tensor_args.matmul_output_tensors.at(1), rs_output_tensor};
-    } else {
-        Tensor matmul_output_tensor = operation_attributes.matmul.create_output_tensors(
-            {tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {})[0];
-        return {matmul_output_tensor, rs_output_tensor};
     }
+    Tensor matmul_output_tensor = operation_attributes.matmul.create_output_tensors(
+        {tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {})[0];
+    return {matmul_output_tensor, rs_output_tensor};
 }
 
 tt::stl::hash::hash_t Matmul_RS::compute_program_hash(

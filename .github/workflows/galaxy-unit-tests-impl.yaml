@@ -101,7 +101,7 @@ jobs:
           all_tests=$(jq -n '[
             { "name": "Galaxy unit tests", "arch": "wormhole_b0", "model": "unit", "timeout": 30, "owner_id": "XXXXX" },
             { "name": "Galaxy Fabric tests", "arch": "wormhole_b0", "model": "fabric", "timeout": 25, "owner_id": "UJ45FEC7M" },
-            { "name": "Galaxy Multi-Process tests", "arch": "wormhole_b0", "model": "multiprocess", "timeout": 5, "owner_id": "U03NG0A5ND7" },
+            { "name": "Galaxy Multi-Process tests", "arch": "wormhole_b0", "model": "multiprocess", "timeout": 10, "owner_id": "U03NG0A5ND7" },
             # { "name": "Galaxy Llama3-70b unit tests", "arch": "wormhole_b0", "model": "llama3-70b", "timeout": 30, "owner_id": "U053W15B6JF", "mlperf": true },
             # { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" },
             { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 10, "owner_id": "U08TJ70UFRT", "mlperf": true },
@@ -196,6 +196,8 @@ jobs:
           python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
           tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_big_mesh_fabric_2d_sanity.yaml
           tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml --mpi-args "--tag-output --allow-run-as-root"  python3 tests/ttnn/distributed/test_multi_mesh.py
+          tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_mesh_rank_binding.yaml ./build/test/tt_metal/multi_host_socket_tests
+          tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml  ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="*Socket*"
       - name: Run Llama3-70b unit tests
         if: ${{ matrix.test-group.model == 'llama3-70b' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
