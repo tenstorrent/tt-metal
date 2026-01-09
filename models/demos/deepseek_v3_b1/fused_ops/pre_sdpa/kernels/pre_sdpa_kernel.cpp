@@ -54,6 +54,10 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("mcast_dst_num_pages"),
     };
 
+    // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
+    using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    using Matmul2CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+
     // Matmul reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
 
@@ -132,6 +136,10 @@ KERNEL_ENTRY {
         get_write_ptr(mcast_dst_cb),
     };
 
+    // Matmul CTArgs type alias (BRISC uses WriterCTArgs)
+    using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+    using Matmul2CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+
     // Matmul writer args (BRISC is no-op)
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 
@@ -194,13 +202,16 @@ KERNEL_ENTRY {
     // Mcast compute args (no-op for TRISC)
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
 
+    // Matmul CTArgs type alias (out_w is compile-time for TRISC)
+    using MatmulCTArgs =
+        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w_per_core")>;
+
     // Matmul compute args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Matmul::ComputeArgs matmul_args{
         get_named_compile_time_arg_val("matmul_in0"),
         get_named_compile_time_arg_val("matmul_in1"),
         get_named_compile_time_arg_val("matmul_out"),
         get_named_compile_time_arg_val("matmul_k_num_tiles"),
-        get_named_compile_time_arg_val("matmul_out_w_per_core"),  // out_w_per_core: shard width per core for mm1
     };
 
     // Gather compute args (no-op for TRISC)
@@ -218,13 +229,16 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("rmsnorm_scalar_index"),
     };
 
+    // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
+    using Matmul2CTArgs =
+        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul2_out_w_per_core")>;
+
     // Matmul2 compute args (from compile-time args)
     deepseek_b1_ops::Matmul::ComputeArgs matmul2_args{
         get_named_compile_time_arg_val("matmul2_in0"),
         get_named_compile_time_arg_val("matmul2_in1"),
         get_named_compile_time_arg_val("matmul2_out"),
         get_named_compile_time_arg_val("matmul2_k_num_tiles"),
-        get_named_compile_time_arg_val("matmul2_out_w_per_core"),  // out_w_per_core: shard width per core for mm2
     };
 
     // Mcast2 compute args (no-op for TRISC)
@@ -292,7 +306,7 @@ KERNEL_ENTRY {
     {
         DeviceZoneScopedN("MATMUL");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-        deepseek_b1_ops::Matmul::Op<Core::is_matmul_core, true, false> matmul;
+        deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
         matmul(matmul_args);
     }
 
@@ -389,7 +403,7 @@ KERNEL_ENTRY {
     {
         DeviceZoneScopedN("MATMUL2");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-        deepseek_b1_ops::Matmul::Op<Core::is_matmul2_core, true, false> matmul2;
+        deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
         matmul2(matmul2_args);
     }
 }
