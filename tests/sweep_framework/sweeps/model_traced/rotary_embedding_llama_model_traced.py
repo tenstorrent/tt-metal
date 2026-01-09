@@ -282,20 +282,16 @@ def extract_rope_parameters(traced_source: str = None) -> dict:
     # In the future, this could load the actual model config from HuggingFace
     # and extract rope_theta and rope_scaling parameters
 
-    # Example of what could be done (requires HuggingFace transformers):
-    # if traced_source and "HF_MODEL:" in traced_source:
-    #     import re
-    #     match = re.search(r'HF_MODEL:([^\]]+)', traced_source)
-    #     if match:
-    #         model_name = match.group(1)
-    #         # Load config and extract parameters
-    #         from transformers import AutoConfig
-    #         config = AutoConfig.from_pretrained(model_name)
-    #         rope_params["theta"] = config.rope_theta
-    #         if hasattr(config, 'rope_scaling') and config.rope_scaling:
-    #             rope_params["scale_factor"] = config.rope_scaling.get("factor")
-    #             rope_params["orig_context_len"] = config.rope_scaling.get("original_max_position_embeddings")
-    #             rope_params["rope_type"] = config.rope_scaling.get("type", "default")
+    # Example of a future implementation (requires HuggingFace transformers):
+    # In the future, this function could:
+    #   - Parse the HF model name from traced_source (for example, from a "HF_MODEL:" tag).
+    #   - Use transformers.AutoConfig.from_pretrained(model_name) to load the model config.
+    #   - Read rope_theta and any rope_scaling fields from the config.
+    #   - Update rope_params["theta"], rope_params["scale_factor"],
+    #     rope_params["orig_context_len"], and rope_params["rope_type"] accordingly.
+    #
+    # This behavior is intentionally not implemented here to keep tests free of
+    # an unconditional dependency on the transformers library.
 
     return rope_params
 
