@@ -3,8 +3,7 @@ name: "(Galaxy) profiler tests"
 on:
   workflow_dispatch:
   workflow_call:
-  schedule:
-    - cron: "0 2 * * *" # This cron schedule runs the workflow every day at 2am
+  # schedule: removed (no nightly autoruns)
 
 jobs:
   build-artifact-profiler:
