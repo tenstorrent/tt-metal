@@ -102,6 +102,7 @@ class Embedding1D(AbstractModule):
                 cluster_axis=0,
                 dim=-1,
                 topology=ttnn.Topology.Linear,
+                num_links=4,
                 # memory_config=memory_config, # TODO: uncomment once all gather async segfault is solved (Issue #26672)
             ),
         }
@@ -149,6 +150,7 @@ class Embedding1D(AbstractModule):
                 dim=-1,
                 topology=ttnn.Topology.Linear,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                num_links=4,
                 # memory_config=memory_config, # TODO: uncomment once all gather async segfault is solved (Issue #26672)
             ),
         }

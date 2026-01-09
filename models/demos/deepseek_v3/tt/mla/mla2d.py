@@ -82,12 +82,14 @@ class MLA2D(MLA1D):
                 cluster_axis=0,
                 dim=2,
                 topology=ttnn.Topology.Linear,
+                num_links=4,
             ),
             "seq_rs_prefill": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=0,
                 dim=2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
+                num_links=4,
             ),
         }
 
