@@ -94,6 +94,8 @@ void kernel_main() {
     uint32_t final_dst_addr_l = get_arg_val<uint32_t>(arg_idx++);
     uint32_t final_dst_addr_s = get_arg_val<uint32_t>(arg_idx++);
     uint32_t final_dst_addr_m = get_arg_val<uint32_t>(arg_idx++);
+    // Handoff semaphore for Writer1→Reader1 mux channel coordination
+    uint32_t writer_to_reader_handoff_sem = get_arg_val<uint32_t>(arg_idx++);
 
     const uint8_t dst_num_hops = 1;
 
@@ -156,7 +158,7 @@ void kernel_main() {
 
     DPRINT << "AFTER fabric_set_unicast_route\n";
     //  wait for receiver to signal it is ready
-    DPRINT << "waiting for semaphore at address: " << (uint32_t)receive_semaphore_addr << "\n";
+    DPRINT << "waiting for barrier semaphore at address: " << (uint32_t)receive_semaphore_addr << "\n";
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 0);
     DPRINT << "after receiving ready signal from receiver\n";
@@ -165,6 +167,7 @@ void kernel_main() {
     DPRINT << "after reserving packet buffer\n";
     uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
 
+    DPRINT << "sending fabric sem at addr: " << (uint32_t)receive_semaphore_addr << "\n";
     const uint64_t dst_noc_addr = get_noc_addr(current_core_noc_x, current_core_noc_y, receiver_base_address);
     const uint64_t receive_sem_noc_addr = get_noc_addr(current_core_noc_x, current_core_noc_y, receive_semaphore_addr);
 
@@ -173,7 +176,6 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, receive_sem_noc_addr, 1, true},
         align(new_payload_size_bytes, alignment));
 
-    DPRINT << "sending packet to receiver at noc address: " << (uint32_t)dst_noc_addr << "\n";
     mux_connection.wait_for_empty_write_slot();
     DPRINT << "after wait for empty write slot\n";
     mux_connection.send_payload_without_header_non_blocking_from_address(packet_base_addr, new_payload_size_bytes);
@@ -183,7 +185,16 @@ void kernel_main() {
 
     cb_pop_front(packet_cb_id, 1);
 
+    // Disconnect from mux to allow Reader1 to use the same channel
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
+    DPRINT << "after fabric_client_disconnect\n";
+
+    // Signal Reader1 that we have released the mux channel
+    auto* handoff_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_to_reader_handoff_sem);
+    noc_semaphore_set(handoff_sem_ptr, 1);
+    DPRINT << "signaled handoff semaphore for reader1\n";
+
+    /*
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
         // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
@@ -195,6 +206,7 @@ void kernel_main() {
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
     }
+    */
     DPRINT << "end of round 1\n";
 
     DPRINT << "round2\n";

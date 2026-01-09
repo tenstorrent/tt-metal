@@ -85,6 +85,8 @@ void kernel_main() {
     const uint32_t core_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t current_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t current_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    // Handoff semaphore to signal Writer2 when Reader2 disconnects from mux
+    const uint32_t reader2_to_writer2_handoff_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     const uint8_t sender_num_hops = 1;
 
@@ -144,14 +146,26 @@ void kernel_main() {
 
     const uint64_t sender_sem_noc_addr = get_noc_addr(current_core_noc_x, current_core_noc_y, sender_semaphore_addr);
 
+    DPRINT << "sending barrier sem to address:  " << (uint32_t)sender_semaphore_addr << " \n";
     auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, sender_num_hops);
     sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
 
     mux_connection.wait_for_empty_write_slot();
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
+
+    // Disconnect from mux and signal Writer2 that it can now use the mux channel
+    tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
+    DPRINT << "after fabric_client_disconnect\n";
+
+    // Signal Writer2 that Reader2 has disconnected from mux
+    volatile tt_l1_ptr uint32_t* handoff_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader2_to_writer2_handoff_sem);
+    noc_semaphore_set(handoff_sem_ptr, 1);
+    DPRINT << "signaled handoff semaphore for writer2\n";
+
     cb_reserve_back(packet_cb_id, 1);
-    DPRINT << "after sending barrier sem to address:  " << (uint32_t)sender_sem_noc_addr << " \n";
+    DPRINT << "after sending barrier sem \n";
 
     const uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
@@ -170,14 +184,15 @@ void kernel_main() {
         input_num_tiles);
     DPRINT << "after reading from local\n";
 
+    DPRINT << "waiting for fabric semaphore at address: " << (uint32_t)sender_semaphore_addr << "\n";
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
     noc_semaphore_set(local_semaphore_ptr, 0);
     DPRINT << "after waiting for fabric semaphore\n";
 
+    /*
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     DPRINT << "after fabric client disconnect\n";
-
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
         // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
@@ -189,6 +204,8 @@ void kernel_main() {
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
     }
+
+    */
     DPRINT << "after termination sync\n";
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
 
