@@ -12,14 +12,6 @@
 
 namespace tt::tt_metal {
 
-int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint64_t> strides) {
-    int flat_index = 0;
-    for (auto i = 0; i < indices.size(); i++) {
-        flat_index += indices[i] * strides[i];
-    }
-    return flat_index;
-};
-
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
