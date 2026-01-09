@@ -37,6 +37,7 @@ Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_f
         args.output_channels,
         args.sliding_window_config.window_hw.first,   // kernel_height
         args.sliding_window_config.window_hw.second,  // kernel_width
+        input_shape[1],                               // image_height
         input_shape[2]);                              // image_width
 
     if (is_depthwise) {

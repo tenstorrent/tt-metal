@@ -66,6 +66,7 @@ bool is_2d_depthwise_conv(
     uint32_t output_channels,
     uint32_t kernel_height,
     uint32_t kernel_width,
+    uint32_t image_height,
     uint32_t image_width);
 
 struct SkipMcast {

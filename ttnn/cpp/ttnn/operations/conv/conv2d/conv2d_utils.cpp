@@ -545,9 +545,14 @@ bool is_2d_depthwise_conv(
     uint32_t output_channels,
     uint32_t kernel_height,
     uint32_t kernel_width,
+    uint32_t image_height,
     uint32_t image_width) {
     bool is_depthwise = groups == input_channels && groups == output_channels;
-    bool is_2d_conv = !is_1d_conv(kernel_width, image_width);
+    // If height dimension is 1D (kernel_height=1 && image_height=1), this is effectively a 1D conv
+    // and should not use the 2D depthwise path (pool2d-based implementation doesn't handle this)
+    bool is_height_1d = is_1d_conv(kernel_height, image_height);
+    bool is_width_1d = is_1d_conv(kernel_width, image_width);
+    bool is_2d_conv = !is_height_1d && !is_width_1d;
     bool is_actual_conv = kernel_height > 1 || kernel_width > 1;  // Not 1x1 conv
     return is_depthwise && is_2d_conv && is_actual_conv;
 }

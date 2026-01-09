@@ -1749,6 +1749,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
                 original_weights_out_channels,
                 original_weights_shape[2],
                 original_weights_window_w,
+                params.input_height,
                 params.input_width)) {
             // Unified weight preparation for all sharding schemes
             // num_channel_shards is determined by get_num_cores_channels_from_parallel_config:
