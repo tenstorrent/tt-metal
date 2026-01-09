@@ -93,7 +93,7 @@ def run_test_moe(device, M, K, N, check_accuracy, w0_dtype, math_fidelity, fp32_
             dtype=ttnn.bfloat8_b,
             device=device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=input_sharded_mem_config,
+            memory_config=weight0_1_shard_memory_config,
         )
         tt_weight0 = ttnn.empty((K, N), dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT)
         tt_weight1 = ttnn.empty((K, N), dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT)
@@ -145,7 +145,7 @@ def run_test_moe(device, M, K, N, check_accuracy, w0_dtype, math_fidelity, fp32_
 
 
 SHAPE2TIME = {
-    (32, 7168, 2048): 360_000,
+    (32, 7168, 2048): 360.0,
 }
 
 # Configuration: (w0_dtype, math_fidelity, fp32_dest_acc_en, id_string)
@@ -160,6 +160,18 @@ COMPUTE_CONFIGS = [
 ]
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            },
+            id="dispatch_col",
+        )
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "M, K, N",
     SHAPE2TIME.keys(),
@@ -187,23 +199,22 @@ def test_moe(device, M, K, N, check_accuracy, w0_dtype, math_fidelity, fp32_dest
     # assert accuracy_metrics["relative_rmse"] < 0.02
 
 
-# @pytest.mark.skip()
 @pytest.mark.parametrize(
     "M, K, N",
     SHAPE2TIME.keys(),
 )
 @pytest.mark.parametrize("check_accuracy", ["default", "no_check"])
 def test_moe_performance(M, K, N, check_accuracy):
-    command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[{check_accuracy}-M={M}-K={K}-N={N}]"
+    command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[{check_accuracy}-M={M}-K={K}-N={N}-dispatch_col]"
 
     run_device_profiler(command, "ttnn_moe_performance", device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log("ttnn_moe_performance", float_columns=["DEVICE KERNEL DURATION [ns]"])
-    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
-    logger.info(f"Performance: {duration_ns} ns")
+    duration_us = int(r["DEVICE KERNEL DURATION [ns]"].min()) / 1000.0
+    logger.info(f"Performance: {duration_us} us")
 
     assert (
-        duration_ns < SHAPE2TIME[(M, K, N)]
-    ), f"Performance {duration_ns} ns is greater than expected {SHAPE2TIME[(M, K, N)]} ns"
+        duration_us < SHAPE2TIME[(M, K, N)]
+    ), f"Performance {duration_us} us is greater than expected {SHAPE2TIME[(M, K, N)]} us"
 
 
 def post_process_ops_log(output_logs_subdir: str, float_columns: list[str]) -> dict[str, float]:
