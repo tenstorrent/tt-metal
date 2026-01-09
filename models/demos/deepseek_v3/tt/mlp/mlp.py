@@ -208,7 +208,7 @@ class MLP(AbstractModule):
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
-                num_links=4,
+                num_links=3,
             ),
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -315,7 +315,7 @@ class MLP(AbstractModule):
                 dim=3,  # We are scattering across the feature dimension (last one)
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=output_memory_config,
-                num_links=4,
+                num_links=3,
             ),
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
             "input_memory_config": input_memory_config,

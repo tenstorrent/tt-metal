@@ -89,7 +89,7 @@ class MLA2D(MLA1D):
                 dim=2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
-                num_links=4,
+                num_links=3,
             ),
         }
 
