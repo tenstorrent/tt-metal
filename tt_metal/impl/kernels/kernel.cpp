@@ -388,29 +388,6 @@ std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {
     return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
-std::vector<uint32_t>& Kernel::get_watcher_runtime_args(const CoreCoord& logical_core) {
-    TT_FATAL(
-        logical_core.x < this->core_to_runtime_args_.size() &&
-            logical_core.y < this->core_to_runtime_args_[logical_core.x].size(),
-        "Cannot get runtime args for kernel {} that is not placed on core {}",
-        this->name(),
-        logical_core.str());
-    if (!watcher_assert_enabled_ || core_to_runtime_args_[logical_core.x][logical_core.y].empty()) {
-        return core_to_runtime_args_[logical_core.x][logical_core.y];
-    }
-
-    // Build [count|args] on first access for this specific core
-    auto& watcher_args = runtime_args_watcher_[logical_core];
-    if (watcher_args.empty()) {
-        const auto& core_args = core_to_runtime_args_[logical_core.x][logical_core.y];
-        watcher_args.reserve(1 + core_args.size());
-        watcher_args.push_back(static_cast<uint32_t>(core_args.size()));
-        watcher_args.insert(watcher_args.end(), core_args.begin(), core_args.end());
-    }
-
-    return watcher_args;
-}
-
 RuntimeArgsData& Kernel::runtime_args_data(const CoreCoord& logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
@@ -429,22 +406,6 @@ std::vector<std::vector<RuntimeArgsData>>& Kernel::runtime_args_data() { return 
 std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runtime_args_; }
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
-
-std::vector<uint32_t>& Kernel::get_watcher_common_runtime_args() {
-    if (!watcher_assert_enabled_ || common_runtime_args_.empty()) {
-        return common_runtime_args_;
-    }
-
-    // Build [count|args] on first access
-    if (common_runtime_args_watcher_.empty()) {
-        common_runtime_args_watcher_.reserve(1 + common_runtime_args_.size());
-        common_runtime_args_watcher_.push_back(static_cast<uint32_t>(common_runtime_args_.size()));
-        common_runtime_args_watcher_.insert(
-            common_runtime_args_watcher_.end(), common_runtime_args_.begin(), common_runtime_args_.end());
-    }
-
-    return common_runtime_args_watcher_;
-}
 
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 void Kernel::validate_runtime_args_size(
@@ -489,33 +450,44 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
     auto& set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
     // TODO: Only allow setting once
     if (set_rt_args.empty()) {
-        if (runtime_args.size() > max_runtime_args_per_core_) {
-            max_runtime_args_per_core_ = runtime_args.size();
+        // Validate against hardware limit (341 words)
+        // When watcher enabled, prepended count word consumes 1 slot
+        size_t effective_limit = watcher_assert_enabled_ ? runtime_args.size() + 1  // [count | args]
+                                                         : runtime_args.size();     // [args]
+
+        this->validate_runtime_args_size(effective_limit, this->common_runtime_args_.size(), logical_core);
+
+        // Track maximum dispatch size for CRTA validation
+        // Note: max_runtime_args_per_core_ stores effective size (includes count word if watcher enabled)
+        if (effective_limit > max_runtime_args_per_core_) {
+            max_runtime_args_per_core_ = effective_limit;
             core_with_max_runtime_args_ = logical_core;
         }
-        this->validate_runtime_args_size(runtime_args.size(), this->common_runtime_args_.size(), logical_core);
-        set_rt_args.assign(runtime_args.begin(), runtime_args.end());
+
+        // Prepend count when watcher enabled for device-side bounds checking
+        if (watcher_assert_enabled_) {
+            set_rt_args.reserve(effective_limit);
+            set_rt_args.push_back(static_cast<uint32_t>(runtime_args.size()));
+            set_rt_args.insert(set_rt_args.end(), runtime_args.begin(), runtime_args.end());
+        } else {
+            set_rt_args.assign(runtime_args.begin(), runtime_args.end());
+        }
         this->core_to_runtime_args_data_[logical_core.x][logical_core.y] =
             RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
         this->core_with_runtime_args_.insert(logical_core);
     } else {
+        // Updating existing args - extract user arg count and verify it matches
+        size_t user_arg_count = watcher_assert_enabled_ ? set_rt_args.size() - 1 : set_rt_args.size();
         TT_FATAL(
-            set_rt_args.size() == runtime_args.size(),
+            user_arg_count == runtime_args.size(),
             "Illegal Runtime Args on {}: Number of runtime args cannot be modified from {} to {}!",
             logical_core.str(),
-            set_rt_args.size(),
+            user_arg_count,
             runtime_args.size());
-        // If watcher is enabled, the second time set_runtime_args is called, make sure we dont overwrite
-        // the arg count by adding a +1 to the dest (which is now pointing to the command issue queue)
-        const bool watcher_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-                                     !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
-        // Check if pointer has been retargeted to command stream (which has count header)
-        const bool pointer_retargeted =
-            (this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data != set_rt_args.data());
-        const uint32_t offset = (watcher_enabled && pointer_retargeted) ? 1 : 0;
+        // Copy new values, skipping count word if present
+        const uint32_t offset = (watcher_assert_enabled_) ? 1 : 0;
         std::memcpy(
-            this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data +
-                offset,  // +1 to skip count word
+            this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data + offset,
             runtime_args.data(),
             runtime_args.size() * sizeof(uint32_t));
     }
@@ -526,9 +498,23 @@ void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_ar
     TT_FATAL(
         set_rt_args.empty(),
         "Illegal Common Runtime Args: Can only set common runtime args once. Get and modify args in place instead.");
-    this->validate_runtime_args_size(
-        max_runtime_args_per_core_, common_runtime_args.size(), core_with_max_runtime_args_);
-    set_rt_args.assign(common_runtime_args.begin(), common_runtime_args.end());
+
+    // When watcher enabled, CRTA has count word prepended in dispatch packet
+    size_t effective_crta_limit = watcher_assert_enabled_ ? common_runtime_args.size() + 1  // [crta_count | crta_args]
+                                                          : common_runtime_args.size();     // [crta_args]
+
+    // Validate combined RTA + CRTA size doesn't exceed hardware limit (341 words)
+    // max_runtime_args_per_core_ already includes count word if watcher enabled
+    this->validate_runtime_args_size(max_runtime_args_per_core_, effective_crta_limit, core_with_max_runtime_args_);
+
+    // Prepend count when watcher enabled for device-side bounds checking
+    if (watcher_assert_enabled_) {
+        set_rt_args.reserve(effective_crta_limit);
+        set_rt_args.push_back(static_cast<uint32_t>(common_runtime_args.size()));
+        set_rt_args.insert(set_rt_args.end(), common_runtime_args.begin(), common_runtime_args.end());
+    } else {
+        set_rt_args.assign(common_runtime_args.begin(), common_runtime_args.end());
+    }
     this->common_runtime_args_data_ = RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
 }
 

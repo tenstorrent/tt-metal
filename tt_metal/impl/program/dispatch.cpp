@@ -127,17 +127,11 @@ DispatchWriteOffsets get_dispatch_write_offset(HalProgrammableCoreType core_type
 
 };  // namespace
 
-inline bool is_watcher_assert_enabled() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-           !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
-}
-
 uint32_t configure_rta_offsets_for_kernel_groups(
     uint32_t /*programmable_core_type_index*/,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
-    uint32_t base_offset,
-    bool watcher_assert_enabled) {
+    uint32_t base_offset) {
     const auto& hal = MetalContext::instance().hal();
     // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
     // whereas the RTA allocation is separate for DM0/DM1/COMPUTE.
@@ -148,8 +142,9 @@ uint32_t configure_rta_offsets_for_kernel_groups(
     for (auto& kg : kernel_groups) {
         // Initialize RTA/CRTA offsets to sentinel when watcher enabled. Launch message memory
         // may contain stale data from previous dispatches. Can't use 0 as "no args" since 0 is
-        // a valid L1 offset. Sentinel (0xBEEF) distinguishes "no args" from "args at offset 0"
-        if (watcher_assert_enabled) {
+        // a valid L1 offset. Sentinel (0xFFFF) distinguishes "no args" from "args at offset 0"
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+            !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()) {
             auto rta_offsets = kg->launch_msg.view().kernel_config().rta_offset();
             for (size_t i = 0; i < rta_offsets.size(); i++) {
                 kg->launch_msg.view().kernel_config().rta_offset()[i].rta_offset() = RTA_CRTA_NO_ARGS_SENTINEL;
@@ -164,11 +159,8 @@ uint32_t configure_rta_offsets_for_kernel_groups(
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord core_coord(x, y);
-                        // Use watcher-aware accessor which includes count word when watcher enabled
-                        const uint32_t rta_size = watcher_assert_enabled
-                                                      ? kernel->get_watcher_runtime_args(core_coord).size()
-                                                      : kernel->runtime_args(core_coord).size();
-                        max_rtas[dispatch_class] = std::max(max_rtas[dispatch_class], rta_size);
+                        max_rtas[dispatch_class] =
+                            std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
                     }
                 }
             }
@@ -209,8 +201,7 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t crta_base_offset,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes,
-    bool watcher_assert_enabled) {
+    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
     const auto& hal = MetalContext::instance().hal();
     // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
     // whereas the CRTA allocation is separate for DM0/DM1/COMPUTE.
@@ -220,10 +211,7 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     for (auto& kernel_info : kernels) {
         auto kernel = kernel_info.second;
         uint32_t dispatch_class = kernel->dispatch_class();
-        // Use watcher-aware accessor which includes count word when watcher enabled
-        uint32_t crta_size = watcher_assert_enabled ? kernel->get_watcher_common_runtime_args().size()
-                                                    : kernel->common_runtime_args().size();
-        max_crtas[dispatch_class] = std::max(max_crtas[dispatch_class], crta_size);
+        max_crtas[dispatch_class] = std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
     }
 
     // Derive crta offsets and sizes per dispatch class
@@ -277,18 +265,11 @@ uint32_t finalize_rt_args(
     uint32_t& rta_offset,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
-    const bool watcher_assert_enabled = is_watcher_assert_enabled();
     uint32_t max_unique_rta_size = program_dispatch::configure_rta_offsets_for_kernel_groups(
-        programmable_core_type_index, kernels, kernel_groups, base_offset, watcher_assert_enabled);
+        programmable_core_type_index, kernels, kernel_groups, base_offset);
     uint32_t crta_base_offset = base_offset + max_unique_rta_size;
     uint32_t total_crta_size = program_dispatch::configure_crta_offsets_for_kernel_groups(
-        programmable_core_type_index,
-        kernels,
-        kernel_groups,
-        crta_base_offset,
-        crta_offsets,
-        crta_sizes,
-        watcher_assert_enabled);
+        programmable_core_type_index, kernels, kernel_groups, crta_base_offset, crta_offsets, crta_sizes);
 
     uint32_t offset = max_unique_rta_size + total_crta_size;
 
@@ -612,8 +593,7 @@ BatchedTransfers assemble_runtime_args_commands(
     ProgramCommandSequence& program_command_sequence,
     ProgramImpl& program,
     IDevice* device,
-    const CommandConstants& constants,
-    bool watcher_assert_enabled) {
+    const CommandConstants& constants) {
     BatchedTransfers transfers = {};
     using RtaDataPair =
         std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>;
@@ -756,20 +736,13 @@ BatchedTransfers assemble_runtime_args_commands(
                      extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
                     auto noc_xy_addr = device->get_noc_multicast_encoding(
                         constants.noc_index, std::get<CoreRange>(transfer_info.cores));
-                    // Use watcher-aware accessor which includes count word when watcher enabled
-                    auto& crta_payload = watcher_assert_enabled
-                                             ? kernel->get_watcher_common_runtime_args()  // [count | args...]
-                                             : kernel->common_runtime_args();
-                    if (watcher_assert_enabled) {
-                        kernel->common_runtime_args_data().rt_args_data = crta_payload.data();
-                        kernel->common_runtime_args_data().rt_args_count = crta_payload.size();
-                    }
-                    size_t size = crta_payload.size() * sizeof(*crta_payload.data());
+                    size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
                     RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
                     transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
                         std::vector<Transfer>{Transfer{
                             .start = crta_offset,
-                            .data = tt::stl::Span<const uint8_t>(reinterpret_cast<uint8_t*>(crta_payload.data()), size),
+                            .data = tt::stl::Span<const uint8_t>(
+                                reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
                             .cbs = {},
                             .rta_data = &kernel->common_runtime_args_data()}};
                 }
@@ -802,14 +775,7 @@ BatchedTransfers assemble_runtime_args_commands(
                                 auto kernel = program.get_kernel(device_local_kernel_handle);
                                 if (!kernel->cores_with_runtime_args().empty()) {
                                     auto dispatch_class = kernel->dispatch_class();
-                                    // Use watcher-aware accessor which includes count word when watcher enabled
-                                    auto& runtime_args_data = watcher_assert_enabled
-                                                                  ? kernel->get_watcher_runtime_args(core_coord)
-                                                                  : kernel->runtime_args(core_coord);
-                                    if (watcher_assert_enabled) {
-                                        kernel->runtime_args_data(core_coord).rt_args_data = runtime_args_data.data();
-                                        kernel->runtime_args_data(core_coord).rt_args_count = runtime_args_data.size();
-                                    }
+                                    const auto& runtime_args_data = kernel->runtime_args(core_coord);
                                     unique_rt_args_data.back().emplace_back(
                                         RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
                                     TT_ASSERT(
@@ -872,17 +838,12 @@ BatchedTransfers assemble_runtime_args_commands(
                     if (kernel->dispatch_class() != dispatch_class) {
                         continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                     }
-                    // Use watcher-aware accessor which includes count word when watcher enabled
-                    auto& common_rt_args = watcher_assert_enabled
-                                               ? kernel->get_watcher_common_runtime_args()  // [count | args...]
-                                               : kernel->common_runtime_args();
+
+                    const auto& common_rt_args = kernel->common_runtime_args();
                     if (common_rt_args.empty()) {
                         continue;
                     }
-                    if (watcher_assert_enabled) {
-                        kernel->common_runtime_args_data().rt_args_data = common_rt_args.data();
-                        kernel->common_runtime_args_data().rt_args_count = common_rt_args.size();
-                    }
+
                     common_rt_args_data.resize(common_rt_args_data.size() + 1);
                     common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
 
@@ -1821,9 +1782,8 @@ void assemble_device_commands(
     constants.max_prefetch_command_size =
         MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).max_prefetch_command_size();
     constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
-    const bool watcher_assert_enabled = is_watcher_assert_enabled();
     BatchedTransfers batched_transfers =
-        assemble_runtime_args_commands(program_command_sequence, program, device, constants, watcher_assert_enabled);
+        assemble_runtime_args_commands(program_command_sequence, program, device, constants);
 
     // Assemble config buffer
     DeviceCommandCalculator program_config_buffer_calculator;

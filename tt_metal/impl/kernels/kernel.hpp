@@ -96,14 +96,12 @@ public:
     std::unordered_map<std::string, uint32_t> named_compile_time_args() const { return named_compile_time_args_; }
 
     std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
-    std::vector<uint32_t>& get_watcher_runtime_args(const CoreCoord& logical_core);
     RuntimeArgsData& runtime_args_data(const CoreCoord& logical_core);
     std::vector<std::vector<std::vector<uint32_t>>>& runtime_args();
     std::vector<std::vector<RuntimeArgsData>>& runtime_args_data();
     void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
     std::vector<uint32_t>& common_runtime_args();
     RuntimeArgsData& common_runtime_args_data();
-    std::vector<uint32_t>& get_watcher_common_runtime_args();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
     uint32_t dispatch_class() const { return this->dispatch_class_; }
@@ -181,12 +179,9 @@ protected:
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
-    std::unordered_map<CoreCoord, std::vector<uint32_t>>
-        runtime_args_watcher_;  // used with watcher assert only: [core: [count, args]]
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
     std::vector<uint32_t> common_runtime_args_;
-    std::vector<uint32_t> common_runtime_args_watcher_;  // used with watcher assert only: [count, args]
     RuntimeArgsData common_runtime_args_data_{};
     std::set<CoreCoord> core_with_runtime_args_;
     std::size_t max_runtime_args_per_core_{0};  // For validation

@@ -893,8 +893,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     if (!force_slow_dispatch) {
         detail::DispatchStateCheck(false);
     }
-    const bool watcher_assert_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-                                        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
 
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
@@ -909,10 +907,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                         auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                         for (auto kernel_id : kg->kernel_ids) {
                             const auto& kernel = program.impl().get_kernel(kernel_id);
-                            const auto& rt_args =
-                                watcher_assert_enabled
-                                    ? kernel->get_watcher_runtime_args(logical_core)  // [count | args...]
-                                    : kernel->runtime_args(logical_core);
+                            const auto& rt_args = kernel->runtime_args(logical_core);
 
                             // RTA/CRTA offsets are the same for all binaries of the kernel, pick any binary.
                             uint32_t processor_index = hal.get_processor_index(
@@ -936,9 +931,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     device_id, physical_core, rt_args, rt_args_addr);
                             }
 
-                            const auto& common_rt_args =
-                                watcher_assert_enabled ? kernel->get_watcher_common_runtime_args()  // [count | args...]
-                                                       : kernel->common_runtime_args();
+                            const auto& common_rt_args = kernel->common_runtime_args();
                             if (!common_rt_args.empty()) {
                                 auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset();
                                 log_trace(

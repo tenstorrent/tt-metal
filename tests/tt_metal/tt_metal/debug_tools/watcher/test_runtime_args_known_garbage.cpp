@@ -108,7 +108,7 @@ struct RTAAssertTestParams {
 // Parameterized test fixture for RTA/CRTA out-of-bounds assertions
 class RTAAssertTest : public RTATestFixture, public ::testing::WithParamInterface<RTAAssertTestParams> {};
 
-// Verifies watcher handles 0xBEEF sentinel pattern (used when no RTAs set):
+// Verifies watcher handles 0xFFFF sentinel pattern (used when no RTAs set):
 // - Device interprets 0xBEEF#### as rta_count = 0 (validated on BRISC/TRISC0)
 // - Kernels not accessing args run successfully with sentinel pattern
 // - Kernels accessing args when count = 0 trigger "out of bounds" assert
@@ -150,7 +150,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             core_range_set,
             ComputeConfig{.compile_args = {compute_scratch_addr}});
 
-        // No SetRuntimeArgs called - all cores have RTA/CRTA offset = 0xBEEF pattern
+        // No SetRuntimeArgs called - all cores have RTA/CRTA offset = 0xFFFF pattern
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device, workload);
 
