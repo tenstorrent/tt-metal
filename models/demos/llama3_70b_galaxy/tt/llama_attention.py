@@ -832,15 +832,16 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # Reduce-scatter
-        output_11SH = self.tt_ccl.line_all_reduce(
+        output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
             num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="WO_AG",
         )
+        output_11SH.deallocate()
 
-        return output_11SH
+        return output_11SH_reduced
 
     def forward(
         self,
