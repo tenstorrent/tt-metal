@@ -115,7 +115,6 @@ Comparison and logical operations
   unary_le_tile
   unary_max_tile
   unary_min_tile
-  max_tile
   binary_max_tile
   binary_min_tile
   ltz_tile
