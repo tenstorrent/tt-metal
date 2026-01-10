@@ -14,7 +14,7 @@
   cmd: run_t3000_tteager_tests
   sku: wh_llmbox
   owner_id: U084B1CES7M # Borys Bradel
-  team: ops
+  team: ttnn
   timeout: 30
 
 # - name: t3k_ethernet_tests

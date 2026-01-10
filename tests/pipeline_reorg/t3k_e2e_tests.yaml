@@ -14,7 +14,7 @@
   cmd: pytest -n auto tests/nightly/t3000/ccl
   sku: wh_llmbox
   owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ops
+  team: ttnn
   timeout: 90
 
 - name: t3k_ccl_2d_tests
