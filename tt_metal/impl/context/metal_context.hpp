@@ -172,6 +172,7 @@ private:
     CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(ChipId device_id);
     void generate_worker_logical_to_virtual_map(ChipId device_id);
+    std::vector<uint16_t> generate_dram_bank_to_noc_table_for_core(ChipId device_id, CoreCoord virtual_core);
     void initialize_device_bank_to_noc_tables(
         ChipId device_id,
         const HalProgrammableCoreType& core_type,
