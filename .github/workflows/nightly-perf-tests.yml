@@ -18,19 +18,20 @@ jobs:
     uses: ./.github/workflows/run-perf-tests.yml
     secrets: inherit
 
-  report-failure:
-    name: "🔔 Report failure"
+  report-status:
+    name: "🔔 Report status"
     runs-on: ubuntu-latest
-    if: ${{ failure() }}
+    if: always()
     needs: nightly-performance-tests
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Report failure
+      - name: Report status
         uses: ./.github/actions/report-failure
         with:
           test_name: "Nightly Performance Tests"
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           slack_channel_id: ${{ secrets.SLACK_CHANNEL_ID }}
+          status: ${{ needs.nightly-performance-tests.result }}

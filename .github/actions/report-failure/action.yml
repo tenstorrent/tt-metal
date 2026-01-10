@@ -1,9 +1,9 @@
-name: 'Report Failure'
-description: 'Send Slack notification when tests fail'
+name: 'Report Status'
+description: 'Send Slack notification with test results'
 
 inputs:
   test_name:
-    description: 'Name of the test suite that failed'
+    description: 'Name of the test suite'
     required: true
     type: string
   slack_bot_token:
@@ -12,6 +12,10 @@ inputs:
     type: string
   slack_channel_id:
     description: 'Slack channel ID'
+    required: true
+    type: string
+  status:
+    description: 'Status of the test run (success or failure)'
     required: true
     type: string
 
@@ -31,11 +35,24 @@ runs:
         if [ -z "$TRIGGERER" ]; then
           TRIGGERER="scheduled run"
         fi
-        MESSAGE=":alert: *${{ inputs.test_name }} failed* :alert:"
-        MESSAGE="$MESSAGE\n\nThe scheduled run hit some test failures."
+
+        if [ "${{ inputs.status }}" == "success" ]; then
+          MESSAGE=":white_check_mark: *${{ inputs.test_name }} passed* :white_check_mark:"
+          MESSAGE="$MESSAGE\n\nAll tests completed successfully!"
+        else
+          MESSAGE=":alert: *${{ inputs.test_name }} failed* :alert:"
+          MESSAGE="$MESSAGE\n\nThe scheduled run hit some test failures."
+        fi
+
         MESSAGE="$MESSAGE\n\nTriggered by: \`$TRIGGERER\`"
         MESSAGE="$MESSAGE\nCommit: <$COMMIT_URL|$COMMIT_SHA>"
-        MESSAGE="$MESSAGE\n<${RUN_URL}|Please check the logs to see what went wrong.>"
+
+        if [ "${{ inputs.status }}" == "success" ]; then
+          MESSAGE="$MESSAGE\n<${RUN_URL}|View the run details.>"
+        else
+          MESSAGE="$MESSAGE\n<${RUN_URL}|Please check the logs to see what went wrong.>"
+        fi
+
         {
           echo 'text<<EOF'
           echo "$MESSAGE"
