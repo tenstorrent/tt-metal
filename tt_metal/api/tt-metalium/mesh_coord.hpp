@@ -97,6 +97,9 @@ public:
     std::optional<MeshCoordinate> get_neighbor(
         const MeshShape& shape, int32_t offset, int32_t dim, BoundaryMode mode = BoundaryMode::WRAP) const;
 
+    // Translates the coordinate by the given offset.
+    MeshCoordinate translate(const MeshCoordinate& offset, bool add = true) const;
+
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(value_); }

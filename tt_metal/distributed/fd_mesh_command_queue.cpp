@@ -555,16 +555,14 @@ void FDMeshCommandQueue::write_shard_to_device(
     // validation errors when submeshes are closed.
     if (mesh_device_->is_parent_mesh()) {
         auto submesh = mesh_device_->get_submesh_for_coordinate(device_coord);
-        if (submesh) {
-            auto* target_device = mesh_device_->get_view().get_device(device_coord);
-            auto local_coord = submesh->get_view().find_device(target_device->id());
-            auto& submesh_cq = submesh->mesh_command_queue(this->id_);
-            auto* fd_submesh_cq = dynamic_cast<FDMeshCommandQueue*>(&submesh_cq);
-            if (fd_submesh_cq) {
-                fd_submesh_cq->write_shard_to_device(buffer, local_coord, src, region, sub_device_ids);
-                return;
-            }
-        }
+        TT_FATAL(submesh, "Submesh not found for device coordinate: {}", device_coord);
+        auto* target_device = mesh_device_->get_view().get_device(device_coord);
+        auto local_coord = submesh->get_view().find_device(target_device->id());
+        auto& submesh_cq = submesh->mesh_command_queue(this->id_);
+        auto* fd_submesh_cq = dynamic_cast<FDMeshCommandQueue*>(&submesh_cq);
+        TT_FATAL(fd_submesh_cq, "FDMeshCommandQueue not found for submesh: {}", submesh->id());
+        fd_submesh_cq->write_shard_to_device(buffer, local_coord, src, region, sub_device_ids);
+        return;
     }
 
     in_use_ = true;
@@ -598,17 +596,14 @@ void FDMeshCommandQueue::read_shard_from_device(
     // validation errors when submeshes are closed.
     if (mesh_device_->is_parent_mesh()) {
         auto submesh = mesh_device_->get_submesh_for_coordinate(device_coord);
-        if (submesh) {
-            auto* target_device = mesh_device_->get_view().get_device(device_coord);
-            auto local_coord = submesh->get_view().find_device(target_device->id());
-            auto& submesh_cq = submesh->mesh_command_queue(this->id_);
-            auto* fd_submesh_cq = dynamic_cast<FDMeshCommandQueue*>(&submesh_cq);
-            if (fd_submesh_cq) {
-                fd_submesh_cq->read_shard_from_device(
-                    buffer, local_coord, dst, region, num_txns_per_device, sub_device_ids);
-                return;
-            }
-        }
+        TT_FATAL(submesh, "Submesh not found for device coordinate: {}", device_coord);
+        auto* target_device = mesh_device_->get_view().get_device(device_coord);
+        auto local_coord = submesh->get_view().find_device(target_device->id());
+        auto& submesh_cq = submesh->mesh_command_queue(this->id_);
+        auto* fd_submesh_cq = dynamic_cast<FDMeshCommandQueue*>(&submesh_cq);
+        TT_FATAL(fd_submesh_cq, "FDMeshCommandQueue not found for submesh: {}", submesh->id());
+        fd_submesh_cq->read_shard_from_device(buffer, local_coord, dst, region, num_txns_per_device, sub_device_ids);
+        return;
     }
 
     in_use_ = true;

@@ -70,16 +70,6 @@ void EnqueueMeshWorkloadWithOffset(
         return;
     }
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        mesh_workload.impl().compile(mesh_cq.device());
-        mesh_workload.impl().load_binaries(mesh_cq, offset);
-        mesh_workload.impl().generate_dispatch_commands(mesh_cq);
-    }
-    mesh_cq.enqueue_mesh_workload(mesh_workload, blocking, offset);
-}
-
-void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
-    auto* mesh_device = mesh_cq.device();
     if (mesh_device->is_parent_mesh()) {
         auto submeshes = mesh_device->get_submeshes();
 
@@ -93,9 +83,14 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         size_t num_program_devices = 0;
         size_t num_program_devices_in_submeshes = 0;
         for (const auto& [device_range, program] : mesh_workload.get_programs()) {
-            num_program_devices += device_range.shape().mesh_size();
             for (const auto& coord : device_range) {
-                if (all_submesh_devices.contains(mesh_device->get_device(coord)->id())) {
+                // Skip coordinates that don't fall within this mesh
+                if (!is_coord_in_mesh_with_offset(coord, offset, mesh_device->shape())) {
+                    continue;
+                }
+                num_program_devices++;
+                auto translated_coord = coord.translate(offset, false);
+                if (all_submesh_devices.contains(mesh_device->get_device(translated_coord)->id())) {
                     num_program_devices_in_submeshes++;
                 }
             }
@@ -109,33 +104,28 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
             num_program_devices_in_submeshes);
 
         // Route to submeshes, passing the offset for coordinate translation
-        for (auto& submesh : submeshes) {
-            auto offset = compute_submesh_offset(mesh_device, submesh.get());
-
-            for (uint8_t cq_id = 0; cq_id < submesh->num_hw_cqs(); ++cq_id) {
-                auto& submesh_cq = submesh->mesh_command_queue(cq_id);
-                EnqueueMeshWorkloadWithOffset(submesh_cq, mesh_workload, blocking, offset);
+        for (const auto& submesh : submeshes) {
+            auto submesh_offset = offset.translate(compute_submesh_offset(mesh_device, submesh.get()));
+            for (uint8_t i = 0; i < submesh->num_hw_cqs(); ++i) {
+                auto& submesh_cq = submesh->mesh_command_queue(i);
+                EnqueueMeshWorkloadWithOffset(submesh_cq, mesh_workload, blocking, submesh_offset);
             }
         }
-        return;
-    }
 
-    // Non-parent mesh path (standalone mesh without submeshes)
-    // Use zero offset since device_range coordinates match the mesh's local coordinates
-    auto zero_offset = MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-
-    bool has_programs_for_device = !mesh_workload.get_programs().empty();
-
-    if (!has_programs_for_device) {
         return;
     }
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
-        mesh_workload.impl().load_binaries(mesh_cq, zero_offset);
+        mesh_workload.impl().load_binaries(mesh_cq, offset);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     }
-    mesh_cq.enqueue_mesh_workload(mesh_workload, blocking, zero_offset);
+    mesh_cq.enqueue_mesh_workload(mesh_workload, blocking, offset);
+}
+
+void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
+    EnqueueMeshWorkloadWithOffset(
+        mesh_cq, mesh_workload, blocking, MeshCoordinate::zero_coordinate(mesh_cq.device()->shape().dims()));
 }
 
 void EventSynchronize(const MeshEvent& event) {

@@ -183,6 +183,15 @@ std::optional<MeshCoordinate> MeshCoordinate::get_neighbor(
     return result;
 }
 
+MeshCoordinate MeshCoordinate::translate(const MeshCoordinate& offset, bool add) const {
+    TT_FATAL(dims() == offset.dims(), "Coordinate dimensions do not match: {} != {}", dims(), offset.dims());
+    MeshCoordinate result = *this;
+    for (size_t i = 0; i < dims(); ++i) {
+        result[i] = add ? result[i] + offset[i] : result[i] - offset[i];
+    }
+    return result;
+}
+
 bool operator==(const MeshCoordinate& lhs, const MeshCoordinate& rhs) {
     return lhs.dims() == rhs.dims() && std::equal(lhs.coords().begin(), lhs.coords().end(), rhs.coords().begin());
 }
