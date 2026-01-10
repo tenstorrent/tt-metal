@@ -80,14 +80,21 @@ jobs:
               || echo "❌ TCP connect FAILED"
           done
 
-      - name: 🌍 HTTPS Request Test
+      - name: 🔌 Neon DB connectivity test
         run: |
-          echo ""
-          echo "==== HTTPS REQUEST TEST ===="
-          for host in github.com google.com cloudflare.com neon.tech aswincloud.com; do
-            echo ""
-            echo "Fetching: https://$host"
-            curl -I --max-time 8 https://$host \
-              && echo "✅ HTTPS OK" \
-              || echo "❌ HTTPS FAILED"
-          done
+          pip install -q psycopg2-binary
+
+          python3 << 'EOF'
+          import psycopg2, sys
+
+          conn = psycopg2.connect(
+              "postgresql://sweep_reader:sweep_readonly_pw@"
+              "ep-blue-credit-ah8iebt7-pooler.c-3.us-east-1.aws.neon.tech/"
+              "tt-sweeps?sslmode=require&options=endpoint%3Dep-blue-credit-ah8iebt7"
+          )
+          cur = conn.cursor()
+          cur.execute("SELECT COUNT(*) FROM operations")
+          print("Operations:", cur.fetchone()[0])
+          conn.close()
+          print("✅ Neon DB works directly from CI")
+          EOF
