@@ -757,7 +757,7 @@ class TestFromTorchAndDump:
                 mock_ttnn.from_torch.return_value = mock_ttnn_tensor
                 mock_ttnn.StorageType.HOST = ttnn.StorageType.HOST
 
-                result = _from_torch_and_dump(
+                _from_torch_and_dump(
                     tensor=mock_tensor,
                     device=mock_mesh_device,
                     dtype=ttnn.bfloat16,
@@ -963,7 +963,7 @@ class TestLazyWeightIntegration:
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper_config=None,
             )
-            result1 = lw1.get_device_weight()
+            lw1.get_device_weight()
 
             # Second LazyWeight should load from cache
             lw2 = LazyWeight(

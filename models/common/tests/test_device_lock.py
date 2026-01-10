@@ -33,7 +33,6 @@ class TestDeviceLock:
         def worker(worker_id, hold_time):
             """Acquire lock, record timestamp, hold for hold_time, release."""
             with tt_device_lock(lock_path=lock_path, timeout=30):
-                start = time.monotonic()
                 with open(result_file, "a") as f:
                     f.write(f"{worker_id}:acquired:{time.time()}\n")
                 time.sleep(hold_time)
@@ -62,7 +61,7 @@ class TestDeviceLock:
             events.append((int(parts[0]), parts[1], float(parts[2])))
 
         # Worker 1 should acquire before worker 2
-        w1_acquire = next(e for e in events if e[0] == 1 and e[1] == "acquired")
+        next(e for e in events if e[0] == 1 and e[1] == "acquired")
         w1_release = next(e for e in events if e[0] == 1 and e[1] == "released")
         w2_acquire = next(e for e in events if e[0] == 2 and e[1] == "acquired")
 
