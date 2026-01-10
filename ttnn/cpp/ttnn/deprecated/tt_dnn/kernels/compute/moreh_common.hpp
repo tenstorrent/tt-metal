@@ -18,6 +18,7 @@
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/comp.h"

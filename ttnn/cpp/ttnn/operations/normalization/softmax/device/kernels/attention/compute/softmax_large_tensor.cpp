@@ -457,10 +457,10 @@ void reduce_cb(
         copy_tile(cb_prev_out, 0, 1);
         if (reduce_type == PoolType::MAX) {
             // path if we are doing a max redudce
-            max_tile_init();
+            binary_max_tile_init();
             // garbage data will be in data outside the first collumn, but since we broadcast this column it shouldnt
             // matter
-            max_tile(0, 1);
+            binary_max_tile(0, 1, 0);
         } else {
             // path if we are doing a sum redudce
             add_binary_tile_init();

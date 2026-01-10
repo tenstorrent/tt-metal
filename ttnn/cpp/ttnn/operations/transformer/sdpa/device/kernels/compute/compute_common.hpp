@@ -38,7 +38,7 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
     copy_tile_to_dst_init_short(in1);
-    max_tile_init();
+    binary_max_tile_init();
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
     cb_wait_front(in0, num_tiles);
@@ -47,7 +47,7 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
         acquire_dst();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(VectorMode::C));
+        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, static_cast<int>(VectorMode::C));
         pack_tile(dst_reg_0, in0);
         release_dst();
     }
@@ -76,7 +76,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     const uint32_t num_tiles_to_wait = dst_tiles * cols;
     uint32_t in0_wait_tiles = num_tiles_to_wait;
 
-    max_tile_init();
+    reduce_block_max_row_init();
 
     uint32_t row_start_idx = 0;
     for (uint32_t g = 0; g < granularity; g++) {

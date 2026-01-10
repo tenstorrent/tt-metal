@@ -33,7 +33,7 @@ template <int vector_mode = (int)VectorMode::RC>
 void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
-    max_tile_init();
+    binary_max_tile_init();
 
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
@@ -44,7 +44,7 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
         acquire_dst();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(vector_mode));
+        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, static_cast<int>(vector_mode));
         pack_tile(dst_reg_0, out_cb, i);
         release_dst();
     }
@@ -72,7 +72,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
 
-    max_tile_init();
+    binary_max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
@@ -86,7 +86,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, r, prev_max_dst_idx);
-            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(vector_mode));
+            binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, static_cast<int>(vector_mode));
         }
         pack_tile(reduce_dst_idx, out_cb);
         release_dst();
@@ -516,7 +516,6 @@ void correction_block(
         acquire_dst();
         copy_tile_to_dst_init_short(cb_worker_max);
         exp_tile_init<EXP_APPROX_MODE, false>();
-        max_tile_init();
         copy_tile(cb_prev_max, i, dst_reg_0);
         copy_tile(cb_worker_max, i, dst_reg_1);
         copy_tile(cb_prev_sum, i, dst_reg_3);
