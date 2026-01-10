@@ -639,10 +639,22 @@ def run_text_encoder_on_device(
     # Create causal mask
     causal_mask = torch.full((seq_len, seq_len), float("-inf"))
     causal_mask = torch.triu(causal_mask, diagonal=1)
+    # [1, 1, S, S]
     causal_mask = causal_mask[None, None, :, :]
 
+    # Create padding mask from attention_mask
+    # attention_mask is [batch, seq_len] (1 for keep, 0 for discard)
+    # We want to add -inf to padded positions
+    # [batch, 1, 1, seq_len]
+    padding_mask = (1.0 - attention_mask) * -1e9
+    padding_mask = padding_mask.unsqueeze(1).unsqueeze(1)
+
+    # Combine masks
+    # Both are additive masks: -inf/large_neg for masked, 0 for visible
+    combined_mask = causal_mask + padding_mask
+
     causal_mask_tt = ttnn.from_torch(
-        causal_mask,
+        combined_mask,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,

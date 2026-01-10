@@ -133,7 +133,7 @@ models/demos/wormhole/owl_vit/
 
 
 
-## Validation Criteria (Stage 1 Bounty)
+## Validation Criteria
 
 - [x] Model implementation using TTNN APIs
 - [x] Runs on N300 hardware
