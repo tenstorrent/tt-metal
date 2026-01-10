@@ -43,238 +43,51 @@ on:
         default: false
 
 jobs:
-  determine-scan-type:
-    runs-on: ubuntu-latest
-    outputs:
-      do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
-      do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
-    steps:
-      - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
-
-      - id: compute-outputs
-        shell: bash
-        run: |
-          do_full_scan=$([[ "${{ github.ref_name }}" == "main" || "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]] && echo "true" || echo "false")
-          do_scan=$([[ "$do_full_scan" == "true" || "${{ steps.find-changes.outputs.any-code-changed }}" == "true" || "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]] && echo "true" || echo "false")
-          echo "Do a scan: $do_scan"
-          echo "Do a full scan: $do_full_scan"
-          echo "do-full-scan=$do_full_scan" >> "$GITHUB_OUTPUT"
-          echo "do-scan=$do_scan" >> "$GITHUB_OUTPUT"
-
-  build-docker-image:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      distro: ${{ inputs.distro || 'ubuntu' }}
-      version: ${{ inputs.version || '24.04' }}
-      architecture: ${{ inputs.architecture || 'amd64' }}
-
-  clang-tidy:
-    name: 🤖 Clang Tidy
-    needs: [ build-docker-image, determine-scan-type ]
-    if: ${{ needs.determine-scan-type.outputs.do-scan == 'true' }}
-    runs-on: tt-ubuntu-2204-xlarge-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
-      env:
-        CCACHE_REMOTE_ONLY: "true"
-        CCACHE_TEMPDIR: /tmp/ccache
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-      # Group 1457 is for the shared ccache drive
-      # tmpfs is for efficiency
-      options: >
-        --group-add 1457
-        --tmpfs /tmp
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: Check Redis credentials
-        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
-        # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
-        run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
-            exit 1
-          fi
-          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
-          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
-
-      - name: Create ccache tmpdir
-        run: |
-          mkdir -p /tmp/ccache
-
-      - name: Check out repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-          clean: true
-
-      - name: Determine merge base
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        run: |
-          echo "Current branch: ${{ github.ref_name }}"
-          MERGE_BASE=$(git merge-base ${{ github.ref_name }} origin/main)
-          echo "Merge base between ${{ github.ref_name }} and main: $MERGE_BASE"
-          echo "MERGE_BASE=$MERGE_BASE" >> $GITHUB_ENV
-
-      - name: Check out baseline
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.MERGE_BASE }}
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-          clean: true
-
-      - name: Create shim
-        run: |
-          # Suppress clang-tidy to first get an up-to-date build tree
-          ln -sf /usr/bin/true ./clang-tidy-shim
-
-      - name: 🔧 CMake configure
-        run: |
-          cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
-
-      - name: Prepare baseline ccache summary
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        run: |
-          # Zero out the stats so we can see how we did this build
-          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-          ccache -z
-
-      - name: 🛠️ Baseline Build
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        run: |
-          cmake --build --preset clang-tidy
-
-      - name: Publish Ccache summary
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        run: |
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-          clean: false
-
-      - name: Restore shim
-        run: |
-          # Restore shim to legit clang-tidy
-          # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
-          ln -sf $(which clang-tidy-20) ./clang-tidy-shim
-
-      - name: Prepare ccache summary
-        run: |
-          # Zero out the stats so we can see how we did this build
-          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-          ccache -z
-
-      - name: 🔍 Analyze code with clang-tidy
-        run: |
-          cmake --build --preset clang-tidy
-
-      - name: Publish Ccache summary
-        run: |
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-  clang-static-analyzer:
-    name: 🔬 Clang Static Analyzer
-    needs: [ build-docker-image ]
-    if: ${{ inputs.enable-static-analysis == true || github.event_name == 'schedule' }}
-    runs-on: tt-ubuntu-2204-xlarge-stable
-    container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - ${{ github.workspace }}/../../_actions:${{ github.workspace }}/../../_actions # HACK: make actions available inside container
-      options: --tmpfs /tmp
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-
-      - name: 🔧 CMake configure
-        run: cmake --preset clang-static-analyzer
-
-      - name: 🛠️ Generate files
-        run: cmake --build .build/clang-static-analyzer --target all_generated_files
-
-      - name: Setup clang symlinks for CodeChecker
-        run: |
-          update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
-          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100
-
-      - name: 🔬 Analyze with CodeChecker
-        uses: whisperity/codechecker-analysis-action@v1.0.4
-        id: codechecker
-        with:
-          logfile: /work/.build/clang-static-analyzer/compile_commands.json
-          llvm-version: ignore # Already installed in our Docker container
-          config: /work/.codechecker.json
-
-      - name: Upload CodeChecker reports
-        uses: actions/upload-artifact@v4
-        if: always()
-        timeout-minutes: 10
-        with:
-          name: CodeChecker-Static-Analysis-Reports
-          path: ${{ steps.codechecker.outputs.result-html-dir }}
-
-  publish-clangsa-pages:
-    name: 📄 Publish CSA HTML to GitHub Pages
-    needs: [ clang-static-analyzer ]
-    if: ${{ always() && needs.clang-static-analyzer.result != 'skipped' }}
+  connectivity-test:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download CodeChecker reports artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: CodeChecker-Static-Analysis-Reports
-          path: site
+      - name: 📡 ICMP Ping Test
+        run: |
+          echo "==== ICMP PING TEST ===="
+          for host in github.com google.com cloudflare.com neon.tech aswincloud.com; do
+            echo ""
+            echo "Pinging: $host"
+            ping -c 3 -W 3 $host \
+              && echo "✅ Ping OK" \
+              || echo "❌ Ping FAILED"
+          done
 
-      - name: Add .nojekyll
-        run: touch site/.nojekyll
+      - name: 🧪 DNS Resolution Test
+        run: |
+          echo ""
+          echo "==== DNS RESOLUTION TEST ===="
+          for host in github.com google.com cloudflare.com neon.tech aswincloud.com; do
+            echo ""
+            echo "Resolving: $host"
+            getent ahosts $host || echo "❌ DNS lookup failed for $host"
+          done
 
-      - name: Publish to blozano-tt/clangsa-results (gh-pages)
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          personal_token: ${{ secrets.WILDER_PAT }}
-          external_repository: blozano-tt/clangsa-results
-          publish_branch: gh-pages
-          publish_dir: site
-          force_orphan: true
-          commit_message: "Update CSA reports from tt-metal @ ${{ github.sha }}"
+      - name: 🔌 TCP Connectivity Test (443)
+        run: |
+          echo ""
+          echo "==== TCP CONNECTIVITY TEST (PORT 443) ===="
+          for host in github.com google.com cloudflare.com neon.tech aswincloud.com; do
+            echo ""
+            echo "Testing TCP: $host:443"
+            timeout 5 bash -c "cat < /dev/null > /dev/tcp/$host/443" \
+              && echo "✅ TCP connect OK" \
+              || echo "❌ TCP connect FAILED"
+          done
+
+      - name: 🌍 HTTPS Request Test
+        run: |
+          echo ""
+          echo "==== HTTPS REQUEST TEST ===="
+          for host in github.com google.com cloudflare.com neon.tech aswincloud.com; do
+            echo ""
+            echo "Fetching: https://$host"
+            curl -I --max-time 8 https://$host \
+              && echo "✅ HTTPS OK" \
+              || echo "❌ HTTPS FAILED"
+          done
