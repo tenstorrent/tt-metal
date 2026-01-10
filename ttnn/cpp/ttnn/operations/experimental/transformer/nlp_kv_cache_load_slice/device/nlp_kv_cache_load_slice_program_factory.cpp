@@ -55,7 +55,7 @@ NlpKVCacheLoadSliceProgramFactory::cached_program_t NlpKVCacheLoadSliceProgramFa
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.output_tensor_start;
 
-    const auto output_shape = output.padded_shape();
+    const auto& output_shape = output.padded_shape();
     const auto& input_shape = a.padded_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();

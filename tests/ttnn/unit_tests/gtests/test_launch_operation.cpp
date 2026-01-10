@@ -69,7 +69,8 @@ struct NewInfraProgramFactory {
     using tensor_args_t = Tensor;
     using tensor_return_value_t = Tensor;
 
-    static cached_program_t create(const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
+    static cached_program_t create(
+        const tensor_args_t& /*tensor_args*/, tensor_return_value_t& /*tensor_return_value*/) {
         return cached_program_t(tt::tt_metal::Program(), SharedVariables{});
     }
 
@@ -89,7 +90,7 @@ struct NewInfraWorkloadFactory {
     using tensor_return_value_t = Tensor;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
+        const tensor_args_t& /*tensor_args*/, tensor_return_value_t& /*tensor_return_value*/) {
         return cached_mesh_workload_t(
             tt::tt_metal::distributed::MeshWorkload(),
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t>());
@@ -113,7 +114,7 @@ struct OldInfraDeviceOpWithCreateProgram {
     }
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& /*input_tensors*/) const { return {}; }
 
-    auto create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    auto create_program(const std::vector<Tensor>& /*input_tensors*/, std::vector<Tensor>& /*output_tensors*/) const {
         return tt::tt_metal::operation::ProgramWithCallbacks();
     }
 };
@@ -128,8 +129,8 @@ struct OldInfraDeviceOpWithCreateMeshWorkload {
 
     auto create_mesh_workload(
         const ttnn::MeshCoordinateRangeSet& /*mesh_coordinate_range_set*/,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const {
+        const std::vector<Tensor>& /*input_tensors*/,
+        std::vector<Tensor>& /*output_tensors*/) const {
         return tt::tt_metal::operation::MeshWorkloadWithCallbacks();
     }
 };
