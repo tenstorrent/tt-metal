@@ -69,13 +69,14 @@ def load_image(url: str) -> Image.Image:
     return Image.open(requests.get(url, stream=True).raw).convert("RGB")
 
 
-def get_pytorch_model_and_inputs(text_queries: list[str]) -> Tuple:
+def get_pytorch_model_and_inputs(text_queries: list[str], image: Image.Image = None) -> Tuple:
     """Load PyTorch model and prepare inputs for inference."""
     processor = OwlViTProcessor.from_pretrained(MODEL_NAME)
     model = OwlViTForObjectDetection.from_pretrained(MODEL_NAME)
     model.eval()
 
-    image = load_image(TEST_IMAGE_URL)
+    if image is None:
+        image = load_image(TEST_IMAGE_URL)
 
     inputs = processor(text=[text_queries], images=image, return_tensors="pt")
 

@@ -168,7 +168,7 @@ def run_ttnn_inference(
         inference_time: Time in seconds
     """
     # Load model and processor
-    processor, model, inputs, _ = get_pytorch_model_and_inputs(text_queries)
+    processor, model, inputs, _ = get_pytorch_model_and_inputs(text_queries, image)
 
     # Preprocess weights for TTNN
     logger.info("Loading model weights to device...")
@@ -232,6 +232,7 @@ def run_demo(
     image_source: str = "http://images.cocodataset.org/val2017/000000039769.jpg",
     text_queries: list[str] = None,
     output_name: str = "detection_result.png",
+    threshold: float = 0.1,
 ):
     """
     Run the full OWL-ViT demo on TTNN.
@@ -263,7 +264,7 @@ def run_demo(
 
     try:
         # Use lower threshold to find smaller/occluded objects
-        boxes, scores, labels, inference_time = run_ttnn_inference(image, text_queries, device, threshold=0.1)
+        boxes, scores, labels, inference_time = run_ttnn_inference(image, text_queries, device, threshold=threshold)
 
         logger.info("=" * 60)
         logger.info("DETECTION RESULTS (TTNN)")
@@ -276,7 +277,7 @@ def run_demo(
             logger.info(f"  {text_queries[label]}: score={score:.2f}, box={box_str}")
 
         # Draw results with the lower threshold
-        result_image = draw_boxes(image, boxes, scores, labels, text_queries, threshold=0.1)
+        result_image = draw_boxes(image, boxes, scores, labels, text_queries, threshold=threshold)
 
         # Save output
         output_path = OUTPUT_DIR / output_name
@@ -306,4 +307,38 @@ def test_owl_vit_demo():
 
 
 if __name__ == "__main__":
-    run_demo()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run OWL-ViT object detection demo on TTNN")
+    parser.add_argument(
+        "--image",
+        type=str,
+        default="http://images.cocodataset.org/val2017/000000039769.jpg",
+        help="Path or URL to input image",
+    )
+    parser.add_argument(
+        "--queries",
+        nargs="+",
+        default=["a cat", "a remote control", "a cushion"],
+        help="List of text queries to detect",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="detection_result.png",
+        help="Output image filename",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.1,
+        help="Detection confidence threshold",
+    )
+    args = parser.parse_args()
+
+    run_demo(
+        image_source=args.image,
+        text_queries=args.queries,
+        output_name=args.output,
+        threshold=args.threshold,
+    )

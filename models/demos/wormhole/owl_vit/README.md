@@ -79,6 +79,12 @@ pytest models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py -v -s
 
 # Or run directly
 python models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py
+
+# Run with custom image and queries
+python models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py \
+  --image "http://images.cocodataset.org/val2017/000000000285.jpg" \
+  --queries "a bear" "video game" "grass" \
+  --output "bear_detection.png"
 ```
 
 ### 4. Run PyTorch Reference Demo (CPU)
