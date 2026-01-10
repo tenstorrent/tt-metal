@@ -40,8 +40,7 @@ def load_test_image(url: str = TEST_IMAGE_URL) -> Image.Image:
         return image
     except Exception as e:
         logger.warning(f"Could not load image from URL: {e}")
-        # Create a dummy image for testing
-        return Image.new("RGB", (768, 768), color="red")
+        pytest.skip("Test image could not be downloaded (offline?)")
 
 
 def get_pytorch_reference(image: Image.Image, text_queries: list[str]):
@@ -54,8 +53,12 @@ def get_pytorch_reference(image: Image.Image, text_queries: list[str]):
         inputs: Preprocessed inputs
         outputs: Model outputs
     """
-    processor = OwlViTProcessor.from_pretrained(MODEL_NAME)
-    model = OwlViTForObjectDetection.from_pretrained(MODEL_NAME)
+    try:
+        processor = OwlViTProcessor.from_pretrained(MODEL_NAME)
+        model = OwlViTForObjectDetection.from_pretrained(MODEL_NAME)
+    except Exception as e:
+        logger.warning(f"Failed to load HF model: {e}")
+        pytest.skip("HuggingFace model could not be loaded (offline/no token?)")
     model.eval()
 
     texts = [text_queries]

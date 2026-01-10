@@ -66,13 +66,21 @@ TEXT_NUM_LAYERS = 12
 
 def load_image(url: str) -> Image.Image:
     """Load test image from URL."""
-    return Image.open(requests.get(url, stream=True).raw).convert("RGB")
+    try:
+        return Image.open(requests.get(url, stream=True).raw).convert("RGB")
+    except Exception as e:
+        logger.warning(f"Failed to download image: {e}")
+        pytest.skip("Test image could not be downloaded (offline?)")
 
 
 def get_pytorch_model_and_inputs(text_queries: list[str], image: Image.Image = None) -> Tuple:
     """Load PyTorch model and prepare inputs for inference."""
-    processor = OwlViTProcessor.from_pretrained(MODEL_NAME)
-    model = OwlViTForObjectDetection.from_pretrained(MODEL_NAME)
+    try:
+        processor = OwlViTProcessor.from_pretrained(MODEL_NAME)
+        model = OwlViTForObjectDetection.from_pretrained(MODEL_NAME)
+    except Exception as e:
+        logger.warning(f"Failed to load HF model: {e}")
+        pytest.skip("HuggingFace model could not be loaded coverage (offline/no token?)")
     model.eval()
 
     if image is None:
