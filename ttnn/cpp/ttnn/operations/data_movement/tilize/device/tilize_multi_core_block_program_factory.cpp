@@ -54,7 +54,8 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
          has_cliff_row,
          has_cliff_col,
          full_cores_per_row,
-         full_cores_per_col] =
+         full_cores_per_col,
+         single_sblocks_width] =
             ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
     uint32_t total_tiles_per_row =

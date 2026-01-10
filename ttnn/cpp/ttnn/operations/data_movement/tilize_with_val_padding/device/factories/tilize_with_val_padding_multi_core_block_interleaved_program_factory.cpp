@@ -47,8 +47,8 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
     uint32_t max_l1_size = get_max_l1_space(a);
     uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
-
     uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+    uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
 
     auto
         [ncores,
@@ -64,31 +64,10 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
          has_cliff_row,
          has_cliff_col,
          full_cores_per_row,
-         full_cores_per_col] =
-            ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
-
-    // TODO: apply the maximum value among single_block_size, single_block_size_cliff_row, and
-    // single_block_size_cliff_col
-    if (single_block_size * (input_single_tile_size + output_single_tile_size) > max_l1_size and
-        num_tiles_per_row > num_tiles_per_col) {
-        TT_FATAL(false, "Tensor size is too large to fit in L1 cache");
-        // [ncores_new,
-        //  all_cores_new,
-        //  core_range_new,
-        //  cliff_row_core_range_new,
-        //  cliff_col_core_range_new,
-        //  cliff_col_row_core_range_new,
-        //  nblocks_per_core_new,
-        //  single_block_size_new,
-        //  single_block_size_cliff_row_new,
-        //  single_block_size_cliff_col_new,
-        //  has_cliff_row_new,
-        //  has_cliff_col_new,
-        //  full_cores_per_row_new,
-        //  full_cores_per_col_new] =
-        //     ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col,
-        //     input_single_tile_size, output_single_tile_size, max_l1_size);
-    }
+         full_cores_per_col,
+         single_sblocks_width] =
+            ttnn::split_blocks_for_tilize_wh(
+                available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
 
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
