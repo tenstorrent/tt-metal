@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <string>
 #include <vector>
+#include <atomic>
 #include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
