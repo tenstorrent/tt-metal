@@ -482,7 +482,8 @@ class ModelArgs:
         self.tile_size = 32
 
         # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
-        self.use_qk_fused = True
+        # We currently disable this fusion of ops for vision-capable models
+        self.use_qk_fused = not self.is_vision()
 
         self.is_70b = False
         self.is_90b = False
