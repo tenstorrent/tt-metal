@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <algorithm>
+#include <limits>
 #include <mutex>
 #include <future>
 #include <vector>
@@ -1129,9 +1131,79 @@ void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
     }
 }
 
+std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_for_core(
+    ChipId device_id, CoreCoord virtual_core) {
+    // For Wormhole, each DRAM bank has multiple NOC endpoints. This function generates
+    // a per-core table that picks the closest DRAM NOC endpoint for each bank.
+    // This optimization is WH-specific as WH has 3 NOC endpoints per DRAM bank.
+    const auto& soc_d = cluster_->get_soc_desc(device_id);
+    auto config = L1BankingAllocator::generate_config(
+        device_id,
+        num_hw_cqs_,
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        worker_l1_unreserved_start_,
+        l1_bank_remap_);
+    const auto allocator = L1BankingAllocator(config);
+    const size_t num_dram_banks = allocator.get_num_banks(BufferType::DRAM);
+    const size_t num_dram_ports = soc_d.get_grid_size(CoreType::DRAM).y;
+
+    bool noc_translation_enabled = (cluster_->get_target_device_type() == tt::TargetDevice::Mock)
+                                       ? false
+                                       : cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool dram_is_virtualized =
+        noc_translation_enabled && (hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
+
+    // Get the physical/NOC0 coordinate of the worker core for distance calculation
+    tt::umd::CoreCoord worker_noc0_coord =
+        soc_d.translate_coord_to(tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
+
+    std::vector<uint16_t> dram_bank_to_noc_xy;
+    dram_bank_to_noc_xy.reserve(hal_->get_num_nocs() * num_dram_banks);
+
+    for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
+        for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+            size_t dram_channel = allocator.get_dram_channel_from_bank_id(bank_id);
+
+            // Find the closest DRAM NOC endpoint for this channel
+            CoreCoord closest_endpoint;
+            uint32_t min_distance = std::numeric_limits<uint32_t>::max();
+
+            for (size_t port = 0; port < num_dram_ports; port++) {
+                tt::umd::CoreCoord dram_endpoint_noc0 =
+                    soc_d.get_dram_core_for_channel(dram_channel, port, CoordSystem::NOC0);
+
+                // Calculate Manhattan distance
+                uint32_t distance = std::abs(static_cast<int>(worker_noc0_coord.x) - static_cast<int>(dram_endpoint_noc0.x)) +
+                                    std::abs(static_cast<int>(worker_noc0_coord.y) - static_cast<int>(dram_endpoint_noc0.y));
+
+                if (distance < min_distance) {
+                    min_distance = distance;
+                    // Get the translated coordinate for the closest endpoint
+                    tt::umd::CoreCoord dram_endpoint_translated =
+                        soc_d.get_dram_core_for_channel(dram_channel, port, CoordSystem::TRANSLATED);
+                    closest_endpoint = CoreCoord(dram_endpoint_translated.x, dram_endpoint_translated.y);
+                }
+            }
+
+            uint16_t noc_x, noc_y;
+            if (dram_is_virtualized) {
+                noc_x = closest_endpoint.x;
+                noc_y = closest_endpoint.y;
+            } else {
+                noc_x = hal_->noc_coordinate(noc, soc_d.grid_size.x, closest_endpoint.x);
+                noc_y = hal_->noc_coordinate(noc, soc_d.grid_size.y, closest_endpoint.y);
+            }
+            uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
+            dram_bank_to_noc_xy.push_back(xy);
+        }
+    }
+
+    return dram_bank_to_noc_xy;
+}
+
 void MetalContext::initialize_device_bank_to_noc_tables(
     ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
-    const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
     const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_[device_id].size() * sizeof(int32_t);
@@ -1139,13 +1211,28 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     const uint64_t mem_bank_to_noc_addr = hal_->get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
     const uint32_t mem_bank_to_noc_size = hal_->get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
+    // For Wormhole, generate per-core DRAM bank tables that pick the closest NOC endpoint.
+    // WH has multiple DRAM NOC endpoints per DRAM bank, and different worker cores should
+    // use different endpoints based on proximity for optimal performance.
+    // For other architectures (BH), use the pre-generated device-wide table.
+    std::vector<uint16_t> dram_bank_to_noc_xy;
+    const std::vector<uint16_t>* dram_table_ptr;
+    if (cluster_->arch() == ARCH::WORMHOLE_B0) {
+        dram_bank_to_noc_xy = generate_dram_bank_to_noc_table_for_core(device_id, virtual_core);
+        dram_table_ptr = &dram_bank_to_noc_xy;
+    } else {
+        dram_table_ptr = &dram_bank_to_noc_xy_[device_id];
+    }
+
+    const uint32_t dram_to_noc_sz_in_bytes = dram_table_ptr->size() * sizeof(uint16_t);
+
     TT_ASSERT(
         (dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes) <=
             mem_bank_to_noc_size,
         "Size of bank_to_noc table is greater than available space");
 
     cluster_->write_core(
-        dram_bank_to_noc_xy_[device_id].data(),
+        dram_table_ptr->data(),
         dram_to_noc_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         mem_bank_to_noc_addr);
