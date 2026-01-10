@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
+#include <ranges>
 
 namespace ttnn::operations::matmul {
 
@@ -138,9 +139,9 @@ std::vector<uint32_t> get_multi_dim_per_core_factor(
         if (in0_block_w % per_core_factor_k != 0) {
             continue;
         }
-        for (const auto& [multiple, factor] : factors) {
-            uint32_t per_core_factor_m = std::get<0>(factor);
-            uint32_t per_core_factor_n = std::get<1>(factor);
+        for (const auto& factor : std::ranges::reverse_view(factors)) {
+            uint32_t per_core_factor_m = std::get<0>(factor.second);
+            uint32_t per_core_factor_n = std::get<1>(factor.second);
 
             size = utilities::get_estimated_size_of_cbs(
                 per_core_factor_m,
