@@ -626,7 +626,7 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,
-    const IDevice* device,
+    const IDevice* /*device*/,
     const ccl::EriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
     const tt::tt_metal::DataMovementProcessor risc_id,

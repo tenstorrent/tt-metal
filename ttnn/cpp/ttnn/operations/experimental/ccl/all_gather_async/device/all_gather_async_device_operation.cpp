@@ -30,7 +30,7 @@ AllGatherAsyncVersion select_version(const operation_attributes_t& operation_att
 }
 
 AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     AllGatherAsyncVersion version = select_version(args);
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
     switch (version) {
