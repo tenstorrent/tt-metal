@@ -1,6 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -10,21 +13,22 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/buffer_types.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
-using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
+namespace ttnn::operations::matmul::program {
+
 namespace reuse_mcast_optimized_helpers {
 
-tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
-    tt_metal::Program& program,
-    tt_metal::IDevice* device,
+MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1(
+    tt::tt_metal::Program& program,
+    tt::tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -47,10 +51,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t per_core_N,
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
-    tt_metal::Buffer* in0_buffer,
-    tt_metal::Buffer* in1_buffer,
-    tt_metal::Buffer* bias_buffer,
-    tt_metal::Buffer* out_buffer,
+    tt::tt_metal::Buffer* in0_buffer,
+    tt::tt_metal::Buffer* in1_buffer,
+    tt::tt_metal::Buffer* bias_buffer,
+    tt::tt_metal::Buffer* out_buffer,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const tt::tt_metal::Tile& bias_tile,
@@ -61,6 +65,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat output_data_format,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
     // currently only support transpose of the full tile
@@ -108,13 +113,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_block_tiles = out_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
     if (B * num_blocks > 1) {
-        in0_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
+        in0_CB_tiles *= utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
-        in1_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
+        in1_CB_tiles *= utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -1342,8 +1347,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         }
     }
 
-    auto override_runtime_arguments_callback =
-        [mm_kernel_in0_sender_id,
+    return {
+        std::move(program),
+        {mm_kernel_in0_sender_id,
          in0_sender_interleaved_cores,
          mm_kernel_in1_sender_writer_id,
          in1_sender_cores,
@@ -1358,107 +1364,136 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
          start_core_x,
          start_core_y,
          transpose_mcast,
-         cores](
-            const void* /*operation*/,
-            tt::tt_metal::Program& program,
-            const std::vector<tt::tt_metal::Tensor>& input_tensors,
-            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            TT_FATAL(
-                input_tensors.size() + optional_input_tensors.size() == 3,
-                "Total number of input tensors (required + optional) must be 3, but got {} + {} = {}",
-                input_tensors.size(),
-                optional_input_tensors.size(),
-                input_tensors.size() + optional_input_tensors.size());
-            TT_FATAL(
-                output_tensors.size() == 1, "Number of output tensors must be 1, but got {}", output_tensors.size());
-
-            auto* src_buffer_a = input_tensors.at(0).buffer();
-            auto* src_buffer_b = input_tensors.at(1).buffer();
-            const auto& bias_tensor = optional_input_tensors.at(0);
-
-            auto* dst_buffer = output_tensors.at(0).buffer();
-
-            bool src0_sharded = input_tensors[0].memory_config().is_sharded();
-            bool out_sharded = output_tensors[0].memory_config().is_sharded();
-
-            std::optional<tt::tt_metal::Buffer*> bias_buffer;
-            if (bias_tensor.has_value()) {
-                bias_buffer = bias_tensor.value().buffer();
-            }
-
-            // in0 sender
-            if (src0_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
-            } else {
-                auto& reader_sender_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in0_sender_id);
-                for (const auto& core : in0_sender_interleaved_cores) {
-                    auto& reader_runtime_args = reader_sender_runtime_args_by_core[core.x][core.y];
-                    reader_runtime_args[0] = src_buffer_a->address();
-                }
-            }
-
-            // in1 sender
-            auto& sender_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
-            for (const auto& core : in1_sender_cores) {
-                auto& writer_runtime_args = sender_writer_runtime_args_by_core[core.x][core.y];
-                writer_runtime_args[0] = src_buffer_b->address();
-                writer_runtime_args[7] = dst_buffer->address();
-                if (bias_tensor.has_value()) {
-                    writer_runtime_args[18] = (*bias_buffer)->address();
-                }
-            }
-
-            // in1 receiver
-            auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id);
-            for (const auto& core : in1_receiver_cores) {
-                auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-                writer_runtime_args[2] = dst_buffer->address();
-            }
-            if (mm_kernel_in1_receiver_writer_id != mm_kernel_in1_receiver_writer_other_noc_setup_id) {
-                auto& receiver_writer_runtime_args_by_core =
-                    GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_other_noc_setup_id);
-                for (const auto& core : in1_receiver_other_cores) {
-                    auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-                    writer_runtime_args[2] = dst_buffer->address();
-                }
-            }
-
-            if (out_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+         cores}};
 }
 
+void override_runtime_arguments_impl(
+    const MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t& shared_variables,
+    tt::tt_metal::Program& program,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    auto mm_kernel_in0_sender_id = shared_variables.mm_kernel_in0_sender_id;
+    auto in0_sender_interleaved_cores = shared_variables.in0_sender_interleaved_cores;
+    auto mm_kernel_in1_sender_writer_id = shared_variables.mm_kernel_in1_sender_writer_id;
+    auto in1_sender_cores = shared_variables.in1_sender_cores;
+    auto mm_kernel_in1_receiver_writer_id = shared_variables.mm_kernel_in1_receiver_writer_id;
+    auto in1_receiver_cores = shared_variables.in1_receiver_cores;
+    auto mm_kernel_in1_receiver_writer_other_noc_setup_id =
+        shared_variables.mm_kernel_in1_receiver_writer_other_noc_setup_id;
+    auto in1_receiver_other_cores = shared_variables.in1_receiver_other_cores;
+    auto cb_src2 = shared_variables.cb_src2;
+    auto cb_output = shared_variables.cb_output;
+    auto cores = shared_variables.cores;
+
+    const auto& input_tensors = tensor_args.input_tensors;
+    const auto& optional_input_tensors = tensor_args.optional_input_tensors;
+
+    TT_FATAL(
+        input_tensors.size() + optional_input_tensors.size() == 3,
+        "Total number of input tensors (required + optional) must be 3, but got {} + {} = {}",
+        input_tensors.size(),
+        optional_input_tensors.size(),
+        input_tensors.size() + optional_input_tensors.size());
+    TT_FATAL(output_tensors.size() == 1, "Number of output tensors must be 1, but got {}", output_tensors.size());
+
+    auto* src_buffer_a = input_tensors.at(0).buffer();
+    auto* src_buffer_b = input_tensors.at(1).buffer();
+    const auto& bias_tensor = optional_input_tensors.at(0);
+
+    auto* dst_buffer = output_tensors.at(0).buffer();
+
+    bool src0_sharded = input_tensors[0].memory_config().is_sharded();
+    bool out_sharded = output_tensors[0].memory_config().is_sharded();
+
+    std::optional<tt::tt_metal::Buffer*> bias_buffer;
+    if (bias_tensor.has_value()) {
+        bias_buffer = bias_tensor.value().buffer();
+    }
+
+    // in0 sender
+    if (src0_sharded) {
+        UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
+    } else {
+        auto& reader_sender_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in0_sender_id);
+        for (const auto& core : in0_sender_interleaved_cores) {
+            auto& reader_runtime_args = reader_sender_runtime_args_by_core[core.x][core.y];
+            reader_runtime_args[0] = src_buffer_a->address();
+        }
+    }
+
+    // in1 sender
+    auto& sender_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
+    for (const auto& core : in1_sender_cores) {
+        auto& writer_runtime_args = sender_writer_runtime_args_by_core[core.x][core.y];
+        writer_runtime_args[0] = src_buffer_b->address();
+        writer_runtime_args[7] = dst_buffer->address();
+        if (bias_tensor.has_value()) {
+            writer_runtime_args[18] = (*bias_buffer)->address();
+        }
+    }
+
+    // in1 receiver
+    auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id);
+    for (const auto& core : in1_receiver_cores) {
+        auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
+        writer_runtime_args[2] = dst_buffer->address();
+    }
+    if (mm_kernel_in1_receiver_writer_id != mm_kernel_in1_receiver_writer_other_noc_setup_id) {
+        auto& receiver_writer_runtime_args_by_core =
+            GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_other_noc_setup_id);
+        for (const auto& core : in1_receiver_other_cores) {
+            auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
+            writer_runtime_args[2] = dst_buffer->address();
+        }
+    }
+
+    if (out_sharded) {
+        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+    }
+}
 }  // namespace reuse_mcast_optimized_helpers
 
-namespace ttnn::operations::matmul {
-
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
+static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_2d_optimized_(
     tt::tt_metal::Program& program,
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<const Tensor>& bias,
-    Tensor& output,
-    bool bcast_batch,
-    bool transpose_a,
-    bool transpose_b,
-    CoreCoord compute_with_storage_grid_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t out_block_h,
-    uint32_t out_block_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    bool fuse_batch,
-    bool transpose_mcast,
-    std::optional<UnaryWithParam> fused_activation,
-    bool untilize_out,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    using namespace tt;
+    using namespace matmul::utilities;
+
+    const auto& a = tensor_args.input_tensors.at(0);
+    const auto& b = tensor_args.input_tensors.at(1);
+    const auto& bias = tensor_args.optional_input_tensors.at(0);
+    const auto& output = tensor_return_value.at(0);
+
+    TT_FATAL(operation_attributes.bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
+    TT_FATAL(operation_attributes.program_config.has_value(), "Error: program_config field should have been populated");
+    bool bcast_batch = operation_attributes.bcast_batch.value();
+    bool transpose_a = operation_attributes.transpose_a;
+    bool transpose_b = operation_attributes.transpose_b;
+
+    auto program_config =
+        std::get<MatmulMultiCoreReuseMultiCastProgramConfig>(operation_attributes.program_config.value());
+
+    auto fuse_batch = program_config.fuse_batch;
+    auto in0_block_w = program_config.in0_block_w;
+    auto compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
+    auto out_subblock_h = program_config.out_subblock_h;
+    auto out_subblock_w = program_config.out_subblock_w;
+    auto out_block_h = program_config.out_block_h;
+    auto out_block_w = program_config.out_block_w;
+    auto per_core_M = program_config.per_core_M;
+    auto per_core_N = program_config.per_core_N;
+    auto transpose_mcast = program_config.transpose_mcast;
+
+    TT_FATAL(
+        operation_attributes.compute_kernel_config.has_value(),
+        "Error: compute_kernel_config field should have been populated");
+    auto compute_kernel_config = operation_attributes.compute_kernel_config.value();
+    auto untilize_out = operation_attributes.untilize_out;
+    // auto fused_op_signaler = std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>();
+
     const auto& a_shape_padded = get_matmul_tensor_padded_shape(a, transpose_a);
     const auto& b_shape_padded = get_matmul_tensor_padded_shape(b, transpose_b);
     const auto in0_tile = get_matmul_tile(a, transpose_a);
@@ -1605,7 +1640,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         per_core_M,
         per_core_N,
         transpose_mcast,
-        std::move(fused_activation),
+        program_config.fused_activation,
         in0_buffer,
         in1_buffer,
         bias_buffer,
@@ -1622,57 +1657,71 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         fused_op_signaler);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<const Tensor>& bias,
-    Tensor& output_tensor,
-    bool broadcast_batch,
-    bool transpose_a,
-    bool transpose_b,
-    CoreCoord compute_with_storage_grid_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t out_block_h,
-    uint32_t out_block_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    bool fuse_batch,
-    bool transpose_mcast,
-    std::optional<UnaryWithParam> fused_activation,
-    bool untilize_out) {
-    tt_metal::Program program{}; /* Create a program */
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t MatmulMultiCoreReuseMcast2DProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::Program program{};
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
 
     return matmul_multi_core_reuse_mcast_2d_optimized_(
-        program,
-        a,
-        b,
-        bias,
-        output_tensor,
-        broadcast_batch,
-        transpose_a,
-        transpose_b,
-        compute_with_storage_grid_size,
-        compute_kernel_config,
-        in0_block_w,
-        out_subblock_h,
-        out_subblock_w,
-        out_block_h,
-        out_block_w,
-        per_core_M,
-        per_core_N,
-        fuse_batch,
-        transpose_mcast,
-        std::move(fused_activation),
-        untilize_out,
-        empty_fused_op_signaler);
+        program, operation_attributes, tensor_args, tensor_return_value, fused_op_signaler);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
-    tt_metal::Program& program, /* Take programa as input by reference */
+void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    reuse_mcast_optimized_helpers::override_runtime_arguments_impl(
+        cached_program.shared_variables, cached_program.program, tensor_args, tensor_return_value);
+}
+
+void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const shared_variables_t& shared_variables,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    reuse_mcast_optimized_helpers::override_runtime_arguments_impl(
+        shared_variables, program, tensor_args, tensor_return_value);
+}
+
+MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory::cached_mesh_workload_t
+MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory::create_mesh_workload(
+    const operation_attributes_t& attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
+        for (const auto& mesh_coord : mesh_coord_range) {
+            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
+            auto single_device_program =
+                MatmulMultiCoreReuseMcast2DProgramFactory::create(attributes, tensor_args, tensor_return_value);
+            shared_variables[mesh_coord_range] = single_device_program.shared_variables;
+            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
+        }
+    }
+    return {std::move(workload), std::move(shared_variables)};
+}
+
+void MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
+        auto cached_program_proxy = MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t::proxy(
+            program, cached_workload.shared_variables.at(mesh_coord_range));
+        MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+            cached_program_proxy, attributes, tensor_args, tensor_return_value);
+    }
+}
+
+MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    tt::tt_metal::Program& program, /* Take programa as input by reference */
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
@@ -1682,32 +1731,13 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     const MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
-    MatmulMultiCoreReuseMultiCastProgramConfig config =
-        std::get<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config);
+    auto attributes = operation_attributes_t{.program_config = program_config, .bcast_batch = broadcast_batch};
+    attributes.compute_kernel_config = compute_kernel_config;
+    attributes.untilize_out = untilize_out;
 
+    auto output_tensors = tensor_return_value_t{output_tensor};
     return matmul_multi_core_reuse_mcast_2d_optimized_(
-        program,
-        a,
-        b,
-        bias,
-        output_tensor,
-        broadcast_batch,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        config.compute_with_storage_grid_size,
-        compute_kernel_config,
-        config.in0_block_w,
-        config.out_subblock_h,
-        config.out_subblock_w,
-        config.out_block_h,
-        config.out_block_w,
-        config.per_core_M,
-        config.per_core_N,
-        config.fuse_batch,
-        config.transpose_mcast,
-        config.fused_activation,
-        untilize_out,
-        fused_op_signaler);
+        program, attributes, tensor_args_t{{a, b}, {bias}, {}}, output_tensors, fused_op_signaler);
 }
 
-}  // namespace ttnn::operations::matmul
+}  // namespace ttnn::operations::matmul::program

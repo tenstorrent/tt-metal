@@ -157,7 +157,7 @@ static void RunTest(
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
     std::string expected;
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        const uint32_t line_num = 67;
+        const uint32_t line_num = 66;
         expected = fmt::format(
             "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. "
             "Note that file name reporting is not yet implemented, and the reported line number for the assert may be "
