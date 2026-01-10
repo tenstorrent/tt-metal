@@ -5,6 +5,7 @@
 
 import torch
 import ttnn
+from typing import Tuple, Optional
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -37,6 +38,46 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def invalidate_vector(test_vector) -> tuple:
+    """
+    Invalidate test vectors with core coordinates that exceed hardware limits.
+
+    interleaved_to_sharded requires sharded output memory config with valid core coordinates.
+    Configs traced from larger systems (e.g., 32-card TT-Galaxy) may specify cores that
+    don't exist on smaller systems (e.g., 2-card WH N300 with max grid (8,8), valid 0-7).
+
+    Returns:
+        Tuple of (is_invalid: bool, reason: str or None)
+    """
+    output_mem_config = test_vector.get("output_memory_config")
+
+    if output_mem_config:
+        # During parameter generation, output_mem_config is a ttnn.MemoryConfig object
+        # Check if it's sharded and has shard_spec
+        if hasattr(output_mem_config, "is_sharded") and output_mem_config.is_sharded():
+            if hasattr(output_mem_config, "shard_spec") and output_mem_config.shard_spec:
+                shard_spec = output_mem_config.shard_spec
+
+                # Get the grid from shard_spec
+                if hasattr(shard_spec, "grid"):
+                    grid = shard_spec.grid
+
+                    # WH N300 max grid is (8,8), so valid range is 0-7
+                    MAX_X = 7
+                    MAX_Y = 7
+
+                    # grid is a CoreRangeSet, iterate through its ranges
+                    for core_range in grid.ranges():
+                        end_coord = core_range.end
+                        end_x = end_coord.x
+                        end_y = end_coord.y
+
+                        if end_x > MAX_X or end_y > MAX_Y:
+                            return True, f"Core coordinates end({end_x}, {end_y}) exceed hardware max({MAX_X}, {MAX_Y})"
+
+    return False, None
 
 
 def mesh_device_fixture():
