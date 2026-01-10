@@ -21,7 +21,7 @@
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/operations/embedding/device/embedding_device_operation_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 std::ostream& operator<<(std::ostream& os, const std::vector<bool>& value) {
