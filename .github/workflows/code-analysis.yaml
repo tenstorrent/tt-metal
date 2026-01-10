@@ -47,54 +47,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📡 ICMP Ping Test
-        run: |
-          echo "==== ICMP PING TEST ===="
-          for host in github.com google.com cloudflare.com neon.tech aswincloud.com; do
-            echo ""
-            echo "Pinging: $host"
-            ping -c 3 -W 3 $host \
-              && echo "✅ Ping OK" \
-              || echo "❌ Ping FAILED"
-          done
-
-      - name: 🧪 DNS Resolution Test
-        run: |
-          echo ""
-          echo "==== DNS RESOLUTION TEST ===="
-          for host in github.com google.com cloudflare.com neon.tech aswincloud.com; do
-            echo ""
-            echo "Resolving: $host"
-            getent ahosts $host || echo "❌ DNS lookup failed for $host"
-          done
-
-      - name: 🔌 TCP Connectivity Test (443)
-        run: |
-          echo ""
-          echo "==== TCP CONNECTIVITY TEST (PORT 443) ===="
-          for host in github.com google.com cloudflare.com neon.tech aswincloud.com; do
-            echo ""
-            echo "Testing TCP: $host:443"
-            timeout 5 bash -c "cat < /dev/null > /dev/tcp/$host/443" \
-              && echo "✅ TCP connect OK" \
-              || echo "❌ TCP connect FAILED"
-          done
-
-      - name: 🔌 Neon DB connectivity test
+      - name: 🔌 Neon DB test
         run: |
           pip install -q psycopg2-binary
 
           python3 << 'EOF'
-          import psycopg2, sys
+          import psycopg2
 
           conn = psycopg2.connect(
               "postgresql://sweep_reader:sweep_readonly_pw@"
               "ep-blue-credit-ah8iebt7-pooler.c-3.us-east-1.aws.neon.tech/"
-              "tt-sweeps?sslmode=require&options=endpoint%3Dep-blue-credit-ah8iebt7"
+              "tt-sweeps?sslmode=require&options=endpoint%3Dep-blue-credit-ah8iebt7-pooler"
           )
           cur = conn.cursor()
           cur.execute("SELECT COUNT(*) FROM operations")
           print("Operations:", cur.fetchone()[0])
           conn.close()
-          print("✅ Neon DB works directly from CI")
+          print("✅ Neon DB connection successful")
           EOF
