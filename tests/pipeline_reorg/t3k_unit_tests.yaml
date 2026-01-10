@@ -106,7 +106,7 @@
   sku: wh_llmbox
   owner_id: U06ECNVR0EN # Evan Smal
   team: models
-  timeout: 30
+  timeout: 10
 
 - name: t3k_mistral_tests
   cmd: run_t3000_mistral_tests
@@ -148,7 +148,7 @@
   sku: wh_llmbox
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
-  timeout: 30
+  timeout: 10
 
 - name: t3k_tttv2_modules_tests
   cmd: run_t3000_tttv2_modules_tests
