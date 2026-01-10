@@ -60,7 +60,10 @@ jobs:
           path: /work/pkgs/
 
       - name: Check available memory in container
-        run: cat /sys/fs/cgroup/memory.max
+        run: |
+          cat /sys/fs/cgroup/memory.max 2>/dev/null || \
+            cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || \
+            echo "Unable to read memory limit from cgroup (v1 or v2)"
 
       - name: Install packages
         run: |
