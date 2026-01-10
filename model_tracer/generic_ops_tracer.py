@@ -1387,11 +1387,15 @@ Examples (Standalone Python scripts):
     # Explicit separator for standalone scripts
     python model_tracer/generic_ops_tracer.py model.py -d -- --model-name resnet50 --batch 32
 
+    # Single quoted string (everything in quotes passed to test/script)
+    python model_tracer/generic_ops_tracer.py "demo.py --arg1 val1 --arg2 val2 config.yaml"
+    python model_tracer/generic_ops_tracer.py -d "demo.py --prompts-file file.json config.yaml"
+
 Note: The tracer automatically detects pytest vs standalone scripts.
       Unknown arguments are automatically passed to pytest or the script.
       Use -d/--debug to see live test logs in the terminal.
 
-Argument Handling (Two Modes):
+Argument Handling (Three Modes):
 
       Mode 1 - Automatic (Default):
       - Tracer-specific flags: -o/--output-dir, --store, -d/--debug
@@ -1405,10 +1409,21 @@ Argument Handling (Two Modes):
       - Example: python tracer.py test.py -d --store -- -v -k "test"
                  Tracer gets: test.py, -d, --store
                  Pytest gets: -v, -k "test"
+
+      Mode 3 - Single Quoted String:
+      - Pass entire command as single quoted string
+      - First token becomes test_path, rest becomes extra_args
+      - Example: python tracer.py "demo.py --arg1 val1 config.yaml"
+                 Test path: demo.py
+                 Extra args: --arg1 val1 config.yaml
+      - Can combine with tracer flags:
+        python tracer.py -d "demo.py --arg1 val1 config.yaml"
         """,
     )
     parser.add_argument(
-        "test_path", help="Path to test file or script (e.g., /path/to/test.py or /path/to/test.py::test_function)"
+        "test_path",
+        nargs="?",  # Make optional to handle quoted string case
+        help="Path to test file or script, OR quoted string with full command",
     )
     parser.add_argument(
         "--output-dir",
@@ -1432,14 +1447,84 @@ Argument Handling (Two Modes):
     # Handle explicit separator '--' for explicit argument separation
     # If '--' is present, split arguments: left side for tracer, right side for pytest/script
     import sys
+    import shlex
 
-    if "--" in sys.argv:
+    # MODE 3: Check if we have a single quoted string with spaces (full command in quotes)
+    # This happens when user does: python tracer.py "demo.py --arg1 val1 config.yaml"
+    # In this case, sys.argv might have tracer flags followed by the quoted string
+    # We need to detect and split the quoted string into test_path and extra_args
+
+    # First, check if any argument looks like a full command (contains .py and has spaces/flags)
+    quoted_command_found = False
+    quoted_command_idx = -1
+
+    for idx, arg in enumerate(sys.argv[1:], 1):  # Skip script name
+        # Skip tracer-specific flags
+        if arg in ["-d", "--debug", "--store", "--keep-traces", "-o", "--output-dir"]:
+            continue
+        # Skip values for flags that take arguments
+        if idx > 1 and sys.argv[idx - 1] in ["-o", "--output-dir"]:
+            continue
+
+        # Check if this looks like a full command string
+        # (contains .py and has additional args after it)
+        if ".py" in arg and (" -" in arg or arg.count(" ") > 0):
+            quoted_command_found = True
+            quoted_command_idx = idx
+            break
+
+    if quoted_command_found:
+        # MODE 3: Single quoted string mode
+        quoted_command = sys.argv[quoted_command_idx]
+
+        # Split the quoted command into tokens using shlex (handles nested quotes properly)
+        try:
+            command_tokens = shlex.split(quoted_command)
+        except ValueError:
+            # If shlex fails (unmatched quotes), fall back to simple split
+            command_tokens = quoted_command.split()
+
+        if not command_tokens:
+            print("❌ Error: Empty quoted command string")
+            return 1
+
+        # First token is the test path, rest are extra args
+        test_path = command_tokens[0]
+        extra_args = command_tokens[1:] if len(command_tokens) > 1 else []
+
+        # Parse tracer-specific flags (everything before the quoted string)
+        tracer_argv = sys.argv[1:quoted_command_idx]
+
+        # Create a modified argv for argparse (replace quoted string with just test_path)
+        modified_argv = tracer_argv + [test_path]
+        args = parser.parse_args(modified_argv)
+
+        print("🚀 TTNN Operations Tracer")
+        print("=" * 50)
+        print(f"🔀 Quoted command mode detected")
+        print(f"📁 Test: {test_path}")
+        if extra_args:
+            print(f"📎 Extra args: {' '.join(extra_args)}")
+        if args.store:
+            print(f"💾 Keeping individual trace files")
+        if args.debug:
+            print(f"🐛 Debug mode enabled - showing live test output")
+        print("=" * 50)
+
+    elif "--" in sys.argv:
+        # MODE 2: Explicit separator mode
         separator_index = sys.argv.index("--")
         tracer_argv = sys.argv[1:separator_index]  # Everything before '--'
         extra_args = sys.argv[separator_index + 1 :]  # Everything after '--'
 
         # Parse only tracer arguments
         args = parser.parse_args(tracer_argv)
+
+        # Validate that test_path was provided
+        if not args.test_path:
+            print("❌ Error: test_path is required")
+            parser.print_help()
+            return 1
 
         print("🚀 TTNN Operations Tracer")
         print("=" * 50)
@@ -1452,9 +1537,18 @@ Argument Handling (Two Modes):
         if args.debug:
             print(f"🐛 Debug mode enabled - showing live test output")
         print("=" * 50)
+
+        # Assign test_path for consistency
+        test_path = args.test_path
     else:
-        # Default behavior: automatic detection with parse_known_args
+        # MODE 1: Default behavior - automatic detection with parse_known_args
         args, extra_args = parser.parse_known_args()
+
+        # Validate that test_path was provided
+        if not args.test_path:
+            print("❌ Error: test_path is required")
+            parser.print_help()
+            return 1
 
         print("🚀 TTNN Operations Tracer")
         print("=" * 50)
@@ -1469,8 +1563,12 @@ Argument Handling (Two Modes):
             print(f"ℹ️  Note: Unknown flags are automatically passed to pytest/script")
         print("=" * 50)
 
+        # Assign test_path for consistency
+        test_path = args.test_path
+
     try:
-        result = run_test_with_tracing(args.test_path, args.output_dir, args.store, args.debug, extra_args)
+        # Use test_path variable (set in all three modes)
+        result = run_test_with_tracing(test_path, args.output_dir, args.store, args.debug, extra_args)
 
         print("\\n" + "=" * 50)
         print("📋 RESULTS")
