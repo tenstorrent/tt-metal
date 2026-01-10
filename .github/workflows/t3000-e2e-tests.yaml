@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * *" # runs every day at 6am UTC, 1am EST
+  push:
+    branches:
+      - roseli/30675-reorg-t3k-pipelines-rebased
 
 jobs:
   build-artifact:

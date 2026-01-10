@@ -22,6 +22,9 @@ on:
           - gemma-3-27b-it
   schedule:
     - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
+  push:
+    branches:
+      - roseli/30675-reorg-t3k-pipelines-rebased
 
 jobs:
   build-artifact:

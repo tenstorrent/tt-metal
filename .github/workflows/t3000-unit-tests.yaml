@@ -29,6 +29,9 @@ on:
           - gpt-oss
   schedule:
     - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
+  push:
+    branches:
+      - roseli/30675-reorg-t3k-pipelines-rebased
 
 permissions:
   packages: write
