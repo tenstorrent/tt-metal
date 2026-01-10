@@ -5,6 +5,8 @@
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -42,10 +44,11 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
         // Matmul validate
-        operation_attributes.matmul.validate(
-            {all_gather_output_tensor, weight_tensor},
-            {tensor_args.bias},
-            {});  // TODO: migrate this code to use new matmul API.
+        operations::matmul::MatmulDeviceOperation::validate_on_program_cache_miss(
+            operation_attributes.matmul,
+            {.input_tensors = {all_gather_output_tensor, weight_tensor},
+             .optional_input_tensors = {tensor_args.bias},
+             .optional_output_tensors = {}});
     }
     // All Gather Matmul validate
     TT_FATAL(
@@ -91,9 +94,11 @@ spec_return_value_t AllGatherMatmulAsyncDeviceOperation::compute_output_specs(
         operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
     // Matmul shape
-    auto matmul_output_specs = operation_attributes.matmul.compute_output_specs(
-        {tensor_args.input_tensor, tensor_args.weight_tensor},
-        {})[0];  // TODO: migrate this code to use new matmul API.
+    auto matmul_output_specs = operations::matmul::MatmulDeviceOperation::compute_output_specs(
+        operation_attributes.matmul,
+        {.input_tensors = {tensor_args.input_tensor, tensor_args.weight_tensor},
+         .optional_input_tensors = {},
+         .optional_output_tensors = {}})[0];
 
     return {all_gather_output_specs, matmul_output_specs};
 }
@@ -106,8 +111,11 @@ tensor_return_value_t AllGatherMatmulAsyncDeviceOperation::create_output_tensors
         operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
     // Matmul output tensor
-    auto matmul_output_tensor = operation_attributes.matmul.create_output_tensors(
-        {all_gather_output_tensor, tensor_args.weight_tensor})[0];  // TODO: migrate this code to use new matmul API.
+    auto matmul_output_tensor = operations::matmul::MatmulDeviceOperation::create_output_tensors(
+        operation_attributes.matmul,
+        {.input_tensors = {all_gather_output_tensor, tensor_args.weight_tensor},
+         .optional_input_tensors = {},
+         .optional_output_tensors = {}})[0];
 
     return {all_gather_output_tensor, matmul_output_tensor};
 }
@@ -213,26 +221,25 @@ all_gather_matmul_async(
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
-    operations::matmul::Matmul matmul_struct =
-        operations::matmul::create_matmul_struct(  // TODO: migrate this code to use new matmul API. This code relies on
-                                                   // the old matmul struct
-            all_gather_out_tensor,
-            weight_tensor,
-            /*parameters=*/
-            operations::matmul::Matmul{
-                program_config,
-                /*bcast_batch=*/std::nullopt,
-                memory_config_mm.value_or(input_tensor.memory_config()),
-                dtype.value_or(input_tensor.dtype()),
-                compute_kernel_config,
-                /*untilize_out=*/false,
-                user_core_coord,
-                ttnn::operations::matmul::get_fused_activation(activation),
-                user_run_batched,
-                transpose_a,
-                transpose_b,
-                /*output_tile=*/std::nullopt,
-                /*global_cb=*/std::nullopt});
+    auto matmul_struct = operations::matmul::create_matmul_attributes(
+        all_gather_out_tensor,
+        weight_tensor,
+        /*parameters=*/
+        operations::matmul::operation_attributes_t{
+            program_config,
+            /*bcast_batch=*/std::nullopt,
+            memory_config_mm.value_or(input_tensor.memory_config()),
+            dtype.value_or(input_tensor.dtype()),
+            compute_kernel_config,
+            /*untilize_out=*/false,
+            user_core_coord,
+            ttnn::operations::matmul::get_fused_activation(activation),
+            user_run_batched,
+            transpose_a,
+            transpose_b,
+            /*output_tile=*/std::nullopt,
+            /*global_cb=*/std::nullopt},
+        {});
 
     auto operation_attributes = OperationType::operation_attributes_t{
         /* All Gather Params */

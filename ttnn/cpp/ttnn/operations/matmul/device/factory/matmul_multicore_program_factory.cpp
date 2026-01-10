@@ -1,21 +1,33 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
 using namespace tt::constants;
 
-namespace ttnn::operations::matmul {
+namespace ttnn::operations::matmul::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
-    const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
+MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    if (!tensor_args.optional_input_tensors.empty()) {
+        TT_FATAL(!tensor_args.optional_input_tensors[0].has_value(), "Bias is not supported for matmul multi core");
+    }
+
+    const auto& a = tensor_args.input_tensors.at(0);
+    const auto& b = tensor_args.input_tensors.at(1);
+    auto& output = tensor_return_value.at(0);
+
+    TT_FATAL(operation_attributes.bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
+    bool bcast_batch = operation_attributes.bcast_batch.value();
+
     tt_metal::Program program{};
 
     const auto& ashape = a.padded_shape();
@@ -112,8 +124,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
         1,                                 // Mt
         Kt,                                // Kt
         num_output_tiles_per_core_group_1  // Nt
-    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt
-        // for simplicity
+    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set
+        // Nt for simplicity
 
     tt_metal::CreateKernel(
         program,
@@ -128,8 +140,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
             1,                                 // Mt
             Kt,                                // Kt
             num_output_tiles_per_core_group_2  // Nt
-        };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set
-            // Nt for simplicity
+        };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only
+            // set Nt for simplicity
 
         tt_metal::CreateKernel(
             program,
@@ -170,35 +182,72 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
         num_tiles_written += num_output_tiles_per_core;
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = reader_id, writer_kernel_id = writer_id, num_cores, num_cores_y](
-            const void* operation,
-            const Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>&,
-            const std::vector<Tensor>& output_tensors) {
-            auto* src_dram_buffer_a = input_tensors.at(0).buffer();
-            auto* src_dram_buffer_b = input_tensors.at(1).buffer();
-
-            auto* dst_dram_buffer = output_tensors.at(0).buffer();
-
-            for (uint32_t i = 0; i < num_cores; i++) {
-                CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_dram_buffer_a->address();
-                    runtime_args[1] = src_dram_buffer_b->address();
-                }
-
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = dst_dram_buffer->address();
-                }
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {std::move(program), {reader_id, writer_id, num_cores, num_cores_y}};
 }
 
-}  // namespace ttnn::operations::matmul
+void MatmulMultiCoreProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& program = cached_program.program;
+    auto& shared_variables = cached_program.shared_variables;
+    auto reader_kernel_id = shared_variables.reader_kernel_id;
+    auto writer_kernel_id = shared_variables.writer_kernel_id;
+    auto num_cores = shared_variables.num_cores;
+    auto num_cores_y = shared_variables.num_cores_y;
+
+    auto* src_dram_buffer_a = tensor_args.input_tensors.at(0).buffer();
+    auto* src_dram_buffer_b = tensor_args.input_tensors.at(1).buffer();
+    auto* dst_dram_buffer = tensor_return_value.at(0).buffer();
+
+    for (uint32_t i = 0; i < num_cores; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        {
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = src_dram_buffer_a->address();
+            runtime_args[1] = src_dram_buffer_b->address();
+        }
+        {
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            runtime_args[0] = dst_dram_buffer->address();
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////
+//                      Mesh Workload Setup
+////////////////////////////////////////////////////////////////////////////
+
+MatmulMeshWorkloadMultiCoreFactory::cached_mesh_workload_t MatmulMeshWorkloadMultiCoreFactory::create_mesh_workload(
+    const operation_attributes_t& attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
+        for (const auto& mesh_coord : mesh_coord_range) {
+            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
+            auto single_device_program = MatmulMultiCoreProgramFactory::create(attributes, tensor_args, output);
+            shared_variables[mesh_coord_range] = single_device_program.shared_variables;
+            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
+        }
+    }
+    return {std::move(workload), std::move(shared_variables)};
+}
+
+void MatmulMeshWorkloadMultiCoreFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
+        auto cached_program_proxy = MatmulMultiCoreProgramFactory::cached_program_t::proxy(
+            program, cached_workload.shared_variables.at(mesh_coord_range));
+        MatmulMultiCoreProgramFactory::override_runtime_arguments(
+            cached_program_proxy, attributes, tensor_args, tensor_return_value);
+    }
+}
+
+}  // namespace ttnn::operations::matmul::program
