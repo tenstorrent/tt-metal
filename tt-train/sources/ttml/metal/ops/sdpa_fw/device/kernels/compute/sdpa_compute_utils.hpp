@@ -6,6 +6,7 @@
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/negative.h"
@@ -82,8 +83,8 @@ void update_cur_row_max_value(
         copy_tile(cb_prev_max, /* tile_idx */ 0, /* register idx */ prev_max_dst_idx);
 
         // find max value between current max and previous max
-        max_tile_init();
-        max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+        binary_max_tile_init();
+        binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, static_cast<int>(VectorMode::C));
     }
     tile_regs_commit();
 
