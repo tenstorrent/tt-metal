@@ -1,15 +1,103 @@
 # This file defines the maximum allowed timeout (in minutes) for tests
 # belonging to a given team and workflow.
+# These budgets are enforced during the load-test-matrix step in pipelines.
 
 # This is part of an effort to reorganize the pipelines for clearer resource allocation and ownership.
-# For more information please refer to https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/1396506680/Proposed+pipeline+and+test+organization+changes
 
-# Team: ops
-ops:
-  # Workflow: sanity
-  sanity:
-    skus:
-      N300:
-        time_budget: 540
-      P150b:
-        time_budget: 540
+# Entries are grouped by team -> pipeline -> sku (machine type in CI) : time_budget (in minutes)
+
+# Team names are currently assigned to tests by best guess.
+#   Please message #tt-metal-infra if there are any concerns.
+# Sku names do not make the distinction between baremetal/vm, or viommu/non-viommu.
+#   This will be determined per pipeline based on need.
+
+# Example:
+metal_infra:
+  smoke: # intended category for PR gate and merge gate
+    CPU: 0
+    N150: 0
+    N300: 0
+    wh_llmbox: 0
+  sanity: # APC will be renamed to sanity
+    CPU: 0
+    N150: 0
+    N300: 0
+    P100: 0
+    P100a: 0
+    P150: 0
+    P150b: 0
+    P300: 0
+    wh_llmbox: 0
+    bh_llmbox: 0
+    bh_loudbox: 0
+    bh_qb: 0
+  unit:
+    N150: 0
+    N300: 0
+    P100: 0
+    P100a: 0
+    P150: 0
+    P150b: 0
+    wh_llmbox: 0
+    wh_galaxy: 0
+    bh_galaxy: 0
+  integration:
+    N150: 0
+    N300: 0
+    P100: 0
+    P100a: 0
+    P150: 0
+    P150b: 0
+    wh_llmbox: 0
+    wh_galaxy: 0
+    bh_galaxy: 0
+  e2e:
+    wh_llmbox: 0
+    wh_galaxy: 0
+    bh_galaxy: 0
+  perf:
+    wh_llmbox: 0
+    wh_galaxy: 0
+    bh_galaxy: 0
+  demo:
+    wh_llmbox: 0
+    wh_galaxy: 0
+    bh_galaxy: 0
+
+
+# Current time budgets are sums of timeouts of existing tests.
+ttnn:
+  unit:
+    wh_llmbox: 45
+  e2e:
+    wh_llmbox: 90
+  integration:
+    wh_llmbox: 30
+
+fabric:
+  unit:
+    wh_llmbox: 40
+  integration:
+    wh_llmbox: 10
+  e2e:
+    wh_llmbox: 165
+
+scaleout:
+  e2e:
+    wh_llmbox: 20
+  unit:
+    wh_llmbox: 15
+  integration:
+    wh_llmbox: 30
+
+models:
+  e2e:
+    wh_llmbox: 30
+  unit:
+    wh_llmbox: 445
+  integration:
+    wh_llmbox: 420
+  perf:
+    wh_llmbox: 660
+  demo:
+    wh_llmbox: 1020
