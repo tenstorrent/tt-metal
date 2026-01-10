@@ -2039,7 +2039,7 @@ void bind_binary_inplace_operation(
 }
 
 template <typename binary_operation_t>
-void bind_power(nb::module_& mod, const binary_operation_t& operation, const std::string& note = "") {
+void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         Perform element-wise {0} operation on :attr:`input_tensor` with :attr:`exponent`.
