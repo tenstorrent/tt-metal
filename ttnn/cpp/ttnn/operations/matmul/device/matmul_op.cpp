@@ -16,6 +16,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -115,7 +116,7 @@ bool get_broadcast_batch(
     const bool transpose_b,
     const std::optional<const MatmulProgramConfig>& matmul_program_config) {
     const auto& b_shape_padded = get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
-    uint32_t batch_size_b = get_batch_size(b_shape_padded);
+    uint32_t batch_size_b = ttnn::get_batch_size(b_shape_padded);
     bool broadcast_batch = batch_size_b == 1;
     if (!matmul_program_config.has_value()) {
         return broadcast_batch;
@@ -129,7 +130,7 @@ bool get_broadcast_batch(
         matmul_program_config.value());
     if (is_multi_core_reuse) {
         const auto& a_shape_padded = get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
-        uint32_t batch_size_a = get_batch_size(a_shape_padded);
+        uint32_t batch_size_a = ttnn::get_batch_size(a_shape_padded);
         broadcast_batch &= batch_size_a > 1;
     }
     return broadcast_batch;
@@ -157,7 +158,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     // Calculate number of mul/add operations
     // TODO: add bias modeling
     int64_t num_mul_adds_per_elem = in_a_shape[-1] * 2;  // 1 multiply and 1 add per element
-    uint32_t batch_size = get_batch_size(out_shape);
+    uint32_t batch_size = ttnn::get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 
     MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
@@ -420,8 +421,8 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     auto k_size = a_padded_shape[-1];
     auto m_size = a_padded_shape[-2];
     auto n_size = b_padded_shape[-1];
-    uint32_t batch_size_a = get_batch_size(a_padded_shape);
-    uint32_t batch_size_b = get_batch_size(b_padded_shape);
+    uint32_t batch_size_a = ttnn::get_batch_size(a_padded_shape);
+    uint32_t batch_size_b = ttnn::get_batch_size(b_padded_shape);
     TT_FATAL(
         batch_size_b == 1,
         "Second input cannot be currently batched when running matmul using "
@@ -662,7 +663,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 compute_kernel_config,
                 output_dtype,
                 all_dram_interleaved);
-        } else if (core_range.x == 1 or use_mcast_1d_in1_config) {
+        }
+        if (core_range.x == 1 or use_mcast_1d_in1_config) {
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -677,8 +679,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 compute_kernel_config,
                 output_dtype,
                 all_dram_interleaved);
-        } else if (
-            (core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
+        }
+        if ((core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
             bool transpose_mcast =
                 input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
@@ -755,8 +757,8 @@ MatmulProgramConfig create_matmul_program_config(
     auto k_size = a_padded_shape[-1];
     auto m_size = a_padded_shape[-2];
     auto n_size = b_padded_shape[-1];
-    uint32_t batch_size_a = get_batch_size(a_padded_shape);
-    uint32_t batch_size_b = get_batch_size(b_padded_shape);
+    uint32_t batch_size_a = ttnn::get_batch_size(a_padded_shape);
+    uint32_t batch_size_b = ttnn::get_batch_size(b_padded_shape);
     bool input_b_is_batched = batch_size_b > 1;
     bool any_size_within_tile = k_size <= ttnn::TILE_SIZE || m_size <= ttnn::TILE_SIZE || n_size <= ttnn::TILE_SIZE;
     const auto& input_tensor_a_memory_config = input_tensor_a.memory_config();
@@ -1048,8 +1050,8 @@ MatmulProgramConfig get_matmul_program_config(
                 .fused_activation = fused_activation,
                 .mcast_in0 = mcast_in0,
             };
-        } else if (
-            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
+        }
+        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
             (grid_size.x > 1 and grid_size.y > 1)) {
             bool transpose_mcast = input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
 
@@ -1163,8 +1165,8 @@ MatmulProgramConfig get_matmul_program_config(
         auto out_subblock_w = std::get<1>(subblock_hw);
 
         // TODO: Temporarily allow for single core; should support bcast_batch in general
-        const auto batch_size_a = get_batch_size(get_matmul_tensor_padded_shape(input_tensor_a, transpose_a));
-        const auto batch_size_b = get_batch_size(get_matmul_tensor_padded_shape(input_tensor_b, transpose_b));
+        const auto batch_size_a = ttnn::get_batch_size(get_matmul_tensor_padded_shape(input_tensor_a, transpose_a));
+        const auto batch_size_b = ttnn::get_batch_size(get_matmul_tensor_padded_shape(input_tensor_b, transpose_b));
         bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
         TT_FATAL(!broadcast_batch, "Batch broadcasting is not supported for the chosen program config");
 
@@ -1239,35 +1241,33 @@ inline MatmulProgramConfig generate_matmul_program_config(
                 compute_kernel_config,
                 mem_config,
                 output_dtype);
-        } else {
-            tt::tt_metal::IDevice* device = input_tensor_a.device();
-            auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-            return create_simple_matmul_program_config(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                compute_kernel_config,
-                compute_with_storage_grid_size,
-                mem_config,
-                output_dtype);
         }
-    } else {
-        bool bmm = user_run_batched;
-        return get_matmul_program_config(
+        tt::tt_metal::IDevice* device = input_tensor_a.device();
+        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        return create_simple_matmul_program_config(
             input_tensor_a,
             input_tensor_b,
             transpose_a,
             transpose_b,
             bias_single_tile_size,
-            mem_config,
-            std::nullopt,
-            !bmm,
-            user_core_coord,
             compute_kernel_config,
+            compute_with_storage_grid_size,
+            mem_config,
             output_dtype);
     }
+    bool bmm = user_run_batched;
+    return get_matmul_program_config(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a,
+        transpose_b,
+        bias_single_tile_size,
+        mem_config,
+        std::nullopt,
+        !bmm,
+        user_core_coord,
+        compute_kernel_config,
+        output_dtype);
 }
 
 tt::tt_metal::Tile get_output_tile(
@@ -1316,9 +1316,8 @@ tt::tt_metal::Tile get_output_tile(
         }
 
         return override_output_tile;
-    } else {
-        return tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
     }
+    return tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 }
 
 }  // namespace

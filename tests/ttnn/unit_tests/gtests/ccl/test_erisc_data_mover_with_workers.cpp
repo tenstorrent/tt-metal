@@ -68,12 +68,12 @@ void set_edm_runtime_args(
     tt_metal::KernelHandle edm_kernel_handle,
     const ccl::EriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core) {
-    std::vector<uint32_t> const& edm_clockwise_kernel_rt_args = edm_builder.get_runtime_args();
+    const std::vector<uint32_t>& edm_clockwise_kernel_rt_args = edm_builder.get_runtime_args();
     tt_metal::SetRuntimeArgs(program, edm_kernel_handle, eth_core, edm_clockwise_kernel_rt_args);
 
     std::stringstream ss;
     ss << "EDM ARGS:\n";
-    for (auto const& s : edm_clockwise_kernel_rt_args) {
+    for (const auto& s : edm_clockwise_kernel_rt_args) {
         ss << "\t" << s << "\n";
     }
     log_info(tt::LogOp, "{}", ss.str());
@@ -124,7 +124,7 @@ struct BankedConfig {
     size_t page_size_bytes;
     tt_metal::BufferType input_buffer_type;   // = BufferType::L1;
     tt_metal::BufferType output_buffer_type;  // = BufferType::L1;
-    tt::DataFormat l1_data_format;  // = tt::DataFormat::Float16_b;
+    tt::DataFormat l1_data_format;            // = tt::DataFormat::Float16_b;
 };
 
 struct KernelXY {
@@ -175,11 +175,11 @@ void generate_receiver_worker_kernels(
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(receiver_worker_writer_compile_args);
     std::vector<uint32_t> receiver_worker_writer_runtime_args{dram_output_buffer_base_addr};
     log_info(tt::LogTest, "\tReceiverWriter CT Args");
-    for (auto const& arg : receiver_worker_writer_compile_args) {
+    for (const auto& arg : receiver_worker_writer_compile_args) {
         log_info(tt::LogTest, "\t\t{}", arg);
     }
     log_info(tt::LogTest, "\tReceiverWriter RT Args");
-    for (auto const& arg : receiver_worker_writer_runtime_args) {
+    for (const auto& arg : receiver_worker_writer_runtime_args) {
         log_info(tt::LogTest, "\t\t{}", arg);
     }
 
@@ -197,11 +197,11 @@ void generate_receiver_worker_kernels(
         worker_semaphore_address,
         num_buffers_per_edm_channel};
     log_info(tt::LogTest, "\tReceiverReader CT Args");
-    for (auto const& arg : receiver_worker_receiver_compile_args) {
+    for (const auto& arg : receiver_worker_receiver_compile_args) {
         log_info(tt::LogTest, "\t\t{}", arg);
     }
     log_info(tt::LogTest, "\tReceiverReader RT Args");
-    for (auto const& arg : receiver_worker_receiver_runtime_args) {
+    for (const auto& arg : receiver_worker_receiver_runtime_args) {
         log_info(tt::LogTest, "\t\t{}", arg);
     }
 
@@ -253,11 +253,11 @@ void generate_sender_worker_kernels(
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_output_buffer_base_addr};
 
     log_info(tt::LogTest, "\tSenderReader CT Args");
-    for (auto const& arg : sender_worker_reader_compile_args) {
+    for (const auto& arg : sender_worker_reader_compile_args) {
         log_info(tt::LogTest, "\t\t{}", arg);
     }
     log_info(tt::LogTest, "\tSenderReader RT Args");
-    for (auto const& arg : sender_worker_reader_runtime_args) {
+    for (const auto& arg : sender_worker_reader_runtime_args) {
         log_info(tt::LogTest, "\t\t{}", arg);
     }
 
@@ -272,11 +272,11 @@ void generate_sender_worker_kernels(
         num_buffers_per_edm_channel};
     uint32_t src0_cb_index = CBIndex::c_0;
     log_info(tt::LogTest, "\tSenderWriter CT Args");
-    for (auto const& arg : sender_worker_writer_compile_args) {
+    for (const auto& arg : sender_worker_writer_compile_args) {
         log_info(tt::LogTest, "\t\t{}", arg);
     }
     log_info(tt::LogTest, "\tSenderWriter RT Args");
-    for (auto const& arg : sender_worker_writer_runtime_args) {
+    for (const auto& arg : sender_worker_writer_runtime_args) {
         log_info(tt::LogTest, "\t\t{}", arg);
     }
     // Just want a dummy DF
@@ -368,7 +368,7 @@ bool RunWriteBWTest(
 
     std::vector<uint32_t> local_worker_semaphore_addresses;
     std::vector<uint32_t> remote_worker_semaphore_addresses;
-    for (auto const& worker_core : worker_cores) {
+    for (const auto& worker_core : worker_cores) {
         local_worker_semaphore_addresses.push_back(tt::tt_metal::CreateSemaphore(sender_program, worker_core, 0));
         remote_worker_semaphore_addresses.push_back(tt::tt_metal::CreateSemaphore(receiver_program, worker_core, 0));
         log_info(
@@ -491,13 +491,13 @@ bool RunWriteBWTest(
         const auto& worker_core_remote_chip = ttnn::ccl::WorkerXY(
             receiver_mesh_device->worker_core_from_logical_core(worker_cores.at(i)).x,
             receiver_mesh_device->worker_core_from_logical_core(worker_cores.at(i)).y);
-        ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& local_sender_channel_buffer =
+        const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& local_sender_channel_buffer =
             local_chip_edm_builder.add_sender_channel(
                 local_worker_semaphore_addresses.at(i),
                 num_messages_to_send_over_channel.at(i),
                 {worker_core_local_chip});
         local_edm_channels.push_back(local_sender_channel_buffer);
-        ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& remote_receiver_channel_buffer =
+        const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& remote_receiver_channel_buffer =
             remote_chip_edm_builder.add_receiver_channel(
                 remote_worker_semaphore_addresses.at(i),
                 num_messages_to_send_over_channel.at(i),
@@ -511,13 +511,13 @@ bool RunWriteBWTest(
         const auto& worker_core_local_chip = ttnn::ccl::WorkerXY(
             sender_mesh_device->worker_core_from_logical_core(worker_cores.at(i)).x,
             sender_mesh_device->worker_core_from_logical_core(worker_cores.at(i)).y);
-        ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& local_receiver_channel_buffer =
+        const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& local_receiver_channel_buffer =
             local_chip_edm_builder.add_receiver_channel(
                 local_worker_semaphore_addresses.at(i),
                 num_messages_to_send_over_channel.at(i),
                 {worker_core_remote_chip});
         local_edm_channels.push_back(local_receiver_channel_buffer);
-        ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& remote_sender_channel_buffer =
+        const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& remote_sender_channel_buffer =
             remote_chip_edm_builder.add_sender_channel(
                 remote_worker_semaphore_addresses.at(i),
                 num_messages_to_send_over_channel.at(i),
@@ -530,7 +530,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     log_info(tt::LogTest, "Generating local_sender -> remote_receiver workers");
     for (uint32_t i = 0; i < num_local_sender_channels; i++) {
-        auto const& worker_core = worker_cores.at(i);
+        const auto& worker_core = worker_cores.at(i);
         log_info(tt::LogTest, "Worker {}. On Core x={},y={}", i, worker_core.x, worker_core.y);
         generate_sender_worker_kernels(
             sender_workload,
@@ -564,7 +564,7 @@ bool RunWriteBWTest(
     log_info(tt::LogTest, "Generating remote_sender -> local_receiver workers");
     for (uint32_t i = 0; i < num_remote_sender_channels; i++) {
         log_info(tt::LogTest, "Worker {}", i);
-        auto const& worker_core = worker_cores.at(i + num_local_sender_channels);
+        const auto& worker_core = worker_cores.at(i + num_local_sender_channels);
         generate_sender_worker_kernels(
             receiver_workload,
             receiver_mesh_device,
@@ -679,10 +679,10 @@ bool RunWriteBWTest(
     bool pass = true;
     constexpr bool enable_check = true;
     if constexpr (enable_check) {
-        for (auto const& output_buffer : local_output_buffers) {
+        for (const auto& output_buffer : local_output_buffers) {
             pass &= is_output_correct(output_buffer);
         }
-        for (auto const& output_buffer : remote_output_buffers) {
+        for (const auto& output_buffer : remote_output_buffers) {
             pass &= is_output_correct(output_buffer);
         }
     }
@@ -723,7 +723,7 @@ int TestEntrypoint(
     const auto& mesh_device_0 = test_fixture.devices_.at(0);
     auto* device_0 = mesh_device_0->get_devices()[0];
 
-    auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
+    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
     ChipId device_id = std::numeric_limits<ChipId>::max();
@@ -1195,5 +1195,3 @@ TEST(
         termination_mode);
     ASSERT_EQ(result, 0);
 }
-
-// EnablePersistentKernelCache

@@ -82,7 +82,9 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         // Estimate shard distribution across cores (round-robin strategy)
         uint32_t total_shards = 1;
         auto tensor_shape = a.padded_shape();
-        for (int i = 0; i < nd_shard_spec.shard_shape.rank(); ++i) {
+        for (int i = 0; i < nd_shard_spec.shard_shape.rank();
+             ++i) {  // This part assumes that the shard shape has the same rank as the tensor (i.e., no
+                     // lower-dimensional squashing like in the 2D sharding case takes place).
             total_shards *= tt::div_up(tensor_shape[i], nd_shard_spec.shard_shape[i]);
         }
 
@@ -138,7 +140,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
         grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-    // if (a.shard_spec().has_value()) {  // case for non ND-sharded tensor
+
     // Compute compile-time args
     std::vector<uint32_t> compute_compile_time_args;
     if (has_2d_shard_spec) {
