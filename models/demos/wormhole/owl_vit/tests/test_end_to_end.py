@@ -889,7 +889,8 @@ class TestOwlViTEndToEnd:
         logger.info("=" * 60)
 
         # Should detect at least something
-        assert len(boxes) >= 0, "Detection completed"
+        assert boxes_pcc > 0.9, f"Box coordinates PCC too low: {boxes_pcc}"
+        assert len(boxes) > 0, "No objects detected with default threshold"
 
     def test_vision_encoder_pcc(self, device):
         """
