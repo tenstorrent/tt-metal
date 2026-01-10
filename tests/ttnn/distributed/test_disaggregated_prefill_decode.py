@@ -150,15 +150,27 @@ def run_prefill_node(device, model, model_args, kv_cache, tokens, send_socket, a
     # NOTE: We use UINT32 dtype to preserve integer precision.
     # BFLOAT16 loses precision for large integers (e.g., token IDs > 32K)
     # which causes the wrong token to be decoded on the receiver side.
-    metadata = torch.tensor([actual_seq_len, next_token.item()], dtype=torch.int32)
+    #
+    # Use explicit 4D shape [1, 1, 1, 2] to match receiver's expected dimensions.
+    # TILE_LAYOUT will pad this to [1, 1, 32, 32] on both sides.
+    metadata = torch.tensor([[[[actual_seq_len, next_token.item()]]]], dtype=torch.int32)
     metadata_tt = ttnn.from_torch(
-        metadata.unsqueeze(0).unsqueeze(0),
+        metadata,
         device=device,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
     )
     logger.info(f"Sending metadata: seq_len={actual_seq_len}, next_token={next_token.item()}")
     ttnn.experimental.send_async(metadata_tt, send_socket)
+
+    # CRITICAL: Synchronize after all send_async calls to ensure transfers complete.
+    # Without this, if the prefill process exits or closes the socket before the
+    # async DMA transfers finish, the decode node may receive incomplete/corrupted data:
+    #   1. KV cache layers may be partially transferred (truncated tensors)
+    #   2. Metadata may not arrive, causing decode node to hang or crash
+    #   3. Socket teardown during active transfer can cause fabric-level errors
+    ttnn.synchronize_device(device)
+
     t_transfer_end = time.perf_counter()
     transfer_time_ms = (t_transfer_end - t_transfer_start) * 1000
 
@@ -195,10 +207,20 @@ def run_decode_node(device, model, model_args, kv_cache, recv_socket, tokenizer,
         logger.info(f"Received KV cache layer {layer_idx}")
 
     # Receive metadata (UINT32 to preserve integer precision for token IDs)
+    # Shape must match sender's explicit 4D shape [1, 1, 1, 2], which gets tile-padded to [1, 1, 32, 32]
     metadata_recv = ttnn.allocate_tensor_on_device(
         ttnn.TensorSpec([1, 1, 32, 32], ttnn.DataType.UINT32, ttnn.TILE_LAYOUT), device
     )
     ttnn.experimental.recv_async(metadata_recv, recv_socket)
+
+    # CRITICAL: Synchronize after all recv_async calls before using the received data.
+    # Race condition: recv_async is non-blocking - it only initiates the DMA transfer.
+    # Without synchronization, the decode loop would start reading KV cache tensors while
+    # the fabric is still transferring data, causing:
+    #   1. Corrupted KV cache values (partial/garbage data)
+    #   2. Incorrect attention outputs leading to nonsensical token generation
+    #   3. Potential hardware hangs if tensors are deallocated during active transfer
+    ttnn.synchronize_device(device)
     # Convert metadata tensor to torch
     # Since we're on a distributed mesh, use mesh composer (tensor is replicated, so take first slice)
     metadata_full = ttnn.to_torch(
@@ -395,6 +417,11 @@ def run_disaggregated_prefill_decode():
         )
         logger.info("Decode node complete.")
         logger.info(f"Full output: {prompt}{generated_text}")
+
+    # Cleanup socket before closing device
+    # MeshSocket resources are released when the object is deleted.
+    # Explicit deletion ensures socket teardown completes before device close.
+    del socket
 
     # Synchronize before cleanup
     ttnn.distributed_context_barrier()
