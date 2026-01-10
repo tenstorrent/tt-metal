@@ -114,7 +114,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
                 program = std::move(cached_program.program);
                 matmul_shared_variables = std::move(cached_program.shared_variables);
             },
-            [&](const auto& config) {
+            [&](const auto& /*config*/) {
                 TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
             }},
         program_config);
@@ -263,7 +263,7 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
                          {tensor_return_value[1]}},
                         matmul_output_tensors);
                 },
-                [&](const auto& config) {
+                [&](const auto& /*config*/) {
                     TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
                 }},
             shared_vars.matmul_shared_variables);
