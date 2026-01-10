@@ -99,19 +99,14 @@ def tt_all_reduce(
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
             input_tensor_sharded.deallocate(True)
 
-        reduced = ttnn.experimental.reduce_scatter_minimal_async(
+        # FIX: Use simplified synchronous reduce_scatter API
+        reduced = ttnn.reduce_scatter(
             input_tensor,
-            persistent_output_buffers=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=num_reduce_scatter_links,
+            cluster_axis=None,  # For N300/T3K
             memory_config=memory_config,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_links=num_reduce_scatter_links,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
         )
         input_tensor.deallocate(True)
         return reduced
@@ -158,20 +153,14 @@ def tt_all_reduce(
     else:
         input_mem_cfg = input_tensor.memory_config()
 
-        reduced_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+        # FIX: Use simplified synchronous reduce_scatter API
+        reduced_tensor = ttnn.reduce_scatter(
             input_tensor,
-            persistent_output_buffers=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            num_links=num_reduce_scatter_links,
             cluster_axis=cluster_axis,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_links=num_reduce_scatter_links,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
         )
 
         reduced_tensor = ttnn.experimental.all_gather_async(
