@@ -112,7 +112,58 @@ def test_resnet(device):
     nn_to_nn = {
         YUNet_nn.Head: RewrittenHead,
     }
-    modules = register_module_replacement_dict(model, nn_to_nn, model_config={"program_config_ffn": {}})
+    model_config = {
+        "backbone.p1.0.conv": {"input_shapes": [[1, 224, 224, 3]], "reshape_output": False},
+        "backbone.p1.1.conv1": {"input_shapes": [[1, 112, 112, 16]], "reshape_output": False},
+        "backbone.p1.1.conv2.conv": {"input_shapes": [[1, 112, 112, 16]], "reshape_output": False},
+        "backbone.p2.0": {"input_shapes": [[1, 112, 112, 16]], "reshape_output": False},
+        "backbone.p2.1.conv1": {"input_shapes": [[1, 56, 56, 16]], "reshape_output": False},
+        "backbone.p2.1.conv2.conv": {"input_shapes": [[1, 56, 56, 64]], "reshape_output": False},
+        "backbone.p2.2.conv1": {"input_shapes": [[1, 56, 56, 64]], "reshape_output": False},
+        "backbone.p2.2.conv2.conv": {"input_shapes": [[1, 56, 56, 64]], "reshape_output": True},
+        "backbone.p2.3.conv1": {"input_shapes": [[1, 56, 56, 64]], "reshape_output": False},
+        "backbone.p2.3.conv2.conv": {"input_shapes": [[1, 56, 56, 64]], "reshape_output": True},
+        "backbone.p3.0": {"input_shapes": [[1, 56, 56, 64]], "reshape_output": False},
+        "backbone.p3.1.conv1": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": False},
+        "backbone.p3.1.conv2.conv": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": False},
+        "backbone.p3.2.conv1": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": False},
+        "backbone.p3.2.conv2.conv": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": True},
+        "backbone.p4.0": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": False},
+        "backbone.p4.1.conv1": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": False},
+        "backbone.p4.1.conv2.conv": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": False},
+        "backbone.p4.2.conv1": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": False},
+        "backbone.p4.2.conv2.conv": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": True},
+        "backbone.p5.0": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": False},
+        "backbone.p5.1.conv1": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": False},
+        "backbone.p5.1.conv2.conv": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": False},
+        "backbone.p5.2.conv1": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": False},
+        "backbone.p5.2.conv2.conv": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": True},
+        "neck.conv1.conv1": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": True},
+        "neck.conv1.conv2.conv": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": True},
+        "neck.conv2.conv1": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": True},
+        "neck.conv2.conv2.conv": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": True},
+        "neck.conv3.conv1": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": True},
+        "neck.conv3.conv2.conv": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": True},
+        "head.m.0.conv1": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": True},
+        "head.m.0.conv2.conv": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": True},
+        "head.m.1.conv1": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": True},
+        "head.m.1.conv2.conv": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": True},
+        "head.m.2.conv1": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": True},
+        "head.m.2.conv2.conv": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": True},
+        "head.cls.0": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": True},
+        "head.cls.1": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": True},
+        "head.cls.2": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": True},
+        "head.box.0": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": True},
+        "head.box.1": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": True},
+        "head.box.2": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": True},
+        "head.obj.0": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": True},
+        "head.obj.1": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": True},
+        "head.obj.2": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": True},
+        "head.kpt.0": {"input_shapes": [[1, 28, 28, 64]], "reshape_output": True},
+        "head.kpt.1": {"input_shapes": [[1, 14, 14, 64]], "reshape_output": True},
+        "head.kpt.2": {"input_shapes": [[1, 7, 7, 64]], "reshape_output": True},
+    }
+    modules = register_module_replacement_dict(model, nn_to_nn, model_config=model_config)
 
     nn_to_ttnn = {
         nn.Linear: TTNNLinear,
@@ -121,9 +172,13 @@ def test_resnet(device):
         nn.MaxPool2d: TTNNMaxPool2dNHWC,
         nn.Upsample: TTNNUpsampleNHWC,
     }
-    modules = register_module_replacement_dict(model, nn_to_ttnn, model_config={"program_config_ffn": {}})
+    modules = register_module_replacement_dict(model, nn_to_ttnn, model_config=model_config)
     set_device(model, device)
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
     result = model(torch.randn(1, 224, 224, 3, dtype=torch.bfloat16))
+    # DispatchManager.clear_timings()
+    # for i in range(60):
+    #     _ = model(torch.randn(1, 224, 224, 3, dtype=torch.bfloat16))
+    # DispatchManager.save_stats_to_file("yunet_timing_stats.csv")
     print(result)
