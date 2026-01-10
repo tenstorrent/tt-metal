@@ -21,6 +21,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 #include <algorithm>
 #include <cmath>

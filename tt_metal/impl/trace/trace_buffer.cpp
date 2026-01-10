@@ -10,6 +10,8 @@
 
 #include "buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <fmt/core.h>
+#include <fmt/ranges.h>
 
 namespace tt::tt_metal {
 
@@ -28,8 +30,8 @@ void TraceBuffer::validate() {
     std::vector<uint32_t> backdoor_data;
     detail::ReadFromBuffer(this->buffer, backdoor_data);
     if (backdoor_data != this->desc->data) {
-        log_error(LogMetalTrace, "Trace buffer expected: {}", this->desc->data);
-        log_error(LogMetalTrace, "Trace buffer observed: {}", backdoor_data);
+        log_error(LogMetalTrace, "Trace buffer expected: {}", fmt::join(this->desc->data, ", "));
+        log_error(LogMetalTrace, "Trace buffer observed: {}", fmt::join(backdoor_data, ", "));
     }
     // add more checks
 }

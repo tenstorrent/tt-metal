@@ -21,6 +21,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
