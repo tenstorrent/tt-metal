@@ -228,7 +228,7 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     command = f'pytest "models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_ff_matmul_with_gelu_sdxl" -v'
     subdir = f"ff_matmul_with_gelu_sdxl_perf"
     cols = ["DEVICE KERNEL"]
-    op_name = "Matmul"
+    op_name = "MatmulDeviceOperation"
 
     # Run the performance test and get detailed results
     results = run_device_perf_detailed(

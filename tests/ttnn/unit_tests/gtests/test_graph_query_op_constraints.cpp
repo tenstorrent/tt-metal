@@ -33,7 +33,7 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
