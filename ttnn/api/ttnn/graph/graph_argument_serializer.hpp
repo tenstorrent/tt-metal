@@ -13,6 +13,7 @@
 
 namespace ttnn::graph {
 std::string graph_demangle(std::string_view name);
+std::string sanitize_utf8(const std::string& str);
 
 class GraphArgumentSerializer {
 public:

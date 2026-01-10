@@ -11,6 +11,19 @@
 #include <tt_stl/optional_reference.hpp>
 #include <type_traits>
 
+// Include headers for additional types
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_operation_types.hpp"
+#include "ttnn/operations/transformer/sdpa_config.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
+#include "ttnn/operations/embedding/device/embedding_device_operation_types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include <umd/device/types/xy_pair.hpp>
+
 std::ostream& operator<<(std::ostream& os, const std::vector<bool>& value) {
     os << "[";
     for (size_t i = 0; i < value.size(); ++i) {
@@ -24,6 +37,73 @@ std::ostream& operator<<(std::ostream& os, const std::vector<bool>& value) {
 }
 
 namespace ttnn::graph {
+
+// Helper function to sanitize strings for JSON serialization
+// Replaces invalid UTF-8 sequences with replacement character (U+FFFD)
+std::string sanitize_utf8(const std::string& str) {
+    std::string result;
+    result.reserve(str.size());
+
+    for (size_t i = 0; i < str.size();) {
+        unsigned char c = str[i];
+
+        // ASCII character (0x00-0x7F)
+        if (c < 0x80) {
+            result.push_back(c);
+            i++;
+        }
+        // 2-byte UTF-8 (0xC0-0xDF)
+        else if ((c >= 0xC0) && (c < 0xE0)) {
+            if (i + 1 < str.size() && (str[i + 1] & 0xC0) == 0x80) {
+                result.push_back(c);
+                result.push_back(str[i + 1]);
+                i += 2;
+            } else {
+                // Invalid sequence, use replacement character
+                result.append("\\uFFFD");
+                i++;
+            }
+        }
+        // 3-byte UTF-8 (0xE0-0xEF)
+        else if ((c >= 0xE0) && (c < 0xF0)) {
+            if (i + 2 < str.size() && (str[i + 1] & 0xC0) == 0x80 && (str[i + 2] & 0xC0) == 0x80) {
+                result.push_back(c);
+                result.push_back(str[i + 1]);
+                result.push_back(str[i + 2]);
+                i += 3;
+            } else {
+                // Invalid sequence, use replacement character
+                result.append("\\uFFFD");
+                i++;
+            }
+        }
+        // 4-byte UTF-8 (0xF0-0xF7)
+        else if ((c >= 0xF0) && (c < 0xF8)) {
+            if (i + 3 < str.size() && (str[i + 1] & 0xC0) == 0x80 && (str[i + 2] & 0xC0) == 0x80 &&
+                (str[i + 3] & 0xC0) == 0x80) {
+                result.push_back(c);
+                result.push_back(str[i + 1]);
+                result.push_back(str[i + 2]);
+                result.push_back(str[i + 3]);
+                i += 4;
+            } else {
+                // Invalid sequence, use replacement character
+                result.append("\\uFFFD");
+                i++;
+            }
+        }
+        // Invalid UTF-8 start byte (0x80-0xBF, 0xF8-0xFF)
+        else {
+            // Replace with hex escape sequence for debugging
+            char hex[8];
+            snprintf(hex, sizeof(hex), "\\x%02X", c);
+            result.append(hex);
+            i++;
+        }
+    }
+
+    return result;
+}
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
     tt::stl::reflection::operator<<(os, tensor);
@@ -91,7 +171,145 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::experimental::Glo
     return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const tt::xy_pair& value) {
+    os << value.str();
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ttnn::TileReshapeMapMode& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ttnn::operations::embedding::EmbeddingsType& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os, const ttnn::operations::normalization::LayerNormDefaultProgramConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os, const ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ttnn::operations::normalization::SoftmaxDefaultProgramConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os, const ttnn::operations::normalization::SoftmaxShardedMultiCoreProgramConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ttnn::operations::transformer::SDPAProgramConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ttnn::operations::conv::conv2d::Conv2dConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ttnn::operations::op_slicing::Op2DSliceConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+// Compute kernel config types
+std::ostream& operator<<(std::ostream& os, const ttnn::GrayskullComputeKernelConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ttnn::WormholeComputeKernelConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+// Matmul program config types
+std::ostream& operator<<(std::ostream& os, const ttnn::operations::matmul::MatmulMultiCoreProgramConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os, const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os, const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os, const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+// BasicUnaryWithParam template operators
+template <typename... Ts>
+std::ostream& operator<<(std::ostream& os, const ttnn::operations::unary::BasicUnaryWithParam<Ts...>& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+// Variant operators - must be defined after all element type operators
 std::ostream& operator<<(std::ostream& os, const std::variant<float, tt::tt_metal::Tensor>& value) {
+    std::visit([&os](const auto& v) { os << v; }, value);
+    return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os, const std::variant<std::string, ttnn::operations::unary::BasicUnaryWithParam<float>>& value) {
+    std::visit([&os](const auto& v) { os << v; }, value);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ttnn::operations::normalization::LayerNormProgramConfig& value) {
+    std::visit([&os](const auto& v) { os << v; }, value);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ttnn::operations::normalization::SoftmaxProgramConfig& value) {
+    std::visit([&os](const auto& v) { os << v; }, value);
+    return os;
+}
+
+// Compute kernel config variant
+std::ostream& operator<<(
+    std::ostream& os,
+    const std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>& value) {
+    std::visit([&os](const auto& v) { os << v; }, value);
+    return os;
+}
+
+// Matmul program config variant
+std::ostream& operator<<(
+    std::ostream& os,
+    const std::variant<
+        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>& value) {
     std::visit([&os](const auto& v) { os << v; }, value);
     return os;
 }
@@ -465,7 +683,24 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<uint32_t>();
     GraphArgumentSerializer::register_type<uint64_t>();
     GraphArgumentSerializer::register_type<int32_t>();
-    GraphArgumentSerializer::register_type<std::string>();
+
+    // Custom handler for std::string to sanitize UTF-8
+    GraphArgumentSerializer::ConvertionFunction string_function = [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        if (value.type() == typeid(std::reference_wrapper<std::string>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<std::string>>(value);
+            oss << sanitize_utf8(referenced_value.get());
+        } else if (value.type() == typeid(std::reference_wrapper<const std::string>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<const std::string>>(value);
+            oss << sanitize_utf8(referenced_value.get());
+        } else {
+            oss << "Unable to parse string";
+        }
+        return oss.str();
+    };
+    registry()[typeid(std::reference_wrapper<std::string>)] = string_function;
+    registry()[typeid(std::reference_wrapper<const std::string>)] = string_function;
+    registry()[typeid(const std::reference_wrapper<std::string>)] = string_function;
     GraphArgumentSerializer::register_type<tt::tt_metal::DataType>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Layout>();
     GraphArgumentSerializer::register_type<tt::tt_metal::MemoryConfig>();
@@ -499,6 +734,68 @@ void GraphArgumentSerializer::initialize() {
 
     GraphArgumentSerializer::register_type<tt::tt_metal::experimental::GlobalCircularBuffer>();
     GraphArgumentSerializer::register_type<tt::tt_metal::IDevice>();
+    // Unary operation types
+    GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<float>>();
+    GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<int>>();
+    GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<unsigned int>>();
+    GraphArgumentSerializer::register_type<ttnn::operations::unary::BasicUnaryWithParam<float, int, unsigned int>>();
+
+    // Variant of string and BasicUnaryWithParam (used in some operations)
+    GraphArgumentSerializer::register_type<
+        std::variant<std::string, ttnn::operations::unary::BasicUnaryWithParam<float>>>();
+
+    // Reshape mode
+    GraphArgumentSerializer::register_type<ttnn::TileReshapeMapMode>();
+
+    // Program configs - LayerNorm
+    GraphArgumentSerializer::register_type<ttnn::operations::normalization::LayerNormDefaultProgramConfig>();
+    GraphArgumentSerializer::register_type<ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>();
+    GraphArgumentSerializer::register_type<ttnn::operations::normalization::LayerNormProgramConfig>();
+
+    // Program configs - Softmax
+    GraphArgumentSerializer::register_type<ttnn::operations::normalization::SoftmaxDefaultProgramConfig>();
+    GraphArgumentSerializer::register_type<ttnn::operations::normalization::SoftmaxShardedMultiCoreProgramConfig>();
+    GraphArgumentSerializer::register_type<ttnn::operations::normalization::SoftmaxProgramConfig>();
+
+    // SDPA config
+    GraphArgumentSerializer::register_type<ttnn::operations::transformer::SDPAProgramConfig>();
+
+    // Conv2d config
+    GraphArgumentSerializer::register_type<ttnn::operations::conv::conv2d::Conv2dConfig>();
+
+    // Op slicing config
+    GraphArgumentSerializer::register_type<ttnn::operations::op_slicing::Op2DSliceConfig>();
+
+    // Embedding type
+    GraphArgumentSerializer::register_type<ttnn::operations::embedding::EmbeddingsType>();
+
+    // Fabric topology
+    GraphArgumentSerializer::register_type<tt::tt_fabric::Topology>();
+
+    // xy_pair
+    GraphArgumentSerializer::register_type<tt::xy_pair>();
+
+    // Compute kernel configs
+    GraphArgumentSerializer::register_type<ttnn::GrayskullComputeKernelConfig>();
+    GraphArgumentSerializer::register_type<ttnn::WormholeComputeKernelConfig>();
+    GraphArgumentSerializer::register_type<
+        std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>>();
+
+    // Matmul program configs
+    GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreProgramConfig>();
+    GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>();
+    GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>();
+    GraphArgumentSerializer::register_type<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>();
+    GraphArgumentSerializer::register_type<
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>();
+    GraphArgumentSerializer::register_type<std::variant<
+        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>>();
+
+    // Note: std::nullopt_t is already handled specially and cannot be registered as a template parameter
 }
 
 }  // namespace ttnn::graph
