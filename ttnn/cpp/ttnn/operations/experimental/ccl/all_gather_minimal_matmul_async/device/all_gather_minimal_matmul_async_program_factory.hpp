@@ -30,9 +30,22 @@ all_gather_minimal_matmul_async_factory_helper(
     const std::optional<const Tensor>& bias_tensor,
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const std::optional<const AllGatherMinimalMatmulAsyncConfig>& config,
-    const Tensor& output_tensor,
+    const Tensor& mm_output_tensor,
+    const Tensor& ag_output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler);
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const uint32_t chunks_per_sync,
+    const uint32_t num_workers_per_direction,
+    const uint32_t num_buffers_per_channel);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_minimal_matmul_async_factory(
     const Tensor& input_tensor,
@@ -40,8 +53,22 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_minimal_matmul_async_fa
     const std::optional<const Tensor>& bias_tensor,
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const std::optional<const AllGatherMinimalMatmulAsyncConfig>& config,
-    const Tensor& output_tensor,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const Tensor& mm_output_tensor,
+    const Tensor& ag_output_tensor,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const uint32_t chunks_per_sync,
+    const uint32_t num_workers_per_direction,
+    const uint32_t num_buffers_per_channel);
 
 }  // namespace detail
 }  // namespace ttnn::operations::experimental::all_gather_minimal_matmul_async

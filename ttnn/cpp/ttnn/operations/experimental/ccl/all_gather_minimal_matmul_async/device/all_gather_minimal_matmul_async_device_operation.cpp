@@ -167,36 +167,91 @@ std::vector<TensorSpec> AllGatherMinimalMatmulAsyncOp::compute_output_specs(
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
     uint32_t N = in1_input_tensor_shape[-1];
 
+    ttnn::Shape intermediate_shape(in0_input_tensor_shape);
+    intermediate_shape[-1] = intermediate_shape[-1] * this->ring_size;
+
     ttnn::Shape output_shape(in0_input_tensor_shape);
     output_shape[-1] = N;
 
     const auto& memory_config = this->output_mem_config.value_or(in0_input_tensor.memory_config());
     auto dtype = this->output_dtype.value_or(in0_input_tensor.dtype());
 
-    return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
+    return {
+        TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)),
+        TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
 }
 
 std::vector<Tensor> AllGatherMinimalMatmulAsyncOp::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, {});
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    std::vector<Tensor> output_tensors;
+    const auto& device = input_tensors.at(0).device();
+    const auto& output_specs = this->compute_output_specs(input_tensors);
+    output_tensors.reserve(output_specs.size());
+
+    if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
+        output_tensors.emplace_back(optional_output_tensors[0].value());
+        output_tensors.emplace_back(create_device_tensor(output_specs[1], device));
+    } else {
+        for (const auto& output_spec : output_specs) {
+            output_tensors.emplace_back(create_device_tensor(output_spec, device));
+        }
+    }
+
+    return output_tensors;
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllGatherMinimalMatmulAsyncOp::create_program(
+tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherMinimalMatmulAsyncOp::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
+    return ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, optional_input_tensors, output_tensors);
+        });
+}
+
+tt::tt_metal::operation::ProgramWithCallbacks AllGatherMinimalMatmulAsyncOp::create_program_at(
+    const MeshCoordinate& coord,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
+
+    std::optional<MeshCoordinate> forward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
+
     const auto& act_tensor = input_tensors.at(0);
     const auto& weight_tensor = input_tensors.at(1);
     const auto& bias_tensor = optional_input_tensors.at(0);
-    const auto& output_tensor = output_tensors.at(0);
+    const auto& ag_output_tensor = output_tensors.at(0);
+    const auto& mm_output_tensor = output_tensors.at(1);
     return detail::all_gather_minimal_matmul_async_factory(
         act_tensor,
         weight_tensor,
         bias_tensor,
         this->fused_activation,
         this->config,
-        output_tensor,
-        compute_kernel_config);
+        mm_output_tensor,
+        ag_output_tensor,
+        compute_kernel_config,
+        coord,
+        forward_coord,
+        backward_coord,
+        this->num_links,
+        this->ring_size,
+        device_index,
+        this->topology,
+        this->semaphore,
+        this->barrier_semaphore,
+        this->using_persistent_buffers,
+        this->chunks_per_sync,
+        this->num_workers_per_link,
+        this->num_buffers_per_channel);
 }
 
 }  // namespace ttnn::operations::experimental::all_gather_minimal_matmul_async
