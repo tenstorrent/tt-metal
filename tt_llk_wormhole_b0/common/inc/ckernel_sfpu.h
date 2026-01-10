@@ -59,29 +59,3 @@
 #include "sfpu/ckernel_sfpu_typecast.h"
 #include "sfpu/ckernel_sfpu_welfords.h"
 #include "sfpu/ckernel_sfpu_where.h"
-
-// namespace ckernel
-// {
-// namespace sfpu
-// {
-
-/*
-template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE, bool SCALE_EN>
-void calculate_cube(uint16_t exp_base_scale_factor = 0)
-{
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, 0); // load from dest
-        TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-        TTI_SFPNOP; TTI_SFPNOP;
-        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG2, 0);
-        TTI_SFPNOP; TTI_SFPNOP;
-        TTI_SFPSTORE(p_sfpu::LREG2, 0, 0); // Store from lreg[1] into dest registers
-        TTI_INCRWC(0, 2, 0, 0);
-    }
-}
-*/
-
-// } // namespace sfpu
-// } // namespace ckernel
