@@ -176,13 +176,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
 inline void eltwise_unary_configure_addrmod(const uint dst_format)
 {
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_3);
-
     // Use srcA for data movement
     if constexpr (type == A2D)
     {
@@ -200,6 +193,16 @@ inline void eltwise_unary_configure_addrmod(const uint dst_format)
             .dest = {.incr = 8},
         }
             .set(ADDR_MOD_2);
+
+        if constexpr (bcast_type != BroadcastType::NONE)
+        {
+            addr_mod_t {
+                .srca = {.incr = 0},
+                .srcb = {.incr = 0},
+                .dest = {.incr = 0},
+            }
+                .set(ADDR_MOD_3);
+        }
     }
     else
     {
