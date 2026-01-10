@@ -29,6 +29,9 @@ from transformers import AutoTokenizer
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs
 
+DEFAULT_PROMPT = "Explain the concept of machine learning in detail:"
+DEFAULT_MAX_NEW_TOKENS = 50
+
 
 def setup_kv_cache_sockets(device, mesh_shape, num_layers):
     """
@@ -230,7 +233,8 @@ def run_decode_node(device, model, model_args, kv_cache, recv_socket, tokenizer,
 
     t_decode_start = time.perf_counter()
     decode_times = []
-    for step in range(max_new_tokens):
+    step = 0
+    while True:
         t_step_start = time.perf_counter()
 
         # Prepare decode input (single token)
@@ -265,9 +269,16 @@ def run_decode_node(device, model, model_args, kv_cache, recv_socket, tokenizer,
         current_token = next_token
         current_pos += 1
 
+        step += 1
+
         # Check for EOS
         if next_token == tokenizer.eos_token_id:
             logger.info(f"EOS token detected at step {step}")
+            break
+
+        # Check for max tokens limit
+        if step >= max_new_tokens:
+            logger.info(f"Reached max_new_tokens limit ({max_new_tokens})")
             break
 
     # Decode timing summary
@@ -336,10 +347,8 @@ def run_disaggregated_prefill_decode():
     # Setup sockets for KV cache transfer
     socket_config = setup_kv_cache_sockets(device, mesh_shape, model_args.n_layers)
 
-    # The prompt to process - can be overridden by environment variable
-    import os
-
-    prompt = os.environ.get("PROMPT", "Quick brown fox")
+    # The prompt to process
+    prompt = DEFAULT_PROMPT
 
     logger.info(f"Prompt: '{prompt}'")
 
@@ -364,17 +373,11 @@ def run_disaggregated_prefill_decode():
         logger.info(f"Tokenized: {tokens.tolist()}")
 
         # Pad tokens to be divisible by 128 (model requirement)
-        # TARGET_SEQ_LEN env var can force a specific sequence length for stress testing
         actual_seq_len = tokens.shape[1]
         pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
 
-        target_seq_len = int(os.environ.get("TARGET_SEQ_LEN", "0"))
-        if target_seq_len > 0:
-            # Force specific sequence length for stress testing
-            padded_len = target_seq_len
-        else:
-            # Round up to nearest multiple of 128
-            padded_len = ((actual_seq_len + 127) // 128) * 128
+        # Round up to nearest multiple of 128
+        padded_len = ((actual_seq_len + 127) // 128) * 128
 
         if padded_len > actual_seq_len:
             padding = torch.full((1, padded_len - actual_seq_len), pad_token_id, dtype=tokens.dtype)
@@ -387,10 +390,8 @@ def run_disaggregated_prefill_decode():
         logger.info(f"Prefill node complete. First generated token: {tokenizer.decode([next_token.item()])}")
     else:
         # === DECODE NODE ===
-        # Get max_new_tokens from env, default to 50 for longer generation tests
-        max_new_tokens = int(os.environ.get("MAX_NEW_TOKENS", "50"))
         generated_tokens, generated_text = run_decode_node(
-            device, model, model_args, kv_cache, socket, tokenizer, max_new_tokens=max_new_tokens
+            device, model, model_args, kv_cache, socket, tokenizer, max_new_tokens=DEFAULT_MAX_NEW_TOKENS
         )
         logger.info("Decode node complete.")
         logger.info(f"Full output: {prompt}{generated_text}")
