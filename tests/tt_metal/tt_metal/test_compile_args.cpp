@@ -12,6 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "impl/program/program.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

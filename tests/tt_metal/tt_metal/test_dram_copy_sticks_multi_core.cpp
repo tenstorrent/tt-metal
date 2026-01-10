@@ -30,6 +30,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "impl/program/program.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

@@ -44,6 +44,7 @@
 // Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels, get_kernel
 #include "impl/program/program_impl.hpp"
 #include "impl/buffers/circular_buffer.hpp"
+#include "impl/program/program.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

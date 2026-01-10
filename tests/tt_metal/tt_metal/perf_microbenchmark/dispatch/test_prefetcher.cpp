@@ -19,6 +19,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 #include <impl/dispatch/dispatch_query_manager.hpp>
+#include "impl/program/program.hpp"
 
 /*
  * FAST PREFETCHER MICROBENCHMARK SUITE

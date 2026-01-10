@@ -35,6 +35,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/program/program.hpp"
 
 using namespace tt;
 

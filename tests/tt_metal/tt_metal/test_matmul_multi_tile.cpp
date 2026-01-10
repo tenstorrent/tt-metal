@@ -13,6 +13,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 
 #include "test_common.hpp"
+#include "impl/program/program.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

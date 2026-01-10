@@ -14,6 +14,7 @@
 #include <tt_metal.hpp>
 #include "common/executor.hpp"
 #include "context/metal_context.hpp"
+#include "impl/device/device.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>

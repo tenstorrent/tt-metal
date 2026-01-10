@@ -27,6 +27,7 @@
 #include "impl/kernels/kernel.hpp"
 // Access to internal API: ProgramImpl::get_kernels
 #include "impl/program/program_impl.hpp"
+#include "impl/program/program.hpp"
 
 using namespace tt::tt_metal;
 

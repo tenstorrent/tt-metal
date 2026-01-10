@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "impl/program/program.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 

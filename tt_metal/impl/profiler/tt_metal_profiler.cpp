@@ -51,6 +51,7 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
+#include "impl/program/program.hpp"
 #include "device/device_manager.hpp"
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"

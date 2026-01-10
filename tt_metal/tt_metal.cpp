@@ -34,6 +34,7 @@
 #include <filesystem>
 #include "device.hpp"
 #include "context/metal_context.hpp"
+#include "impl/device/device.hpp"
 #include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
@@ -48,6 +49,7 @@
 #include <tt_metal_profiler.hpp>
 #include <program.hpp>
 #include "program/program_impl.hpp"
+#include "impl/program/program.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>

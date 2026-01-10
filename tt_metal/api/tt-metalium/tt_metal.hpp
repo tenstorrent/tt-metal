@@ -33,8 +33,6 @@ class Program;
 
 namespace detail {
 
-bool DispatchStateCheck(bool isFastDispatch);
-
 std::map<ChipId, IDevice*> CreateDevices(
     // TODO: delete this in favour of DeviceManager
     const std::vector<ChipId>& device_ids,
@@ -61,6 +59,36 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices);
  * | device_id   | ID of the device to look for                    | ChipId                  | Valid device IDs | Yes |
  */
 IDevice* GetActiveDevice(ChipId device_id);
+
+void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);
+/**
+ * Copies data from a buffer into a host buffer
+ *
+ * Return value: void
+ *
+ * | Argument    | Description                                     | Data type               | Valid range | Required |
+ * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
+ * | buffer      | Buffer to read data from                        | Buffer &                | | Yes      | |
+ * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | | core_id | ID
+ * of core                                      | const uint32_t &        | | Yes      |
+ */
+template <typename DType>
+void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& core_id) {
+    host_buffer.resize(buffer.page_size() * buffer.shard_spec().num_pages());
+    ReadShard(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), core_id);
+}
+
+/**
+ * Return the name of the architecture present.
+ *
+ * Return value: std::string
+ */
+std::string get_platform_architecture_name();
+
+}  // namespace detail
+
+// TODO: functions below are to be moved out of the api directory and dispersed
+namespace detail {
 
 /**
  * Copies data from a host buffer into the specified buffer
@@ -119,81 +147,6 @@ template <typename DType>
 void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<DType>& host_buffer) {
     ReadFromBuffer(*buffer, host_buffer);
 }
-
-void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);
-/**
- * Copies data from a buffer into a host buffer
- *
- * Return value: void
- *
- * | Argument    | Description                                     | Data type               | Valid range | Required |
- * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
- * | buffer      | Buffer to read data from                        | Buffer &                | | Yes      | |
- * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | | core_id | ID
- * of core                                      | const uint32_t &        | | Yes      |
- */
-template <typename DType>
-void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& core_id) {
-    host_buffer.resize(buffer.page_size() * buffer.shard_spec().num_pages());
-    ReadShard(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), core_id);
-}
-
-// Launches all kernels on cores specified with kernels in the program.
-// All kernels on a given Tensix core must be launched.
-void LaunchProgram(
-    IDevice* device, Program& program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
-void LaunchProgram(
-    IDevice* device,
-    const std::shared_ptr<Program>& program,
-    bool wait_until_cores_done = true,
-    bool force_slow_dispatch = false);
-void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results = true);
-
-/**
- *  Compiles all kernels within the program, and generates binaries that are written to
- * `<tt-metal-cache directory>/<build_key>/kernels/<kernel name>/<kernel hash>`
- *
- *  The build key component accounts for device architecture as binaries are not compatible across architectures.
- *  To speed up compilation there is a kernel compilation cache that skips over generating binaries for the previously
- * compiled kernels. Kernel uniqueness is determined by the kernel hash which is computed based on compile time args,
- * defines, and kernel type specific attributes such as NOC for data movement kernels and math fidelity for compute
- * kernels.
- *  On cache hits the kernel is not recompiled if the output binary directory exists, otherwise the kernel is compiled.
- *  This cache is static and is enabled for the duration of the running process.
- *  Across runs, previously compiled kernels are recompiled if the source code or dependencies have changed.
- *
- *  Return value: void
- *
- * | Argument                  | Description                                                      | Type      | Valid
- * Range                                        | Required |
- * |---------------------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
- * | device                    | Which device the program is compiled for                         | IDevice*  | Must be
- * initialized via tt_metal::InitializeDevice | Yes      | | program                   | The program to compile |
- * Program & |                                                    | Yes      | | force_slow_dispatch        | Set when
- * a user wants to compile a program with Slow Dispatch Force Enabled (advanced feature, currently used internally to
- * launch Fast Dispatch Firmware and in the Device Performance Profiler)           | bool      | | No |
- */
-void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
-
-/**
- * Writes runtime args that are saved in the program to device
- *
- * Return value: void
- *
- * | Argument            | Description                                                            | Type | Valid Range
- * | Required |
- * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device              | The device to whcih runtime args will be written                       | IDevice* | | Yes |
- * | program             | The program holding the runtime args                                   | const Program & | |
- * Yes      |
- */
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
-
-// Configures a given device with a given program.
-// - Loads all kernel binaries into L1s of assigned Tensix cores
-// - Configures circular buffers (inits regs with buffer data)
-// - Takes the device out of reset
-bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
  * Generate a (unique) per device ID for a program (potentially) running across multiple devices. The generated ID is
@@ -380,13 +333,6 @@ bool ReadFromDeviceL1(
     CoreType core_type = CoreType::WORKER);
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
-
-/**
- * Return the name of the architecture present.
- *
- * Return value: std::string
- */
-std::string get_platform_architecture_name();
 
 }  // namespace detail
 }  // namespace tt::tt_metal

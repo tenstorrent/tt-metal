@@ -57,6 +57,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
+#include "impl/program/program.hpp"
 
 using std::vector;
 using namespace tt;

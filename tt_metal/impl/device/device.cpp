@@ -36,6 +36,7 @@
 #include "program/program_impl.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
+#include "impl/device/device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
@@ -45,6 +46,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include "tt-metalium/program.hpp"
+#include "impl/program/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"

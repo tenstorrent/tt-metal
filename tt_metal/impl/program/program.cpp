@@ -59,6 +59,7 @@
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
 #include "tt-metalium/program.hpp"
+#include "impl/program/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
