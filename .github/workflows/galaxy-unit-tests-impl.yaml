@@ -105,7 +105,8 @@ jobs:
             # { "name": "Galaxy Llama3-70b unit tests", "arch": "wormhole_b0", "model": "llama3-70b", "timeout": 30, "owner_id": "U053W15B6JF", "mlperf": true },
             # { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" },
             { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 10, "owner_id": "U08TJ70UFRT", "mlperf": true },
-            { "name": "Galaxy distributed ops tests", "arch": "wormhole_b0", "model": "distributed-ops", "timeout": 10, "owner_id": "U044T8U8DEF" }
+            { "name": "Galaxy distributed ops tests", "arch": "wormhole_b0", "model": "distributed-ops", "timeout": 10, "owner_id": "U044T8U8DEF" },
+            { "name": "Galaxy tttv2 tests", "arch": "wormhole_b0", "model": "tttv2", "timeout": 5, "owner_id": "U07RY6B5FLJ", "mlperf": true} # Gongyu Wang
           ]')
 
           # Filter matrix based on model selection
@@ -235,6 +236,32 @@ jobs:
 
           HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
             pytest -n auto models/demos/gpt_oss/tests/unit -k "4x8" --timeout 900
+
+      - name: Run tttv2 module tests
+        if: ${{ matrix.test-group.model == 'tttv2' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          HF_HUB_OFFLINE: 1
+          HF_HOME: /mnt/MLPerf/huggingface
+          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
+        run: |
+          # All tests run, and this step fails if any test failed.
+          failed=0
+
+          pytest --durations-min=3.0 models/common/tests/modules/mlp/test_mlp_2d.py \
+            -m "not slow" \
+            --tb=short \
+            --cov=models.common.modules.mlp.mlp_2d \
+            --cov-report=term-missing \
+            --cov-config=models/common/tests/setup.cfg || failed=1
+
+          pytest --durations-min=3.0 models/common/tests/test_auto_compose.py \
+            --tb=short \
+            --cov=models.common.auto_compose \
+            --cov-report=term-missing \
+            --cov-config=models/common/tests/setup.cfg || failed=1
+
+          exit $failed
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

@@ -26,7 +26,7 @@ void bind_view(nb::module_& mod) {
             * In Layout::TILE the second last two dimensions must not change OR there is no padding on the second last dimension
         Args:
             * input_tensor: Input Tensor.
-            * new_shape: New shape of tensor.
+            * shape: Shape of tensor.
         Returns:
             ttnn.Tensor: the output tensor with the new shape.
         Example:

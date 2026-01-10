@@ -22,199 +22,59 @@ on:
         default: "in-service"
 
 jobs:
-  generate-matrix:
+  load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix: ${{ steps.load-test-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_unit_tests.yaml
     steps:
-      - name: Generate Matrix
-        id: set-matrix
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
         run: |
-          ALWAYS_RUN=$(jq -n '[
-            {
-              "name": "t3k ttmetal tests",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_ttmetal_tests",
-              "timeout": 40,
-              "owner_id": "ULMEPM2MA" # Sean Nijjar
-            },
-            {
-              "name": "t3k ttnn tests",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_ttnn_tests",
-              "timeout": 45,
-              "owner_id": "UBHPP2NDP" # Joseph Chu
-            },
-            {
-              "name": "t3k tt_metal multiprocess tests",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_tt_metal_multiprocess_tests",
-              "timeout": 15,
-              "owner_id": "U03NG0A5ND7" # Aditya Saigal
-            }
-            ]')
-
-          MODEL_TESTS=$(jq -n '[
-            {
-              "name": "t3k falcon7b tests",
-              "model": "falcon7b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_falcon7b_tests",
-              "timeout": 30,
-              "owner_id": "UBHPP2NDP" # Joseph Chu
-            },
-            {
-              "name": "t3k falcon40b tests",
-              "model": "falcon40b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_falcon40b_tests",
-              "timeout": 30,
-              "owner_id": "U053W15B6JF" # Djordje Ivanovic
-            },
-            {
-              "name": "t3k llama3-small tests",
-              "model": "llama3-small",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3-small_tests",
-              "timeout": 30,
-              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
-            },
-            {
-              "name": "t3k llama3.2-11b tests",
-              "model": "llama3.2-11b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3.2-11b_tests",
-              "timeout": 30,
-              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
-            },
-            {
-              "name": "t3k llama3.2-11b-vision tests",
-              "model": "llama3.2-11b-vision",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3.2-11b-vision_unit_tests",
-              "timeout": 30,
-              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
-            },
-            {
-              "name": "t3k n300 mesh llama3.2-11b-vision tests",
-              "model": "n300 mesh llama3.2-11b-vision",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests",
-              "timeout": 30,
-              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
-            },
-            {
-              "name": "t3k llama3.2-90b-vision tests",
-              "model": "llama3.2-90b-vision",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3.2-90b-vision_unit_tests",
-              "timeout": 30,
-              "label": "pipeline-functional",
-              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
-            },
-            # {
-            #   "name": "t3k llama3.1-70b tests",
-            #   "model": "llama3.1-70b",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_llama3.1-70b_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
-            # },
-            {
-              "name": "t3k llama3.2-90b tests",
-              "model": "llama3.2-90b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3.2-90b_tests",
-              "timeout": 30,
-              "label": "pipeline-functional",
-              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
-            },
-            {
-              "name": "t3k mistral tests",
-              "model": "mistral",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_mistral_tests",
-              "timeout": 30,
-              "owner_id": "U0896VBAKFC" # Praktikkumar Prajapati
-            },
-            {
-              "name": "t3k mixtral tests",
-              "model": "mixtral",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_mixtral_tests",
-              "timeout": 30,
-              "owner_id": "U03PUAKE719" # Harry Zhou
-            },
-            {
-              "name": "t3k grok tests",
-              "model": "grok",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_grok_tests",
-              "timeout": 30,
-              "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
-            },
-            {
-              "name": "t3k unet shallow tests",
-              "model": "unet shallow",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_unet_shallow_tests",
-              "timeout": 30,
-              "owner_id": "U06ECNVR0EN" # Evan Smal
-            },
-            {
-              "name": "t3k qwen25_vl tests",
-              "model": "qwen25_vl",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_qwen25_vl_unit_tests",
-              "timeout": 20,
-              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
-            },
-            {
-              "name": "t3k gemma3-small tests",
-              "model": "gemma3-small",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_gemma3-small_tests",
-              "timeout": 30,
-              "owner_id": "U08E1JCDVNX" # Pavle Petrovic
-            },
-            {
-              #Uses random weights for corresponding model initialization. Does not depend on MLPerf
-              "name": "t3k DiTs Image and Video Generation",
-              "model": "dits",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_tt_dit_tests",
-              "timeout": 20,
-              "owner_id": "U08TED0JM9D" # Samuel Adesoye
-            },
-            {
-              "name": "t3k gpt-oss unit tests",
-              "model": "gpt-oss",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_gpt_oss_unit_tests",
-              "timeout": 10,
-              "owner_id": "U08TJ70UFRT" # Harry Andrews
-            }
-          ]')
-
-          echo "[INFO] Selected model: ${{ inputs.model }}"
-          # Filter matrix based on model selection
-          if [ "${{ inputs.model }}" = "all" ]; then
-              MATRIX=$(jq -n -c --argjson MT "$MODEL_TESTS" --argjson AR "$ALWAYS_RUN" '$MT + $AR')
-            else
-              CHOSEN_MODEL=$(echo "$MODEL_TESTS" | jq --arg model "${{ inputs.model }}" '[.[] | select(.model == $model)]')
-              MATRIX=$(jq -n -c --argjson CM "$CHOSEN_MODEL" --argjson AR "$ALWAYS_RUN" '$CM + $AR')
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "unit"
+      - name: Load test matrix
+        id: load-test-matrix
+        run: |
+          set -e
+          # Install yq
+          YQ_VERSION="v4.44.1"
+          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          # Check if the file exists
+          if [ ! -f "$TESTS_YAML_PATH" ]; then
+            echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
+            exit 1
           fi
-
-          echo "[INFO] Tests to be run:"
-          echo $MATRIX | jq '.[].name'
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          # Sanitize line endings
+          sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
+          # Convert to JSON
+          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
+          # Filter by model if specified (model filtering not yet implemented in YAML format)
+          # For now, return all tests. Model filtering can be added later if needed.
+          echo "[INFO] Selected model: ${{ inputs.model }}"
+          echo "[INFO] Loading all tests from YAML (model filtering not yet implemented)"
+          # Print the JSON output
+          echo "Read contents of $TESTS_YAML_PATH and converted to JSON:"
+          echo "${json_output}"
+          echo "matrix=${json_output}" >> $GITHUB_OUTPUT
 
   t3000-unit-tests:
-    needs: generate-matrix
+    needs: load-test-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
@@ -227,7 +87,7 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: wormhole_b0
         HF_HUB_OFFLINE: 1
         HF_HOME: /mnt/MLPerf/huggingface
         LOGURU_LEVEL: INFO
@@ -254,11 +114,12 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Run unit regression tests
+      - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
+          echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

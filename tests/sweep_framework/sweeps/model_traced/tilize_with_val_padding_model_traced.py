@@ -5,9 +5,6 @@
 
 import torch
 import ttnn
-import math
-from tt_lib.utils import tilize as tilize_util
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -64,14 +61,6 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
-
-
-def invalidate_vector(test_vector) -> tuple:
-    """
-    No configs need to be skipped.
-    We'll adjust the layout in run() for bfloat8_b/bfloat4_b dtypes.
-    """
-    return False, None
 
 
 def run(

@@ -1,0 +1,103 @@
+# This file defines the test matrix for the T3000 perf tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The command to run in the script tests/scripts/t3000/run_t3000_perf_tests.sh.
+#   sku: Machine type to target (e.g. wh_llmbox).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   timeout: The maximum allowed runtime for this job in minutes.
+#   model-name: The model name for filtering (used with the model input parameter).
+#   model-type: The model type (LLM, CNN, DiT, ViT) for artifact naming.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: t3k_LLM_falcon7b_model_perf_tests
+  cmd: run_t3000_falcon7b_tests
+  sku: wh_llmbox
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  timeout: 75
+  model-name: falcon7b
+  model-type: LLM
+
+- name: t3k_LLM_falcon40b_model_perf_tests
+  cmd: run_t3000_falcon40b_tests
+  sku: wh_llmbox
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+  timeout: 75
+  model-name: falcon40b
+  model-type: LLM
+
+- name: t3k_CNN_resnet50_model_perf_tests
+  cmd: run_t3000_resnet50_tests
+  sku: wh_llmbox
+  owner_id: U0837MYG788 # Marko Radosavljevic
+  team: models
+  timeout: 75
+  model-name: resnet50
+  model-type: CNN
+
+- name: t3k_CNN_sentence_bert_model_perf_tests
+  cmd: run_t3000_sentence_bert_tests
+  sku: wh_llmbox
+  owner_id: U045U3DEKM4 # Mohamed Bahnas (Aniruddha Tupe)
+  team: models
+  timeout: 75
+  model-name: sentence_bert
+  model-type: LLM
+
+- name: t3k_DiT_SD3.5_model_perf_tests
+  cmd: run_t3000_stable_diffusion_35_large_tests
+  sku: wh_llmbox
+  owner_id: U03FJB5TM5Y # Colman Glagovich
+  team: models
+  timeout: 75
+  model-name: stable_diffusion_35_large
+  model-type: DiT
+
+- name: t3k_DiT_Mochi_model_perf_tests
+  cmd: run_t3000_mochi_tests
+  sku: wh_llmbox
+  owner_id: U09ELB03XRU # Stephen Osborne
+  team: models
+  timeout: 75
+  model-name: mochi
+  model-type: DiT
+
+- name: t3k_DiT_Wan2.2_model_perf_tests
+  cmd: run_t3000_wan22_tests
+  sku: wh_llmbox
+  owner_id: U03FJB5TM5Y # Colman Glagovich
+  team: models
+  timeout: 45
+  model-name: wan22
+  model-type: DiT
+
+- name: t3k_DiT_Flux.1-dev_model_perf_tests
+  cmd: run_t3000_flux1_tests
+  sku: wh_llmbox
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  timeout: 75
+  model-name: flux1-dev
+  model-type: DiT
+
+- name: t3k_DiT_Motif_model_perf_tests
+  cmd: run_t3000_motif_tests
+  sku: wh_llmbox
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  timeout: 15
+  model-name: motif
+  model-type: DiT
+
+- name: t3k_ViT_Gemma3_perf_tests
+  cmd: run_t3000_gemma3_tests
+  sku: wh_llmbox
+  owner_id: U093901FR8U # Milos Stojko
+  team: models
+  timeout: 75
+  model-name: gemma-3-27b-it
+  model-type: ViT

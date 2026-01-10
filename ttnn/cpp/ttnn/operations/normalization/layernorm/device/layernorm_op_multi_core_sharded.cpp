@@ -88,11 +88,11 @@ bool should_use_two_stage_reduce(
 uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const ShardSpec& shard_spec) {
     if (mcast_1d) {
         return shard_spec.num_cores();
-    } else if (row_wise) {
-        return grid_size.x;
-    } else {
-        return grid_size.y;
     }
+    if (row_wise) {
+        return grid_size.x;
+    }
+    return grid_size.y;
 
     return uint32_t{};
 }
@@ -1412,7 +1412,7 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
 
 void LayerNormShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto* const src_buffer_a = tensor_args.input.buffer();

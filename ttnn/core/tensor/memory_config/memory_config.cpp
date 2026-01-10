@@ -96,11 +96,10 @@ tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::
     if (created_with_nd_shard_spec) {
         auto nd_shard_spec = ttsl::json::from_json<tt::tt_metal::NdShardSpec>(json_object["nd_shard_spec"]);
         return tt::tt_metal::MemoryConfig(buffer_type, std::move(nd_shard_spec));
-    } else {
-        std::optional<tt::tt_metal::ShardSpec> shard_spec;
-        if (json_object.contains("shard_spec")) {
-            shard_spec = ttsl::json::from_json<tt::tt_metal::ShardSpec>(json_object["shard_spec"]);
-        }
-        return tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
     }
+    std::optional<tt::tt_metal::ShardSpec> shard_spec;
+    if (json_object.contains("shard_spec")) {
+        shard_spec = ttsl::json::from_json<tt::tt_metal::ShardSpec>(json_object["shard_spec"]);
+    }
+    return tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
 }
