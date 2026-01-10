@@ -2,7 +2,7 @@
 
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
-#   cmd: The command to run the test (includes sourcing the script and calling the function).
+#   cmd: The command to run in the script tests/scripts/t3000/run_t3000_demo_tests.sh.
 #   sku: Machine type to target (e.g. wh_llmbox).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
