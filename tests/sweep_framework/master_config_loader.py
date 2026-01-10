@@ -577,6 +577,20 @@ class MasterConfigLoader:
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=False
                 )
+            elif self._matches_operation(operation_name, "fill"):
+                print(f"🔧 Detected fill operation - extracting fill_value parameter")
+                return self._get_fill_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
+            elif self._matches_operation(operation_name, "split"):
+                print(f"🔧 Detected split operation - extracting split_size and dim parameters")
+                return self._get_split_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
+            elif self._matches_operation(operation_name, "scatter"):
+                print(f"🔧 Detected scatter operation - extracting dim parameter")
+                return self._get_scatter_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
+            elif self._matches_operation(operation_name, "fast_reduce_nc"):
+                print(f"🔧 Detected fast_reduce_nc operation - extracting dims parameter")
+                return self._get_fast_reduce_nc_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=False
+                )
             elif self._matches_operation(
                 operation_name, "scaled_dot_product_attention"
             ) and not self._matches_operation(operation_name, "decode"):
@@ -2794,6 +2808,118 @@ class MasterConfigLoader:
 
             traceback.print_exc()
             return {}
+
+    def _get_fill_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for fill operation which requires fill_value parameter"""
+        # Extract fill_value from arg1
+        fill_values = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    fill_value = args[1]["arg1"]
+                    try:
+                        # Convert string to float
+                        fill_values.append(float(fill_value))
+                    except:
+                        fill_values.append(0.0)
+
+        # Get base parameters using unary operation logic
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add fill_value parameter
+        if fill_values:
+            params["fill_value"] = fill_values
+
+        return params
+
+    def _get_split_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for split operation which requires split_size and dim parameters"""
+        split_sizes = []
+        dims = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg1 is split_size/num_chunks, arg2 is dim
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    try:
+                        split_sizes.append(int(args[1]["arg1"]))
+                    except:
+                        split_sizes.append(1)
+                if len(args) > 2 and isinstance(args[2], dict) and "arg2" in args[2]:
+                    try:
+                        dims.append(int(args[2]["arg2"]))
+                    except:
+                        dims.append(0)
+
+        # Get base parameters
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add operation-specific parameters
+        if split_sizes:
+            params["split_size"] = split_sizes
+        if dims:
+            params["dim"] = dims
+
+        return params
+
+    def _get_scatter_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for scatter operation which has 3 tensor inputs and dim parameter"""
+        dims = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg1 is dim (arg0=input, arg2=index, arg3=src)
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    try:
+                        dims.append(int(args[1]["arg1"]))
+                    except:
+                        dims.append(0)
+
+        # Get base parameters - scatter is a 3-tensor operation
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add dim parameter
+        if dims:
+            params["dim"] = dims
+
+        return params
+
+    def _get_fast_reduce_nc_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for fast_reduce_nc operation which requires dims list parameter"""
+        dims_list = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg1 is dims list
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    dims_value = args[1]["arg1"]
+                    if isinstance(dims_value, list):
+                        dims_list.append(dims_value)
+                    elif isinstance(dims_value, str):
+                        try:
+                            import ast
+
+                            dims_list.append(ast.literal_eval(dims_value))
+                        except:
+                            dims_list.append([0, 1])
+
+        # Get base parameters
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add dims parameter
+        if dims_list:
+            params["dims"] = dims_list
+
+        return params
 
     def _get_nlp_create_qkv_heads_suite_parameters(
         self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
