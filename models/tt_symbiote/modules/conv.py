@@ -20,6 +20,14 @@ def fold_batch_norm2d_into_conv2d(weight, bias, scale, shift, running_mean, runn
     return weight, bias
 
 
+def get_shape_from_module_name(module_name, model_config):
+    """Get input shape from model config based on module name."""
+    if model_config is None or not isinstance(model_config, dict) or module_name not in model_config:
+        return None
+    config = model_config[module_name]
+    return config.get("input_shapes", None)
+
+
 class NHWCConvPytorch(nn.Module):
     """A wrapper around nn.Conv2d to handle NHWC input/output."""
 
@@ -188,7 +196,18 @@ class TTNNConv2dNHWC(TTNNModule):
 
     def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
         """Forward pass through linear layer."""
-        batch_size, input_height, input_width, _ = input_tensor.shape
+        input_shape = get_shape_from_module_name(self.module_name, self.model_config)
+        if input_shape is None:
+            batch_size, input_height, input_width, _ = input_tensor.shape
+            if isinstance(self.model_config, dict):
+                self.model_config[self.module_name] = {
+                    "input_shapes": [list(input_tensor.shape)],
+                    "reshape_output": reshape_output,
+                }
+        else:
+            assert len(input_shape) == 1, f"Only single input shape is supported. Got {input_shape}."
+            batch_size, input_height, input_width, _ = input_shape[0]
+            reshape_output = self.model_config[self.module_name].get("reshape_output", reshape_output)
         config = Conv2dConfiguration(
             input_height=input_height,
             input_width=input_width,
@@ -209,6 +228,8 @@ class TTNNConv2dNHWC(TTNNModule):
             out, h_w = layer(input_tensor, return_output_dim=reshape_output)
             out = self.reshape(out, [batch_size, h_w[0], h_w[1], -1])
             return out
+        if input_tensor.memory_config().is_sharded():
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor)
         return layer(input_tensor)
 
 
@@ -598,7 +619,18 @@ class TTNNMaxPool2dNHWC(TTNNModule):
 
     def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
         """Forward pass through linear layer."""
-        batch_size, input_height, input_width, channels = input_tensor.shape
+        input_shape = get_shape_from_module_name(self.module_name, self.model_config)
+        if input_shape is None:
+            batch_size, input_height, input_width, channels = input_tensor.shape
+            if isinstance(self.model_config, dict):
+                self.model_config[self.module_name] = {
+                    "input_shapes": [list(input_tensor.shape)],
+                    "reshape_output": reshape_output,
+                }
+        else:
+            assert len(input_shape) == 1, f"Only single input shape is supported. Got {input_shape}."
+            batch_size, input_height, input_width, channels = input_shape[0]
+            reshape_output = self.model_config[self.module_name].get("reshape_output", reshape_output)
         config = MaxPool2dConfiguration(
             input_height=input_height,
             input_width=input_width,
