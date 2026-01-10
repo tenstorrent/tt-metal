@@ -18,6 +18,9 @@ from ...parallel.config import VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import tensor
 from ...utils.substate import pop_substate, rename_substate
+from ...models.vae.vae_wan2_1 import WanDecoder
+from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
+from ...utils.tensor import bf16_tensor_2dshard
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -373,7 +376,85 @@ class QwenImageUpBlock(Module):
         return x
 
 
-class QwenImageVaeDecoder(Module):
+class QwenImageVaeDecoder:
+    def __init__(
+        self,
+        *,
+        base_dim: int = 96,
+        z_dim: int = 16,
+        dim_mult: Sequence[int] = (1, 2, 4, 4),
+        num_res_blocks: int = 2,
+        temperal_downsample: Sequence[bool] = (False, True, True),
+        non_linearity: str = "silu",
+        parallel_config: VAEParallelConfig | None,
+        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager | None,
+    ) -> None:
+        self.wan_decoder = WanDecoder(
+            base_dim=base_dim,
+            z_dim=z_dim,
+            dim_mult=dim_mult,
+            num_res_blocks=num_res_blocks,
+            temperal_downsample=temperal_downsample,
+            mesh_device=device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+        )
+
+        # TODO: Remove when WanDecoder is migrated to tt-dit Modules framework.
+        self._is_loaded = False
+
+    def forward(self, x: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
+        return self.wan_decoder(x, logical_h=logical_h)
+
+    def load_torch_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
+        self.wan_decoder.load_state_dict(state_dict)
+        self._is_loaded = True
+
+    def deallocate_weights(self) -> None:
+        NotImplementedError(
+            "Deallocation of WanDecoder based model weights is not supported yet. Use QwenImageVaeDecoder_wan_reipmpl instead."
+        )
+
+    def is_loaded(self) -> bool:
+        return self._is_loaded
+
+    def is_wan_based(self) -> bool:
+        return True
+
+    def prepare_input(self, torch_latents: torch.Tensor) -> tuple[ttnn.Tensor, int]:
+        torch_latents = torch_latents.unsqueeze(1)
+        torch_latents = conv_pad_in_channels(torch_latents)
+        torch_latents, logical_h = conv_pad_height(
+            torch_latents, self.wan_decoder.parallel_config.height_parallel.factor
+        )
+        tt_latents = bf16_tensor_2dshard(
+            torch_latents,
+            self.wan_decoder.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={
+                self.wan_decoder.parallel_config.height_parallel.mesh_axis: 2,
+                self.wan_decoder.parallel_config.width_parallel.mesh_axis: 3,
+            },
+        )
+        return tt_latents, logical_h
+
+    def postprocess_output(self, tt_latents: ttnn.Tensor, logical_h: int) -> torch.Tensor:
+        concat_dims = [None, None]
+        concat_dims[self.wan_decoder.parallel_config.height_parallel.mesh_axis] = 3
+        concat_dims[self.wan_decoder.parallel_config.width_parallel.mesh_axis] = 4
+        decoded_output = ttnn.to_torch(
+            tt_latents,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.wan_decoder.mesh_device, mesh_shape=tuple(self.wan_decoder.mesh_device.shape), dims=concat_dims
+            ),
+        ).squeeze(
+            2
+        )  # remove the temporal dimension
+        return decoded_output
+
+
+class QwenImageVaeDecoder_wan_reipmpl(Module):
     """Qwen-Image VAE decoder without support for temporal dimension."""
 
     def __init__(
@@ -460,3 +541,6 @@ class QwenImageVaeDecoder(Module):
         x = self.conv_out.forward(x)
 
         return ttnn.clamp(x, min=-1.0, max=1.0)
+
+    def is_wan_based(self) -> bool:
+        return False

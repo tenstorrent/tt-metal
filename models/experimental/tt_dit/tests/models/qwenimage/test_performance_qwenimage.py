@@ -52,8 +52,8 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 @pytest.mark.parametrize(
     "is_fsdp",
     [
-        # pytest.param(True, id="fsdp_enabled"),
-        pytest.param(None, id="fsdp_disabled"),  # uncomment to compare with/without fsdp
+        pytest.param(True, id="fsdp_enabled"),
+        # pytest.param(None, id="fsdp_disabled"),  # uncomment to compare with/without fsdp
     ],
 )
 def test_qwenimage_pipeline_performance(

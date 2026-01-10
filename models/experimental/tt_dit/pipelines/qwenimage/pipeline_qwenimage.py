@@ -22,7 +22,13 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from ...encoders.qwen25vl.encoder_pair import Qwen25VlTokenizerEncoderPair
 from ...models.transformers.transformer_qwenimage import QwenImageTransformer
 from ...models.vae.vae_qwenimage import QwenImageVaeDecoder
-from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
+from ...parallel.config import (
+    DiTParallelConfig,
+    EncoderParallelConfig,
+    ParallelFactor,
+    VAEParallelConfig,
+    VaeHWParallelConfig,
+)
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
@@ -65,6 +71,8 @@ class QwenImagePipeline:
         height: int = 1024,
         width: int = 1024,
         is_fsdp: bool = False,
+        dynamic_load_encoder: bool = True,  # Set to true if it wouldn't fit with the transformer given the configuration
+        dynamic_load_vae: bool = False,  # Set to true if it wouldn't fit with the transformer given the configuration
     ) -> None:
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
@@ -91,9 +99,6 @@ class QwenImagePipeline:
                 )
             )
 
-        self._encoder_parallel_config = encoder_parallel_config
-        self._vae_parallel_config = vae_parallel_config
-
         # Create submeshes based on CFG parallel configuration
         submesh_shape = list(mesh_device.shape)
         submesh_shape[parallel_config.sequence_parallel.mesh_axis] = parallel_config.sequence_parallel.factor
@@ -114,7 +119,12 @@ class QwenImagePipeline:
         self.vae_submesh_idx = len(self._submesh_devices) - self.encoder_submesh_idx - 1  # Use other submesh for VAE. 0
 
         self.encoder_device = self._submesh_devices[self.encoder_submesh_idx] if not use_torch_text_encoder else None
-        self.vae_device = self._submesh_devices[self.vae_submesh_idx] if not use_torch_text_encoder else None
+        self.vae_device = self._submesh_devices[self.vae_submesh_idx] if not use_torch_vae_decoder else None
+
+        # setup parallel configs
+        self._encoder_parallel_config = encoder_parallel_config
+        self._vae_parallel_config = vae_parallel_config
+        self._wan_vae_parallel_config = self.get_wan_vae_parallel_config()
 
         self.encoder_mesh_shape = self.get_mesh_shape(
             self.encoder_device, self._encoder_parallel_config.tensor_parallel
@@ -205,9 +215,11 @@ class QwenImagePipeline:
 
         # With FSDP enabled, weights are sharded so all models can fit in memory simultaneously
         # Without FSDP, we need to load/unload models to avoid OOM
-        if is_fsdp or use_torch_text_encoder:
+        if (
+            not dynamic_load_encoder or use_torch_text_encoder
+        ):  # Implies we have enough space. VAE comes after denoising, so load all transformers now.
             # FSDP path: load all models upfront - they can coexist in memory
-            logger.info("FSDP enabled: loading all models (encoder, transformer, VAE) simultaneously...")
+            # logger.info("FSDP enabled: loading all models (encoder, transformer, VAE) simultaneously...")
             # Load transformers immediately with FSDP
             for idx, submesh_device in enumerate(self._submesh_devices):
                 self._load_transformers(idx)
@@ -238,18 +250,20 @@ class QwenImagePipeline:
             with self.mesh_reshape(self.vae_device, self.vae_mesh_shape, synchronize=True):
                 logger.info("creating TT-NN VAE decoder...")
                 self._vae_decoder = QwenImageVaeDecoder(
-                    base_dim=self._vae_config["base_dim"],
-                    z_dim=self._vae_config["z_dim"],
-                    dim_mult=self._vae_config["dim_mult"],
-                    num_res_blocks=self._vae_config["num_res_blocks"],
-                    temperal_downsample=self._vae_config["temperal_downsample"],
+                    base_dim=self._torch_vae.config.base_dim,
+                    z_dim=self._torch_vae.config.z_dim,
+                    dim_mult=self._torch_vae.config.dim_mult,
+                    num_res_blocks=self._torch_vae.config.num_res_blocks,
+                    temperal_downsample=self._torch_vae.config.temperal_downsample,
                     device=self.vae_device,
-                    parallel_config=self._vae_parallel_config,
+                    parallel_config=self._wan_vae_parallel_config,
                     ccl_manager=self._ccl_managers[self.vae_submesh_idx],
                 )
 
             # With FSDP or torch encoder: load VAE now (no memory conflict)
-            if is_fsdp:
+            if (
+                not dynamic_load_vae
+            ):  # Implies we have enough space to load with the denoising transformer. VAE comes after denoising, so load all transformers now.
                 self._vae_decoder.load_torch_state_dict(self._vae_state_dict)
 
         self._traces = None
@@ -330,6 +344,19 @@ class QwenImagePipeline:
         mesh_shape[1 - parallel_factor.mesh_axis] = mesh_device.shape.mesh_size() // parallel_factor.factor
         return ttnn.MeshShape(tuple(mesh_shape))
 
+    # TODO: Configure the correct parallel config
+    def get_wan_vae_parallel_config(self):
+        return VaeHWParallelConfig(
+            height_parallel=ParallelFactor(
+                factor=self.vae_device.shape[self._vae_parallel_config.tensor_parallel.mesh_axis],
+                mesh_axis=self._vae_parallel_config.tensor_parallel.mesh_axis,
+            ),
+            width_parallel=ParallelFactor(
+                factor=self.vae_device.shape[1 - self._vae_parallel_config.tensor_parallel.mesh_axis],
+                mesh_axis=1 - self._vae_parallel_config.tensor_parallel.mesh_axis,
+            ),
+        )
+
     def run_single_prompt(
         self,
         *,
@@ -370,6 +397,8 @@ class QwenImagePipeline:
         width: int = 1024,
         height: int = 1024,
         is_fsdp: bool = None,
+        dynamic_load_encoder: bool | None = None,
+        dynamic_load_vae: bool | None = None,
     ) -> QwenImagePipeline:
         default_config = {
             # 8-chip configurations
@@ -390,6 +419,8 @@ class QwenImagePipeline:
                 "vae_tp": (4, 1),
                 "num_links": 1,
                 "is_fsdp": False,
+                "dynamic_load_encoder": True,
+                "dynamic_load_vae": False,
             },
             # 6U (32-chip Galaxy) configuration - matching Stable Diffusion
             (4, 8): {
@@ -399,7 +430,9 @@ class QwenImagePipeline:
                 "encoder_tp": (4, 1),
                 "vae_tp": (4, 1),
                 "num_links": 4,
-                "is_fsdp": True,
+                "is_fsdp": False,
+                "dynamic_load_encoder": False,
+                "dynamic_load_vae": False,
             },
         }
         cfg_factor, cfg_axis = dit_cfg or default_config[tuple(mesh_device.shape)]["cfg_config"]
@@ -409,6 +442,8 @@ class QwenImagePipeline:
         vae_tp_factor, vae_tp_axis = vae_tp or default_config[tuple(mesh_device.shape)]["vae_tp"]
         num_links = num_links or default_config[tuple(mesh_device.shape)]["num_links"]
         is_fsdp = is_fsdp or default_config[tuple(mesh_device.shape)]["is_fsdp"]
+        dynamic_load_encoder = dynamic_load_encoder or default_config[tuple(mesh_device.shape)]["dynamic_load_encoder"]
+        dynamic_load_vae = dynamic_load_vae or default_config[tuple(mesh_device.shape)]["dynamic_load_vae"]
 
         dit_parallel_config = DiTParallelConfig(
             cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
@@ -439,6 +474,8 @@ class QwenImagePipeline:
             width=width,
             height=height,
             is_fsdp=is_fsdp,
+            dynamic_load_encoder=dynamic_load_encoder,
+            dynamic_load_vae=dynamic_load_vae,
         )
 
     def prepare_encoder(self) -> None:
@@ -693,11 +730,11 @@ class QwenImagePipeline:
                     self.prepare_vae()
 
                     with self.mesh_reshape(self.encoder_device, self.encoder_mesh_shape):
-                        tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
-                        tt_decoded_output = self._vae_decoder(tt_latents)
-                        decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(
-                            0, 3, 1, 2
-                        )
+                        # tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
+                        tt_latents, logical_h = self._vae_decoder.prepare_input(torch_latents)
+                        tt_decoded_output, logical_h = self._vae_decoder.forward(tt_latents, logical_h)
+                        # decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
+                        decoded_output = self._vae_decoder.postprocess_output(tt_decoded_output, logical_h)
 
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 assert isinstance(image, torch.Tensor)
