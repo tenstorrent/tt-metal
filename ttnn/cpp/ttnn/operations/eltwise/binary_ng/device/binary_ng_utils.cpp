@@ -689,6 +689,27 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
             b->memory_config().buffer_type() == BufferType::DRAM || c.buffer_type() == BufferType::DRAM) {
             return false;
         }
+
+        // Check if output grid differs from input grids - if so, cannot use native sharding
+        // This will force resharding through interleaved path
+        if (c.is_sharded() && c.shard_spec().has_value()) {
+            const auto& c_grid = c.shard_spec()->grid;
+            if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
+                const auto& a_grid = a.memory_config().shard_spec()->grid;
+                if (a_grid != c_grid) {
+                    // Different grids require resharding - treat as interleaved
+                    return false;
+                }
+            }
+            if (b->memory_config().is_sharded() && b->memory_config().shard_spec().has_value()) {
+                const auto& b_grid = b->memory_config().shard_spec()->grid;
+                if (b_grid != c_grid) {
+                    // Different grids require resharding - treat as interleaved
+                    return false;
+                }
+            }
+        }
+
         if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
             return true;
         }

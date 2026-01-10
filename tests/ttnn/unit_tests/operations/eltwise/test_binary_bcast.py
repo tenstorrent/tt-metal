@@ -4258,17 +4258,18 @@ def test_binary_reshard(device):
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     mem_config_32 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec_32)
-    # a_sharded = ttnn.to_memory_config(a, mem_config_64)
-    # b_sharded = ttnn.to_memory_config(b, mem_config_64)
-    # result = ttnn.add(a_sharded, b_sharded, memory_config=mem_config_32, use_legacy=None)
+
+    expected = torch_a + torch_b
+    a_sharded = ttnn.to_memory_config(a, mem_config_64)
+    b_sharded = ttnn.to_memory_config(b, mem_config_64)
+    result = ttnn.add(a_sharded, b_sharded, memory_config=mem_config_32, use_legacy=None)
+    result = ttnn.to_torch(result)
+    assert_with_pcc(expected, result)
 
     a_sharded = ttnn.to_memory_config(a, mem_config_32)
     b_sharded = ttnn.to_memory_config(b, mem_config_32)
-
-    # Multiply completes but hangs afterward
-    result = ttnn.add(a_sharded, b_sharded, memory_config=mem_config_32, use_legacy=None)
+    result = ttnn.add(a_sharded, b_sharded, memory_config=mem_config_64, use_legacy=None)
     result = ttnn.to_torch(result)
-    expected = torch_a + torch_b
     assert_with_pcc(expected, result)
 
 
