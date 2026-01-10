@@ -9,14 +9,14 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
 
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::program {
 
 struct MatmulReduceScatterAsyncSharedVariables {
     std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>>
         reduce_scatter_override_runtime_arguments_callback;
-    std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>>
-        matmul_override_runtime_arguments_callback;
+    matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t matmul_shared_variables;
 };
 
 struct MatmulReduceScatterAsyncProgramFactory {

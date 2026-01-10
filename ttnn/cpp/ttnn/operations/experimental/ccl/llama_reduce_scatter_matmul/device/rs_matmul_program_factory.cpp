@@ -13,6 +13,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+
 namespace ttnn::operations::experimental::ccl {
 Matmul_RS::Matmul_RS_PF::cached_mesh_workload_t Matmul_RS::Matmul_RS_PF::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -52,7 +53,7 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
             tensor_return_value.at(2),
             program,
             fused_op_signaler);
-        auto matmul_sv = matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+        auto matmul_sv = matmul::program::matmul_multi_core_reuse_mcast_1d_optimized_helper(
             program,
             tensor_args.matmul.input_tensor,
             {tensor_args.matmul.weight_tensor, tensor_args.second_weight_tensor.value()},
@@ -77,7 +78,7 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
         tensor_return_value.at(1),
         program,
         fused_op_signaler);
-    auto matmul_sv = matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    auto matmul_sv = matmul::program::matmul_multi_core_reuse_mcast_1d_optimized_helper(
         program,
         tensor_args.matmul.input_tensor,
         {tensor_args.matmul.weight_tensor},
@@ -109,14 +110,14 @@ void Matmul_RS::Matmul_RS_PF::override_runtime_arguments(
                 operation_attributes.rs_op,
                 tensor_args.rs,
                 tensor_return_value.at(2));
-            reuse_mcast_1d_optimized_helpers::override_program_parameters(
+            matmul::program::reuse_mcast_1d_optimized_helpers::override_program_parameters(
                 shared_variables.matmul_shared_vars,
-                &operation_attributes.matmul,
+                operation_attributes.matmul.global_cb,
                 program,
-                {tensor_args.matmul.input_tensor,
-                 tensor_args.matmul.weight_tensor,
-                 tensor_args.second_weight_tensor.value()},
-                {},
+                {{tensor_args.matmul.input_tensor,
+                  tensor_args.matmul.weight_tensor,
+                  tensor_args.second_weight_tensor.value()},
+                 {}},
                 {tensor_return_value.at(0), tensor_return_value.at(1)});
         }
     } else {
@@ -128,12 +129,11 @@ void Matmul_RS::Matmul_RS_PF::override_runtime_arguments(
                 operation_attributes.rs_op,
                 tensor_args.rs,
                 tensor_return_value.at(1));
-            reuse_mcast_1d_optimized_helpers::override_program_parameters(
+            matmul::program::reuse_mcast_1d_optimized_helpers::override_program_parameters(
                 shared_variables.matmul_shared_vars,
-                &operation_attributes.matmul,
+                operation_attributes.matmul.global_cb,
                 program,
-                {tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor},
-                {},
+                {{tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {}},
                 {tensor_return_value.at(0)});
         }
     }
