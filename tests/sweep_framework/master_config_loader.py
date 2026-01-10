@@ -72,195 +72,67 @@ except ImportError:
 
 
 BASE_DIR = get_base_dir()
-
-DEFAULT_DB_CONFIG = "postgresql://sweep_reader:sweep_readonly_pw@ep-blue-credit-ah8iebt7-pooler.c-3.us-east-1.aws.neon.tech:6543/tt-sweeps?sslmode=require&channel_binding=require"
-
+DEFAULT_DB_CONFIG = (
+    "postgresql://sweep_reader:sweep_readonly_pw@ep-blue-credit-ah8iebt7-pooler.c-3.us-east-1.aws.neon.tech/tt-sweeps"
+    "?sslmode=require&options=endpoint%3Dep-blue-credit-ah8iebt7-pooler"
+)
 
 @dataclass
 class TensorConfig:
-    """Represents a tensor configuration extracted from master JSON"""
-
     shape: List[int]
     dtype: str
     layout: str
     memory_config: Dict
-    storage_type: str = "StorageType::DEVICE"  # Default to DEVICE for backward compatibility
+    storage_type: str = "StorageType::DEVICE"
 
 
 class MasterConfigLoader:
-    """Loads and converts master JSON configurations to sweep test parameters"""
-
-    def _matches_operation(self, operation_name: str, base_name: str) -> bool:
-        """Check if operation_name matches any variant of base_name.
-
-        Handles common patterns like:
-        - "add" matches ["add", "ttnn::add"]
-        - "linear" matches ["linear", "ttnn::linear"]
-        - "nlp_create_qkv_heads" matches ["nlp_create_qkv_heads", "experimental::nlp_create_qkv_heads", "ttnn::experimental::nlp_create_qkv_heads"]
-
-        Args:
-            operation_name: The operation name to check
-            base_name: The base operation name
-
-        Returns:
-            True if operation_name is any variant of base_name
-        """
-        variants = [
-            base_name,
-            f"ttnn::{base_name}",
-            f"experimental::{base_name}",
-            f"ttnn::experimental::{base_name}",
-            f"transformer::{base_name}",
-            f"ttnn::transformer::{base_name}",
-        ]
-        return operation_name in variants
 
     def __init__(self, master_file_path: str = None, db_config: str = None):
-        """
-        Initialize the master config loader.
-
-        Now uses PostgreSQL database exclusively with connection pooling.
-
-        Args:
-            master_file_path: Kept for API compatibility, not used
-            db_config: Database connection string (optional, uses default if not provided)
-        """
-        # Keep for API compatibility
-        if master_file_path is None:
-            master_file_path = os.path.join(BASE_DIR, "model_tracer/traced_operations/ttnn_operations_master.json")
         self.master_file_path = master_file_path
-        self.master_data = None
-        self.traced_configs_cache = {}  # Cache full operation configs by operation name only
-
-        # Database connection
-        if not DB_AVAILABLE:
-            raise ImportError("psycopg2 not available. Install with: pip install psycopg2-binary")
-
+        self.traced_configs_cache = {}
         self.db_config = db_config or os.environ.get("DATABASE_URL", DEFAULT_DB_CONFIG)
 
-        # 1️⃣ Connection pooling - avoid reconnect storms in CI
+    def _get_connection(self):
         try:
-            self.pool = psycopg2.pool.SimpleConnectionPool(1, 10, self.db_config, cursor_factory=RealDictCursor)
-            self.conn = None
-            print(f"✅ PostgreSQL connection pool initialized (1-10 connections)")
+            return psycopg2.connect(
+                self.db_config,
+                cursor_factory=RealDictCursor,
+                connect_timeout=10,
+            )
         except Exception as e:
-            raise RuntimeError(
-                f"Failed to create database connection pool: {e}\n"
-                f"Make sure cloudflared tunnel is running:\n"
-                f"  cloudflared access tcp --hostname tt-sweeps.aswincloud.com --url localhost:15432"
-            ) from e
-
-    def _reconnect_if_needed(self):
-        """Get a connection from the pool if needed"""
-        if self.conn is None or self.conn.closed:
-            try:
-                self.conn = self.pool.getconn()
-            except Exception as e:
-                raise RuntimeError(f"Failed to get connection from pool: {e}")
-
-    def __del__(self):
-        """Return connection to pool on cleanup"""
-        if hasattr(self, "conn") and self.conn:
-            try:
-                self.pool.putconn(self.conn)
-            except:
-                pass  # Silently fail if pool is already closed
+            raise RuntimeError(f"Neon DB connection failed: {e}") from e
 
     def load_master_data(self):
-        """Load operation metadata from database"""
-        self._reconnect_if_needed()
-        if not self.conn:
-            raise RuntimeError("No database connection")
-
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT COUNT(*) as count FROM operations")
-            result = cursor.fetchone()
-            count = result["count"] if result else 0
-            print(f"✅ Connected to database with {count} operations")
-            cursor.close()
-        except Exception as e:
-            raise RuntimeError(f"Error loading database metadata: {e}")
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) AS count FROM operations")
+                count = cursor.fetchone()["count"]
+                print(f"✅ Connected to Neon DB — {count} operations found")
 
     def get_operation_configs(self, operation_name: str, max_configs: int = None):
-        """
-        Stream configurations for a specific operation from database.
-
-        🚀 Enterprise-grade streaming query - scales to millions of configs with constant RAM.
-
-        Args:
-            operation_name: Operation name (with or without ttnn:: prefix)
-            max_configs: Maximum number of configurations to stream (None = all, no limit!)
-
-        Yields:
-            Tuples of (arguments, source, machine_info)
-
-        Example:
-            # Stream 500k+ configs with constant memory:
-            for args, source, machine in loader.get_operation_configs("add"):
-                process(args, source, machine)
-
-        Performance:
-            - Time to first row: <100ms
-            - RAM usage: <200MB (constant, regardless of total configs)
-            - Streaming batch size: 2000 rows at a time
-            - No artificial limits on config count
-
-        Note: This is a generator - use get_operation_configs_list() if you need a list.
-              Caching is only done in get_operation_configs_list() to avoid cache poisoning.
-        """
-        # 2️⃣ FIX: Remove cache from streaming path to prevent cache poisoning
-        # Only get_operation_configs_list() should cache
-
-        self._reconnect_if_needed()
-        if not self.conn:
-            raise RuntimeError("No database connection")
-
-        # 1️⃣ FIX: Get connection reference and ensure it's returned to pool
-        conn = self.conn
-        cursor = None
-        temp_cursor = None
+        conn = self._get_connection()
+        conn.autocommit = True
 
         try:
-            # Use server-side cursor for streaming (avoids loading all rows into Python memory)
-            cursor = conn.cursor(name=f"stream_{operation_name.replace('::', '_')}")
-            cursor.itersize = 2000  # Fetch 2000 rows at a time from PostgreSQL
+            with conn.cursor() as c:
+                variants = self._get_operation_variants(operation_name)
+                c.execute("""
+                    SELECT operation_id, operation_name
+                    FROM operations
+                    WHERE operation_name = ANY(%s)
+                    LIMIT 1
+                """, (variants,))
+                op = c.fetchone()
 
-            # Find the operation with flexible matching
-            operation_variants = self._get_operation_variants(operation_name)
-
-            # First, get operation_id with a regular cursor
-            temp_cursor = conn.cursor()
-
-            # 4️⃣ FIX: Tune work_mem for large GROUP BY operations (500k+ rows)
-            temp_cursor.execute("SET work_mem = '256MB'")
-
-            temp_cursor.execute(
-                """
-                SELECT operation_id, operation_name
-                FROM operations
-                WHERE operation_name = ANY(%s)
-                LIMIT 1
-            """,
-                (operation_variants,),
-            )
-
-            op_result = temp_cursor.fetchone()
-            temp_cursor.close()
-            temp_cursor = None
-
-            if not op_result:
-                print(f"⚠️ No configurations found for operation: {operation_name}")
+            if not op:
+                print(f"⚠️ No configurations for {operation_name}")
                 return
 
-            operation_id = op_result["operation_id"]
-            found_op_name = op_result["operation_name"]
+            cursor = conn.cursor(name=f"stream_{operation_name.replace('::','_')}")
+            cursor.itersize = 2000
 
-            # 2️⃣ Optimized query - LEFT JOINs with array_agg (eliminates N+1 subqueries)
-            # 3️⃣ FIX: GROUP BY only c.config_id (not c.arguments) for index-only scans
-            # This is 100x+ faster than nested json_agg and 3-4x faster than grouping on JSONB
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT
                     c.arguments,
                     array_remove(array_agg(DISTINCT s.source_path), NULL) AS sources,
@@ -277,116 +149,35 @@ class MasterConfigLoader:
                 WHERE c.operation_id = %s
                 GROUP BY c.config_id
                 ORDER BY c.config_id
-            """,
-                (operation_id,),
-            )
+            """, (op["operation_id"],))
 
-            # Stream rows from database
+            print(f"✅ Streaming configs for {op['operation_name']}")
+
             count = 0
-            first_batch = True
             for row in cursor:
-                if first_batch:
-                    print(f"✅ Streaming configurations for {found_op_name}...")
-                    first_batch = False
-
-                arguments = row["arguments"]  # Already parsed as list by psycopg2
-                sources = row["sources"] if row["sources"] else []
-                machines = row["machines"] if row["machines"] else []
-
-                # Format source (first source if available, or "database")
-                source = sources[0] if sources else "database"
-
-                # Format machine_info (first machine if available, or None)
-                machine_info = machines[0] if machines else None
-
-                yield (arguments, source, machine_info)
-
+                yield (
+                    row["arguments"],
+                    row["sources"][0] if row["sources"] else "database",
+                    row["machines"][0] if row["machines"] else None,
+                )
                 count += 1
                 if max_configs and count >= max_configs:
                     break
 
-            print(f"✅ Streamed {count} configurations for {found_op_name}")
-
-        except Exception as e:
-            print(f"❌ Error streaming configs for {operation_name}: {e}")
-            import traceback
-
-            traceback.print_exc()
         finally:
-            # 1️⃣ FIX: Always return connection to pool to prevent leaks
-            try:
-                if temp_cursor:
-                    temp_cursor.close()
-            except:
-                pass
-            try:
-                if cursor:
-                    cursor.close()
-            except:
-                pass
-            # Return connection to pool
-            if conn:
-                self.pool.putconn(conn)
-                self.conn = None
+          try:
+              cursor.close()
+          except:
+              pass
+          conn.close()
 
-    def get_operation_configs_list(
-        self, operation_name: str, max_configs: int = None
-    ) -> List[Tuple[List[Dict], str, Optional[Dict]]]:
-        """
-        Get all configurations as a list (backward compatibility wrapper).
-
-        ⚠️ WARNING: This loads all configs into memory at once.
-        For large operations (>10k configs), use get_operation_configs() generator instead.
-
-        Args:
-            operation_name: Operation name
-            max_configs: Maximum configs to return
-
-        Returns:
-            List of (arguments, source, machine_info) tuples
-        """
-        configs = list(self.get_operation_configs(operation_name, max_configs))
-
-        # Cache the list for repeated access
-        if max_configs is None:  # Only cache full loads
-            self.traced_configs_cache[operation_name] = configs
-
-        return configs
-
-    def _get_operation_variants(self, operation_name: str) -> List[str]:
-        """
-        Generate all possible variants of an operation name.
-        Handles ttnn::, experimental::, transformer:: prefixes.
-        """
-        variants = [operation_name]
-
-        # Add ttnn:: prefix if not present
-        if not operation_name.startswith("ttnn::"):
-            variants.append(f"ttnn::{operation_name}")
-
-        # Add experimental:: variants
-        if "experimental::" not in operation_name:
-            variants.append(f"experimental::{operation_name}")
-            variants.append(f"ttnn::experimental::{operation_name}")
-
-        # Add transformer:: variants
-        if "transformer::" not in operation_name:
-            variants.append(f"transformer::{operation_name}")
-            variants.append(f"ttnn::transformer::{operation_name}")
-
-        # Try without prefix if it starts with ttnn::
-        if operation_name.startswith("ttnn::"):
-            base_name = operation_name[6:]  # Remove "ttnn::"
-            variants.append(base_name)
-            variants.append(f"ttnn::transformer::{base_name}")
-
-        # Try without experimental:: prefix
-        if operation_name.startswith("experimental::"):
-            base_name = operation_name[14:]  # Remove "experimental::"
-            variants.append(base_name)
-            variants.append(f"ttnn::{base_name}")
-
-        return list(set(variants))  # Remove duplicates
+    def _get_operation_variants(self, name: str):
+        v = [name]
+        if not name.startswith("ttnn::"):
+            v.append(f"ttnn::{name}")
+        v += [f"experimental::{name}", f"ttnn::experimental::{name}",
+              f"transformer::{name}", f"ttnn::transformer::{name}"]
+        return list(set(v))
 
     def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str]]:
         """
