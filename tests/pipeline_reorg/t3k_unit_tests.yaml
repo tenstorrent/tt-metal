@@ -143,9 +143,9 @@
   team: models
   timeout: 10
 
-- name: t3k_tttv2_modules_tests
-  cmd: run_t3000_tttv2_modules_tests
+- name: t3k_tttv2_fast_unit_tests
+  cmd: run_t3000_tttv2_fast_unit_tests
   sku: wh_llmbox
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
-  timeout: 5
+  timeout: 10
