@@ -427,7 +427,7 @@ class QwenImagePipeline:
                 "cfg_config": (2, 1),
                 "sp": (4, 0),
                 "tp": (4, 1),
-                "encoder_tp": (4, 1),
+                "encoder_tp": (16, 1),
                 "vae_tp": (4, 1),
                 "num_links": 4,
                 "is_fsdp": False,

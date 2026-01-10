@@ -33,7 +33,16 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
             1,
         ],  # 78 s. Less than 1s to load vae. NO FSDP
         [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # 112 s NO FSDP
-        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
+        [
+            (4, 8),
+            (2, 1),
+            (4, 0),
+            (4, 1),
+            (16, 1),
+            (4, 1),
+            ttnn.Topology.Linear,
+            4,
+        ],  # 25s NO FSDP for best perf on WH GLX
     ],
     ids=[
         "1x8cfg1sp1tp8",
