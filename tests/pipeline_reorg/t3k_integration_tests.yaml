@@ -1,0 +1,138 @@
+# This file defines the test matrix for the T3000 integration tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The command to run the test (includes sourcing the script and calling the function).
+#   sku: Machine type to target (e.g. wh_llmbox).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   timeout: The maximum allowed runtime for this job in minutes.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: t3k_tteager_tests
+  cmd: run_t3000_tteager_tests
+  sku: wh_llmbox
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  timeout: 30
+
+# - name: t3k_ethernet_tests
+#   cmd: run_t3000_ethernet_tests
+#   sku: wh_llmbox
+#   owner_id: ULMEPM2MA # Sean Nijjar
+#   team: fabric
+#   timeout: 10
+#   # Disabled: GH #34582
+
+- name: t3k_trace_stress_tests
+  cmd: run_t3000_trace_stress_tests
+  sku: wh_llmbox
+  owner_id: U03NG0A5ND7 # Aditya Saigal
+  team: scaleout
+  timeout: 30
+
+- name: t3k_falcon40b_tests
+  cmd: run_t3000_falcon40b_tests
+  sku: wh_llmbox
+  owner_id: U04S2UV6L8N # Sofija Jovic
+  team: models
+  timeout: 20
+
+- name: t3k_llama3.2-vision_tests
+  cmd: run_t3000_llama3.2-11b-vision_freq_tests
+  sku: wh_llmbox
+  owner_id: U03FJB5TM5Y # Colman Glagovich
+  team: models
+  timeout: 20
+
+- name: t3k_n300_mesh_llama3.2-vision_tests
+  cmd: run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
+  sku: wh_llmbox
+  owner_id: U03FJB5TM5Y # Colman Glagovich
+  team: models
+  timeout: 20
+
+- name: t3k_llama3.2-90b-vision_tests
+  cmd: run_t3000_llama3.2-90b-vision_freq_tests
+  sku: wh_llmbox
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  timeout: 20
+
+- name: t3k_llama3_tests
+  cmd: run_t3000_llama3_tests
+  sku: wh_llmbox
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  timeout: 45
+
+- name: t3k_llama3_accuracy_tests
+  cmd: run_t3000_llama3_accuracy_tests
+  sku: wh_llmbox
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  timeout: 40
+
+- name: t3k_llama3_70n90b_accuracy_tests
+  cmd: run_t3000_llama3_70n90b_accuracy_tests
+  sku: wh_llmbox
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  timeout: 20
+
+- name: t3k_llama3_90b_tests
+  cmd: run_t3000_llama3_90b_tests
+  sku: wh_llmbox
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  timeout: 30
+
+- name: t3k_resnet_tests
+  cmd: run_t3000_resnet_tests
+  sku: wh_llmbox
+  owner_id: U052J2QDDKQ # Pavle Josipovic
+  team: models
+  timeout: 15
+
+- name: t3k_sd35_large_tests
+  cmd: run_t3000_sd35large_tests
+  sku: wh_llmbox
+  owner_id: U03FJB5TM5Y # Colman Glagovich
+  team: models
+  timeout: 30
+
+- name: t3k_flux1_tests
+  cmd: run_t3000_flux1_tests
+  sku: wh_llmbox
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  timeout: 30
+
+- name: t3k_motif_tests
+  cmd: run_t3000_motif_tests
+  sku: wh_llmbox
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  timeout: 10
+
+- name: t3k_mistral_tests
+  cmd: run_t3000_mistral_tests
+  sku: wh_llmbox
+  owner_id: U0896VBAKFC # Pratikkumar Prajapati
+  team: models
+  timeout: 15
+
+- name: t3k_wan2.2_tests
+  cmd: run_t3000_wan22_tests
+  sku: wh_llmbox
+  owner_id: U03FJB5TM5Y # Colman Glagovich
+  team: models
+  timeout: 45
+
+- name: t3k_mochi_tests
+  cmd: run_t3000_mochi_tests
+  sku: wh_llmbox
+  owner_id: U09ELB03XRU # Stephen Osborne
+  team: models
+  timeout: 60
