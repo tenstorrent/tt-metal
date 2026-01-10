@@ -737,7 +737,7 @@ class QwenImagePipeline:
                 else:
                     self.prepare_vae()
 
-                    with self.mesh_reshape(self.encoder_device, self.encoder_mesh_shape):
+                    with self.mesh_reshape(self.vae_device, self.vae_mesh_shape):
                         # tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
                         tt_latents, logical_h = self._vae_decoder.prepare_input(torch_latents)
                         tt_decoded_output, logical_h = self._vae_decoder.forward(tt_latents, logical_h)
