@@ -21,7 +21,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
     [
         # 2x4 config with sp enabled - sp on axis 0 enables fsdp weight sharding (no cfg parallel)
         [(1, 8), (1, 0), (1, 0), (8, 1), (8, 1), (8, 1), ttnn.Topology.Linear, 1],  # 109 s FSDP
-        [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # OOM with all configs
+        [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (2, 1), ttnn.Topology.Linear, 1],  # 129s. Needs FSDP
         [
             (2, 4),
             (2, 0),

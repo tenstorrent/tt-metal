@@ -390,16 +390,18 @@ class QwenImageVaeDecoder:
         device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
     ) -> None:
-        self.wan_decoder = WanDecoder(
-            base_dim=base_dim,
-            z_dim=z_dim,
-            dim_mult=dim_mult,
-            num_res_blocks=num_res_blocks,
-            temperal_downsample=temperal_downsample,
-            mesh_device=device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-        )
+        self.params = {
+            "base_dim": base_dim,
+            "z_dim": z_dim,
+            "dim_mult": dim_mult,
+            "num_res_blocks": num_res_blocks,
+            "temperal_downsample": temperal_downsample,
+            "mesh_device": device,
+            "ccl_manager": ccl_manager,
+            "parallel_config": parallel_config,
+        }
+
+        self.wan_decoder = WanDecoder(**self.params)
 
         # TODO: Remove when WanDecoder is migrated to tt-dit Modules framework.
         self._is_loaded = False
@@ -408,13 +410,16 @@ class QwenImageVaeDecoder:
         return self.wan_decoder(x, logical_h=logical_h)
 
     def load_torch_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
+        if self.wan_decoder is None:
+            self.wan_decoder = WanDecoder(**self.params)
         self.wan_decoder.load_state_dict(state_dict)
         self._is_loaded = True
 
     def deallocate_weights(self) -> None:
-        NotImplementedError(
-            "Deallocation of WanDecoder based model weights is not supported yet. Use QwenImageVaeDecoder_wan_reipmpl instead."
-        )
+        # Hack. Move Wan to Module framework and implement deallocate_weights.
+        del self.wan_decoder
+        self.wan_decoder = None
+        self._is_loaded = False
 
     def is_loaded(self) -> bool:
         return self._is_loaded

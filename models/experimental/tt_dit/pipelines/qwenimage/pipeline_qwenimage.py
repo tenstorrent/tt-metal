@@ -57,6 +57,12 @@ class PipelineTrace:
 
 
 class QwenImagePipeline:
+    """
+    QwenImagePipeline is a pipeline for generating images from text prompts.
+    It uses a transformer to encode the text prompts and a VAE to decode the latent space.
+    Dynamic loading is controlled by the initialization state. During inference, modules will be loaded/offloaded as needed.
+    """
+
     def __init__(
         self,
         *,
@@ -213,16 +219,14 @@ class QwenImagePipeline:
                 is_fsdp=is_fsdp,
             )
 
-        # With FSDP enabled, weights are sharded so all models can fit in memory simultaneously
-        # Without FSDP, we need to load/unload models to avoid OOM
+        # load tranformer weights based on configuration
+        # Encoder is already loaded. Decide if we should also load the transformers.
         if (
             not dynamic_load_encoder or use_torch_text_encoder
         ):  # Implies we have enough space. VAE comes after denoising, so load all transformers now.
-            # FSDP path: load all models upfront - they can coexist in memory
-            # logger.info("FSDP enabled: loading all models (encoder, transformer, VAE) simultaneously...")
-            # Load transformers immediately with FSDP
-            for idx, submesh_device in enumerate(self._submesh_devices):
-                self._load_transformers(idx)
+            self._load_transformers(self.encoder_submesh_idx)
+        # Always load transformers for vae since it comes before VAE
+        self._load_transformers(self.vae_submesh_idx)
 
         # Delete the torch model to free up CPU memory
         del torch_transformer
@@ -260,7 +264,7 @@ class QwenImagePipeline:
                     ccl_manager=self._ccl_managers[self.vae_submesh_idx],
                 )
 
-            # With FSDP or torch encoder: load VAE now (no memory conflict)
+            # Load VAE weights based on configuration
             if (
                 not dynamic_load_vae
             ):  # Implies we have enough space to load with the denoising transformer. VAE comes after denoising, so load all transformers now.
@@ -410,6 +414,8 @@ class QwenImagePipeline:
                 "vae_tp": (8, 1),
                 "num_links": 1,
                 "is_fsdp": True,
+                "dynamic_load_encoder": False,
+                "dynamic_load_vae": False,
             },
             (2, 4): {
                 "cfg_config": (2, 1),
@@ -418,7 +424,7 @@ class QwenImagePipeline:
                 "encoder_tp": (4, 1),
                 "vae_tp": (4, 1),
                 "num_links": 1,
-                "is_fsdp": False,
+                "is_fsdp": True,
                 "dynamic_load_encoder": True,
                 "dynamic_load_vae": False,
             },
@@ -482,7 +488,8 @@ class QwenImagePipeline:
         """Prepare encoder for inference."""
         if not self._text_encoder.encoder_loaded():
             self._deallocate_transformers(self.encoder_submesh_idx)
-            self._text_encoder.reload_encoder_weights()
+            with self.mesh_reshape(self.encoder_device, self.encoder_mesh_shape):
+                self._text_encoder.reload_encoder_weights()
 
     def prepare_transformers(self) -> None:
         """Prepare transformers for inference."""
@@ -504,7 +511,8 @@ class QwenImagePipeline:
         # With FSDP: all models can coexist, skip deallocation/reload
         if not self._vae_decoder.is_loaded():
             self._deallocate_transformers(self.vae_submesh_idx)
-            self._reload_vae()
+            with self.mesh_reshape(self.vae_device, self.vae_mesh_shape):
+                self._reload_vae()
 
     def __call__(
         self,
