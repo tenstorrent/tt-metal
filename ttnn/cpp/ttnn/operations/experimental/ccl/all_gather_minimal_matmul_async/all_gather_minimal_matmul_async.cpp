@@ -19,9 +19,18 @@ ttnn::Tensor ExecuteAllGatherMinimalMatmulAsync::invoke(
     const std::optional<ttnn::Tensor>& bias_tensor,
     std::optional<unary::UnaryWithParam> fused_activation,
     const std::optional<const AllGatherMinimalMatmulAsyncConfig>& config,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const ttnn::ccl::Topology topology,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    uint32_t num_links,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    uint32_t chunks_per_sync,
+    uint32_t num_workers_per_link,
+    uint32_t num_buffers_per_channel) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
@@ -30,17 +39,35 @@ ttnn::Tensor ExecuteAllGatherMinimalMatmulAsync::invoke(
         true /*fp32_acc*/,
         true /*packer_acc*/);
 
+    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+
+    bool using_persistent_buffers = persistent_output_buffer.has_value();
+
+    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
+
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+
     return operation::run(
                AllGatherMinimalMatmulAsyncOp{
-                   .config = config,
-                   .fused_activation = std::move(fused_activation),
-                   .output_mem_config = memory_config,
-                   .output_dtype = dtype,
-                   .compute_kernel_config = kernel_config_val},
+                   config,
+                   std::move(fused_activation),
+                   memory_config,
+                   dtype,
+                   kernel_config_val,
+                   num_links,
+                   num_devices,
+                   topology_,
+                   multi_device_global_semaphore,
+                   cluster_axis,
+                   barrier_semaphore,
+                   using_persistent_buffers,
+                   chunks_per_sync,
+                   num_workers_per_link,
+                   num_buffers_per_channel},
                {input_tensor, weight_tensor},
                {bias_tensor},
-               {})
-        .at(0);
+               {optional_output_tensors})
+        .at(1);
 }
 
 }  // namespace ttnn::operations::experimental::all_gather_minimal_matmul_async

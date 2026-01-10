@@ -156,9 +156,18 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("bias_tensor") = nb::none(),
             nb::arg("fused_activation") = nb::none(),
             nb::arg("config") = nb::none(),
+            nb::arg("multi_device_global_semaphore"),
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
             nb::arg("memory_config") = nb::none(),
             nb::arg("dtype") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("persistent_output_buffer") = nb::none(),
+            nb::arg("num_links") = 1,
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("barrier_semaphore") = nb::none(),
+            nb::arg("chunks_per_sync") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none()});
 
     auto py_all_gather_minimal_matmul_async_config =
         nb::class_<all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig>(

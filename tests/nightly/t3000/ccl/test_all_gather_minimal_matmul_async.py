@@ -8,11 +8,18 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
+from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
     run_device_profiler,
 )
+
+
+def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
+    # create global semaphore handles
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+    return ccl_semaphore_handles
 
 
 def assert_quality(torch_output, tt_output):
@@ -38,12 +45,43 @@ def run_test_linear_impl(
     N_block_size,
     subblock_h,
     subblock_w,
+    num_devices,
+    num_links,
+    topology,
+    cluster_axis,
+    input_dtype,
+    core_grid,
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
-    core_grid=None,
+    num_iters=1,
+    use_persistent_buffers=True,
 ):
-    core_grid = core_grid or device.compute_with_storage_grid_size()
+    ccl_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+    )
+
+    # create global semaphore handles
+    ccl_semaphore_handles = [create_global_semaphores(device, num_devices, ccl_cores, 0) for _ in range(num_iters)]
+
+    barrier_semaphore_handles = [ttnn.create_global_semaphore(device, ccl_cores, 0) for _ in range(num_iters)]
+
+    ### Create persistent output buffers
+    logger.info("Creating persistent buffers")
+    if use_persistent_buffers:
+        persistent_output_buffers = [
+            ttnn.from_torch(
+                torch.zeros(tt_input.shape[0], tt_input.shape[1]),
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=input_dtype,
+                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, None]),
+            )
+            for _ in range(num_iters)
+        ]
+    else:
+        persistent_output_buffers = []
 
     activation_fn = None
     if activation == "gelu":
@@ -82,9 +120,27 @@ def run_test_linear_impl(
         fused_activation=activation_fn,
         compute_kernel_config=compute_config,
         config=matmul_config,
+        persistent_output_buffer=persistent_output_buffers[0],
+        multi_device_global_semaphore=ccl_semaphore_handles[0],
+        num_links=1,
+        topology=topology,
+        cluster_axis=cluster_axis,
+        barrier_semaphore=barrier_semaphore_handles[0] if not use_persistent_buffers else None,
+        chunks_per_sync=1,
+        num_workers_per_link=4,
+        num_buffers_per_channel=2,
     )
-    tt_output = ttnn.to_torch(tt_output)
-    check_result = assert_quality(torch_output, tt_output)
+
+    tt_output = ttnn.from_device(tt_output)
+    tt_output = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=(0, 1)),
+    )
+    check_result = []
+    for i in range(num_devices):
+        tt_device_output = tt_output[:, i * torch_output.shape[1] : (i + 1) * torch_output.shape[1]]
+        check_result.append(assert_quality(torch_output, tt_device_output))
+
     return check_result
 
 
@@ -98,6 +154,8 @@ def run_test_linear(
     N_block_size,
     subblock_h,
     subblock_w,
+    topology,
+    core_grid,
     use_bias=False,
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -105,7 +163,6 @@ def run_test_linear(
     dtype=ttnn.bfloat16,
     weight_dtype=None,
     bias_dtype=None,
-    core_grid=None,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -140,20 +197,47 @@ def run_test_linear(
         math_fidelity=math_fidelity,
         fp32_acc=fp32_acc,
         core_grid=core_grid,
+        input_dtype=dtype,
+        num_devices=device.get_num_devices(),
+        num_links=1,
+        topology=topology,
+        cluster_axis=1,
     )
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "M, K, N",
-    [(4096, 4096, 4096)],
+    "M, K, N, core_grid_x, core_grid_y",
+    [(4096, 4096, 4096, 4, 4)],
 )
 @pytest.mark.parametrize(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [(8, 8, 8, 2, 2)],
 )
-def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_linear(
+    mesh_device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    topology,
+    core_grid_x,
+    core_grid_y,
+):
     check_result = run_test_linear(
-        device,
+        mesh_device,
         M,
         K,
         N,
@@ -162,6 +246,9 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
         N_block_size,
         subblock_h,
         subblock_w,
+        topology,
+        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
     )
-    assert check_result["pcc"] > 0.999_500
-    assert check_result["relative_rmse"] < 0.02
+    for i in range(mesh_device.get_num_devices()):
+        assert check_result[i]["pcc"] > 0.999_500
+        assert check_result[i]["relative_rmse"] < 0.02
