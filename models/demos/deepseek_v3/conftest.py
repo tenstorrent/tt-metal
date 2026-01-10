@@ -29,6 +29,60 @@ def pytest_addoption(parser):
     )
 
 
+def automatically_detect_current_device_type() -> str:
+    """
+    Automatically detect device type based on cluster type and device count.
+
+    Returns:
+        str: One of "N150", "N300", "T3K", "TG", "DUAL", "QUAD"
+
+    Raises:
+        ValueError: If the device type cannot be determined from the current configuration
+    """
+    cluster_type = ttnn.cluster.get_cluster_type()
+    num_devices = ttnn.get_num_devices()
+
+    # Check cluster type first
+    if cluster_type == ttnn.cluster.ClusterType.T3K:
+        if num_devices == 8:
+            return "T3K"
+        else:
+            raise ValueError(f"T3K cluster type detected but unexpected device count: {num_devices} (expected 8)")
+    elif cluster_type == ttnn.cluster.ClusterType.TG:
+        if num_devices == 32:
+            return "TG"
+        else:
+            raise ValueError(f"TG cluster type detected but unexpected device count: {num_devices} (expected 32)")
+    elif cluster_type == ttnn.cluster.ClusterType.GALAXY:
+        # Galaxy can be TG (32 devices), DUAL (64 devices), or QUAD (128 devices)
+        if num_devices == 32:
+            return "TG"
+        elif num_devices == 64:
+            return "DUAL"
+        elif num_devices == 128:
+            return "QUAD"
+        else:
+            raise ValueError(
+                f"GALAXY cluster type detected but unexpected device count: {num_devices} "
+                f"(expected 32 for TG, 64 for DUAL, or 128 for QUAD)"
+            )
+    elif cluster_type == ttnn.cluster.ClusterType.N150:
+        if num_devices == 1:
+            return "N150"
+        else:
+            raise ValueError(f"N150 cluster type detected but unexpected device count: {num_devices} (expected 1)")
+    elif cluster_type == ttnn.cluster.ClusterType.N300:
+        if num_devices == 1 or num_devices == 2:
+            return "N300"
+        else:
+            raise ValueError(f"N300 cluster type detected but unexpected device count: {num_devices} (expected 1 or 2)")
+
+    raise ValueError(
+        f"Unable to determine device type: cluster_type={cluster_type}, "
+        f"num_devices={num_devices}, arch_name={ttnn.get_arch_name()}"
+    )
+
+
 @pytest.fixture(scope="function")
 def mesh_device(request, device_params):
     """
@@ -53,9 +107,20 @@ def mesh_device(request, device_params):
     if requested_system_name is None:
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to T3K, DUAL, QUAD, or TG.")
 
-    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
-    logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
+    def get_mesh_shape(system_name: str) -> ttnn.MeshShape:
+        if system_name.upper() == "AUTO":
+            detected_name = get_current_device_type()
+            logger.info(
+                f"Selected MESH_DEVICE: 'AUTO' - detected device type: '{detected_name}' - mesh shape will be set to: {system_name_to_mesh_shape(detected_name)}"
+            )
+            return system_name_to_mesh_shape(detected_name)
+        else:
+            logger.info(
+                f"Selected MESH_DEVICE: '{system_name}' - mesh shape will be set to: {system_name_to_mesh_shape(system_name)}"
+            )
+            return system_name_to_mesh_shape(system_name)
 
+    mesh_shape = get_mesh_shape(requested_system_name)
     updated_device_params = get_updated_device_params(device_params)
 
     fabric_config = updated_device_params.pop("fabric_config", None)
@@ -170,7 +235,7 @@ def cache_path():
     return Path(os.getenv("DEEPSEEK_V3_CACHE", default_cache))
 
 
-def get_current_device_type():
+def get_current_device_type() -> str:
     """
     Determine the current device type based on cluster type and device count.
     Honors MESH_DEVICE environment variable when set, falling back to hardware detection otherwise.
@@ -182,75 +247,19 @@ def get_current_device_type():
         ValueError: If the device type cannot be determined from the current configuration
     """
 
-    def automatically_detect_current_device_type():
-        """
-        Automatically detect device type based on cluster type and device count.
-
-        Returns:
-            str: One of "N150", "N300", "T3K", "TG", "DUAL", "QUAD"
-
-        Raises:
-            ValueError: If the device type cannot be determined from the current configuration
-        """
-        cluster_type = ttnn.cluster.get_cluster_type()
-        num_devices = ttnn.get_num_devices()
-
-        # Check cluster type first
-        if cluster_type == ttnn.cluster.ClusterType.T3K:
-            if num_devices == 8:
-                return "T3K"
-            else:
-                raise ValueError(f"T3K cluster type detected but unexpected device count: {num_devices} (expected 8)")
-        elif cluster_type == ttnn.cluster.ClusterType.TG:
-            if num_devices == 32:
-                return "TG"
-            else:
-                raise ValueError(f"TG cluster type detected but unexpected device count: {num_devices} (expected 32)")
-        elif cluster_type == ttnn.cluster.ClusterType.GALAXY:
-            # Galaxy can be TG (32 devices), DUAL (64 devices), or QUAD (128 devices)
-            if num_devices == 32:
-                return "TG"
-            elif num_devices == 64:
-                return "DUAL"
-            elif num_devices == 128:
-                return "QUAD"
-            else:
-                raise ValueError(
-                    f"GALAXY cluster type detected but unexpected device count: {num_devices} "
-                    f"(expected 32 for TG, 64 for DUAL, or 128 for QUAD)"
-                )
-        elif cluster_type == ttnn.cluster.ClusterType.N150:
-            if num_devices == 1:
-                return "N150"
-            else:
-                raise ValueError(f"N150 cluster type detected but unexpected device count: {num_devices} (expected 1)")
-        elif cluster_type == ttnn.cluster.ClusterType.N300:
-            if num_devices == 1 or num_devices == 2:
-                return "N300"
-            else:
-                raise ValueError(
-                    f"N300 cluster type detected but unexpected device count: {num_devices} (expected 1 or 2)"
-                )
-
-        raise ValueError(
-            f"Unable to determine device type: cluster_type={cluster_type}, "
-            f"num_devices={num_devices}, arch_name={ttnn.get_arch_name()}"
-        )
-
     valid_system_names = get_valid_system_names()
     requested_system_name = os.getenv("MESH_DEVICE")
-    if requested_system_name:
-        upper_name = requested_system_name.upper()
-        if upper_name not in valid_system_names:
-            raise ValueError(
-                f"Invalid MESH_DEVICE value: {requested_system_name}. Must be one of {', '.join(valid_system_names)}"
-            )
-        return upper_name
+    if requested_system_name is None:
+        raise ValueError(f"Invalid system name: {system_name}. Must be one of {', '.join(valid_system_names)} or AUTO")
 
-    logger.warning(f"MESH_DEVICE environment variable is not set - falling back to hardware detection")
-    system_name = automatically_detect_current_device_type()
-    if system_name not in valid_system_names:
+    upper_name = requested_system_name.upper()
+    if upper_name is "AUTO":
+        system_name = automatically_detect_current_device_type()
+        logger.warning(f"MESH_DEVICE environment variable is not set - falling back to hardware detection")
+
+    if upper_name not in valid_system_names:
         raise ValueError(f"Invalid system name: {system_name}. Must be one of {', '.join(valid_system_names)}")
+
     return system_name
 
 
