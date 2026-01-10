@@ -19,7 +19,7 @@ using namespace tt::constants;
 FillCacheMultiCoreProgramFactory::cached_program_t FillCacheMultiCoreProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& /*output_tensor*/) {
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
     const auto batch_idx = operation_attributes.batch_idx;
@@ -179,7 +179,7 @@ void FillCacheMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& /*output_tensor*/) {
     auto& program = cached_program.program;
     const auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     const auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;

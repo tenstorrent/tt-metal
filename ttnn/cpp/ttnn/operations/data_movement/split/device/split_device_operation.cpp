@@ -65,13 +65,13 @@ SplitDeviceOperation::tensor_return_value_t SplitDeviceOperation::create_output_
 }
 
 SplitDeviceOperation::program_factory_t SplitDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::SplitProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SplitDeviceOperation::tensor_return_value_t>
 SplitDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     const auto& input_tensor = tensor_args.input;
     std::vector<Tensor> input_tensors = {input_tensor};
 

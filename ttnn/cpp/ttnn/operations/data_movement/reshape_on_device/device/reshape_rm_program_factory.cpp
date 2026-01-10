@@ -20,7 +20,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     const Tensor& input_tensor,
     Tensor& output_tensor,
     uint32_t num_cores_total,
-    uint32_t num_cores,
     uint32_t num_cores_y,
     const CoreRangeSet& core_group_1,
     uint32_t num_w_sticks_per_core_group_1,
@@ -117,7 +116,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }  // namespace
 
 ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
-    const reshape_on_device::operation_attributes_t& operation_attributes,
+    const reshape_on_device::operation_attributes_t& /*operation_attributes*/,
     const reshape_on_device::tensor_args_t& tensor_args,
     reshape_on_device::tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -199,7 +198,6 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
         input_tensor,
         output_tensor,
         num_cores_total,
-        num_cores,
         num_cores_y,
         core_group_1,
         num_sticks_per_core_group_1,
@@ -222,7 +220,7 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
 
 void ReshapeRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshape_on_device::operation_attributes_t& operation_attributes,
+    const reshape_on_device::operation_attributes_t& /*operation_attributes*/,
     const reshape_on_device::tensor_args_t& tensor_args,
     reshape_on_device::tensor_return_value_t& output_tensor) {
     const auto& src_tensor = tensor_args.input_tensor;
@@ -256,7 +254,6 @@ void ReshapeRMProgramFactory::override_runtime_arguments(
         src_tensor,
         dst_tensor,
         num_cores_total,
-        num_cores,
         num_cores_y,
         core_group_1,
         num_sticks_per_core_group_1,

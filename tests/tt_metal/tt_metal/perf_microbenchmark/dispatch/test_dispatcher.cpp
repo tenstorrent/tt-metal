@@ -524,7 +524,7 @@ class DispatchPackedWriteLargeTestFixture : public DispatchPackedWriteTestFixtur
         std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
         uint32_t xfer_size_bytes,
         uint32_t addr,
-        const CoreCoord& worker_coord,
+        const CoreCoord& /*worker_coord*/,
         const CoreCoord& virtual_start,
         const CoreCoord& virtual_end,
         uint32_t num_mcast_dests) {

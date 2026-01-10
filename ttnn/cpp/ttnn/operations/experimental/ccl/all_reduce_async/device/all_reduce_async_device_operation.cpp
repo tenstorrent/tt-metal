@@ -14,7 +14,7 @@
 namespace ttnn::operations::experimental::ccl::all_reduce_async {
 
 AllReduceAsyncDeviceOperation::program_factory_t AllReduceAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return AllReduceAsyncMeshWorkloadFactory{};
 }
 

@@ -255,7 +255,7 @@ struct TestMux : TestWorker {
 public:
     TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_config(FabricMuxConfig* config, ConnectionKey connection_key);
-    bool validate_results(std::vector<uint32_t>& data) const override { return true; }  // Mux doesn't validate
+    bool validate_results(std::vector<uint32_t>& /*data*/) const override { return true; }  // Mux doesn't validate
 
     FabricMuxConfig* config_ = nullptr;
     ConnectionKey connection_key_{};

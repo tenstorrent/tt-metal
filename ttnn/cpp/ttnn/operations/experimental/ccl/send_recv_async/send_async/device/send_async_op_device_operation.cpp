@@ -13,7 +13,7 @@
 namespace ttnn::operations::experimental::ccl::send_async {
 
 SendAsyncDeviceOperation::program_factory_t SendAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return SendAsyncMeshWorkloadFactory{};
 }
 
@@ -33,13 +33,13 @@ void SendAsyncDeviceOperation::validate_on_program_cache_miss(
 }
 
 SendAsyncDeviceOperation::spec_return_value_t SendAsyncDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     // Op does not return any output tensors
     return {};
 }
 
 SendAsyncDeviceOperation::tensor_return_value_t SendAsyncDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     // Op does not return any output tensors
     return {};
 }

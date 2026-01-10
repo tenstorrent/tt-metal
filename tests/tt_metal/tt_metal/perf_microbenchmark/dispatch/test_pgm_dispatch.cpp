@@ -583,7 +583,7 @@ CoreType dispatch_core_type_to_core_type(DispatchCoreType dispatch_core_type) {
 
 // Helper function to create standard programs
 std::array<tt_metal::Program, 2> create_standard_programs(
-    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType dispatch_core_type) {
+    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType /*dispatch_core_type*/) {
     std::array<tt_metal::Program, 2> programs;
     if (!initialize_program(info, mesh_device, programs[0], info.slow_kernel_cycles) ||
         !initialize_program(info, mesh_device, programs[1], info.fast_kernel_cycles)) {

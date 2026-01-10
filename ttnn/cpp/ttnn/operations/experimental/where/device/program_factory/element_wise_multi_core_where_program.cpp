@@ -135,7 +135,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
 
 void ElementWiseMultiCoreWhereProgram::override_runtime_arguments(
     cached_program_t& cached_program,
-    const where_ttt_args::operation_attributes_type& operation_attributes,
+    const where_ttt_args::operation_attributes_type& /*operation_attributes*/,
     const where_ttt_args::tensor_args_type& tensor_args,
     where_ttt_args::tensor_return_value_type& tensor_return_value) {
     const auto& sh_var = cached_program.shared_variables;

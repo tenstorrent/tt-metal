@@ -520,7 +520,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
 
 void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormPostAllGatherOperationAttributes& operation_attributes,
+    const LayerNormPostAllGatherOperationAttributes& /*operation_attributes*/,
     const LayerNormPostAllGatherTensorArgs& tensor_args,
     LayerNormPostAllGatherTensorReturnValue& output) {
     auto& shared_vars = cached_program.shared_variables;

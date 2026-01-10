@@ -21,13 +21,13 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 }
 
 MorehAbsPowOperation::program_factory_t MorehAbsPowOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // Case for int32
     return MorehAbsPowFactory{};
 }
 
 void validate_tensors(
-    const MorehAbsPowOperation::operation_attributes_t& operation_attributes,
+    const MorehAbsPowOperation::operation_attributes_t& /*operation_attributes*/,
     const MorehAbsPowOperation::tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;

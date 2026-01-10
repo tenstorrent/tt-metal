@@ -62,7 +62,7 @@ ttnn::Shape compute_sparse_matmul_output_shape(
 
 namespace ttnn::operations::sparse_matmul {
 SparseMatmulDeviceOperation::program_factory_t SparseMatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return program::SparseMatmulMultiCoreReuseMcast1DProgramFactory{};
 }
 
@@ -275,7 +275,7 @@ SparseMatmulDeviceOperation::invoke(
 SparseMatmulDeviceOperation::operation_attributes_t create_sparse_matmul_attributes(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const Tensor& sparsity,
+    const Tensor& /*sparsity*/,
     const SparseMatmulDeviceOperation::operation_attributes_t& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
     auto matmul_attributes = ttnn::operations::matmul::operation_attributes_t{

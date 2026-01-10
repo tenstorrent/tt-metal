@@ -68,7 +68,7 @@ Tensor _isclose(
 Tensor ExecuteMinimum::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& output_dtype,
+    const std::optional<const DataType>& /*output_dtype*/,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -90,13 +90,13 @@ Tensor ExecuteMinimum::invoke(
 Tensor ExecuteMinimum::invoke(
     const Tensor& input_a,
     unary::ScalarVariant value,
-    const std::optional<const DataType>& output_dtype,
+    const std::optional<const DataType>& /*output_dtype*/,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    std::optional<bool> /*use_legacy*/) {
     return std::visit(
         [&](auto input_b) {
             return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::MINIMUM>::
@@ -108,7 +108,7 @@ Tensor ExecuteMinimum::invoke(
 Tensor ExecuteMaximum::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& output_dtype,
+    const std::optional<const DataType>& /*output_dtype*/,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -130,13 +130,13 @@ Tensor ExecuteMaximum::invoke(
 Tensor ExecuteMaximum::invoke(
     const Tensor& input_a,
     unary::ScalarVariant value,
-    const std::optional<const DataType>& output_dtype,
+    const std::optional<const DataType>& /*output_dtype*/,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    std::optional<bool> /*use_legacy*/) {
     return std::visit(
         [&](auto input_b) {
             return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::MAXIMUM>::
@@ -456,7 +456,8 @@ Tensor ExecuteDiv::invoke(
     return typecast(result, input_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
-Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor _div_no_nan_overload(
+    const Tensor& input_a, float value, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     if (value == 0) {
         return ttnn::zeros_like(input_a);
     }
@@ -473,12 +474,13 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
 }
 
-Tensor ExecutePrelu::invoke(const Tensor& input, float weight, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecutePrelu::invoke(
+    const Tensor& input, float weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     return ttnn::prelu_sfpu(input, weight);
 }
 
 Tensor ExecutePrelu::invoke(
-    const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     float scalar_weight = weight[0];
     return ttnn::prelu_sfpu(input, scalar_weight);
 }
@@ -641,7 +643,7 @@ Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
     DataType input_dtype = input_a.dtype();
     Tensor div_res = ttnn::div(input_a, input_b, false, "trunc", std::nullopt, output_mem_config);
     // No typecast for FP32 input
@@ -659,7 +661,7 @@ Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
     return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::FMOD>::invoke(
         input, scalar, output_mem_config);
 }
@@ -697,7 +699,7 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optio
  * - implementation supports any 1D "squeezable tensor" at input operands
  *   by running reshape.
  */
-Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     const ttnn::Shape& s_a = input_a.logical_shape();
     const ttnn::Shape& s_b = input_b.logical_shape();
     auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
@@ -760,7 +762,7 @@ Tensor _polyval(
 Tensor ExecuteGCD::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& output_dtype,
+    const std::optional<const DataType>& /*output_dtype*/,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -782,7 +784,7 @@ Tensor ExecuteGCD::invoke(
 Tensor ExecuteLCM::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& output_dtype,
+    const std::optional<const DataType>& /*output_dtype*/,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -845,7 +847,7 @@ Tensor ExecutePower::invoke(
 Tensor ExecutePower::invoke(
     const Tensor& input,
     const Tensor& exponent,
-    const std::optional<const DataType>& dtype,
+    const std::optional<const DataType>& /*dtype*/,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
@@ -868,7 +870,7 @@ Tensor ExecutePower::invoke(
 Tensor ExecutePower::invoke(
     float input_a,
     const Tensor& exponent,
-    const std::optional<const DataType>& dtype,
+    const std::optional<const DataType>& /*dtype*/,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,

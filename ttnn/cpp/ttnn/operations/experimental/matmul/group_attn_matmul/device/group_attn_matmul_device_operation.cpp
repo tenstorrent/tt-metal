@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::matmul::group_attn_matmul {
 
 GroupAttnMatmulDeviceOperation::program_factory_t GroupAttnMatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return program::GroupAttnMatmulProgramFactory{};
 }
 

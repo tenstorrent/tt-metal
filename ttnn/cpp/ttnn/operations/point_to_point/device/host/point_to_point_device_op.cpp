@@ -142,7 +142,7 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
 };
 
 PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // !Maybe todo. Support output with different config/layout than input
 
     const auto& input_tensor = tensor_args.input_tensor;

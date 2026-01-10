@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ssm::hc_sum_reduce {
 
 HCSumReduceDeviceOperation::program_factory_t HCSumReduceDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::HCSumReduceProgramFactory{};
 }
 

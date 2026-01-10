@@ -866,7 +866,7 @@ public:
     }
 
     std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
-        const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const override {
+        const FabricNodeId& src_node, const std::vector<FabricNodeId>& /*devices*/) const override {
         // Get mesh dimensions
         uint32_t mesh_height = mesh_shape_[NS_DIM];
         uint32_t mesh_width = mesh_shape_[EW_DIM];

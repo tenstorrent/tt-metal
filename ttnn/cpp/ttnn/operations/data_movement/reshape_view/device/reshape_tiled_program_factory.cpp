@@ -60,7 +60,7 @@ uint32_t tensor_idxs_to_page_idx(
     const uint32_t c,
     const uint32_t h,
     const uint32_t w,
-    const Shape& shape,
+    const Shape& /*shape*/,
     const std::array<uint32_t, 2>& tile_shape,
     const Dims& tile_dims) {
     return (c * tile_dims.c) + (h / tile_shape[0] * tile_dims.w) + (w / tile_shape[1]);
@@ -205,7 +205,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
 }
 
 Tensor compute_reshape_mapping_host_tensor(
-    const uint32_t num_input_pages,
+    const uint32_t /*num_input_pages*/,
     const uint32_t num_output_pages,
     const Shape& input_shape,
     const Shape& output_shape,

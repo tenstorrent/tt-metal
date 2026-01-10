@@ -12,12 +12,12 @@
 namespace ttnn::operations::data_movement {
 
 MoeExpertTokenRemapDeviceOperation::program_factory_t MoeExpertTokenRemapDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return Multicore{};
 }
 
 void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& topk_tensor = tensor_args.topk_tensor;
     const auto& metadata_tensor = tensor_args.metadata_tensor;
     const auto& mapping_tensor = tensor_args.mapping_tensor;

@@ -213,7 +213,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
 void UnaryProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
@@ -416,7 +416,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
 
 void UnarySubCoreGridProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;

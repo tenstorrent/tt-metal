@@ -192,7 +192,7 @@ CopyProgramFactory::cached_program_t CopyProgramFactory::create(
 
 void CopyProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const copy::operation_attributes_t& operation_attributes,
+    const copy::operation_attributes_t& /*operation_attributes*/,
     const copy::tensor_args_t& tensor_args,
     copy::tensor_return_value_t& output) {
     using namespace tt::tt_metal;

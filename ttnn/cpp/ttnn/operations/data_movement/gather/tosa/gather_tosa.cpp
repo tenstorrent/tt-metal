@@ -15,7 +15,7 @@
 namespace ttnn::operations::data_movement {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-Tensor pre_tosa_gather_transform_input_index_tensor(const Tensor& input_tensor, const int8_t dim, const uint32_t C) {
+Tensor pre_tosa_gather_transform_input_index_tensor(const Tensor& input_tensor, const uint32_t C) {
     if (input_tensor.logical_shape().rank() == 1) {
         // Early exit for scalar tensors, return the same tensor
         return input_tensor;
@@ -68,7 +68,7 @@ Tensor ExecuteTosaGather::invoke(
         "Index tensor first dimension must be equal to input tensor first dimension");
 
     Tensor expanded_index_tensor =
-        CMAKE_UNIQUE_NAMESPACE::pre_tosa_gather_transform_input_index_tensor(input_index_tensor, dim, C);
+        CMAKE_UNIQUE_NAMESPACE::pre_tosa_gather_transform_input_index_tensor(input_index_tensor, C);
 
     return ttnn::gather(
         input_tensor, dim, expanded_index_tensor, sparse_grad, memory_config_value, optional_output_tensor_value);

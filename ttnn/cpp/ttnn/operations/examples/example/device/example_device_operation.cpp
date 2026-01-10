@@ -8,7 +8,7 @@
 namespace ttnn::operations::examples {
 
 ExampleDeviceOperation::program_factory_t ExampleDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     bool some_condition_based_on_operation_attributes_and_or_tensor_args = true;
     if (some_condition_based_on_operation_attributes_and_or_tensor_args) {
         return SingleCore{};

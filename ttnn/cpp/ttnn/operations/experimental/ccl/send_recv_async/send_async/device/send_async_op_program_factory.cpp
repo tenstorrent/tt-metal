@@ -45,7 +45,7 @@ SendAsyncMeshWorkloadFactory::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& /*tensor_return_value*/) {
     auto mesh_socket = operation_attributes.mesh_socket;
     const auto& input_tensor = tensor_args.input_tensor;
     auto* mesh_device = input_tensor.device();

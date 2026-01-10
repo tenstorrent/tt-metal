@@ -52,7 +52,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     const std::optional<ttnn::Tensor>& bias,
     const std::optional<ttnn::Tensor>& reciprocals,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::DataType> dtype,
+    const std::optional<ttnn::DataType> /*dtype*/,
     std::optional<CoreGrid> core_grid,
     std::optional<bool> inplace,
     std::optional<ttnn::Layout> output_layout,

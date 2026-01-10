@@ -306,7 +306,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const std::optional<const CoreCoord> compute_with_storage_grid_size,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype,
-    const bool all_dram_interleaved) {
+    const bool /*all_dram_interleaved*/) {
     using namespace tt;
     auto* device = input_tensor_a.device();
     auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());

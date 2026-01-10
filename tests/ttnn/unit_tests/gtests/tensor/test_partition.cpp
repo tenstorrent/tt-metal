@@ -230,7 +230,7 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     // Set up signal handler to verify segmentation faults.
     static sigjmp_buf jmp_env;
     struct Handler {
-        static void segfault_handler(int signum) { siglongjmp(jmp_env, /*val=*/1); }
+        static void segfault_handler(int /*signum*/) { siglongjmp(jmp_env, /*val=*/1); }
     };
     struct sigaction old_action{};
     struct sigaction new_action{};

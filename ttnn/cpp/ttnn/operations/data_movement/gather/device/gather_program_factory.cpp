@@ -159,7 +159,7 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
 
 void GatherProgramFactorySingleRowSingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attributes,
+    const operation_attributes_t& /*attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
@@ -327,7 +327,7 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
 
 void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attributes,
+    const operation_attributes_t& /*attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     // Get tensor buffers

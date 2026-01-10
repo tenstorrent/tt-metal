@@ -231,7 +231,7 @@ bool test_program_specified_with_core_range_set(
     return pass;
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
     // Once this test is uplifted to use fast dispatch, this can be removed.
     char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";

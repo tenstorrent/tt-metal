@@ -11,7 +11,7 @@
 namespace ttnn::operations::ccl::broadcast {
 
 BroadcastDeviceOperation::program_factory_t BroadcastDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return program::BroadcastProgramFactory{};
 }
 

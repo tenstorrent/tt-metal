@@ -18,10 +18,8 @@ namespace {
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_runtime_args_tile_sharded(
     const Tensor& input_tensor,
-    Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
     uint32_t num_cores_total,
-    uint32_t num_cores_x,
     uint32_t num_tiles_per_core) {
     auto* input_buffer = input_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
@@ -57,7 +55,7 @@ NlpKVCacheLoadSliceProgramFactory::cached_program_t NlpKVCacheLoadSliceProgramFa
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.output_tensor_start;
 
-    const auto output_shape = output.padded_shape();
+    const auto& output_shape = output.padded_shape();
     const auto& input_shape = a.padded_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -117,8 +115,8 @@ NlpKVCacheLoadSliceProgramFactory::cached_program_t NlpKVCacheLoadSliceProgramFa
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    auto all_runtime_args = get_unpad_runtime_args_tile_sharded(
-        a, output, output_tensor_start, num_cores_total, num_cores_x, num_tiles_per_core);
+    auto all_runtime_args =
+        get_unpad_runtime_args_tile_sharded(a, output_tensor_start, num_cores_total, num_tiles_per_core);
 
     for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
@@ -157,8 +155,8 @@ void NlpKVCacheLoadSliceProgramFactory::override_runtime_arguments(
     auto num_tiles_per_core = num_units_per_shard_height * num_units_per_shard_width;
 
     const auto& tensor_start = operation_attributes.output_tensor_start;
-    auto all_runtime_args = get_unpad_runtime_args_tile_sharded(
-        src_tensor, output, tensor_start, num_cores_total, num_cores_x, num_tiles_per_core);
+    auto all_runtime_args =
+        get_unpad_runtime_args_tile_sharded(src_tensor, tensor_start, num_cores_total, num_tiles_per_core);
 
     for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};

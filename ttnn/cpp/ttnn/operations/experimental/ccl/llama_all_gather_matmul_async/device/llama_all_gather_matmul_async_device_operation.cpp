@@ -11,7 +11,7 @@ namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async {
 
 LlamaAllGatherMatmulAsyncDeviceOperation::program_factory_t
 LlamaAllGatherMatmulAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::LlamaAllGatherMatmulAsyncProgramFactory{};
 }
 

@@ -562,7 +562,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
 }
 
 void run_local_noc_stream_reg_inc(
-    MeshDispatchFixture* fixture,
+    MeshDispatchFixture* /*fixture*/,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& core,
     const HalProgrammableCoreType& hal_programmable_core_type) {

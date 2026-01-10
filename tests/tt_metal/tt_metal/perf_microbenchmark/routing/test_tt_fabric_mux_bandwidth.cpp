@@ -132,7 +132,7 @@ void create_kernel(
 }
 
 void create_mux_kernel(
-    const TestParams& test_params,
+    const TestParams& /*test_params*/,
     const MuxTestConfig& mux_test_config,
     const DrainerTestConfig& drainer_test_config,
     tt::tt_metal::IDevice* device,

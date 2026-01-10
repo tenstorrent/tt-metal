@@ -39,7 +39,7 @@ args_list_t emit_runtime_args(Shape4D<T> const& shape) {
 }
 
 template <typename T>
-args_list_t emit_compile_time(Shape4D<T> const& shape) {
+args_list_t emit_compile_time(const Shape4D<T>& /*shape*/) {
     return {};
 }
 
