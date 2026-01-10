@@ -71,16 +71,16 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
         cb_reserve_back(cb_r2c_w0, 1);
         uint32_t cb_r2c_w0_addr = get_write_ptr(cb_r2c_w0);
-        noc_async_read_tile(w0_tile_id, w0_accessor, cb_r2c_w0_addr);
-        noc_async_read_barrier();
+        // noc_async_read_tile(w0_tile_id, w0_accessor, cb_r2c_w0_addr);
+        // noc_async_read_barrier();
         cb_push_back(cb_r2c_w0, 1);
         w0_tile_id += w0_w1_stride;
     }
     for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
         cb_reserve_back(cb_r2c_w1, 1);
         uint32_t cb_r2c_w1_addr = get_write_ptr(cb_r2c_w1);
-        noc_async_read_tile(w1_tile_id, w1_accessor, cb_r2c_w1_addr);
-        noc_async_read_barrier();
+        // noc_async_read_tile(w1_tile_id, w1_accessor, cb_r2c_w1_addr);
+        // noc_async_read_barrier();
         cb_push_back(cb_r2c_w1, 1);
         w1_tile_id += w0_w1_stride;
     }
@@ -92,8 +92,8 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_w2_tiles_w; ++j) {
             cb_reserve_back(cb_r2c_w2, 1);
             uint32_t cb_r2c_w2_addr = get_write_ptr(cb_r2c_w2);
-            noc_async_read_tile(w2_tile_id, w2_accessor, cb_r2c_w2_addr);
-            noc_async_read_barrier();
+            // noc_async_read_tile(w2_tile_id, w2_accessor, cb_r2c_w2_addr);
+            // noc_async_read_barrier();
             cb_push_back(cb_r2c_w2, 1);
             w2_tile_id += w2_stride_w;
         }
