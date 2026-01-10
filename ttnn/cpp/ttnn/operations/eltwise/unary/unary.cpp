@@ -383,7 +383,7 @@ Tensor Tanhshrink::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    bool approx) {
+    bool /*approx*/) {
     UnaryOpType op_type = UnaryOpType::TANHSHRINK;
     return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }

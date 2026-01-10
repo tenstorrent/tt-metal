@@ -32,7 +32,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     Tensor& output_tensor,
     const ttnn::Shape& input_tensor_start,
     uint32_t num_cores_total,
-    uint32_t num_cores,
     uint32_t num_cores_y,
     const CoreRangeSet& core_group_1,
     uint32_t num_w_sticks_per_core_group_1,
@@ -234,7 +233,6 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         output,
         input_tensor_start,
         num_cores_total,
-        num_cores,
         num_cores_y,
         core_group_1,
         num_sticks_padded_per_core_group_1,
@@ -265,7 +263,7 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
 
 void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& src_tensor = tensor_args.input;
@@ -295,7 +293,6 @@ void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
         dst_tensor,
         cached_program.shared_variables.input_tensor_start,
         num_cores_total,
-        num_cores,
         num_cores_y,
         core_group_1,
         num_sticks_padded_per_core_group_1,

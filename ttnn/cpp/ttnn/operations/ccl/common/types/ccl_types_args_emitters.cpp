@@ -22,7 +22,7 @@ args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) 
         edm_interface_args.num_buffers_per_channel};
 }
 
-args_list_t emit_compile_time(WorkerEdmInterfaceArgs const& edm_interface_args) { return {}; }
+args_list_t emit_compile_time(const WorkerEdmInterfaceArgs& /*edm_interface_args*/) { return {}; }
 
 args_list_t legacy_emit_address_generator_runtime_args(
     const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
@@ -52,7 +52,8 @@ args_list_t legacy_emit_address_generator_runtime_args(
     };
 }
 
-args_list_t emit_address_generator_runtime_args(const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
+args_list_t emit_address_generator_runtime_args(
+    const tt::tt_metal::IDevice* const /*d*/, const tt::tt_metal::Tensor& t) {
     args_list_t args;
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:

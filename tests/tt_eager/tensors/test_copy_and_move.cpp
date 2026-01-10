@@ -221,7 +221,7 @@ void test_tensor_deallocate_and_close_device(distributed::MeshDevice* device) {
     dev_a.deallocate();
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

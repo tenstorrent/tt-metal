@@ -17,6 +17,8 @@
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #endif
 
+// NOLINTBEGIN(misc-unused-parameters)
+
 // Forward declared from dataflow_api.h
 template <typename T>
 T get_arg_val(int arg_idx);
@@ -516,3 +518,4 @@ struct ShardView {
         return accessor.get_shard_noc_addr(shard_id, offset, noc);
     }
 };
+// NOLINTEND(misc-unused-parameters)

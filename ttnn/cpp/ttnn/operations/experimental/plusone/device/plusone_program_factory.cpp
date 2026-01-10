@@ -17,7 +17,7 @@ namespace ttnn::operations::experimental::plusone::program {
 PlusOneProgramFactory::cached_program_t PlusOneProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& /*tensor_return_value*/) {
     tt::tt_metal::Program program{};
     const auto& input = tensor_args.input;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());

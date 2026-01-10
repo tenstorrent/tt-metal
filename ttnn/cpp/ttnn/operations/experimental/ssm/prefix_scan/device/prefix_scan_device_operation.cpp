@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ssm::prefix_scan {
 
 PrefixScanDeviceOperation::program_factory_t PrefixScanDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::PrefixScanProgramFactory{};
 }
 
@@ -22,7 +22,7 @@ void PrefixScanDeviceOperation::validate_on_program_cache_hit(
 }
 
 void PrefixScanDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& a = tensor_args.a;
     const auto& bx = tensor_args.bx;

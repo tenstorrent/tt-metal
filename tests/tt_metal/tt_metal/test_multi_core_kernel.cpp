@@ -46,7 +46,7 @@ using std::vector;
 using namespace tt;
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::IDevice* device,
+    tt_metal::IDevice* /*device*/,
     uint32_t single_tile_size,
     const CoreRange& all_cores,
     const std::vector<uint32_t>& eltwise_unary_args) {
@@ -102,8 +102,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 }
 
 void compile_and_configure_program(
-    tt_metal::IDevice* device,
-    tt_metal::Program& program,
+    tt_metal::IDevice* /*device*/,
+    tt_metal::Program& /*program*/,
     std::vector<uint32_t>& src_vec,
     tt_metal::Buffer& src_dram_buffer) {
     ////////////////////////////////////////////////////////////////////////////
@@ -126,16 +126,14 @@ void set_rt_args(tt_metal::Program &program, tt_metal::KernelHandle kernel, cons
 }
 
 void write_same_runtime_args_to_device(
-    tt_metal::IDevice* device,
+    tt_metal::IDevice* /*device*/,
     tt_metal::Program& program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
     const CoreRange& core_range,
     int32_t num_tiles,
-    tt_metal::Buffer &src_dram_buffer,
-    tt_metal::Buffer &dst_dram_buffer)
-{
-
+    tt_metal::Buffer& src_dram_buffer,
+    tt_metal::Buffer& dst_dram_buffer) {
     const std::array unary_reader_args{
     (std::uint32_t)src_dram_buffer.address(),
     (std::uint32_t) 0,
@@ -151,19 +149,17 @@ void write_same_runtime_args_to_device(
 }
 
 void write_unique_writer_runtime_args_to_device(
-    tt_metal::IDevice* device,
+    tt_metal::IDevice* /*device*/,
     tt_metal::Program& program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
     const CoreRange& core_range,
     const CoreRangeSet& core_blocks,
     int32_t num_tiles,
-    tt_metal::Buffer &src_dram_buffer,
-    tt_metal::Buffer &dst_dram_buffer_1,
-    tt_metal::Buffer &dst_dram_buffer_2,
-    tt_metal::Buffer &dst_dram_buffer_3
-) {
-
+    tt_metal::Buffer& src_dram_buffer,
+    tt_metal::Buffer& dst_dram_buffer_1,
+    tt_metal::Buffer& dst_dram_buffer_2,
+    tt_metal::Buffer& dst_dram_buffer_3) {
     // Same readers args because all kernels read from same src
     const std::array unary_reader_args{
         (std::uint32_t)src_dram_buffer.address(),
@@ -340,7 +336,7 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::IDevice* device) {
     return pass;
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");

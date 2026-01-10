@@ -77,7 +77,7 @@ strided_all_gather_minimal_matmul_async_program(
     bool read_local_slice_from_input,
 
     /* All Gather Params */
-    IDevice* target_device,
+    IDevice* /*target_device*/,
     const MeshCoordinate& target_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,

@@ -15,8 +15,8 @@ using namespace tt::tt_metal;
 
 GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperation::GenericProgram::create(
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
     Program program{operation_attributes};
 
     shared_variables_t shared_vars;
@@ -34,8 +34,8 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
 void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 

@@ -425,7 +425,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
 
 void UntilizeWithHaloProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const sliding_window::halo::operation_attributes_t& operation_attributes,
+    const sliding_window::halo::operation_attributes_t& /*operation_attributes*/,
     const sliding_window::halo::tensor_args_t& tensor_args,
     sliding_window::halo::tensor_return_value_t& output_tensor) {
     auto& program = cached_program.program;

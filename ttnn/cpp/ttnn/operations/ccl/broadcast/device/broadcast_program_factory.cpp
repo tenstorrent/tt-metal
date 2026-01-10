@@ -321,7 +321,7 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
 
 void BroadcastProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;

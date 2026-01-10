@@ -378,7 +378,7 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y) {
 
 bool validation_bfp8_b(
     const tt::deprecated::Tensor<float>& input_tensor,
-    const tt::DataFormat& data_format,
+    const tt::DataFormat&  /*data_format*/,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
@@ -421,7 +421,7 @@ bool validation_bfp8_b(
 
 bool validation_fp16(
     const tt::deprecated::Tensor<bfloat16>& input_tensor,
-    const tt::DataFormat& data_format,
+    const tt::DataFormat&  /*data_format*/,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,
@@ -464,8 +464,8 @@ bool validation_fp16(
 
 bool validation_mixed_df(
     const tt::deprecated::Tensor<bfloat16>& input_tensor_fp16,
-    const tt::deprecated::Tensor<float>& input_tensor_fp8,
-    const tt::DataFormat& data_format,
+    const tt::deprecated::Tensor<float>&  /*input_tensor_fp8*/,
+    const tt::DataFormat&  /*data_format*/,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t kt,

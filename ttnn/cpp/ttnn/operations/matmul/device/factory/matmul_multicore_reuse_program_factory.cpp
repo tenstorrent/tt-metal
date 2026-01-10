@@ -206,7 +206,7 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
 
 void MatmulMultiCoreReuseProgramFactory::override_runtime_arguments(
     MatmulMultiCoreReuseProgramFactory::cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     constexpr uint32_t per_core_M = 16;

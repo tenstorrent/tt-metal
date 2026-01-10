@@ -353,7 +353,7 @@ static Tensor apply_halo_padding(
 // This function checks if the current shard height is divisible by (stride_h * input_width).
 // If not, it calculates an optimal number of cores and corresponding shard height
 // to enable efficient fold computation across the tensor dimensions.
-Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uint32_t stride_w) {
+Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uint32_t /*stride_w*/) {
     ttnn::Shape input_shape = input.logical_shape();
     uint32_t input_width = input_shape[2];
     uint32_t pixels_per_compute_row = stride_h * input_width;

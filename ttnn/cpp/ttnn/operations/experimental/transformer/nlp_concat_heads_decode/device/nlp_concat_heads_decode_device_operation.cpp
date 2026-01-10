@@ -11,7 +11,7 @@
 namespace ttnn::operations::experimental::nlp_concat_heads_decode {
 
 NLPConcatHeadsDecodeDeviceOperation::program_factory_t NLPConcatHeadsDecodeDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.on_subcoregrids) {
         return program::NLPConcatHeadsDecodeSubcoregridsProgramFactory{};
     }
@@ -129,7 +129,7 @@ namespace ttnn::prim {
 ttnn::operations::experimental::nlp_concat_heads_decode::tensor_return_value_t nlp_concat_heads_decode(
     const Tensor& input_tensor,
     uint32_t num_heads,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& /*memory_config*/,
     const std::optional<Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::experimental::nlp_concat_heads_decode::NLPConcatHeadsDecodeDeviceOperation;

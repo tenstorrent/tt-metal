@@ -12,7 +12,7 @@ void MorehLayerNormBackwardGammaBetaGradOperation::validate_inputs(
 
 MorehLayerNormBackwardGammaBetaGradOperation::program_factory_t
 MorehLayerNormBackwardGammaBetaGradOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 
@@ -28,7 +28,7 @@ void MorehLayerNormBackwardGammaBetaGradOperation::validate_on_program_cache_hit
 
 MorehLayerNormBackwardGammaBetaGradOperation::spec_return_value_t
 MorehLayerNormBackwardGammaBetaGradOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     std::vector<std::optional<TensorSpec>> result(2);
     if (tensor_args.gamma_grad.has_value()) {
         result[0] = tensor_args.gamma_grad->tensor_spec();
@@ -42,7 +42,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::compute_output_specs(
 
 MorehLayerNormBackwardGammaBetaGradOperation::tensor_return_value_t
 MorehLayerNormBackwardGammaBetaGradOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     std::vector<std::optional<Tensor>> result(2);
     if (tensor_args.gamma_grad.has_value()) {
         result[0] = tensor_args.gamma_grad.value();

@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::ccl {
 
 LlamaReduceScatterCreateHeadsDeviceOperation::program_factory_t
 LlamaReduceScatterCreateHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return LlamaReduceScatterCreateHeads{};
 }
 

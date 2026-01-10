@@ -70,9 +70,7 @@ struct NewInfraProgramFactory {
     using tensor_return_value_t = Tensor;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value) {
+        const tensor_args_t& /*tensor_args*/, tensor_return_value_t& /*tensor_return_value*/) {
         return cached_program_t(tt::tt_metal::Program(), SharedVariables{});
     }
 
@@ -92,10 +90,7 @@ struct NewInfraWorkloadFactory {
     using tensor_return_value_t = Tensor;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value) {
+        const tensor_args_t& /*tensor_args*/, tensor_return_value_t& /*tensor_return_value*/) {
         return cached_mesh_workload_t(
             tt::tt_metal::distributed::MeshWorkload(),
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t>());
@@ -114,10 +109,12 @@ static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFacto
 // Old infrastructure device operation that uses the "create_program" method
 struct OldInfraDeviceOpWithCreateProgram {
     void validate(const std::vector<Tensor>& input_tensors) const {}
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const { return {}; }
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const { return {}; }
+    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& /*input_tensors*/) const {
+        return {};
+    }
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& /*input_tensors*/) const { return {}; }
 
-    auto create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    auto create_program(const std::vector<Tensor>& /*input_tensors*/, std::vector<Tensor>& /*output_tensors*/) const {
         return tt::tt_metal::operation::ProgramWithCallbacks();
     }
 };
@@ -125,13 +122,15 @@ struct OldInfraDeviceOpWithCreateProgram {
 // Old infrastructure device operation that uses the "create_program_at" method
 struct OldInfraDeviceOpWithCreateMeshWorkload {
     void validate(const std::vector<Tensor>& input_tensors) const {}
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const { return {}; }
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const { return {}; }
+    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& /*input_tensors*/) const {
+        return {};
+    }
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& /*input_tensors*/) const { return {}; }
 
     auto create_mesh_workload(
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const {
+        const ttnn::MeshCoordinateRangeSet& /*mesh_coordinate_range_set*/,
+        const std::vector<Tensor>& /*input_tensors*/,
+        std::vector<Tensor>& /*output_tensors*/) const {
         return tt::tt_metal::operation::MeshWorkloadWithCallbacks();
     }
 };

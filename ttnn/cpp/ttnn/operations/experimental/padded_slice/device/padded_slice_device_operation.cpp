@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::padded_slice {
 
 PaddedSliceDeviceOperation::program_factory_t PaddedSliceDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return program::PaddedSliceRMProgramFactory{};
     }

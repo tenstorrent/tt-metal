@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement::reshard::program {
 
 template <bool local_is_input>
 NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLocalShardFactory<local_is_input>::create(
-    const reshard::operation_attributes_t& operation_attributes,
+    const reshard::operation_attributes_t& /*operation_attributes*/,
     const reshard::tensor_args_t& tensor_args,
     reshard::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;
@@ -159,7 +159,7 @@ NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLo
 template <bool is_reader>
 void NdReshardCopyLocalShardFactory<is_reader>::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshard::operation_attributes_t& operation_attributes,
+    const reshard::operation_attributes_t& /*operation_attributes*/,
     const reshard::tensor_args_t& tensor_args,
     reshard::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;

@@ -73,7 +73,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
     tt::tt_metal::Program program{};

@@ -284,7 +284,7 @@ void test_program_cache() {
     TT_FATAL(device->num_program_cache_entries() == 0, "Error");
 }
 
-int main(int argc, char** argv) {
+int main() {
     // test_operation_infrastructure();
     test_shape_padding();
     test_numerically();

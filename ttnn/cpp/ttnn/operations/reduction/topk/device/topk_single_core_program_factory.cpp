@@ -181,7 +181,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
 
 void TopKSingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& args,
+    const operation_attributes_t& /*args*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
     auto& program = cached_program.program;

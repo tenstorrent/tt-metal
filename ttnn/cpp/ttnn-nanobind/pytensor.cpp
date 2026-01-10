@@ -488,10 +488,7 @@ nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(RowMajorHostBuffer&
 }
 
 auto parse_external_operation(
-    const nb::callable& external_operation,
-    const nb::args& args,
-    const nb::kwargs& kwargs,
-    std::optional<std::string> function_name_override = std::nullopt) {
+    const nb::callable& external_operation, std::optional<std::string> function_name_override = std::nullopt) {
     std::string function_name;
     if (function_name_override.has_value()) {
         function_name = function_name_override.value();
@@ -558,7 +555,7 @@ void pytensor_module(nb::module_& mod) {
                 std::function([function, function_name](const nb::args& args, const nb::kwargs& kwargs) {
                     ZoneScopedN("TT_DNN_FALLBACK_OP");
                     auto [operation, input_tensors] =
-                        CMAKE_UNIQUE_NAMESPACE::parse_external_operation(function, args, kwargs, function_name);
+                        CMAKE_UNIQUE_NAMESPACE::parse_external_operation(function, function_name);
                     GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
                     CMAKE_UNIQUE_NAMESPACE::log_external_operation(operation, input_tensors);
                     auto output = function(*args, **kwargs);

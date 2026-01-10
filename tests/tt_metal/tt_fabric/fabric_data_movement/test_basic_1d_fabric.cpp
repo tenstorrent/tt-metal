@@ -53,7 +53,7 @@ struct WorkerMemMap {
 
 // Utility function reused across tests to get address params
 WorkerMemMap generate_worker_mem_map(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology topology) {
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;

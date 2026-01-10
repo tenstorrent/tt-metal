@@ -193,7 +193,7 @@ SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::creat
 
 void SliceRmStrideProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& args,
+    const operation_attributes_t& /*args*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& src_tensor = tensor_args.input;

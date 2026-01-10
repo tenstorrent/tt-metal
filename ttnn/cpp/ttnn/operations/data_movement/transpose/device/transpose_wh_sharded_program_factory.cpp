@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::transpose::program {
 
 TransposeWHShardedProgramFactory::cached_program_t TransposeWHShardedProgramFactory::create(
-    const transpose::operation_attributes_t& operation_attributes,
+    const transpose::operation_attributes_t& /*operation_attributes*/,
     const transpose::tensor_args_t& tensor_args,
     transpose::tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
@@ -142,7 +142,7 @@ TransposeWHShardedProgramFactory::cached_program_t TransposeWHShardedProgramFact
 
 void TransposeWHShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::operation_attributes_t& operation_attributes,
+    const transpose::operation_attributes_t& /*operation_attributes*/,
     const transpose::tensor_args_t& tensor_args,
     transpose::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;

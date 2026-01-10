@@ -247,7 +247,7 @@ tt::stl::hash::hash_t BcastDeviceOperation::compute_program_hash(
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
 BcastDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const Tensor& input_tensor0 = tensor_args.input_a;

@@ -45,7 +45,7 @@
 using std::vector;
 using namespace tt;
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");

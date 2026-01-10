@@ -20,9 +20,7 @@ using namespace tt::constants;
 using namespace tt;
 
 static bool enable_fp32_dest(
-    const tt_metal::IDevice* device,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    const tt::DataFormat& input_cb_data_format) {
+    const tt_metal::IDevice* device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -32,7 +30,7 @@ static bool enable_fp32_dest(
 PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& /*tensor_return_value*/) {
     Program program{};
 
     const auto& cache_tensor = tensor_args.cache_tensor;
@@ -48,7 +46,7 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    bool fp32_dest_acc_en = enable_fp32_dest(device, operation_attributes.compute_kernel_config, input_cb_data_format);
+    bool fp32_dest_acc_en = enable_fp32_dest(device, operation_attributes.compute_kernel_config);
 
     tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt::tile_size(interm_cb_data_format);
@@ -361,7 +359,7 @@ void PagedUpdateCacheProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& /*tensor_return_value*/) {
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 

@@ -674,7 +674,7 @@ void run(
     }
 }
 
-int main(int argc, char** argv) {
+int main(int /*argc*/, char** argv) {
     std::size_t arg_idx = 1;
     uint32_t benchmark_type = (uint32_t)std::stoi(argv[arg_idx++]);
 

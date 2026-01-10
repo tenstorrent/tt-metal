@@ -9,7 +9,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 AllToAllAsyncDeviceOperation::program_factory_t AllToAllAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return AllToAllAsyncProgram{};
 }
 
@@ -167,13 +167,13 @@ void AllToAllAsyncDeviceOperation::validate_on_program_cache_hit(
 }
 
 AllToAllAsyncDeviceOperation::spec_return_value_t AllToAllAsyncDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Return spec for the output buffer (persistent_output_buffer)
     return tensor_args.persistent_output_buffer.tensor_spec();
 }
 
 AllToAllAsyncDeviceOperation::tensor_return_value_t AllToAllAsyncDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Return the pre-allocated output buffer
     return tensor_args.persistent_output_buffer;
 }

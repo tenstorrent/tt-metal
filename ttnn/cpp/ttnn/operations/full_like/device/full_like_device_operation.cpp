@@ -12,7 +12,7 @@
 namespace ttnn::operations::full_like {
 
 FullLikeOperation::program_factory_t FullLikeOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 

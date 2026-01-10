@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ccl::neighbor_pad {
 
 NeighborPadAsyncDeviceOperation::program_factory_t NeighborPadAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return NeighborPadAsyncMeshWorkloadFactory{};
 }
 

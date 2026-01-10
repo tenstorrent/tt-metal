@@ -16,8 +16,6 @@ namespace {
 
 void setup_runtime(
     const Program& program,
-    const uint32_t& core_offset,
-    const uint32_t& num_cores_r,
     const uint32_t& num_cores_c,
     const uint32_t& z,
     const uint32_t& num_cores_x,
@@ -203,8 +201,6 @@ SplitProgramFactory::cached_program_t SplitProgramFactory::create(
 
     setup_runtime(
         program,
-        0,
-        num_cores_r,
         num_cores_c,
         num_cores_z,
         num_cores_x,
@@ -223,7 +219,7 @@ SplitProgramFactory::cached_program_t SplitProgramFactory::create(
 
 void SplitProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const split::operation_attributes_t& operation_attributes,
+    const split::operation_attributes_t& /*operation_attributes*/,
     const split::tensor_args_t& tensor_args,
     split::tensor_return_value_t& output_tensors) {
     auto& program = cached_program.program;

@@ -68,7 +68,7 @@ constexpr uint32_t CORES_X = 2;
 constexpr uint32_t CORES_Y = 4;
 
 IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
@@ -157,7 +157,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
 void IntImgProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& program = cached_program.program;

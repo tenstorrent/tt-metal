@@ -20,7 +20,7 @@ inline void log_rt_args(const CoreCoord& core, std::vector<uint32_t>& args) {
 
 // This is currently mostly hardcoded for resnet shapes
 inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t, uint32_t, uint32_t>
-split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint32_t ntiles_h, uint32_t ntiles_w) {
+split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t ntiles_h, uint32_t ntiles_w) {
     uint32_t ncores, ncores_h, ncores_w, ntiles_per_core_h, ntiles_per_core_w, nbatch_per_core_h, ncores_per_batch_h;
 
     ncores_h = 1;
@@ -193,7 +193,6 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
 
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t nbatch = output_padded_shape[0];
-    uint32_t nchannel = output_padded_shape[1];
     // first the batch dim is distributed along H, and within each batch then the tiles are distributed.
     auto
         [ncores,
@@ -204,7 +203,7 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
          ntiles_per_core_h,
          ntiles_per_core_w,
          nbatch_per_core_h,
-         ncores_per_batch_h] = split_across_cores(grid_size, nbatch, nchannel, ntiles_h, ntiles_w);
+         ncores_per_batch_h] = split_across_cores(grid_size, nbatch, ntiles_h, ntiles_w);
 
     [[maybe_unused]] int32_t src_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * a.element_size();
     int32_t dst_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * output.element_size();
@@ -368,7 +367,7 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
 
 void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto* src_buffer = tensor_args.input.buffer();

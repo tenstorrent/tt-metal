@@ -207,7 +207,7 @@ UntilizeWithUnpaddingDeviceOperation::tensor_return_value_t UntilizeWithUnpaddin
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
 UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;

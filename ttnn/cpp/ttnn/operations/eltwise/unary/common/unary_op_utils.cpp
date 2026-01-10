@@ -952,9 +952,9 @@ std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {
     return std::bit_cast<std::uint32_t>(param);
 }
 
-std::uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype) { return param; }
+std::uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType /*dtype*/) { return param; }
 
-std::uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype) {
+std::uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType /*dtype*/) {
     return std::bit_cast<std::uint32_t>(param);
 }
 

@@ -13,7 +13,7 @@ using namespace tt;
 using namespace tt::constants;
 
 NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& input_tensor = tensor_args.input;
@@ -130,7 +130,7 @@ NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgram
 
 void NLPConcatHeadsDecodeProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& input_tensor = tensor_args.input;

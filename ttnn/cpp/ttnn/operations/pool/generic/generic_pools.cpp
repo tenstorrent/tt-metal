@@ -486,9 +486,9 @@ public:
     }
 
     uint32_t get_L1_usage(
-        const IOShape& output_slice_start,
-        const IOShape& output_slice_end,
-        const op_slicing::Op2DSliceConfig& slice_config) const override {
+        const IOShape& /*output_slice_start*/,
+        const IOShape& /*output_slice_end*/,
+        const op_slicing::Op2DSliceConfig& /*slice_config*/) const override {
         return 0;
     }
 
@@ -721,7 +721,7 @@ enum class Pool2dExecutionPath {
 // Helper function to determine which pool2d execution path to take based on
 // slice configuration and input tensor properties
 Pool2dExecutionPath determine_pool2d_execution_path(
-    const ttnn::Tensor& input_tensor, const std::optional<const Op2DSliceConfig>& slice_config) {
+    const ttnn::Tensor& /*input_tensor*/, const std::optional<const Op2DSliceConfig>& slice_config) {
     // If slice config explicitly specifies DRAM slicing, use DRAM path
     if (slice_config.has_value() && slice_config->slice_type != Op2DSliceConfig::SliceType::L1_FULL) {
         return Pool2dExecutionPath::DRAM;

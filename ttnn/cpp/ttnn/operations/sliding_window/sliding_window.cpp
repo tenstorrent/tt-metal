@@ -437,7 +437,7 @@ std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& 
 }
 
 std::vector<PixelMetadata> generate_tensor_metadata(
-    const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t shard_height) {
+    const std::vector<bool>& pad_metadata, const SlidingWindowConfig& /*config*/, uint32_t shard_height) {
     std::vector<PixelMetadata> tensor_metadata;
     tensor_metadata.reserve(pad_metadata.size());
 

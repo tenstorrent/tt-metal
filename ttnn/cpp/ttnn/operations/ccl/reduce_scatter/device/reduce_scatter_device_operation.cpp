@@ -13,7 +13,7 @@
 namespace ttnn::operations::ccl {
 
 ReduceScatterDeviceOperation::program_factory_t ReduceScatterDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ReduceScatterProgram{};
 }
 
