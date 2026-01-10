@@ -61,23 +61,18 @@ HuggingFace Model: [google/owlvit-base-patch32](https://huggingface.co/google/ow
 | Box Head | 3-layer MLP → 4 outputs (cx, cy, w, h) |
 | Class Head | Projects patches to query space, computes similarity |
 
-
-### 1. Run Tests
+### 1. Run PyTorch Reference Demo (CPU)
+Validate the reference implementation and generate baseline outputs:
 ```bash
-# Run all OWL-ViT tests
-pytest models/demos/wormhole/owl_vit/tests/ -v
-
-# Run specific test classes
-pytest models/demos/wormhole/owl_vit/tests/test_ttnn_owl_vit.py::TestOwlViTBasicFunctionality -v
-pytest models/demos/wormhole/owl_vit/tests/test_ttnn_owl_vit.py::TestOwlViTEndToEnd -v
+python models/demos/wormhole/owl_vit/demo/demo_owl_vit_pytorch.py
 ```
+Output saved to `demo/outputs/detection_result_pytorch.png`.
 
-### 3. Run Demo (on TT Hardware)
+### 2. Run Demo (on TT Hardware)
+Run the optimized TTNN implementation on Tenstorrent hardware:
+
 ```bash
-# Run the TTNN demo via pytest
-pytest models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py -v -s
-
-# Or run directly
+# Run with default image (cats)
 python models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py
 
 # Run with custom image and queries
@@ -87,20 +82,15 @@ python models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py \
   --output "bear_detection.png"
 ```
 
-### 4. Run PyTorch Reference Demo (CPU)
-To compare results with the reference implementation:
-```bash
-python models/demos/wormhole/owl_vit/demo/demo_owl_vit_pytorch.py
-```
-Output saved to `demo/outputs/detection_result_pytorch.png`.
+### 3. Run Tests
+Run the comprehensive test suite (unit tests and end-to-end PCC validation):
 
-### 5. Run Tests (on TT Hardware)
 ```bash
-# Run end-to-end detection test (includes vision encoder PCC validation)
+# Run all tests
+pytest models/demos/wormhole/owl_vit/tests/ -v
+
+# Run specific end-to-end detection test
 pytest models/demos/wormhole/owl_vit/tests/test_end_to_end.py -v
-
-# Or run directly
-python models/demos/wormhole/owl_vit/tests/test_end_to_end.py
 ```
 
 ## Directory Structure

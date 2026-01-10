@@ -21,8 +21,6 @@ from loguru import logger
 from PIL import Image
 from transformers import OwlViTForObjectDetection, OwlViTProcessor
 
-import ttnn
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import OwlViTTTNNConfig
@@ -87,14 +85,6 @@ def calculate_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
         return 1.0 if numerator == 0 else 0.0
 
     return (numerator / denominator).item()
-
-
-@pytest.fixture
-def device():
-    """Create a TTNN device for testing."""
-    device = ttnn.open_device(device_id=0)
-    yield device
-    ttnn.close_device(device)
 
 
 @pytest.fixture

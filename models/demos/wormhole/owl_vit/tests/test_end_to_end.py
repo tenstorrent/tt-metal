@@ -22,7 +22,6 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import pytest
 import requests
 import torch
 from loguru import logger
@@ -788,14 +787,6 @@ def run_owl_vit_end_to_end(
     logger.info(f"Logits shape: {logits.shape}")
 
     return pred_boxes, logits
-
-
-@pytest.fixture
-def device():
-    """Create TTNN device."""
-    device = ttnn.open_device(device_id=0)
-    yield device
-    ttnn.close_device(device)
 
 
 class TestOwlViTEndToEnd:
