@@ -85,6 +85,7 @@ class PerceptionTransformerBEVEncoder(BaseModule):
         self.level_embeds = nn.Parameter(torch.Tensor(self.num_feature_levels, self.embed_dims))
         if self.use_cams_embeds:
             self.cams_embeds = nn.Parameter(torch.Tensor(self.num_cams, self.embed_dims))
+        self.level_projs = nn.ModuleDict()
 
     def init_weights(self):
         """Initialize the transformer weights."""
@@ -104,6 +105,10 @@ class PerceptionTransformerBEVEncoder(BaseModule):
         normal_(self.level_embeds)
         if self.use_cams_embeds:
             normal_(self.cams_embeds)
+        for proj_layer in self.level_projs.values():
+            if isinstance(proj_layer, nn.Linear):
+                nn.init.xavier_uniform_(proj_layer.weight)
+                nn.init.constant_(proj_layer.bias, 0.0)
 
     def forward(
         self, mlvl_feats, bev_queries, bev_h, bev_w, grid_length=[0.512, 0.512], bev_pos=None, prev_bev=None, **kwargs
@@ -121,6 +126,15 @@ class PerceptionTransformerBEVEncoder(BaseModule):
             bs, num_cam, c, h, w = feat.shape
             spatial_shape = (h, w)
             feat = feat.flatten(3).permute(1, 0, 3, 2)
+            if c != self.embed_dims:
+                proj_key = f"level_{lvl}"
+                if proj_key not in self.level_projs:
+                    proj_layer = nn.Linear(c, self.embed_dims)
+                    nn.init.xavier_uniform_(proj_layer.weight)
+                    nn.init.constant_(proj_layer.bias, 0.0)
+                    proj_layer = proj_layer.to(device=feat.device)
+                    self.level_projs[proj_key] = proj_layer
+                feat = self.level_projs[proj_key](feat)
             if self.use_cams_embeds:
                 feat = feat + self.cams_embeds[:, None, None, :].to(feat.dtype)
             feat = feat + self.level_embeds[None, None, lvl : lvl + 1, :].to(feat.dtype)
@@ -148,13 +162,29 @@ class PerceptionTransformerBEVEncoder(BaseModule):
         )
         # rotate current bev to final aligned
         prev_bev = bev_embed
-        if (
-            "aug_param" in kwargs["img_metas"][0]
-            and "GlobalRotScaleTransImage_param" in kwargs["img_metas"][0]["aug_param"]
-        ):
-            rot_angle, scale_ratio, flip_dx, flip_dy, bda_mat, only_gt = kwargs["img_metas"][0]["aug_param"][
-                "GlobalRotScaleTransImage_param"
-            ]
+        aug_param = None
+        try:
+            if hasattr(kwargs["img_metas"][0], "get"):
+                aug_param = kwargs["img_metas"][0].get("aug_param")
+            elif isinstance(kwargs["img_metas"][0], dict):
+                aug_param = kwargs["img_metas"][0].get("aug_param")
+            else:
+                aug_param = kwargs["img_metas"][0]["aug_param"]
+        except (KeyError, TypeError, AttributeError, IndexError, ValueError):
+            pass
+        global_rot_param = None
+        if aug_param is not None:
+            try:
+                if hasattr(aug_param, "get"):
+                    global_rot_param = aug_param.get("GlobalRotScaleTransImage_param")
+                elif isinstance(aug_param, dict):
+                    global_rot_param = aug_param.get("GlobalRotScaleTransImage_param")
+                else:
+                    global_rot_param = aug_param["GlobalRotScaleTransImage_param"]
+            except (KeyError, TypeError, AttributeError, ValueError):
+                pass
+        if global_rot_param is not None:
+            rot_angle, scale_ratio, flip_dx, flip_dy, bda_mat, only_gt = global_rot_param
             prev_bev = prev_bev.reshape(bs, bev_h, bev_w, -1).permute(0, 3, 1, 2)  # bchw
             if only_gt:
                 # rot angle

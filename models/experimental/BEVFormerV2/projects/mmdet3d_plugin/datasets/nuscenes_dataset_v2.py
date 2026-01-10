@@ -16,6 +16,9 @@ from .nuscnes_eval import NuScenesEval_custom
 from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import DataContainer as DC
 from collections import defaultdict, OrderedDict
 
+# Import pipelines to ensure they are registered with the PIPELINES registry
+from . import pipelines  # noqa: F401
+
 
 @DATASETS.register_module()
 class CustomNuScenesDatasetV2(NuScenesDataset):
@@ -236,11 +239,11 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
             lidar2cam_rts = []
             cam_intrinsics = []
             for cam_type, cam_info in info["cams"].items():
-                # Replace hardcoded ./data/nuscenes/ or data/nuscenes/ with actual data_root
                 data_path = cam_info["data_path"]
-                # Check for both lowercase and uppercase variants (annotation has lowercase, config may have uppercase)
+                if osp.isabs(data_path) and osp.exists(data_path):
+                    image_paths.append(data_path)
+                    continue
                 if data_path.startswith("./data/nuscenes/"):
-                    # Strip ./data/nuscenes/ prefix to get relative path like samples/CAM_FRONT/...
                     data_path = osp.join(self.data_root, data_path[len("./data/nuscenes/") :])
                 elif data_path.startswith("./data/nuScenes/"):
                     data_path = osp.join(self.data_root, data_path[len("./data/nuScenes/") :])
@@ -248,9 +251,21 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
                     data_path = osp.join(self.data_root, data_path[len("data/nuscenes/") :])
                 elif data_path.startswith("data/nuScenes/"):
                     data_path = osp.join(self.data_root, data_path[len("data/nuScenes/") :])
-                elif not osp.isabs(data_path):
-                    # If path is relative but doesn't match the pattern, join with data_root
-                    data_path = osp.join(self.data_root, data_path)
+                else:
+                    if "/data/nuscenes/" in data_path:
+                        idx = data_path.index("/data/nuscenes/") + len("/data/nuscenes/")
+                        data_path = osp.join(self.data_root, data_path[idx:])
+                    elif "/data/nuScenes/" in data_path:
+                        idx = data_path.index("/data/nuScenes/") + len("/data/nuScenes/")
+                        data_path = osp.join(self.data_root, data_path[idx:])
+                    elif "data/nuscenes/" in data_path:
+                        idx = data_path.index("data/nuscenes/") + len("data/nuscenes/")
+                        data_path = osp.join(self.data_root, data_path[idx:])
+                    elif "data/nuScenes/" in data_path:
+                        idx = data_path.index("data/nuScenes/") + len("data/nuScenes/")
+                        data_path = osp.join(self.data_root, data_path[idx:])
+                    else:
+                        data_path = osp.join(self.data_root, data_path)
                 image_paths.append(data_path)
                 # obtain lidar to image transformation matrix
                 lidar2cam_r = np.linalg.inv(cam_info["sensor2lidar_rotation"])

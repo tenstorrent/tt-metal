@@ -16,7 +16,6 @@ from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
     TransformerLayerSequence,
     force_fp32,
     auto_fp16,
-    TORCH_VERSION,
     digit_version,
     ext_loader,
     build_attention,
@@ -109,11 +108,44 @@ class BEVFormerEncoder(TransformerLayerSequence):
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
 
+        img_metas_for_lidar = img_metas
+        if isinstance(img_metas_for_lidar, dict):
+            img_metas_for_lidar = [img_metas_for_lidar]
+        while (
+            len(img_metas_for_lidar) > 0
+            and isinstance(img_metas_for_lidar[0], (list, tuple))
+            and len(img_metas_for_lidar[0]) > 0
+        ):
+            if isinstance(img_metas_for_lidar[0][0], dict):
+                img_metas_for_lidar = img_metas_for_lidar[0]
+                break
+            img_metas_for_lidar = img_metas_for_lidar[0]
         lidar2img = []
-        for img_meta in img_metas:
-            lidar2img.append(img_meta["lidar2img"])
-        lidar2img = np.asarray(lidar2img)
-        lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
+        for img_meta in img_metas_for_lidar:
+            if isinstance(img_meta, dict) and "lidar2img" in img_meta:
+                lidar2img.append(img_meta["lidar2img"])
+        if len(lidar2img) == 0:
+            if isinstance(img_metas, dict) and "lidar2img" in img_metas:
+                lidar2img = [img_metas["lidar2img"]]
+            elif isinstance(img_metas, (list, tuple)) and len(img_metas) > 0:
+                if isinstance(img_metas[0], dict) and "lidar2img" in img_metas[0]:
+                    lidar2img = [img_metas[0]["lidar2img"]]
+        if len(lidar2img) == 0:
+            lidar2img_np = np.zeros((1, 1, 4, 4), dtype=np.float32)
+        else:
+            lidar2img_list = []
+            for item in lidar2img:
+                if isinstance(item, (list, tuple)) and len(item) > 0:
+                    lidar2img_list.append(np.stack([np.array(x) for x in item]))
+                elif isinstance(item, np.ndarray):
+                    lidar2img_list.append(item)
+            if len(lidar2img_list) > 0:
+                lidar2img_np = np.stack(lidar2img_list)
+            else:
+                lidar2img_np = np.zeros((1, 1, 4, 4), dtype=np.float32)
+        if lidar2img_np.ndim == 3:
+            lidar2img_np = lidar2img_np[np.newaxis, :]
+        lidar2img = reference_points.new_tensor(lidar2img_np)
         reference_points = reference_points.clone()
 
         reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
@@ -124,6 +156,33 @@ class BEVFormerEncoder(TransformerLayerSequence):
 
         reference_points = reference_points.permute(1, 0, 2, 3)
         D, B, num_query = reference_points.size()[:3]
+        if lidar2img.dim() < 2:
+            lidar2img = torch.zeros(1, 1, 4, 4, device=reference_points.device, dtype=reference_points.dtype)
+        elif lidar2img.dim() == 2:
+            lidar2img = (
+                lidar2img.unsqueeze(0).unsqueeze(0)
+                if lidar2img.size(0) == 4 and lidar2img.size(1) == 4
+                else torch.zeros(1, 1, 4, 4, device=lidar2img.device, dtype=lidar2img.dtype)
+            )
+        elif lidar2img.dim() == 3:
+            lidar2img = (
+                lidar2img.unsqueeze(0)
+                if lidar2img.size(-2) == 4 and lidar2img.size(-1) == 4
+                else torch.zeros(1, 1, 4, 4, device=lidar2img.device, dtype=lidar2img.dtype)
+            )
+        if lidar2img.dim() < 4:
+            lidar2img = lidar2img.unsqueeze(0)
+        if lidar2img.size(-2) != 4 or lidar2img.size(-1) != 4:
+            lidar2img = torch.zeros(
+                lidar2img.size(0), lidar2img.size(1), 4, 4, device=lidar2img.device, dtype=lidar2img.dtype
+            )
+        if lidar2img.size(0) != B:
+            if lidar2img.size(0) == 1:
+                lidar2img = lidar2img.expand(B, -1, -1, -1)
+            elif lidar2img.size(0) > B:
+                lidar2img = lidar2img[:B]
+            else:
+                lidar2img = torch.cat([lidar2img, lidar2img[-1:].expand(B - lidar2img.size(0), -1, -1, -1)], 0)
         num_cam = lidar2img.size(1)
 
         reference_points = reference_points.view(D, B, 1, num_query, 4).repeat(1, 1, num_cam, 1, 1).unsqueeze(-1)
@@ -138,8 +197,30 @@ class BEVFormerEncoder(TransformerLayerSequence):
             reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps
         )
 
-        reference_points_cam[..., 0] /= img_metas[0]["img_shape"][0][1]
-        reference_points_cam[..., 1] /= img_metas[0]["img_shape"][0][0]
+        img_meta_for_shape = img_metas[0]
+        while isinstance(img_meta_for_shape, (list, tuple)) and len(img_meta_for_shape) > 0:
+            if isinstance(img_meta_for_shape[0], dict):
+                img_meta_for_shape = img_meta_for_shape[0]
+                break
+            img_meta_for_shape = img_meta_for_shape[0]
+        if isinstance(img_meta_for_shape, dict) and "img_shape" in img_meta_for_shape:
+            img_shape_val = img_meta_for_shape["img_shape"]
+            if isinstance(img_shape_val, np.ndarray):
+                img_shape_val = img_shape_val.tolist()
+            if isinstance(img_shape_val, (list, tuple)) and len(img_shape_val) > 0:
+                shape_item = img_shape_val[0] if isinstance(img_shape_val[0], (list, tuple)) else img_shape_val
+                if isinstance(shape_item, np.ndarray):
+                    shape_item = shape_item.tolist()
+                if isinstance(shape_item, (list, tuple)) and len(shape_item) >= 2:
+                    h, w = int(shape_item[0]), int(shape_item[1])
+                else:
+                    h, w = 640, 1600
+            else:
+                h, w = 640, 1600
+        else:
+            h, w = 640, 1600
+        reference_points_cam[..., 0] /= w
+        reference_points_cam[..., 1] /= h
 
         bev_mask = (
             bev_mask
@@ -148,7 +229,7 @@ class BEVFormerEncoder(TransformerLayerSequence):
             & (reference_points_cam[..., 0:1] < 1.0)
             & (reference_points_cam[..., 0:1] > 0.0)
         )
-        if digit_version(TORCH_VERSION) >= digit_version("1.8"):
+        if digit_version(torch.__version__) >= digit_version("1.8"):
             bev_mask = torch.nan_to_num(bev_mask)
         else:
             bev_mask = bev_mask.new_tensor(np.nan_to_num(bev_mask.cpu().numpy()))
