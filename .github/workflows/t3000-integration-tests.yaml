@@ -32,9 +32,6 @@ on:
           - mochi
   schedule:
     - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
-  push:
-    branches:
-      - roseli/30675-reorg-t3k-pipelines-rebased
 
 jobs:
   build-artifact:
