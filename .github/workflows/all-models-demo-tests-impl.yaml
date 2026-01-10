@@ -229,12 +229,6 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: 🔐 Authenticate with HuggingFace
-        if: ${{ inputs.regenerate-ttnn-cache }}
-        run: |
-          echo "Authenticating with HuggingFace for gated model access..."
-          huggingface-cli login --token "$HF_TOKEN"
-
       - name: Run ${{ matrix.test.name }} test
         timeout-minutes: ${{ matrix.test.timeout }}
         run: |
