@@ -22,11 +22,11 @@ from loguru import logger
 from PIL import Image, ImageDraw, ImageFont
 from transformers import OwlViTForObjectDetection, OwlViTProcessor
 
-sys.path.insert(0, "/root/tt-metal")
+sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 # Constants
 MODEL_NAME = "google/owlvit-base-patch32"
-OUTPUT_DIR = Path("/root/tt-metal/models/demos/wormhole/owl_vit/demo/outputs")
+OUTPUT_DIR = Path(__file__).parent / "outputs"
 
 # Use same colors as TTNN demo for easy comparison
 COLORS = [

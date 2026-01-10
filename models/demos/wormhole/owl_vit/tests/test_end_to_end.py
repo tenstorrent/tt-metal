@@ -19,6 +19,7 @@ Model: google/owlvit-base-patch32
 """
 
 import sys
+from pathlib import Path
 from typing import Any, Dict, Tuple
 
 import pytest
@@ -30,7 +31,7 @@ from transformers import OwlViTForObjectDetection, OwlViTProcessor
 
 import ttnn
 
-sys.path.insert(0, "/root/tt-metal")
+sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import (
     OwlViTTTNNConfig,

@@ -28,7 +28,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 import ttnn
 
-sys.path.insert(0, "/root/tt-metal")
+sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 # Import TTNN implementation from tests
 from models.demos.wormhole.owl_vit.tests.test_end_to_end import (
@@ -38,7 +38,7 @@ from models.demos.wormhole.owl_vit.tests.test_end_to_end import (
 )
 
 # Constants
-OUTPUT_DIR = Path("/root/tt-metal/models/demos/wormhole/owl_vit/demo/outputs")
+OUTPUT_DIR = Path(__file__).parent / "outputs"
 DETECTION_THRESHOLD = 0.3
 
 COLORS = [

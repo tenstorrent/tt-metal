@@ -12,6 +12,7 @@ This file contains tests to validate:
 """
 
 import sys
+from pathlib import Path
 
 import pytest
 import requests
@@ -22,7 +23,7 @@ from transformers import OwlViTForObjectDetection, OwlViTProcessor
 
 import ttnn
 
-sys.path.insert(0, "/root/tt-metal")
+sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import OwlViTTTNNConfig
 
