@@ -3996,7 +3996,17 @@ def bbox3d2result(bboxes, scores, labels, attrs=None):
             - labels_3d (torch.Tensor): Box labels.
             - attrs_3d (torch.Tensor, optional): Box attributes.
     """
-    result_dict = dict(boxes_3d=bboxes.to("cpu"), scores_3d=scores.cpu(), labels_3d=labels.cpu())
+    if isinstance(bboxes, torch.Tensor):
+        boxes_3d = bboxes.cpu()
+    elif hasattr(bboxes, "tensor") and isinstance(bboxes.tensor, torch.Tensor):
+        boxes_3d = bboxes.tensor.cpu()
+    elif hasattr(bboxes, "to") and callable(getattr(bboxes, "to", None)):
+        boxes_3d = bboxes.to("cpu")
+    elif hasattr(bboxes, "cpu") and callable(getattr(bboxes, "cpu", None)):
+        boxes_3d = bboxes.cpu()
+    else:
+        boxes_3d = torch.as_tensor(bboxes, device="cpu")
+    result_dict = dict(boxes_3d=boxes_3d, scores_3d=scores.cpu(), labels_3d=labels.cpu())
 
     if attrs is not None:
         result_dict["attrs_3d"] = attrs.cpu()

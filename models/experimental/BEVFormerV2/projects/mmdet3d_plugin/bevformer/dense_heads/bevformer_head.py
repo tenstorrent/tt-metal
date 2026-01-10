@@ -17,6 +17,7 @@ from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import (
     build_transformer,
     force_fp32,
     auto_fp16,
+    get_box_type,
 )
 from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
 
@@ -505,7 +506,22 @@ class BEVFormerHead(DETRHead):
             bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
 
             code_size = bboxes.shape[-1]
-            bboxes = img_metas[i]["box_type_3d"](bboxes, code_size)
+            box_type_3d = None
+            try:
+                if isinstance(img_metas[i], dict):
+                    if "box_type_3d" in img_metas[i]:
+                        box_type_3d = img_metas[i]["box_type_3d"]
+                    elif isinstance(img_metas[i].get("meta"), dict) and "box_type_3d" in img_metas[i]["meta"]:
+                        box_type_3d = img_metas[i]["meta"]["box_type_3d"]
+            except (KeyError, TypeError, AttributeError, IndexError):
+                pass
+            if box_type_3d is None:
+                box_type_3d_class, _ = get_box_type("LiDAR")
+                box_type_3d = box_type_3d_class
+            elif isinstance(box_type_3d, str):
+                box_type_3d_class, _ = get_box_type(box_type_3d)
+                box_type_3d = box_type_3d_class
+            bboxes = box_type_3d(bboxes, code_size)
             scores = preds["scores"]
             labels = preds["labels"]
 

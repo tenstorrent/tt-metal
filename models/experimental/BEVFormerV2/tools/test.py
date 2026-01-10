@@ -2451,7 +2451,9 @@ def main():
                 for m in _module_dir[1:]:
                     _module_path = _module_path + "." + m
                 print(_module_path)
-                # plg_lib = importlib.import_module(_module_path)
+                import importlib
+
+                plg_lib = importlib.import_module(_module_path)
             else:
                 # import dir is the dirpath for the config file
                 _module_dir = os.path.dirname(args.config)
@@ -2460,7 +2462,9 @@ def main():
                 for m in _module_dir[1:]:
                     _module_path = _module_path + "." + m
                 print(_module_path)
-                # plg_lib = importlib.import_module(_module_path)
+                import importlib
+
+                plg_lib = importlib.import_module(_module_path)
 
     # # set cudnn_benchmark
     # if cfg.get("cudnn_benchmark", False):

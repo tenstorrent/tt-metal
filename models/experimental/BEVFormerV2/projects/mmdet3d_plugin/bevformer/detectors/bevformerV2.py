@@ -3,6 +3,8 @@
 # ---------------------------------------------
 #  Modified by Zhiqi Li
 # ---------------------------------------------
+# Source: Adapted from mmdet3d.models.detectors (BEVFormer/Detr3D pattern)
+# Original reference: https://github.com/open-mmlab/mmdetection3d/blob/v0.17.1/mmdet3d/models/detectors/mvx_two_stage.py
 
 import copy
 from collections import OrderedDict

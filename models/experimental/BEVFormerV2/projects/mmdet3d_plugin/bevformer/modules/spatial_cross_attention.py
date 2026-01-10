@@ -357,7 +357,29 @@ class MSDeformableAttention3D(BaseModule):
 
             bs, num_query, num_Z_anchors, xy = reference_points.shape
             reference_points = reference_points[:, :, None, None, None, :, :]
+            num_levels_actual = spatial_shapes.size(0)
+            if sampling_offsets.size(3) != num_levels_actual:
+                if sampling_offsets.size(3) > num_levels_actual:
+                    sampling_offsets = sampling_offsets[:, :, :, :num_levels_actual, :, :]
+                else:
+                    padding = torch.zeros(
+                        bs,
+                        num_query,
+                        self.num_heads,
+                        num_levels_actual - sampling_offsets.size(3),
+                        self.num_points,
+                        2,
+                        device=sampling_offsets.device,
+                        dtype=sampling_offsets.dtype,
+                    )
+                    sampling_offsets = torch.cat([sampling_offsets, padding], dim=3)
             sampling_offsets = sampling_offsets / offset_normalizer[None, None, None, :, None, :]
+            sampling_offsets = (
+                sampling_offsets.view(bs, num_query, self.num_heads, num_levels_actual, self.num_points, 1, 2)
+                .expand(-1, -1, -1, -1, -1, num_Z_anchors, -1)
+                .contiguous()
+                .view(bs, num_query, self.num_heads, num_levels_actual, self.num_points * num_Z_anchors, 2)
+            )
             bs, num_query, num_heads, num_levels, num_all_points, xy = sampling_offsets.shape
             sampling_offsets = sampling_offsets.view(
                 bs, num_query, num_heads, num_levels, num_all_points // num_Z_anchors, num_Z_anchors, xy
