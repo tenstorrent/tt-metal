@@ -7,6 +7,8 @@
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
@@ -31,6 +33,17 @@ void kernel_main() {
     constexpr uint32_t is_injector_core_backward = get_compile_time_arg_val(20);
     constexpr uint32_t is_injector_core_forward = get_compile_time_arg_val(21);
 
+#ifdef USE_MUX
+    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
+    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
+    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(24);
+    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(25);
+    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(26);
+    constexpr uint32_t ct_arg_count = 27;
+#else
+    constexpr uint32_t ct_arg_count = 22;
+#endif
+
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
@@ -51,14 +64,68 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
+#ifdef USE_MUX
+    bool mux_connection_valid = get_arg_val<uint32_t>(argidx++) == 1;
+    const bool is_termination_master = get_arg_val<uint32_t>(argidx++);
+    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(argidx++);
+    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(argidx++);
+    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(argidx++);
+    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(argidx++);
+    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(argidx++);
+    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(argidx++);
+    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(argidx++);
+    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(argidx++);
+
+    uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(argidx++));
+
+    uint32_t termination_master_noc_x = get_arg_val<uint32_t>(argidx++);
+    uint32_t termination_master_noc_y = get_arg_val<uint32_t>(argidx++);
+#endif
+
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<22>();
+    constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
 #ifdef FUSE_BIAS
     constexpr auto in2_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
+#endif
+
+#ifdef USE_MUX
+    // Setup mux connection
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
+    if (mux_connection_valid) {
+        mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+            fabric_mux_x,
+            fabric_mux_y,
+            fabric_mux_channel_id,
+            fabric_mux_num_buffers_per_channel,
+            fabric_mux_channel_buffer_size_bytes,
+            fabric_mux_channel_base_address,
+            fabric_mux_connection_info_address,
+            fabric_mux_connection_handshake_address,
+            fabric_mux_flow_control_address,
+            fabric_mux_buffer_index_address,
+            local_flow_control_address,
+            local_teardown_address,
+            local_buffer_index_address);
+        mux_connection_handle = &mux_connection;
+    } else {
+        mux_connection_handle = nullptr;
+    }
+
+    if (mux_connection_valid) {
+        // need to wait for fabric mux to be ready to accept connections
+        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+            fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
+        tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
+    }
 #endif
 
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
@@ -260,4 +327,23 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+
+#ifdef USE_MUX
+    if (mux_connection_valid) {
+        tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
+
+        if (is_termination_master) {
+            auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
+            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+        } else {
+            uint64_t dest_addr =
+                safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
+            noc_semaphore_inc(dest_addr, 1);
+            noc_async_atomic_barrier();
+        }
+    }
+
+    noc_async_write_barrier();
+#endif
 }
