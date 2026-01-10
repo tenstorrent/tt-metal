@@ -53,7 +53,7 @@
   timeout: 120
 
 - name: models_tttv2_mlp_modules_full_set_unit_tests
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/mlp,
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/mlp
   sku: wh_llmbox
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
