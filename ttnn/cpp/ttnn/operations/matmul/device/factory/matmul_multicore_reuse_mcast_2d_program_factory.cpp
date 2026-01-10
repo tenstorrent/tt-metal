@@ -1670,7 +1670,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t MatmulMultiCoreReuse
 
 void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     reuse_mcast_optimized_helpers::override_runtime_arguments_impl(
@@ -1680,7 +1680,7 @@ void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
 void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const shared_variables_t& shared_variables,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     reuse_mcast_optimized_helpers::override_runtime_arguments_impl(

@@ -467,7 +467,7 @@ std::string to_string_impl(const Tensor& tensor) {
 
     return std::visit(
         tt::stl::overloaded{
-            [&](const HostStorage& storage) -> std::string {
+            [&](const HostStorage& /*storage*/) -> std::string {
                 const Tensor row_major_tensor = get_row_major_tensor(tensor);
                 const auto strides = row_major_tensor.tensor_spec().compute_strides();
                 const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());

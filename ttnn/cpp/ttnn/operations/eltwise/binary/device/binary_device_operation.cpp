@@ -206,7 +206,7 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
 }
 
 void BinaryDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
 
     const auto& input_shape_a = input_tensor_a.logical_shape();
@@ -357,7 +357,7 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
 
 operation::OpPerformanceModelGeneral<BinaryDeviceOperation::tensor_return_value_t>
 BinaryDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& attributes,
+    const operation_attributes_t& /*attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
@@ -389,8 +389,8 @@ BinaryDeviceOperation::create_op_performance_model(
 }
 
 bool BinaryDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }

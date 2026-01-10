@@ -247,7 +247,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
 
 void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attributes,
+    const operation_attributes_t& /*attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
     auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
@@ -607,7 +607,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
 
 void SortProgramFactoryCrossCoreDataExchange::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attributes,
+    const operation_attributes_t& /*attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
     auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
@@ -955,7 +955,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
 
 void SortProgramFactorySingleRowMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attributes,
+    const operation_attributes_t& /*attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
     auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();

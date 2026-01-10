@@ -424,7 +424,7 @@ bool assign_runtime_args_to_program(
     tt_metal::Program& program,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
-    const uint32_t& num_cores_x,
+    const uint32_t& /*num_cores_x*/,
     const CoreRangeSet& core_group_1,
     const CoreRangeSet& core_group_2,
     const uint32_t& num_tiles_per_core_group_1,
@@ -432,8 +432,8 @@ bool assign_runtime_args_to_program(
     const tt_metal::KernelHandle& kernel,
     const uint32_t& input_buffer_addr,
     const uint32_t& num_reqs_at_a_time,
-    const uint32_t& single_tile_size,
-    const tt::DataFormat& tile_format) {
+    const uint32_t& /*single_tile_size*/,
+    const tt::DataFormat& /*tile_format*/) {
     bool pass = true;
     for (uint32_t i = 0, num_tiles_used = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -464,7 +464,7 @@ bool validation(
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
-    const uint32_t& num_cores_x,
+    const uint32_t& /*num_cores_x*/,
     const CoreRangeSet& core_group_1,
     const CoreRangeSet& core_group_2,
     const uint32_t& num_tiles_per_core_group_1,

@@ -15,7 +15,7 @@ using namespace tt::constants;
 using namespace tt;
 
 NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& a = tensor_args.input_tensor;
@@ -213,7 +213,7 @@ NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgram
 
 void NlpCreateQkvHeadsVitProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;

@@ -126,7 +126,7 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

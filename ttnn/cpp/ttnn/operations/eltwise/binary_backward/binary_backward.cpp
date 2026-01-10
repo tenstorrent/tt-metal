@@ -122,8 +122,8 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardSubAlpha::invoke(
 std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
     const Tensor& grad,
     const Tensor& input,
-    float alpha,
-    const std::optional<MemoryConfig>& output_mem_config,
+    float /*alpha*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     input_grad = input_grad.value_or(ttnn::empty_like(input));
@@ -156,8 +156,8 @@ std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
 
 std::vector<ComplexTensor> ExecuteBackwardAdd::invoke(
     const ComplexTensor& grad,
-    const ComplexTensor& input,
-    const ComplexTensor& other,
+    const ComplexTensor& /*input*/,
+    const ComplexTensor& /*other*/,
     float alpha,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
@@ -175,8 +175,8 @@ std::vector<ComplexTensor> ExecuteBackwardAdd::invoke(
 std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
     const Tensor& grad,
     const Tensor& input,
-    float alpha,
-    const std::optional<MemoryConfig>& output_mem_config,
+    float /*alpha*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     input_grad = input_grad.value_or(ttnn::empty_like(input));
@@ -198,8 +198,8 @@ std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
 
 std::vector<ComplexTensor> ExecuteBackwardSub::invoke(
     const ComplexTensor& grad,
-    const ComplexTensor& input,
-    const ComplexTensor& other,
+    const ComplexTensor& /*input*/,
+    const ComplexTensor& /*other*/,
     float alpha,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
@@ -390,7 +390,10 @@ std::vector<Tensor> ExecuteBackwardRemainder::invoke(
 }
 
 std::vector<Tensor> ExecuteBackwardRemainder::invoke(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad,
+    const Tensor& /*input*/,
+    float /*scalar*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
@@ -410,7 +413,10 @@ std::vector<Tensor> ExecuteBackwardFmod::invoke(
 }
 
 std::vector<Tensor> ExecuteBackwardFmod::invoke(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad,
+    const Tensor& /*input*/,
+    float /*scalar*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
@@ -436,7 +442,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
     const Tensor& input,
     const Tensor& other,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<ttnn::Tensor>> grad_tensor = {std::nullopt, std::nullopt};
@@ -457,8 +463,8 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
     const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
+    const Tensor& /*input*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<ttnn::Tensor>> grad_tensor = {std::nullopt};
     grad_tensor[0] = input_grad.has_value() ? ttnn::assign(grad, input_grad.value()) : grad;
@@ -471,7 +477,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
     const Tensor& other,
     int dim,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& /*memory_config*/,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> grad_tensor = {std::nullopt, std::nullopt};
@@ -511,8 +517,8 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardRsub::invoke(
     const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
+    const Tensor& /*input*/,
+    const Tensor& /*other*/,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
@@ -782,7 +788,7 @@ std::vector<ComplexTensor> ExecuteBackwardDiv::invoke(
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardMul::invoke(
     const Tensor& grad,
-    const Tensor& input,
+    const Tensor& /*input*/,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {

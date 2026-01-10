@@ -87,7 +87,7 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
 //////////////////////////////////////////////////////////////////////////////////////////
 // Tests reduce_h kernel in H dimension (NCHW->NC1W)
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
+int main() {
     auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 

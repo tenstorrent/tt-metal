@@ -92,7 +92,7 @@ NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
 
 void NdReshardCopyPagesFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshard::operation_attributes_t& operation_attributes,
+    const reshard::operation_attributes_t& /*operation_attributes*/,
     const reshard::tensor_args_t& tensor_args,
     reshard::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;

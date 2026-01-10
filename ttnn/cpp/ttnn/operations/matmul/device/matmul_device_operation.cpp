@@ -56,7 +56,7 @@ bool get_broadcast_batch(
 }  // namespace
 
 MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     const auto& config = operation_attributes.program_config.value();
 
     return std::visit(

@@ -36,7 +36,6 @@ static Tensor create_config_tensor(
     const uint32_t in_h,
     const uint32_t in_w,
     const uint32_t scale_factor_h,
-    const uint32_t scale_factor_w,
     const bool is_height_sharded) {
     uint16_t core_idx = 0;        // Tracks the current core being processed
     uint16_t core_idx_start = 0;  // Tracks the starting core index for each row of input, used when scale_factor_h > 1
@@ -289,7 +288,6 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
             input.padded_shape()[1],
             in_w,
             scale_factor_h,
-            scale_factor_w,
             input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
     } else {
         TT_THROW("Unsupported sharding layout");
@@ -350,7 +348,7 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
 
 void UpsampleMultiCoreShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto& program = cached_program.program;

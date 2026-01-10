@@ -23,7 +23,7 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
 }  // namespace detail
 
 MeshPartitionDeviceOperation::program_factory_t MeshPartitionDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return MeshPartition{};
 }
 

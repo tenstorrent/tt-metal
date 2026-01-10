@@ -66,7 +66,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         [](const std::shared_ptr<distributed::MeshDevice>& mesh_device, CoreCoord& core, uint32_t multiplier) {
             return (uint32_t)mesh_device->get_devices()[0]->id() + ((uint32_t)core.x * 10 * multiplier);
         };
-    auto get_second_arg = [](const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    auto get_second_arg = [](const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
                              CoreCoord& core,
                              uint32_t multiplier) { return (uint32_t)core.y * 100 * multiplier; };
 

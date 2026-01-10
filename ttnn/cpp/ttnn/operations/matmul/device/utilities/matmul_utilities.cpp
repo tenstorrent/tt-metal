@@ -16,7 +16,7 @@ uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const bool transpose_a,
-    const bool transpose_b,
+    const bool /*transpose_b*/,
     uint32_t interm_single_tile_size,
     uint32_t bias_single_tile_size) {
     // Circular Buffer sizes:

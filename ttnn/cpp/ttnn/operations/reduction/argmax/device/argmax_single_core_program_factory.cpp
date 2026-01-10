@@ -64,7 +64,6 @@ static void create_circular_buffers_single_core(
 
 static std::vector<uint32_t> get_ctime_args_single_core(
     const Tensor& input,
-    const Tensor& output,
     uint32_t src_page_size,
     uint32_t dst_page_size,
     uint32_t src_cb_index,
@@ -161,7 +160,7 @@ ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory:
 
     // Compile-time args
     std::vector<uint32_t> ctime_args = get_ctime_args_single_core(
-        input, output, src_page_size, dst_page_size, src_cb_index, dst_cb_index, keepdim, reduce_all);
+        input, src_page_size, dst_page_size, src_cb_index, dst_cb_index, keepdim, reduce_all);
 
     auto* const src_buffer = input.buffer();
     auto* const dst_buffer = output.buffer();
@@ -189,7 +188,7 @@ ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory:
 
 void ArgMaxSingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto* src_buffer = tensor_args.input.buffer();

@@ -524,7 +524,7 @@ void TestSync::add_config(TestTrafficSyncConfig sync_config) {
     this->configs_.emplace_back(std::move(sync_config), fabric_connection_key);
 }
 
-bool TestSync::validate_results(std::vector<uint32_t>& data) const {
+bool TestSync::validate_results(std::vector<uint32_t>& /*data*/) const {
     // no-op for now
     return true;
 }

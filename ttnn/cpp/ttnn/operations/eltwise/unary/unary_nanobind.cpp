@@ -1086,7 +1086,7 @@ void bind_unary_rdiv(
 }
 
 template <typename unary_operation_t>
-void bind_softplus(nb::module_& mod, const unary_operation_t& operation) {
+void bind_softplus(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -1199,7 +1199,7 @@ void bind_tanh_like(nb::module_& mod, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
-void bind_sigmoid_accurate(nb::module_& mod, const unary_operation_t& operation) {
+void bind_sigmoid_accurate(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -1254,7 +1254,7 @@ void bind_sigmoid_accurate(nb::module_& mod, const unary_operation_t& operation)
 }
 
 template <typename unary_operation_t>
-void bind_sigmoid_mode_appx(nb::module_& mod, const unary_operation_t& operation) {
+void bind_sigmoid_mode_appx(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -1312,7 +1312,7 @@ void bind_sigmoid_mode_appx(nb::module_& mod, const unary_operation_t& operation
 }
 
 template <typename unary_operation_t>
-void bind_unary_chain(nb::module_& mod, const unary_operation_t& operation) {
+void bind_unary_chain(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -1366,7 +1366,7 @@ void bind_unary_chain(nb::module_& mod, const unary_operation_t& operation) {
             nb::arg("output_tensor") = nb::none()});
 }
 template <typename unary_operation_t>
-void bind_identity(nb::module_& mod, const unary_operation_t& operation) {
+void bind_identity(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         Returns a copy of the :attr:`input_tensor`; useful for profiling the SFPU.
@@ -2373,14 +2373,14 @@ void py_module(nb::module_& mod) {
         )doc");
 
     // Other unaries (unary chain operations)
-    bind_softplus(mod, ttnn::softplus);
+    bind_softplus<decltype(ttnn::softplus)>(mod);
     bind_tanh_like(mod, ttnn::tanh);
     bind_tanh_like(mod, ttnn::tanhshrink);
-    bind_sigmoid_accurate(mod, ttnn::sigmoid_accurate);
-    bind_sigmoid_mode_appx(mod, ttnn::sigmoid);
+    bind_sigmoid_accurate<decltype(ttnn::sigmoid_accurate)>(mod);
+    bind_sigmoid_mode_appx<decltype(ttnn::sigmoid)>(mod);
 
-    bind_unary_chain(mod, ttnn::unary_chain);
-    bind_identity(mod, ttnn::identity);
+    bind_unary_chain<decltype(ttnn::unary_chain)>(mod);
+    bind_identity<decltype(ttnn::identity)>(mod);
 
     // unary composite imported into ttnn
     bind_unary_composite(

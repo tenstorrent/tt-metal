@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::det
 
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
 ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
         return RingReduceScatterMeshWorkloadFactory{};
     }
@@ -23,7 +23,7 @@ ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
 }
 
 void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Lightweight validation for cache hits
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");

@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::moreh::moreh_adam {
 void MorehAdamOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& params_in = tensor_args.param_in;
     const auto& grad = tensor_args.grad;
     const auto& exp_avg_in = tensor_args.exp_avg_in;
@@ -48,7 +48,7 @@ void MorehAdamOperation::validate_inputs(
 }
 
 MorehAdamOperation::program_factory_t MorehAdamOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // For now we litteraly don't care and return a single factory. Whatever
     return ProgramFactory{};
 }

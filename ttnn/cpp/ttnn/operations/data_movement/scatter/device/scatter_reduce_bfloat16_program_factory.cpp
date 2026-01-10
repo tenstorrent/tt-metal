@@ -177,7 +177,7 @@ ScatterReduceBfloat16ProgramFactory::cached_program_t ScatterReduceBfloat16Progr
 
 void ScatterReduceBfloat16ProgramFactory::override_runtime_arguments(
     ScatterReduceBfloat16ProgramFactory::cached_program_t& cached_program,
-    const operation_attributes_t& args,
+    const operation_attributes_t& /*args*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     const auto& program = cached_program.program;

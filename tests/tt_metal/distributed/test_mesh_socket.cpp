@@ -1107,7 +1107,7 @@ std::shared_ptr<Program> create_reduce_program(
     const MeshSocket& recv_socket_0,
     const MeshSocket& recv_socket_1,
     const MeshSocket& send_socket_2,
-    const std::shared_ptr<MeshDevice>& reducer,
+    const std::shared_ptr<MeshDevice>& /*reducer*/,
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& reduce_logical_coord,

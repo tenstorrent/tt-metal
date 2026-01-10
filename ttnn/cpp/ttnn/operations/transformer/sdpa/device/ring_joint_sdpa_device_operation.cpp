@@ -22,7 +22,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa {
 
 RingJointSDPADeviceOperation::program_factory_t RingJointSDPADeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::RingJointSDPAProgramFactory{};
 }
 

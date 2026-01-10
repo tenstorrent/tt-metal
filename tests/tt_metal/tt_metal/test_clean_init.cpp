@@ -42,7 +42,7 @@ class CommandQueue;
 using std::vector;
 using namespace tt::tt_metal;
 
-int main(int argc, char** argv) {
+int main(int argc, char** /*argv*/) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }

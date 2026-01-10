@@ -196,7 +196,7 @@ static ShardSpec compute_output_shard_spec(
 DataType TernaryDeviceOperation::operation_attributes_t::get_dtype() const { return dtype.value_or(input_dtype); }
 
 TernaryDeviceOperation::program_factory_t TernaryDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return TernaryProgramFactory{};
 }
 
@@ -493,8 +493,8 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 }
 
 bool TernaryDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }

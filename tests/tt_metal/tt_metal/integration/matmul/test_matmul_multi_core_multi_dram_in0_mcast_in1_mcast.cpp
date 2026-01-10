@@ -62,13 +62,13 @@ std::tuple<
     uint32_t,
     uint32_t>
 create_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
     int num_cores_c,
-    int M,
-    int N,
+    int /*M*/,
+    int /*N*/,
     int K,
     int in0_block_w,
     int out_subblock_h,

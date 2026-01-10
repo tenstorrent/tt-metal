@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::paged_cache::fill {
 
 PagedFillCacheDeviceOperation::program_factory_t PagedFillCacheDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     // Use mesh workload factory when mesh_coords is provided to enable coordinate filtering
     if (args.mesh_coords.has_value()) {
         return program::PagedFillCacheMeshWorkloadFactory{};
@@ -62,13 +62,13 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
 }
 
 spec_return_value_t PagedFillCacheDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // In-place operation, return cache tensor's spec
     return tensor_args.cache_tensor.tensor_spec();
 }
 
 tensor_return_value_t PagedFillCacheDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // In-place operation, return the cache tensor
     return tensor_args.cache_tensor;
 }

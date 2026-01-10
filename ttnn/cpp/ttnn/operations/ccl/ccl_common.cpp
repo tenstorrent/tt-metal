@@ -250,8 +250,8 @@ ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology:
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& output_tensors,
+    const std::vector<Tensor>& /*input_tensors*/,
+    std::vector<Tensor>& /*output_tensors*/,
     const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program) {
     tt::tt_metal::operation::MeshWorkloadWithCallbacks workload_with_callbacks;
     for (const auto& range : tensor_coords.ranges()) {
@@ -538,8 +538,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     const RingTopology& topology_config,
     const std::vector<ccl::EriscDatamoverBuilder>& clockwise_edm_builders,
     const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
-    std::optional<uint32_t> receiver_device_id,
-    std::optional<uint32_t> sender_device_id) {
+    std::optional<uint32_t> /*receiver_device_id*/,
+    std::optional<uint32_t> /*sender_device_id*/) {
     auto sender_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(tt::tt_metal::hal::get_arch());
     auto receiver_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(tt::tt_metal::hal::get_arch());
     for (uint32_t i = 0; i < topology_config.num_links; ++i) {
@@ -588,7 +588,6 @@ void generate_edm_kernels_for_ring_or_linear_topology(
 
 static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     Program& program,
-    const IDevice* device,
     const ccl::EriscDatamoverBuilder& edm_builder,
     const std::string& kernel_path,
     const CoreCoord& eth_core,
@@ -627,14 +626,13 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,
-    const IDevice* device,
+    const IDevice* /*device*/,
     const ccl::EriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
     const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
         program,
-        device,
         edm_builder,
         "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
         eth_core,
@@ -687,7 +685,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     int slice_dim,
-    uint32_t ring_index,
+    uint32_t /*ring_index*/,
     uint32_t ring_size,
     uint32_t total_num_workers,
     uint32_t max_slice_size_in_bytes,
@@ -1110,11 +1108,11 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
 }
 
 std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::Shape& tensor_shape,
+    const ttnn::Shape& /*tensor_shape*/,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
-    uint32_t half_cb_n_pages) {
+    uint32_t /*half_cb_n_pages*/) {
     log_trace(tt::LogOp, "\tmax_slice_size_in_pages={}", max_slice_size_in_pages);
     TT_ASSERT(max_slice_size_in_pages > 0);
     std::vector<tt_xy_pair> worker_slice_shapes;
@@ -1469,7 +1467,7 @@ tt_xy_pair GenericWrappedTensorSlicer::calculate_tensor_slice_shape(
 
 void GenericWrappedTensorSlicer::initialize(
     const Tensor& input_tensor,
-    const Tensor& output_tensor,
+    const Tensor& /*output_tensor*/,
     int slice_dim,
     uint32_t partition_index,
     uint32_t partition_size,
@@ -1522,11 +1520,11 @@ std::vector<tt_xy_pair> GenericWrappedTensorSlicer::compute_worker_slice_offsets
 }
 
 std::vector<tt_xy_pair> GenericWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::Shape& tensor_shape,
+    const ttnn::Shape& /*tensor_shape*/,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
-    uint32_t half_cb_n_pages) {
+    uint32_t /*half_cb_n_pages*/) {
     log_trace(tt::LogOp, "\tmax_slice_size_in_pages={}", max_slice_size_in_pages);
     TT_ASSERT(max_slice_size_in_pages > 0);
     std::vector<tt_xy_pair> worker_slice_shapes;
@@ -1775,7 +1773,7 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
 
 std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(
     Topology topology,
-    const MeshCoordinate& src_device_coord,
+    const MeshCoordinate& /*src_device_coord*/,
     const std::optional<MeshCoordinate>& forward_device_coord,
     const std::optional<MeshCoordinate>& backward_device_coord,
     MeshDevice* mesh_device) {

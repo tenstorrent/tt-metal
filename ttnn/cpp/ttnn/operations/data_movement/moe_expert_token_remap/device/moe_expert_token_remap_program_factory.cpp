@@ -229,7 +229,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
 void MoeExpertTokenRemapDeviceOperation::Multicore::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& output_mapping_tensor = tensor_return_value.at(0);

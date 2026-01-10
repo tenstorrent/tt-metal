@@ -23,7 +23,7 @@ namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async {
 
 MatmulReduceScatterAsyncDeviceOperation::program_factory_t
 MatmulReduceScatterAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::MatmulReduceScatterAsyncProgramFactory{};
 }
 

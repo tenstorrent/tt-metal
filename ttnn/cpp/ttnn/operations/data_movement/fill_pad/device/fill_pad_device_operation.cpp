@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement::fill_pad {
 using namespace tt::tt_metal;
 
 FillPadDeviceOperation::program_factory_t FillPadDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::FillPadProgramFactory{};
 }
 
@@ -23,20 +23,20 @@ void FillPadDeviceOperation::validate_on_program_cache_hit(
 }
 
 void FillPadDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     TT_FATAL(input_tensor.layout() == TILE_LAYOUT, "FillPad should only be used for tile layout");
     TT_FATAL(detail::data_type_to_size.contains(input_tensor.dtype()), "Unsupported datatype {}", input_tensor.dtype());
 }
 
 spec_return_value_t FillPadDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     return input_tensor.tensor_spec();
 }
 
 tensor_return_value_t FillPadDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     return input_tensor;
 }

@@ -11,7 +11,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 GridSampleOperation::program_factory_t GridSampleOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     const std::string mode = operation_attributes.mode;
     if (mode == "bilinear") {
         return program::GridSampleBilinearProgramFactory{};

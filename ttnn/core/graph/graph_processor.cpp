@@ -475,17 +475,19 @@ nlohmann::json GraphProcessor::end_graph_capture() {
     return res;
 }
 
-bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) { return do_block; }
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* /*mesh_buffer*/) {
+    return do_block;
+}
 
-bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* buffer) { return do_block; }
+bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
-bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* /*mesh_buffer*/) {
     return do_block;
 }
 

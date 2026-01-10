@@ -190,7 +190,7 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
 
 void HCSumReduceProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     constexpr uint32_t TILE_WIDTH = 32;

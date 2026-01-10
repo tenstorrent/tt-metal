@@ -51,7 +51,7 @@ void MorehFoldOperation::validate_inputs(
 }
 
 MorehFoldOperation::program_factory_t MorehFoldOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 };
 

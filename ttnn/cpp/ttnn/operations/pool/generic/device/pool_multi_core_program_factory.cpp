@@ -270,7 +270,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t num_shards_c,
-    const MemoryConfig& out_mem_config,
+    const MemoryConfig& /*out_mem_config*/,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<int32_t> divisor_override,
     uint32_t memory_used,

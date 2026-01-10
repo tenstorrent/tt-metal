@@ -623,7 +623,7 @@ template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
     const float lhs,
     const ttnn::Tensor& rhs,
-    const std::optional<const DataType>& dtype,
+    const std::optional<const DataType>& /*dtype*/,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     return detail::binary_impl(binary_op_type, lhs, rhs, memory_config, output);

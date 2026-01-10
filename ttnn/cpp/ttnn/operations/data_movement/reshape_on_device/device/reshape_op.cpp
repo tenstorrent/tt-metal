@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::reshape_on_device {
 
 ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
         return ReshapeRMProgramFactory{};
     }

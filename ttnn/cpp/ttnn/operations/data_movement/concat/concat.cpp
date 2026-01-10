@@ -45,7 +45,8 @@ using MassagedConcatParams = MassagedOperationParams<ttnn::Tensor, const std::ve
 // fix there.
 MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output_memory_config) {
     return MassagedConcat(MassagedConcatParams{
-        .predicate = [input_rank](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
+        .predicate = [input_rank](
+                         const std::vector<ttnn::Tensor>& tensors, int /*dim*/, unsigned int /*groups*/) -> bool {
             bool inputs_are_device_tensors =
                 std::all_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) {
                     return tt::tt_metal::is_device_tensor(tensor);
@@ -90,7 +91,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
 MassagedConcat build_untilize_rm_retilize_concat(
     const MemoryConfig& output_memory_config, ttnn::Shape& logical_output_shape) {
     return MassagedConcat(MassagedConcatParams{
-        .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
+        .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int /*groups*/) -> bool {
             // untilize_rm_retilize if the concat dim is padded for tilized tensors
             bool res = std::any_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
                 return tensor.layout() == ttnn::TILE_LAYOUT and
@@ -138,7 +139,8 @@ MassagedConcat build_untilize_rm_retilize_concat(
 
 MassagedConcat build_prepost_transpose_concat(const MemoryConfig& output_memory_config, int dim1, int dim2) {
     return MassagedConcat(MassagedConcatParams{
-        .predicate = [dim1, dim2](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
+        .predicate = [dim1, dim2](
+                         const std::vector<ttnn::Tensor>& /*tensors*/, int /*dim*/, unsigned int /*groups*/) -> bool {
             bool res = dim1 != dim2;
             concat_db_print(res, "[DEBUG] pre-post transpose required");
             concat_db_print(!res, "[DEBUG] pre-post transpose not required");
@@ -179,7 +181,7 @@ MassagedConcat build_prepost_transpose_concat(const MemoryConfig& output_memory_
 }
 
 MassagedConcat build_non_aligned_last_dim_concat(
-    const std::vector<ttnn::Tensor>& tensors, const MemoryConfig& output_memory_config) {
+    const std::vector<ttnn::Tensor>& /*tensors*/, const MemoryConfig& output_memory_config) {
     // this is a special case of pre-post transpose concat where we're
     // concatting on the last dim and the last dims of the input tensors are
     // not all aligned
@@ -196,7 +198,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
         });
     };
 
-    auto predicate = [dim_aligned](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
+    auto predicate = [dim_aligned](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int /*groups*/) -> bool {
         auto last_dim = tensors.front().logical_shape().rank() - 1;
         if (dim == last_dim) {
             bool res = !dim_aligned(tensors, dim);
@@ -213,7 +215,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
 
 MassagedConcat build_unsqueeze_squeeze_1D_rm_unaligned_concat(const MemoryConfig& output_memory_config) {
     return MassagedConcat(MassagedConcatParams{
-        .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
+        .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int /*groups*/) -> bool {
             if (dim != 0) {
                 return false;
             }

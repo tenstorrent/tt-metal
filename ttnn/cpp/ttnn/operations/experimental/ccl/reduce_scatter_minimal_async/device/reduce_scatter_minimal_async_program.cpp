@@ -1343,10 +1343,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
          num_cores_per_link,
          barrier_semaphore,
          semaphore](
-            const void* operation,
+            const void* /*operation*/,
             Program& program,
             const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[1];
@@ -2061,10 +2061,10 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
          num_cores_per_link,
          barrier_semaphore,
          semaphore](
-            const void* operation,
+            const void* /*operation*/,
             Program& program,
             const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[1];
