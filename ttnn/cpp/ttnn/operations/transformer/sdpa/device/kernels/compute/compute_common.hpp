@@ -19,9 +19,6 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/reduce_custom.h"
-#include "llk_sfpu_types.h"
-#include "sfpu/ckernel_sfpu_rounding_ops.h"
-#include "api/debug/dprint.h"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -550,8 +547,8 @@ inline void run_clamp_loadmacro() {
     // SIMPLE unit
 }
 
-template <bool USE_ARECIP_INSTR, int NUM_TERMS, uint32_t SCALE>
-void calculate_exponential_more_terms_init() {
+template <uint32_t SCALE>
+void calculate_exponential_polynomial_init() {
     constexpr float scale_fp32 = __builtin_bit_cast(float, SCALE);
     TTI_SFPLOADI(0, 0xA, lo16(scale_fp32));
     TTI_SFPLOADI(0, 0x8, hi16(scale_fp32));
@@ -572,8 +569,8 @@ void calculate_exponential_more_terms_init() {
     init_clamp_loadmacro<SCALE>();
 }
 
-template <bool USE_ARECIP_INSTR, bool SCALE_EN, int ITERATIONS, int NUM_TERMS>
-void calculate_exponential_more_terms(const uint16_t /*exp_base_scale_factor*/) {
+template <bool USE_ARECIP_INSTR, bool SCALE_EN, int ITERATIONS, int POLY_DEGREE>
+void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) {
     // Clamp values < -88.5 to 0.
     run_clamp_loadmacro();
 
@@ -585,20 +582,28 @@ void calculate_exponential_more_terms(const uint16_t /*exp_base_scale_factor*/) 
         .set(ADDR_MOD_7);
 
     if constexpr (!USE_ARECIP_INSTR) {
-        LLK_ASSERT(NUM_TERMS >= 1 && NUM_TERMS <= 3, "Only 1, 2, or 3 terms is supported");
+        LLK_ASSERT(
+            POLY_DEGREE >= 1 && POLY_DEGREE <= 4,
+            "Only degree 1-4 polynomials are supported in calculate_exponential_polynomial");
 
-        float c0 = (NUM_TERMS == 1)   ? 1.03022936050163882354355235184958220293399209290987f
-                   : (NUM_TERMS == 2) ? 0.999848792924395313327307061545061386175496934006f
-                                      : 0.99992449655091231753798502608929170703152709521188f;
-        float c1 = (NUM_TERMS == 1)   ? 1.0201394465967894800285756834161653337107187804001f
-                   : (NUM_TERMS == 2) ? 1.01508760098521056684783640695492761469306929535975f
-                                      : 0.99993960415029750534472970577402987498389428593233f;
-        float c2 = (NUM_TERMS == 1)   ? 0
-                   : (NUM_TERMS == 2) ? 0.50628367056745568861842335616023694454759126020461f
-                                      : 0.50502329058055065591138054839814880512001604099324f;
-        float c3 = (NUM_TERMS == 1) ? 0 : (NUM_TERMS == 2) ? 0 : 0.16817330195731531429790827442800245470170482723302f;
-
-        switch (NUM_TERMS) {
+        // f(x) = c0 + c1 * (x + c2 * (x + c3 * (...))).
+        constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
+                             : (POLY_DEGREE == 2) ? 0.999848792924395313327307061545061386175496934006f
+                             : (POLY_DEGREE == 3) ? 0.99992449655091231753798502608929170703152709521188f
+                                                  : 1.0000001510806179002040134468008959160576106495165f;
+        constexpr float c1 = (POLY_DEGREE == 1)   ? 1.0201394465967894800285756834161653337107187804001f
+                             : (POLY_DEGREE == 2) ? 1.01508760098521056684783640695492761469306929535975f
+                             : (POLY_DEGREE == 3) ? 0.99993960415029750534472970577402987498389428593233f
+                                                  : 0.99996228117047652035114096488703457970402030983204f;
+        constexpr float c2 = (POLY_DEGREE == 1)   ? 0
+                             : (POLY_DEGREE == 2) ? 0.50628367056745568861842335616023694454759126020461f
+                             : (POLY_DEGREE == 3) ? 0.50502329058055065591138054839814880512001604099324f
+                                                  : 0.49998365704615426417337683145647067790385638465486f;
+        constexpr float c3 = (POLY_DEGREE == 1)   ? 0
+                             : (POLY_DEGREE == 2) ? 0
+                             : (POLY_DEGREE == 3) ? 0.16817330195731531429790827442800245470170482723302f
+                                                  : 0.16792157982882225102649214918047336097544632172075f;
+        switch (POLY_DEGREE) {
             case 3: TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3)); TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
             case 2: TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2)); TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
             case 1: TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1)); TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
@@ -609,14 +614,14 @@ void calculate_exponential_more_terms(const uint16_t /*exp_base_scale_factor*/) 
 
     for (int d = 0; d < ITERATIONS; d++) {
         // Load the input.
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 0);
 
         if constexpr (SCALE_EN) {
-            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG11, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG11, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
         }
 
         // Multiply by 1/ln(2) and round.
-        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
@@ -627,19 +632,27 @@ void calculate_exponential_more_terms(const uint16_t /*exp_base_scale_factor*/) 
             TTI_SFPENCC(0, 0, 0, 0);
 
             // Compute exp(x - k*ln2).
-            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
         } else {
-            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
 
             // Compute polynomial.
-            if constexpr (NUM_TERMS == 1) {
+            if constexpr (POLY_DEGREE == 1) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-            } else if constexpr (NUM_TERMS == 2) {
+            } else if constexpr (POLY_DEGREE == 2) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG2, 0);
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-            } else {
+            } else if constexpr (POLY_DEGREE == 3) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+            } else {  // degree 4.
+                constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
+                TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
+                TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG2, 0);
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0);
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             }
@@ -675,28 +688,10 @@ void calculate_exponential_first_column(int scale_bf16) {
             sfpi::dst_reg += 2;
         }
     } else {
-        if constexpr (!DST_ACCUM_MODE) {
-            calculate_exponential_more_terms<1, true, ITERATIONS_HALF_FACE, 3>(scale_bf16);
-            return;
-        }
-        ASSERT(false);
-        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-            val = val * sfpi::s2vFloat16b(scale_bf16);
-            sfpi::vFloat result;
-            if constexpr (!DST_ACCUM_MODE) {
-                // bfloat16-accurate implementation of exp ( < 1 ULP)
-                result = ckernel::sfpu::_sfpu_exp_21f_<false>(val);
-            } else {
-                // float32 version of exp (< 150 float32 ULP)
-                // this is more accurate than exp_21f, but also slower
-                result = ckernel::sfpu::_sfpu_exp_61f_(val);
-            }
-
-            sfpi::dst_reg[0] = result;
-
-            // Stride by 2 to skip columns 8:16 of the face
-            sfpi::dst_reg += 2;
+        if constexpr (DST_ACCUM_MODE) {
+            calculate_exponential_polynomial<0, true, ITERATIONS_HALF_FACE, 4>(scale_bf16);
+        } else {
+            calculate_exponential_polynomial<0, true, ITERATIONS_HALF_FACE, 2>(scale_bf16);
         }
     }
 }
@@ -715,34 +710,13 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init(in0_cb, in1_cb);
-    exp_tile_init<EXP_APPROX_MODE, false>();
-    MATH((calculate_exponential_more_terms_init<1, 3, scale_fp32>()));
+    MATH((calculate_exponential_polynomial_init<scale_fp32>()));
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
 
     // Convert scale_fp32 to bf16 scale
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
-
-    /*#ifdef TRISC_PACK
-    constexpr float scale_fp32_ = __builtin_bit_cast(float, scale_fp32);
-    DPRINT << "SCALE = " << scale_fp32_ << ENDL();
-    DPRINT << "======" << ENDL();
-    DPRINT << "IN0" << ENDL();
-    for (uint32_t r = 0; r < 4; ++r) {
-        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
-        DPRINT << r << " " << TileSlice(in0_cb, 0, sr, true, false) << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-
-    DPRINT << "======" << ENDL();
-    DPRINT << "IN1" << ENDL();
-    for (uint32_t r = 0; r < 4; ++r) {
-        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
-        DPRINT << r << " " << TileSlice(in1_cb, 0, sr, true, false) << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-    #endif*/
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
@@ -757,16 +731,6 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         cb_push_back(out_cb, 1);
         release_dst();
     }
-    /*#ifdef TRISC_PACK
-    cb_wait_front(out_cb, 1);
-    DPRINT << "======" << ENDL();
-    DPRINT << "OUTPUT" << ENDL();
-    for (uint32_t r = 0; r < 8; ++r) {
-        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
-        DPRINT << r << " " << TileSlice(out_cb, 0, sr, true, false) << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-    #endif*/
 }
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
