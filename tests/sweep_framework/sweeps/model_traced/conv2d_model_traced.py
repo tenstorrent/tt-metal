@@ -2,9 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
-import torch
-
 from tests.sweep_framework.sweep_utils.conv2d_common import (
     run_conv2d_short_sweep,
     run_conv1d_short_sweep,

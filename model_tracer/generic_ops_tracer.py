@@ -28,7 +28,6 @@ import sys
 import os
 import subprocess
 import json
-import tempfile
 import argparse
 from datetime import datetime
 
@@ -291,8 +290,6 @@ def create_tracing_plugin(output_dir):
     Returns:
         str: Path to the created plugin file
     """
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     plugin_content = '''
 import pytest
