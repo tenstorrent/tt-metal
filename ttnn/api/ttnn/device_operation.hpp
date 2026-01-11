@@ -539,14 +539,14 @@ typename device_operation_t::tensor_return_value_t launch(
                 tensor_return_value);
         } else {
             // Fall back to default topology imputation
-            auto [output_topology_placements, output_topology_shape] =
+            auto output_topology_result =
                 detail::get_output_placements_and_shape<device_operation_t>(tensor_args, first_tensor.value());
 
             tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-                [&output_topology_placements, &output_topology_shape](const Tensor& output_tensor) {
+                [&output_topology_result](const Tensor& output_tensor) {
                     auto topology = tt::tt_metal::TensorTopology(
-                        output_topology_shape,
-                        output_topology_placements,
+                        output_topology_result.second,
+                        output_topology_result.first,
                         output_tensor.tensor_topology().mesh_coords());
                     return output_tensor.with_tensor_topology(topology);
                 },
