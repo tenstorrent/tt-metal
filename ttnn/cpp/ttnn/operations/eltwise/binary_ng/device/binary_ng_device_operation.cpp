@@ -26,8 +26,13 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case SQUARED_DIFFERENCE:
         case RSUB: return a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16);
         case MUL:
-            return !fast_and_approximate_mode ||
-                   (a == b && (a == FLOAT32 || a == BFLOAT16 || a == INT32 || a == UINT32 || a == UINT16));
+            if (fast_and_approximate_mode) {
+                return false;
+            } else {
+                return a == b && (a == FLOAT32 || a == BFLOAT16 || a == INT32 || a == UINT32 || a == UINT16);
+            }
+            // return !fast_and_approximate_mode ||
+            //        (a == b && (a == FLOAT32 || a == BFLOAT16 || a == INT32 || a == UINT32 || a == UINT16));
         case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
         case LOGADDEXP:
         case LOGADDEXP2:
