@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::moreh::moreh_dot_backward {
 MorehDotBackwardOperation::program_factory_t MorehDotBackwardOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return SingleCore{};
 }
 
@@ -24,7 +24,7 @@ void grad_tensor_validate(const Tensor& tensor, const Tensor& grad_tensor) {
 }
 
 void validate_tensors(
-    const MorehDotBackwardOperation::operation_attributes_t& operation_attributes,
+    const MorehDotBackwardOperation::operation_attributes_t& /*operation_attributes*/,
     const MorehDotBackwardOperation::tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;
@@ -70,7 +70,7 @@ void MorehDotBackwardOperation::validate_on_program_cache_hit(
 }
 
 MorehDotBackwardOperation::spec_return_value_t MorehDotBackwardOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     std::vector<std::optional<TensorSpec>> output_specs;
     output_specs.reserve(tensor_args.output_tensors.size());
     for (const auto& output_tensor : tensor_args.output_tensors) {
@@ -84,7 +84,7 @@ MorehDotBackwardOperation::spec_return_value_t MorehDotBackwardOperation::comput
 }
 
 MorehDotBackwardOperation::tensor_return_value_t MorehDotBackwardOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     TT_FATAL(!tensor_args.output_tensors.empty(), "Invalid number of output tensors.");
     return tensor_args.output_tensors;
 }

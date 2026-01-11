@@ -86,7 +86,7 @@ void OldInfraDeviceOperation<OutputTensors>::MeshWorkloadFactory::override_runti
 template <typename OutputTensors>
 typename OldInfraDeviceOperation<OutputTensors>::program_factory_t
 OldInfraDeviceOperation<OutputTensors>::select_program_factory(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attributes, const tensor_args_t& /*tensor_args*/) {
     return attributes.has_create_workload_method() ? program_factory_t{MeshWorkloadFactory{}}
                                                    : program_factory_t{ProgramFactory{}};
 }

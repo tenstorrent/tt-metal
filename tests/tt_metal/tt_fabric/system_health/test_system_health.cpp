@@ -37,7 +37,7 @@ std::uint64_t cw_pair_to_full(uint32_t hi, uint32_t lo) {
     return (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
 }
 
-ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t chan, ClusterType cluster_type) {
+ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t chan, ClusterType /*cluster_type*/) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& driver = cluster.get_driver();
     TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");

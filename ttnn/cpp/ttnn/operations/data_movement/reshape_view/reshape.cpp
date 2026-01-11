@@ -94,7 +94,7 @@ ttnn::Tensor reshape_rm(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const PadValue& pad_value,
+    const PadValue& /*pad_value*/,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // This function turns ND -> MD into 2D->MD for row major and 3D->MD for tiled using a 0 cost view
     const auto& tensor_shape = tensor.logical_shape();
@@ -173,7 +173,7 @@ ttnn::Tensor reshape_tiled(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const MemoryConfig& memory_config,
-    const PadValue& pad_value,
+    const PadValue& /*pad_value*/,
     const bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // squeeze input tensor and requested shape to 3D

@@ -19,7 +19,7 @@ namespace ttnn::operations::data_movement::transpose::program {
 namespace {
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_hc_rm_sharded(
-    const Tensor& input_tensor, Tensor& output_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
+    const Tensor& input_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t H = input_shape[2], C = input_shape[1];
@@ -83,7 +83,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_hc_rm_sharded_special_case(
-    const Tensor& input_tensor, Tensor& output_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
+    const Tensor& input_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
@@ -282,7 +282,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }  // namespace
 
 TransposeHCShardedProgramFactory::cached_program_t TransposeHCShardedProgramFactory::create(
-    const transpose::operation_attributes_t& operation_attributes,
+    const transpose::operation_attributes_t& /*operation_attributes*/,
     const transpose::tensor_args_t& tensor_args,
     transpose::tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
@@ -378,11 +378,10 @@ TransposeHCShardedProgramFactory::cached_program_t TransposeHCShardedProgramFact
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> all_runtime_args;
     if (is_special_case) {
-        all_runtime_args = get_runtime_args_hc_rm_sharded_special_case(
-            input_tensor, output_tensor, num_cores, num_cores_x, num_cores_y);
-    } else {
         all_runtime_args =
-            get_runtime_args_hc_rm_sharded(input_tensor, output_tensor, num_cores, num_cores_x, num_cores_y);
+            get_runtime_args_hc_rm_sharded_special_case(input_tensor, num_cores, num_cores_x, num_cores_y);
+    } else {
+        all_runtime_args = get_runtime_args_hc_rm_sharded(input_tensor, num_cores, num_cores_x, num_cores_y);
     }
 
     for (uint32_t i = 0; i < num_cores; i++) {
@@ -409,7 +408,7 @@ TransposeHCShardedProgramFactory::cached_program_t TransposeHCShardedProgramFact
 
 void TransposeHCShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::operation_attributes_t& operation_attributes,
+    const transpose::operation_attributes_t& /*operation_attributes*/,
     const transpose::tensor_args_t& tensor_args,
     transpose::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;

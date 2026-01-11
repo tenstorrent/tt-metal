@@ -37,7 +37,7 @@ void set_or_update_runtime_arguments(
     KernelHandle writer_kernel_id,
     KernelHandle compute_kernel_id,
     CoreCoord compute_with_storage_grid_size,
-    const BcastToOperation::operation_attributes_t& operation_attributes,
+    const BcastToOperation::operation_attributes_t& /*operation_attributes*/,
     const BcastToOperation::tensor_args_t& tensor_args,
     BcastToOperation::tensor_return_value_t& output,
     F handle_args) {

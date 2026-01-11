@@ -64,7 +64,7 @@ void measure_latency(const std::string& kernel_name) {
     tt_metal::CloseDevice(device);
 }
 
-int main(int argc, char** argv) {
+int main() {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
         TT_THROW("Test not supported w/ fast dispatch, exiting");
     }
