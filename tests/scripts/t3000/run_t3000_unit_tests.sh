@@ -623,7 +623,7 @@ run_t3000_tt_dit_tests() {
 }
 
 run_t3000_tttv2_fast_unit_tests() {
-  fail = 0
+  fail=0
 
   # Run non-module models/common unit tests
   pytest --tb=short --ignore=models/common/tests/modules models/common/tests ; fail+=$?
