@@ -29,24 +29,25 @@ void kernel_main() {
     auto pkt_semaphore_hdr = PacketHeaderPool::allocate_header();
     pkt_semaphore_hdr->to_noc_unicast_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, static_cast<uint32_t>(1)});  // increment 1
-    // Perform local semaphore increment
-    // noc_semaphore_inc(semaphore_noc_addr, 1);
 
     // Perform remote semaphore increment
     tt::tt_fabric::WorkerToFabricEdmSender cur_connection;
+
+    // Device 0 has a forward connection to Device 1
+    // Device 1 has a backward connection to Device 0
     if (device_id == 0) {
         cur_connection = fabric_connection.get_forward_connection();
     } else {
         cur_connection = fabric_connection.get_backward_connection();
     }
-    DPRINT << device_id << " Waiting for empty slot on connection \n";
+
     cur_connection.wait_for_empty_write_slot();
-    DPRINT << device_id << " Got empty slot on connection. Sending " << sizeof(PACKET_HEADER_TYPE) << " bytes \n";
     fabric_set_unicast_route<false>(pkt_semaphore_hdr, 1);
     cur_connection.send_payload_flush_blocking_from_address((uint32_t)pkt_semaphore_hdr, sizeof(PACKET_HEADER_TYPE));
+
+    // Wait for semaphore to be incremented by the other device.
     noc_semaphore_wait_min(global_semaphore_ptr, 1);
-    DPRINT << "Hello from Device " << device_id << ", connected: " << (int)fabric_connection.is_logically_connected()
-           << "\n";
+
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close();
     }

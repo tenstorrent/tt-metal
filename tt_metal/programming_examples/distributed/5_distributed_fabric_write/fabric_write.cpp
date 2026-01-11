@@ -41,31 +41,22 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 using ttnn::distributed::MeshMapperConfig;
-tt::tt_metal::distributed::MeshWorkload get_distributed_matmul_workload(
-    const ttnn::Tensor& inputA,
-    const ttnn::Tensor& inputB,
-    const ttnn::Tensor& output,
-    tt::tt_metal::GlobalSemaphore& semaphore);
+tt::tt_metal::distributed::MeshWorkload get_workload(
+    const ttnn::Tensor& inputA, tt::tt_metal::GlobalSemaphore& semaphore);
 int main() {
     int M = 1024;
     int N = 128;
-    int K = 512;
     auto mesh_shape = tt::tt_metal::distributed::MeshShape({1, 2});
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     auto mesh_device =
         tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(mesh_shape));
     auto& command_queue = mesh_device->mesh_command_queue();
-    std::vector<float> inputA_data(M * K, 1);
-    std::vector<float> inputB_data(K * N, 1);
-    ttnn::Shape shapeA = ttnn::Shape({M, K});
-    ttnn::Shape shapeB = ttnn::Shape({K, N});
+    std::vector<float> inputA_data(M * N, 1);
+    ttnn::Shape shapeA = ttnn::Shape({M, N});
     auto inputA_host_buffer = tt::tt_metal::HostBuffer(std::move(inputA_data));
-    auto inputB_host_buffer = tt::tt_metal::HostBuffer(std::move(inputB_data));
 
     auto inputA = ttnn::Tensor(
         inputA_host_buffer, shapeA, shapeA, tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::ROW_MAJOR);
-    auto inputB = ttnn::Tensor(
-        inputB_host_buffer, shapeB, shapeB, tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::ROW_MAJOR);
 
     // Split the input tensors across the mesh devices in such a way to minimize communication during matmul.
     // Split inputA along M dimension across the mesh devices.
@@ -77,31 +68,13 @@ int main() {
                 MeshMapperConfig::Shard(0),
             }});
 
-    // Split inputB along N dimension across the mesh devices
-    auto inputB_mesh_mapper = ttnn::distributed::create_mesh_mapper(
-        *mesh_device,
-        MeshMapperConfig{
-            .placements = {
-                MeshMapperConfig::Replicate(),
-                MeshMapperConfig::Shard(1),
-            }});
     inputA = ttnn::distributed::distribute_tensor(inputA, *inputA_mesh_mapper, *mesh_device);
-    inputB = ttnn::distributed::distribute_tensor(inputB, *inputB_mesh_mapper, *mesh_device);
-
-    auto output = tt::tt_metal::create_device_tensor(
-        tt::tt_metal::TensorSpec{
-            tt::tt_metal::Shape({M / 2, N}),  // Shape per device, as we shard M across devices.
-            tt::tt_metal::TensorLayout(
-                tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, ttnn::types::DRAM_MEMORY_CONFIG)
-
-        },
-        mesh_device.get());
 
     const auto available_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, mesh_device->get_sub_device_ids().at(0));
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), available_cores, 0);
     try {
-        auto workload = get_distributed_matmul_workload(inputA, inputB, output, semaphore);
+        auto workload = get_workload(inputA, semaphore);
         tt::tt_metal::distributed::EnqueueMeshWorkload(command_queue, workload, true);
     } catch (const std::exception& e) {
         log_error(tt::LogAlways, "Exception during workload execution: {}", e.what());
@@ -109,16 +82,9 @@ int main() {
     mesh_device->close();
 }
 
-tt::tt_metal::distributed::MeshWorkload get_distributed_matmul_workload(
-    const ttnn::Tensor& inputA,
-    const ttnn::Tensor& inputB,
-    const ttnn::Tensor& output,
-    tt::tt_metal::GlobalSemaphore& semaphore) {
+tt::tt_metal::distributed::MeshWorkload get_workload(
+    const ttnn::Tensor& inputA, tt::tt_metal::GlobalSemaphore& semaphore) {
     auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
-    (void)inputA;
-    (void)inputB;
-    (void)output;
-
     const uint32_t link = 0;
     auto* mesh_device = inputA.device();
     auto mesh_shape = mesh_device->shape();
