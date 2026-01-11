@@ -942,9 +942,7 @@ class TtModelArgs:
 
             def w2_prg_config(seq_len):
                 if seq_len == 128:
-                    return self.matmul_1d_config(
-                        128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
-                    )
+                    return self.matmul_1d_config(128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=2)
                 # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
                 if seq_len < 4096:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
