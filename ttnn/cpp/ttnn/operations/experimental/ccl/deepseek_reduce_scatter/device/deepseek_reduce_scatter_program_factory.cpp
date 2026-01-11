@@ -45,7 +45,7 @@ namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
 void deepseek_append_fabric_mux_connection_ct_args(
     const tt::tt_fabric::FabricMuxChannelType channel_type,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    uint32_t num_workers_per_direction,
+    uint32_t num_workers_per_direction_per_link,
     std::vector<uint32_t>& writer_ct_args) {
     constexpr auto num_ct_args = 5;
     const std::array<uint32_t, num_ct_args> ct_args = {
@@ -53,7 +53,7 @@ void deepseek_append_fabric_mux_connection_ct_args(
         mux_kernel_config.get_buffer_size_bytes(channel_type),  // fabric_mux_channel_buffer_size_bytes
         mux_kernel_config.get_status_address(),                 // fabric_mux_status_address
         mux_kernel_config.get_termination_signal_address(),     // fabric_mux_termination_signal_address
-        num_workers_per_direction                               // num_mux_clients
+        num_workers_per_direction_per_link                      // num_mux_clients
     };
 
     writer_ct_args.reserve(writer_ct_args.capacity() + num_ct_args);
@@ -119,32 +119,12 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     auto* mesh_device = input_tensor.device();
 
     const uint32_t ring_size = 8;
-
-    // op hyperparams
-    // Get worker cores
-    // 2 senders per direction (2: forward, backward) per link (num_links)
-    // Each sender is reader + compute + writer
     const uint32_t num_directions_per_link = 2;
-    uint32_t num_mux_cores_per_direction_per_link = 1;
-    uint32_t num_workers_per_direction = 1;  // TODO: should this be per link or not
-    log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
-    uint32_t num_buffers_full_size_channels = 1;
 
-    uint32_t num_cores_per_link =
-        num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
-
-    // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
-    auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
-        tt::tt_fabric::Topology::Ring, sender_device_coord, forward_coord, backward_coord, mesh_device);
-    auto [mcast_forward_args, mcast_backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
-        tt::tt_fabric::Topology::Ring,
-        sender_device_coord,
-        forward_coord,
-        backward_coord,
-        ring_size - 1,
-        ring_size - 1,
-        mesh_device);
+    const uint32_t num_mux_cores_per_direction_per_link = 1;
+    const uint32_t num_workers_per_direction_per_link = 1;
+    const uint32_t num_cores_per_link =
+        num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction_per_link);
 
     const auto [all_core_range, all_cores] =
         ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
@@ -164,7 +144,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 mux_core_ranges.emplace_back(mux_core);
             }
 
-            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+            for (uint32_t worker = 0; worker < num_workers_per_direction_per_link; worker++) {
                 const auto& worker_core = all_cores[core_id++];
                 sender_worker_core_ranges.emplace_back(worker_core);
 
@@ -211,6 +191,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     uint32_t max_target_noc_addresses_per_packet = 2;
 
     // L1 Scratch CB Creation
+    uint32_t page_size = input_tensor.buffer()->page_size();
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
@@ -254,13 +235,13 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    const auto num_full_size_channels = num_workers_per_direction;
+    const auto num_full_size_channels = num_workers_per_direction_per_link;
     constexpr auto num_header_only_channels = 0;
     const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
-        num_buffers_full_size_channels,
+        1,
         0,
         buffer_size_bytes_full_size_channel,
         mux_base_l1_address);
@@ -328,8 +309,19 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     deepseek_append_fabric_mux_connection_ct_args(
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
-        num_workers_per_direction,
+        num_workers_per_direction_per_link,
         sender_writer_compile_args);
+
+    auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
+        tt::tt_fabric::Topology::Ring, sender_device_coord, forward_coord, backward_coord, mesh_device);
+    auto [mcast_forward_args, mcast_backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+        tt::tt_fabric::Topology::Ring,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        ring_size - 1,
+        ring_size - 1,
+        mesh_device);
 
     sender_writer_compile_args.insert(
         sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
@@ -400,12 +392,12 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             }
 
             auto termination_master_logical_core = *((termination_master_core_iter++)->begin());
-            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+            for (uint32_t worker = 0; worker < num_workers_per_direction_per_link; worker++) {
                 auto core = *((worker_core_iter++)->begin());
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
-                uint32_t worker_id = (link * num_workers_per_direction) + worker;
-                uint32_t num_workers = num_links * num_workers_per_direction;
+                uint32_t worker_id = (link * num_workers_per_direction_per_link) + worker;
+                uint32_t num_workers = num_links * num_workers_per_direction_per_link;
 
                 uint32_t start_tiles_read = worker_id * output_channel_num_pages / num_workers;
                 uint32_t start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
@@ -479,7 +471,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         writer_kernel_id,
         all_cores,
         num_directions_per_link,
-        num_workers_per_direction,
+        num_workers_per_direction_per_link,
         num_mux_cores_per_direction_per_link,
         num_cores_per_link};
 }
@@ -490,7 +482,7 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     const tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
+    uint32_t num_workers_per_direction_per_link,
     uint32_t num_mux_cores_per_direction_per_link,
     uint32_t num_cores_per_link,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
@@ -502,9 +494,10 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     // update senders
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                uint32_t mux_core_offset = (link * num_cores_per_link) +
-                                           (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
+            for (uint32_t worker = 0; worker < num_workers_per_direction_per_link; worker++) {
+                uint32_t mux_core_offset =
+                    (link * num_cores_per_link) +
+                    (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction_per_link));
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
                 std::vector<std::vector<RuntimeArgsData>> reader_runtime_args =
                     GetRuntimeArgs(program, reader_kernel_id);
