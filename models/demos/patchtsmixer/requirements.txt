@@ -1,0 +1,12 @@
+# Core dependencies for PatchTSMixer implementation
+# torch>=2.0.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Optional: For HuggingFace-based training (train_patchtsmixer_etth2.py, patchtsmixer_huggingface_eval.py)
+transformers>=4.30.0
+# tsfm_public  # Currently unavailable via pip, use benchmark_datasets.py for training instead
+
+# Development dependencies (already in tt-metal environment)
+# ttnn - installed as part of tt-metal
+# pytest - for running tests
