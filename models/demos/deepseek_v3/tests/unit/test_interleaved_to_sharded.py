@@ -112,6 +112,7 @@ DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
 ]
 
 
+@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )
