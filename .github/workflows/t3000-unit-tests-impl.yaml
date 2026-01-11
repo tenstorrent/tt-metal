@@ -67,7 +67,8 @@ jobs:
             echo "[INFO] Loading all tests from YAML"
           else
             # Filter tests by model-name field
-            filtered_output=$(echo "$json_output" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.model-name == $model or (.model-name | not))]')
+            # Include tests where model-name matches OR model-name doesn't exist (always-run tests)
+            filtered_output=$(echo "$json_output" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
             echo "[INFO] Filtered tests by model: ${{ inputs.model }}"
           fi
           # Print the JSON output
