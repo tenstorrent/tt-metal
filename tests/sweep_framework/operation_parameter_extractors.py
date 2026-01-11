@@ -3516,9 +3516,40 @@ def _extract_group_norm_parameters(config: List) -> Optional[Dict]:
         return None
 
 
+def _extract_repeat_parameters(config: List) -> Optional[Dict]:
+    """
+    Extract repeat vector (arg1) from ttnn::repeat configuration.
+
+    For repeat operation:
+    - arg0 is the input tensor (handled by standard tensor_config extraction as 'shape')
+    - arg1 is the repetition vector (extracted here as 'repeat_shape')
+
+    The loader will use 'repeat_shape' for the sweep test 'shape' parameter.
+    """
+    try:
+        import ast
+
+        for arg in config:
+            if isinstance(arg, dict) and "arg1" in arg:
+                repeat_vec = arg["arg1"]
+                # arg1 can be either a list or a string representation of a list
+                if isinstance(repeat_vec, str):
+                    repeat_vec = ast.literal_eval(repeat_vec)
+                if isinstance(repeat_vec, list):
+                    # Use 'repeat_shape' to avoid overwriting input tensor shape
+                    return {"repeat_shape": repeat_vec}
+        return None
+    except Exception:
+        return None
+
+
 # Register group_norm extractor
 OperationParameterExtractors.register_extractor("group_norm", extract_func=_extract_group_norm_parameters)
 OperationParameterExtractors.register_extractor("ttnn::group_norm", extract_func=_extract_group_norm_parameters)
+
+# Register repeat extractor
+OperationParameterExtractors.register_extractor("repeat", extract_func=_extract_repeat_parameters)
+OperationParameterExtractors.register_extractor("ttnn::repeat", extract_func=_extract_repeat_parameters)
 
 # Register permute extractor
 OperationParameterExtractors.register_extractor(

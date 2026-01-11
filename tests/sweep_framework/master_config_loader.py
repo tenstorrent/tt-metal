@@ -629,6 +629,9 @@ class MasterConfigLoader:
                 return self._get_fast_reduce_nc_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=False
                 )
+            elif self._matches_operation(operation_name, "repeat"):
+                print(f"🔧 Detected repeat operation - extracting repeat vector (no deduplication)")
+                return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
             elif self._matches_operation(
                 operation_name, "scaled_dot_product_attention"
             ) and not self._matches_operation(operation_name, "decode"):
@@ -907,6 +910,20 @@ class MasterConfigLoader:
                                         )
                                     ).encode()
                                 ).hexdigest()
+                            elif self._matches_operation(operation_name, "repeat") and "repeat_shape" in config_dict:
+                                # For repeat, deduplicate based on (input, repeat_shape) pair
+                                repeat_shape = config_dict["repeat_shape"]
+                                input_sig = hashlib.md5(
+                                    str(
+                                        (
+                                            tensor_config.shape,
+                                            parsed_dtype,
+                                            parsed_layout,
+                                            parsed_mem_config,
+                                            repeat_shape,
+                                        )
+                                    ).encode()
+                                ).hexdigest()
                             elif (
                                 operation_name == "permute" or operation_name == "ttnn::permute"
                             ) and "dims" in config_dict:
@@ -1069,6 +1086,8 @@ class MasterConfigLoader:
                 scalar_if_false_list = [] if self._matches_operation(operation_name, "where") else None
                 # multiply_ specific parameters (scalar multiply)
                 scalar_value_list = [] if self._matches_operation(operation_name, "multiply_") else None
+                # repeat specific parameters
+                repeat_shape_list = [] if self._matches_operation(operation_name, "repeat") else None
                 # New operation parameters
                 exponent_list = [] if self._matches_operation(operation_name, "pow") else None
                 min_list = [] if self._matches_operation(operation_name, "clamp") else None
@@ -1084,7 +1103,6 @@ class MasterConfigLoader:
                     )
                     else None
                 )
-                repeat_shape_list = [] if self._matches_operation(operation_name, "repeat") else None
                 # group_norm parameters (all 16 traced arguments)
                 num_groups_list = [] if self._matches_operation(operation_name, "group_norm") else None
                 epsilon_list = [] if self._matches_operation(operation_name, "group_norm") else None
@@ -1183,6 +1201,8 @@ class MasterConfigLoader:
                             dim1_list.append(cfg["dim1"])
                     if operation_name == "reshape" and "target_shape" in cfg:
                         target_shape_list.append(cfg["target_shape"])
+                    if self._matches_operation(operation_name, "repeat") and "repeat_shape" in cfg:
+                        repeat_shape_list.append(cfg["repeat_shape"])
                     if operation_name == "pad" or operation_name == "ttnn::pad":
                         if "padding" in cfg and "value" in cfg:
                             # Using padding format
@@ -1289,10 +1309,6 @@ class MasterConfigLoader:
                     ):
                         if "dim" in cfg:
                             dim_list.append(cfg["dim"])
-                    # Extract repeat shape parameter
-                    if self._matches_operation(operation_name, "repeat"):
-                        if "shape" in cfg:
-                            repeat_shape_list.append(cfg["shape"])
                     # Extract group_norm parameters (all 16 arguments)
                     # NOTE: All optional parameters must be appended for EVERY config (use None if missing)
                     # to ensure zip(*param_lists) doesn't truncate
@@ -1512,6 +1528,11 @@ class MasterConfigLoader:
                     if scalar_value_list:
                         param_names.append("scalar_value")
                         param_lists.append(scalar_value_list)
+                # Add repeat parameters (repeat vector as 'repeat_shape')
+                if self._matches_operation(operation_name, "repeat"):
+                    if repeat_shape_list:
+                        param_names.append("repeat_shape")
+                        param_lists.append(repeat_shape_list)
                 # Add pow parameters
                 if self._matches_operation(operation_name, "pow"):
                     if exponent_list:
@@ -1535,11 +1556,6 @@ class MasterConfigLoader:
                     if dim_list:
                         param_names.append("dim")
                         param_lists.append(dim_list)
-                # Add repeat shape parameter
-                if self._matches_operation(operation_name, "repeat"):
-                    if repeat_shape_list:
-                        param_names.append("shape")
-                        param_lists.append(repeat_shape_list)
                 # Add group_norm parameters (all 16 arguments)
                 # Always add all parameters (not conditionally) to ensure zip doesn't truncate
                 if self._matches_operation(operation_name, "group_norm"):
