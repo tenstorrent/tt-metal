@@ -28,8 +28,8 @@ sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
  * This saves 1 SFPADDI instruction.
  */
 sfpi_inline sfpi::vInt _float_to_int32_for_exp21f_(sfpi::vFloat val) {
-    sfpi::vInt exp = exexp(val);
-    sfpi::vInt man = exman8(val);  // get mantissa with implicit bit (man in [1; 2])
+    sfpi::vInt exp = sfpi::exexp(val);
+    sfpi::vInt man = sfpi::exman8(val);  // get mantissa with implicit bit (man in [1; 2])
     man = sfpi::reinterpret<sfpi::vInt>(sfpi::shft(sfpi::reinterpret<sfpi::vUInt>(man), exp));
     return man;
 }
