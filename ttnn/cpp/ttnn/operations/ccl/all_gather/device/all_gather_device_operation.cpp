@@ -152,9 +152,6 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     if (operation_attributes.sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
     }
-    TT_FATAL(
-        subdevice_core_range_set.num_cores() != 0,
-        "There are no cores available to run ALL Gather after considering sub device and sub core grid");
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
