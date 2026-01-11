@@ -1269,26 +1269,23 @@ bool any_sender_channels_active(
     return false;
 }
 
-constexpr bool IS_RETRAIN_SYNC_MASTER() { return MY_ERISC_ID == 0; }
-void run_retrain_sync() {
-    if constexpr (NUM_ACTIVE_ERISCS == 1) {
-        run_routing_without_noc_sync();
-    } else {
-        if constexpr (IS_RETRAIN_SYNC_MASTER()) {
-            write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(1);
-            // Wait for erisc1 to ack
-            while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 2) {
-            }
-            run_routing_without_noc_sync();
-            write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(3);
-            // Wait for erisc1 to ack
-            while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 4) {
-            }
-            // Resume normal operation
-            write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(0);
-        } else {
-            while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 1) {
-            }
+constexpr bool IS_RETRAIN_SYNC_MASTER() { return enable_context_switch; }  // MY_ERISC_ID == 0; }
+void run_routing_without_noc_sync_coordinated_as_master() {
+    write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(1);
+    // Wait for erisc1 to ack
+    while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 2) {
+    }
+    run_routing_without_noc_sync();
+    write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(3);
+    // Wait for erisc1 to ack
+    while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 4) {
+    }
+    // Resume normal operation
+    write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(0);
+}
+FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master() {
+    if constexpr (!IS_RETRAIN_SYNC_MASTER()) {
+        if (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() == 1) {
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(2);
             while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 3) {
             }
@@ -1297,7 +1294,15 @@ void run_retrain_sync() {
             }
         }
     }
-    // Master
+}
+void run_retrain_sync() {
+    if constexpr (NUM_ACTIVE_ERISCS == 1) {
+        run_routing_without_noc_sync();
+    } else {
+        if constexpr (IS_RETRAIN_SYNC_MASTER()) {
+            run_routing_without_noc_sync_coordinated_as_master();
+        }
+    }
 }
 template <typename LocalTelemetryT>
 FORCE_INLINE void update_telemetry(
@@ -2076,7 +2081,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 if (did_something) {
                     did_nothing_count = 0;
                 } else {
-                    if (did_nothing_count++ > SWITCH_INTERVAL) {
+                    if (did_nothing_count++ >= SWITCH_INTERVAL) {
                         did_nothing_count = 0;
 
                         run_retrain_sync();
@@ -2084,12 +2089,14 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             } else {
-                if (did_nothing_count++ > SWITCH_INTERVAL) {
+                if (did_nothing_count++ >= SWITCH_INTERVAL) {
                     did_nothing_count = 0;
                     run_retrain_sync();
                     // run_routing_without_noc_sync();
                 }
             }
+        } else {
+            run_routing_without_noc_sync_coordinated_as_non_master();
         }
 
         if constexpr (is_sender_channel_serviced[0]) {
