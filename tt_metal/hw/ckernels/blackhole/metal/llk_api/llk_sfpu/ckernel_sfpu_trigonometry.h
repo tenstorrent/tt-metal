@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -148,32 +149,73 @@ inline void calculate_sfpu_trig() {
     }
 }
 
-#define POLYVAL6(coef5, coef4, coef3, coef2, coef1, coef0, t4) \
-    (t4 * (t4 * (t4 * (t4 * (coef5 * t4 + coef4) + coef3) + coef2) + coef1) + coef0)
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
+    sfpi::vFloat t0 = sfpi::abs(val);
+    sfpi::vFloat result = sfpi::vConst0;
 
-template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val) {
-    vFloat t0 = sfpi::abs(val);
-    v_if(t0 > 1) { t0 = sfpu_reciprocal<false>(t0); }
+    // If input is NaN then output must be NaN as well
+    sfpi::vInt exponent = sfpi::exexp_nodebias(val);
+    sfpi::vInt mantissa = sfpi::exman9(val);
+    v_if(exponent == 255 && mantissa != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+    v_else {
+        sfpi::vFloat absval_minus_1 = t0 - sfpi::vConst1;
+
+        v_if(absval_minus_1 > 0.0f) { t0 = sfpu_reciprocal<false>(t0); }
+        v_endif;
+
+        sfpi::vFloat t1 = t0 * t0;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            // Found using Sollya
+            // > fpminimax(atan(x), [|1,3,5,7|], [|single...|], [2^(-40); 1], relative);
+            t1 = PolynomialEvaluator::eval(
+                t1,
+                0.999787867069244384765625f,
+                -0.325808584690093994140625f,
+                0.1555790007114410400390625f,
+                -4.4326744973659515380859375e-2f);
+        } else {
+            // Found using Sollya
+            // > fpminimax(atan(x), [|1,3,5,7,9,11,13,15,17|], [|single...|], [2^(-40); 1], relative);
+            t1 = PolynomialEvaluator::eval(
+                t1,
+                sfpi::vConst1,
+                -0.3333314359188079833984375f,
+                0.19993579387664794921875f,
+                -0.14209578931331634521484375f,
+                0.1066047251224517822265625f,
+                -7.5408883392810821533203125e-2f,
+                4.3082617223262786865234375e-2f,
+                -1.62907354533672332763671875e-2f,
+                2.90188402868807315826416015625e-3f);
+        }
+
+        t1 = t1 * t0;
+
+        v_if(absval_minus_1 > 0.0f) { t1 = PI_2 - t1; }
+        v_endif;
+
+        result = sfpi::setsgn(t1, val);
+    }
     v_endif;
 
-    vFloat t1 = t0 * t0;
-
-    t1 = POLYVAL6(-0.013480470f, 0.057477314f, -0.121239071f, 0.195635925f, -0.332994597f, 0.999995630f, t1);
-
-    t1 = t1 * t0;
-
-    v_if(sfpi::abs(val) > 1) { t1 = 1.570796327f - t1; }
-    v_endif;
-
-    return sfpi::setsgn(t1, val);
+    return result;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {
     for (int d = 0; d < ITERATIONS; d++) {
-        dst_reg[0] = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(dst_reg[0]);
-        dst_reg++;
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat result = sfpu_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en>(in);
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        }
+
+        sfpi::dst_reg[0] = result;
+
+        sfpi::dst_reg++;
     }
 }
 
