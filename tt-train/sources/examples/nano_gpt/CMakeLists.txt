@@ -18,10 +18,15 @@ set(AGGREGATOR_SOURCES
 
 add_executable(nano_gpt ${MAIN_SOURCES})
 target_link_libraries(nano_gpt PRIVATE ttml)
+tt_train_set_executable_rpath(nano_gpt TTNN)
+
 add_executable(nano_gpt_aggregator ${AGGREGATOR_SOURCES})
 target_link_libraries(nano_gpt_aggregator PRIVATE ttml)
+tt_train_set_executable_rpath(nano_gpt_aggregator TTNN)
+
 add_executable(nano_gpt_optimizer ${OPTIMIZER_SOURCES})
 target_link_libraries(nano_gpt_optimizer PRIVATE ttml)
+tt_train_set_executable_rpath(nano_gpt_optimizer TTNN)
 
 target_compile_definitions(
     nano_gpt

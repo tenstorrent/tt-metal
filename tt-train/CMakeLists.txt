@@ -35,31 +35,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
-# RPATH settings for tt-train executables
-# When built as part of the main project (BUILD_TT_TRAIN=ON), the executables are at:
-#   build/tt-train/tests/ttml_tests
-# And they need to find shared libraries at:
-#   build/lib/libtt_metal.so
-#   ttnn/ttnn/_ttnncpp.so (in the SOURCE tree, not build tree)
-#
-# NOTE: CMAKE_BINARY_DIR is always the top-level build directory (e.g., /work/build/).
-# CMAKE_SOURCE_DIR is always the top-level source directory (e.g., /work/).
-# The tar artifact is created directly from build/ without cmake --install, so
-# BUILD_RPATH is what gets embedded in the binaries (not INSTALL_RPATH).
-#
-# These global settings apply to all targets in tt-train. Individual targets (like ttml_tests)
-# may override these with per-target RPATH settings via tt_set_runtime_rpath() for more
-# specific requirements (e.g., TTNN dependencies).
-set(CMAKE_BUILD_RPATH
-    "${CMAKE_BINARY_DIR}/lib" # /work/build/lib (for libtt_metal.so; tar artifacts always use 'lib')
-    "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}" # /work/build/lib64 on Fedora (some deps may emit here)
-    "${CMAKE_SOURCE_DIR}/ttnn/ttnn" # /work/ttnn/ttnn (for _ttnncpp.so)
-)
-set(CMAKE_INSTALL_RPATH
-    "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}" # FHS: /usr/libexec/tt-train/tests/../${CMAKE_INSTALL_LIBDIR} = /usr/lib64
-    "$ORIGIN/../../lib" # Tar artifact: from tests/ -> build/lib/ (tar artifacts always use 'lib', not CMAKE_INSTALL_LIBDIR)
-    "$ORIGIN/../../../ttnn/ttnn" # Tar artifact: build/tt-train/tests/../../../ttnn/ttnn
-)
+# Include RPATH helper for tt-train executables
+include(cmake/rpath.cmake)
 
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
 

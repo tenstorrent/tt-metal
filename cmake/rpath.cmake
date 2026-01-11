@@ -1,5 +1,12 @@
 # CMake helper for setting relocatable RPATH on test executables and libraries
 #
+# This is required to support developer builds that are not installed.
+#
+# Fedora uses RUNPATH by default, which searches LD_LIBRARY_PATH first.
+# This means that if the library is not in LD_LIBRARY_PATH, it will not be found.
+# This is a problem because the library is not in LD_LIBRARY_PATH when it is built,
+# but it is in LD_LIBRARY_PATH when it is installed.
+#
 # Ensure GNUInstallDirs is available for CMAKE_INSTALL_LIBDIR
 include(GNUInstallDirs)
 
@@ -23,13 +30,14 @@ include(GNUInstallDirs)
 #
 # 3. tt_set_installable_library_rpath() - For libraries that get installed
 #    Use when: Target is a shared library that will be installed (via CPack or install())
-#    - Main libraries (tt_metal, tt_stl, ttnncpp, ttnn)
+#    - Main libraries (tt_metal, ttnncpp, ttnn)
 #    - Sets: Both BUILD_RPATH and INSTALL_RPATH (supports multiple installation layouts)
 #
 # Alternative: Global CMAKE_BUILD_RPATH / CMAKE_INSTALL_RPATH
 #    Use when: All targets in a subdirectory need the same RPATH
-#    - Example: tt-train/CMakeLists.txt sets global RPATH for all tt-train targets
-#    - Individual targets can still override with per-target functions
+#    - Can be overridden by per-target functions like tt_set_runtime_rpath()
+#    - Consider using a wrapper function (like tt-train's tt_train_set_executable_rpath())
+#      to consolidate RPATH logic while still using per-target properties
 #
 # Why different RPATH approaches?
 #   - BUILD_RPATH: Absolute paths for build-time execution and linking (preferred for simple cases)

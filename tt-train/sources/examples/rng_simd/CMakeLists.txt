@@ -8,3 +8,4 @@ target_link_libraries(
         ttml
         Threads::Threads
 )
+tt_train_set_executable_rpath(rng_simd TTNN)

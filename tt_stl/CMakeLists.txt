@@ -86,24 +86,26 @@ install(
         metalium-dev
 )
 
-# Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
-#tt_set_library_rpath(tt_stl)
-tt_set_installable_library_rpath(tt_stl)
+# Set BUILD_RPATH for build-time linking (crucial for Fedora RUNPATH behavior)
+# This mimics tt_metal's approach for consistent behavior across Ubuntu and Fedora
+tt_set_library_rpath(tt_stl)
 
-# Install the library file manually using install(CODE) to work around CMake's
-# install(TARGETS) LIBRARY path resolution bug when LIBRARY_OUTPUT_DIRECTORY is set.
-# The diagnostic proves the file exists at build/lib/libtt_stl.so, but install(TARGETS) fails.
-#install(
-#    CODE
-#        "
-#        set(_src \"${CMAKE_BINARY_DIR}/lib/libtt_stl.so\")
-#        set(_dst \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
-#        message(STATUS \"Installing tt_stl library: \${_src} -> \${_dst}/libtt_stl.so\")
-#        file(INSTALL DESTINATION \"\${_dst}\" TYPE SHARED_LIBRARY FILES \"\${_src}\")
-#        "
-#    COMPONENT
-#        metalium-runtime
-#)
+# Set INSTALL_RPATH for the installed library
+# $ORIGIN must come first for RPM's brp-check-rpaths
+# Using BUILD_WITH_INSTALL_RPATH=FALSE ensures BUILD_RPATH is used during development
+# and INSTALL_RPATH is only applied after cmake --install
+set_target_properties(
+    tt_stl
+    PROPERTIES
+        # Prevent build paths from leaking into install RPATH
+        BUILD_WITH_INSTALL_RPATH
+            FALSE
+        # Don't let CMake auto-append paths
+        INSTALL_RPATH_USE_LINK_PATH
+            FALSE
+        INSTALL_RPATH
+            "$ORIGIN"
+)
 
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(tests)

@@ -66,16 +66,8 @@ target_link_libraries(
     ttml
 )
 
-# Set relocatable RPATH for CI tar artifacts (only when built as part of main project)
-if(COMMAND tt_set_runtime_rpath)
-    set_target_properties(
-        ttml_tests
-        PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY
-                ${CMAKE_CURRENT_BINARY_DIR}
-    )
-    tt_set_runtime_rpath(ttml_tests TTNN)
-endif()
+# Set relocatable RPATH using the consolidated tt-train helper
+tt_train_set_executable_rpath(ttml_tests TTNN)
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
