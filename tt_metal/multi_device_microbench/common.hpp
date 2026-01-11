@@ -129,10 +129,20 @@ inline double run_recv_send_workload_once(
     return std::chrono::duration<double>(t1 - t0).count();
 }
 
-inline std::vector<uint32_t> make_src_data(size_t num_words, uint32_t seed = 0) {
-    std::vector<uint32_t> tx(num_words);
-    for (size_t i = seed; i < num_words + seed; ++i) {
-        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
+template <typename T = uint32_t>
+inline std::vector<T> make_src_data(size_t num_words, uint32_t seed = 0) {
+    std::vector<T> tx(num_words);
+
+    // 1. Infer Device ID (Rank)
+    // In your main(), 'seed' acts as a global offset (0, 1*N, 2*N...).
+    // We recover the Device ID by dividing by the buffer size.
+    uint32_t device_id = (num_words > 0) ? (seed / num_words) : 0;
+
+    for (size_t i = 0; i < num_words; ++i) {
+        // 2. Create Deterministic Pattern
+        // High 4 bits: Device ID (Supports up to 16 devices)
+        // Low 28 bits: Word Index (Supports buffers up to ~1GB)
+        tx[i] = static_cast<T>((device_id << 28) | (i & 0x0FFFFFFF));
     }
     return tx;
 }
