@@ -88,19 +88,6 @@ int main() {
     inputA = ttnn::distributed::distribute_tensor(inputA, *inputA_mesh_mapper, *mesh_device);
     inputB = ttnn::distributed::distribute_tensor(inputB, *inputB_mesh_mapper, *mesh_device);
 
-    // log_info(
-    //     tt::LogAlways,
-    //     "\n Input A : {}, Memory Config : {}, Storage : {} ",
-    //     ttnn::to_string(inputA),
-    //     inputA.memory_config(),
-    //     inputA.storage());
-    // log_info(
-    //     tt::LogAlways,
-    //     "\n Input B : {}, Memory Config : {}, Storage : {} ",
-    //     ttnn::to_string(inputB),
-    //     inputB.memory_config(),
-    //     inputB.storage());
-
     auto output = tt::tt_metal::create_device_tensor(
         tt::tt_metal::TensorSpec{
             tt::tt_metal::Shape({M / 2, N}),  // Shape per device, as we shard M across devices.
@@ -110,12 +97,6 @@ int main() {
         },
         mesh_device.get());
 
-    // log_info(
-    //     tt::LogAlways,
-    //     "\n Output : {}, Memory Config : {}, Storage : {} ",
-    //     ttnn::to_string(output),
-    //     output.memory_config(),
-    //     output.storage());
     const auto available_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, mesh_device->get_sub_device_ids().at(0));
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), available_cores, 0);
