@@ -125,14 +125,56 @@ model_graph = draw_graph(
 
 ## Performance Metrics
 
-Reference implementation results on ETTh2 test set:
+### Stage 1: Bring-Up (Correctness Validation)
 
-| Implementation | MSE    | MAE    | RMSE   | Parameters |
-|---------------|--------|--------|--------|------------|
-| PyTorch       | 0.210  | 0.341  | 0.458  | 169,392    |
-| HuggingFace   | 0.236  | 0.364  | 0.485  | 169,392    |
+Performance collected from [benchmark_datasets.py](benchmark_datasets.py) on ETTh2 test set with trained checkpoint.
 
-*Note: Performance may vary based on training hyperparameters and random initialization*
+**Configuration:**
+- Context Length: 512 timesteps
+- Prediction Length: 96 timesteps
+- Model Dimension (d_model): 16
+- Number of Layers: 4
+- Patch Length: 8
+- Batch Size: 1
+- Dataset: ETTh2 (7 channels)
+- Device: Wormhole (single device, no sharding)
+
+#### Accuracy Metrics (TTNN vs PyTorch)
+
+| Metric | PyTorch | TTNN | Difference | Target | Status |
+|--------|---------|------|------------|--------|--------|
+| MSE (vs ground truth) | 0.2579 | 0.2579 | +0.02% | <5% | ✅ PASS |
+| MAE (vs ground truth) | 0.3550 | 0.3550 | +0.01% | <5% | ✅ PASS |
+| RMSE (vs ground truth) | 0.5078 | 0.5079 | +0.01% | <5% | ✅ PASS |
+| Correlation (vs ground truth) | 0.9009 | 0.9009 | -0.004% | >0.90 | ✅ PASS |
+| TTNN-PyTorch Correlation | - | 0.9999 | - | >0.99 | ✅ PASS |
+
+#### Performance Metrics (Stage 1 Baseline - Unoptimized)
+
+| Metric | PyTorch (CPU) | TTNN (Wormhole) | Ratio | Target (Stage 2/3) |
+|--------|---------------|-----------------|-------|-------------------|
+| Throughput (samples/sec) | 821.75 | 1.39 | 591x slower | 200+ samples/sec |
+| Latency per sample (ms) | 1.2 | 718 | 598x slower | <30ms |
+| Total time (100 samples) | 0.12s | 71.83s | 598x slower | <0.5s |
+
+**Notes:**
+- ✅ **Stage 1 Complete:** All correctness criteria met (MSE/MAE <5%, correlation >0.90)
+- ⚠️ **Performance optimization is Stage 2/3 work** - current numbers are expected baseline
+- No memory sharding, operation fusion, or core parallelization applied yet
+- Single device utilization (Wormhole device 0)
+
+### Training Results
+
+PyTorch reference model training on ETTh2:
+
+| Metric | Value |
+|--------|-------|
+| Best Validation MSE | 0.3496 (Epoch 6) |
+| Test MSE | 0.3270 |
+| Training Time | ~2 minutes (10 epochs) |
+| Checkpoint | `checkpoints/etth2_512_96/best_model.pt` |
+
+*See [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for detailed results and [BOUNTY_PROGRESS.md](BOUNTY_PROGRESS.md) for Stage 2/3 roadmap.*
 
 ## References
 
