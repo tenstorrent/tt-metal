@@ -163,7 +163,7 @@ tt::tt_metal::distributed::MeshWorkload get_distributed_matmul_workload(
         auto program = tt::tt_metal::CreateProgram();
         auto reader_kernel = tt::tt_metal::CreateKernel(
             program,
-            "tt_metal/programming_examples/distributed/5_distributed_write_sem/kernels/write_sem_kernel.cpp",
+            "tt_metal/programming_examples/distributed/5_distributed_fabric_write/kernels/fabric_write_kernel.cpp",
             tt::tt_metal::CoreCoord({0, 0}),
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
