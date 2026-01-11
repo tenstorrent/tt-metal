@@ -186,7 +186,7 @@ class Prefetcher(LightweightModule):
         self.all_worker_cores_range_set = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(10, 9)),
             ]
         )
 
@@ -209,11 +209,13 @@ class Prefetcher(LightweightModule):
     def get_optimal_receiver_cores(self):
         if self.mesh_device.shape == ttnn.MeshShape([1, 2]):
             return 4
+        elif self.mesh_device.shape == ttnn.MeshShape([1, 4]):
+            return 2
         elif self.mesh_device.shape == ttnn.MeshShape([1, 8]):
             return 1
         else:
             raise ValueError(
-                f"Provided mesh device shape {self.mesh_device.shape} is not supported, only [1,2] and [1,8] are supported"
+                f"Provided mesh device shape {self.mesh_device.shape} is not supported, only [1,2], [1,4] and [1,8] are supported"
             )
 
     def to_core_range_set(

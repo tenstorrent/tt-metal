@@ -12,6 +12,7 @@
 
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt;
 using namespace tt::constants;
@@ -445,7 +446,10 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_height_multi
 // input rows are placed at column 0 but sequential rows in the output. The address gap between neighbor input rows
 // is still the output width (which is equal to the input width).
 tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
-    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output) {
+    const std::vector<Tensor>& input_tensors,
+    uint32_t dim,
+    Tensor& output,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     TT_FATAL(dim == 2 || dim == 3, "Sharded concat only supports dim=2 or 3");
     const bool is_height_concat = dim == 2;
 
@@ -485,8 +489,20 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     std::vector<uint32_t> input_num_sticks(num_input_tensors);
     std::vector<uint32_t> input_write_offsets(num_input_tensors);
 
-    // Assume inputs and output have the same sharding grid.
-    const auto all_cores = input_tensors[0].shard_spec().value().grid;
+    // Use the input tensor's shard grid - for sharded tensors, operations must run on the cores where data resides
+    const auto shard_grid = input_tensors[0].shard_spec().value().grid;
+
+    // Validate that sub_core_grids matches shard grid if provided (for sharded tensors, data lives on specific cores)
+    if (sub_core_grids.has_value()) {
+        TT_FATAL(
+            sub_core_grids.value() == shard_grid,
+            "sub_core_grids must match the input tensor shard grid for sharded concat. "
+            "sub_core_grids has {} cores, shard_grid has {} cores",
+            sub_core_grids.value().num_cores(),
+            shard_grid.num_cores());
+    }
+
+    const auto all_cores = shard_grid;
 
     // Input CBs
     uint32_t curr_input_write_offset = 0;
@@ -690,7 +706,11 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
 }
 
 tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
-    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups) {
+    const std::vector<Tensor>& input_tensors,
+    uint32_t dim,
+    Tensor& output,
+    unsigned int groups,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     if (output.is_sharded()) {
         if (input_tensors.size() == 2) {
             // There are unrolled kernels for the case where we have 2 hight-sharded kernels. Currently
@@ -708,7 +728,7 @@ tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
                 groups == 1,
                 "Sharded ttnn.concat with groups > 1 is only supported for 2 sharded input and sharded output "
                 "tensors");
-            return s2s_concat_multi_core(input_tensors, dim, output);
+            return s2s_concat_multi_core(input_tensors, dim, output, sub_core_grids);
         }
     } else {
         TT_FATAL(
@@ -719,7 +739,10 @@ tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
 }
 
 tt_metal::operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output) {
+    const std::vector<Tensor>& input_tensors,
+    const uint32_t dim,
+    const Tensor& output,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt_metal::IDevice* device = output.device();
@@ -741,11 +764,67 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         single_page_size = tt::tile_size(cb_data_format);
     }
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_pages, rm_orientation);
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t num_cores;
+    uint32_t num_tiles_per_core_group_1;
+    uint32_t num_tiles_per_core_group_2;
+    uint32_t num_cores_x = 0;
+    uint32_t num_cores_y = 0;
+    std::vector<CoreCoord> cores_list;
+
+    if (sub_core_grids.has_value() && !output.is_sharded()) {
+        // Use sub_core_grids for interleaved output
+        uint32_t ncores = sub_core_grids->num_cores();
+        TT_FATAL(ncores != 0, "number of cores cannot be 0");
+
+        // Find the maximum number of cores that evenly divides num_output_pages
+        for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
+            if (num_output_pages % core_id == 0) {
+                ncores = core_id;
+                break;
+            } else {
+                ncores--;
+            }
+        }
+        TT_FATAL(
+            (num_output_pages % ncores == 0),
+            "{} num of pages are not split uniformly across {} num of cores",
+            num_output_pages,
+            ncores);
+
+        cores_list = corerange_to_cores(sub_core_grids.value(), ncores, rm_orientation);
+        all_cores =
+            num_cores_to_corerangeset_in_subcoregrids(cores_list[0], ncores, sub_core_grids.value(), rm_orientation);
+        if (ncores == 1) {
+            all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(cores_list[0]));
+        }
+        num_cores = ncores;
+        num_tiles_per_core_group_1 = num_output_pages / ncores;
+        num_tiles_per_core_group_2 = 0;
+        core_group_1 = all_cores;
+        core_group_2 = CoreRangeSet();
+    } else {
+        // Use full compute grid
+        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        num_cores_x = compute_with_storage_grid_size.x;
+        num_cores_y = compute_with_storage_grid_size.y;
+        auto
+            [num_cores_result,
+             all_cores_result,
+             core_group_1_result,
+             core_group_2_result,
+             num_tiles_per_core_group_1_result,
+             num_tiles_per_core_group_2_result] =
+                tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_pages, rm_orientation);
+        num_cores = num_cores_result;
+        all_cores = all_cores_result;
+        core_group_1 = core_group_1_result;
+        core_group_2 = core_group_2_result;
+        num_tiles_per_core_group_1 = num_tiles_per_core_group_1_result;
+        num_tiles_per_core_group_2 = num_tiles_per_core_group_2_result;
+    }
 
     uint32_t num_input_tensors = input_tensors.size();
 
@@ -871,7 +950,14 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
+    std::vector<CoreCoord> cores;
+    if (sub_core_grids.has_value() && !output.is_sharded()) {
+        // Use the cores list we already computed from sub_core_grids
+        cores = cores_list;
+    } else {
+        // Use grid_to_cores for full compute grid
+        cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
+    }
     uint32_t g1_num_cores = core_group_1.num_cores();
     for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];

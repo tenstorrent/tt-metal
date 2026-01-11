@@ -72,9 +72,10 @@ class MLP(LightweightModule):
 
         layer_num = max(layer_num, 0)  # cross_block uses the configutation of the first decoder
 
-        ff1_3_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.FF1_FF3
-        )
+        ff1_3_dtype = ttnn.bfloat4_b
+        # self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+        #     decoder_id=layer_num, tensor=TensorGroup.FF1_FF3
+        # )
         ff2_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF2
         )

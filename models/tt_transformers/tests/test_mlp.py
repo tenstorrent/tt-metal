@@ -89,6 +89,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
 
     # Run prefetcher if it is used
     if prefetcher is not None and mode == "decode":
+        model_args.build_prefetcher_configs("decode")
         prefetcher.prefetch()
         prefetcher.run()
 

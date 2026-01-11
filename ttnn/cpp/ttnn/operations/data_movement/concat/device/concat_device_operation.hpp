@@ -15,6 +15,7 @@ struct ConcatDeviceOperation {
     uint32_t dim;
     unsigned int groups;
     const tt::tt_metal::MemoryConfig output_mem_config;
+    const std::optional<ttnn::CoreRangeSet> sub_core_grids;
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
@@ -32,6 +33,7 @@ Tensor concat_impl(
     const std::vector<Tensor>& input_tensors,
     std::int64_t dim = 0,
     unsigned int groups = 1,
-    const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::operations::data_movement

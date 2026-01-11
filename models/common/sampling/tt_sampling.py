@@ -153,7 +153,9 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+    def _perform_all_gather(
+        self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None, subdevice_id=None
+    ):
         """Flexible all-gather that works with both CCL implementations."""
         if self.cluster_shape[0] * self.cluster_shape[1] == 32:
             # Use line_all_gather with persistent buffer support
@@ -208,6 +210,7 @@ class TTSampling(LightweightModule):
         self,
         x: ttnn.Tensor,
         tt_out_tok: ttnn.Tensor = None,
+        subdevice_id=None,
     ):
         """
         Perform on-device sampling on logits tensor.
@@ -223,13 +226,10 @@ class TTSampling(LightweightModule):
         Returns:
             Sampled token indices tensor
         """
-        # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
-        typecast_mem_fig = x.memory_config()
 
-        x_bf16 = ttnn.typecast(
-            x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids, memory_config=typecast_mem_fig
-        )
-        x_bf16 = ttnn.sharded_to_interleaved(x_bf16, ttnn.L1_MEMORY_CONFIG)
+        x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=x.memory_config().shard_spec.grid)
+
+        x_bf16 = ttnn.sharded_to_interleaved(x_bf16, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if self.multi_step_reduction:
             x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
@@ -275,6 +275,7 @@ class TTSampling(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 num_links=self.num_gather_links,
                 buffer_key="SAMPLING_VALUES",
+                subdevice_id=subdevice_id,
             )
 
             ttnn.deallocate(topk_values)

@@ -11,6 +11,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/common/constants.hpp"
@@ -1155,6 +1156,195 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+}
+
+operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sub_core_grids(
+    const Tensor& a,
+    Tensor& output,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    const CoreRangeSet& sub_core_grids) {
+    tt::tt_metal::Program program{};
+
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+
+    const auto& input_shape = a.padded_shape();
+    const auto& output_shape = output.padded_shape();
+
+    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
+
+    // Calculate ncores from sub_core_grids instead of device grid
+    uint32_t max_cores = sub_core_grids.num_cores();
+    uint32_t ncores = std::min(max_cores, num_blocks);
+
+    // Find the largest number of cores that evenly divides num_blocks
+    while (ncores > 1 && num_blocks % ncores != 0) {
+        ncores--;
+    }
+
+    // Get cores from sub_core_grids
+    auto core_coords = corerange_to_cores(sub_core_grids, ncores, true);
+    auto all_cores = num_cores_to_corerangeset_in_subcoregrids(core_coords[0], ncores, sub_core_grids, true);
+
+    uint32_t nblocks_per_core = num_blocks / ncores;
+    // All cores have the same number of blocks, no cliff
+    uint32_t nblocks_per_core_cliff = 0;
+    bool has_cliff = false;
+
+    uint32_t padded_row_size_bytes;
+    uint32_t unpadded_row_size_bytes;
+
+    if (a.dtype() == DataType::BFLOAT8_B) {
+        padded_row_size_bytes = input_shape[-1] * output.element_size();
+        unpadded_row_size_bytes = output_shape[-1] * output.element_size();
+    } else {
+        padded_row_size_bytes = input_shape[-1] * a.element_size();
+        unpadded_row_size_bytes = output_shape[-1] * a.element_size();
+    }
+
+    create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
+    create_cb(tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_tiles_per_row, output_cb_data_format);
+
+    Buffer* src0_buffer = a.buffer();
+    Buffer* dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    /** reader
+     */
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    KernelHandle unary_reader_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        all_cores,
+        ReaderDataMovementConfig(reader_compile_time_args));
+
+    /** writer
+     */
+    std::vector<uint32_t> writer_ct_args = {
+        (std::uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or
+                        input_cb_data_format == tt::DataFormat::UInt32 or
+                        input_cb_data_format == tt::DataFormat::Int32),
+        unpadded_row_size_bytes};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    KernelHandle unary_writer_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+        "writer_unary_stick_layout_split_rows_multicore.cpp",
+        all_cores,
+        WriterDataMovementConfig(writer_ct_args));
+
+    /** compute
+     */
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
+        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+    }
+
+    CreateKernel(
+        program,
+        compute_kernel,
+        all_cores,
+        ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .compile_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
+            .defines = compute_kernel_defines});
+
+    uint32_t tile_height = output.tensor_spec().tile().get_height();
+    auto core_assignments = ttnn::distribute_work(
+        output_shape, input_shape, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff, tile_height);
+
+    uint32_t tile_start_id = 0;
+    uint32_t row_start_id = 0;
+
+    std::vector<CoreCoord> cores_with_rtargs;
+    for (uint32_t i = 0; i < ncores; ++i) {
+        const auto& core = core_coords[i];
+        const std::vector<BlockRep>& assignment = core_assignments.at(i);
+
+        // writer runtime args
+        std::vector<uint32_t> writer_rt_args = {
+            dst_buffer->address(),
+            padded_row_size_bytes,
+            row_start_id,
+            static_cast<unsigned int>(assignment.size()),
+        };
+
+        uint32_t nblocks_this_core = 0;
+
+        BlockRep ref_el = assignment[0];
+        uint32_t count_repeated = 0;  // will be incremented in first iteration of the loop
+        for (const auto& el : assignment) {
+            nblocks_this_core += el.block_count();
+            row_start_id += el.data_row_count();
+            if (compare_assignments(ref_el, el)) {
+                count_repeated++;
+            } else {
+                // push back information for previous elements
+                writer_rt_args.push_back(ref_el.n_data);
+                writer_rt_args.push_back(ref_el.n_mixed);
+                writer_rt_args.push_back(ref_el.n_pads);
+                writer_rt_args.push_back(ref_el.times);
+                writer_rt_args.push_back(count_repeated);
+                // Set up assignment for this element
+                ref_el = el;
+                count_repeated = 1;
+            }
+        }
+        writer_rt_args.push_back(ref_el.n_data);
+        writer_rt_args.push_back(ref_el.n_mixed);
+        writer_rt_args.push_back(ref_el.n_pads);
+        writer_rt_args.push_back(ref_el.times);
+        writer_rt_args.push_back(count_repeated);
+
+        uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_this_core;
+
+        // reader runtime args
+        const std::array reader_rt_args = {src0_buffer->address(), num_tiles_per_core, tile_start_id};
+
+        SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
+        SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
+        cores_with_rtargs.push_back(core);
+
+        tile_start_id += num_tiles_per_core;
+    }
+
+    auto override_runtime_args_callback =
+        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores_with_rtargs](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto* src_buffer = input_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
+
+            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+
+            for (const auto& core : cores_with_rtargs) {
+                {
+                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = src_buffer->address();
+                }
+                {
+                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = dst_buffer->address();
+                }
+            }
+        };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
 }  // namespace ttnn::operations::data_movement::detail

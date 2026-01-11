@@ -103,6 +103,19 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             this->output_mem_config.memory_layout());
     }
 
+    // Special conditions for sub_core_grids
+    if (this->sub_core_grids.has_value()) {
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Input memory layout must be INTERLEAVED when sub_core_grids argument provided");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Output memory layout must be INTERLEAVED when sub_core_grids argument provided");
+        TT_FATAL(
+            this->use_multicore == true,
+            "sub_core_grids implementation only supported when use_multicore flag argument is set to true");
+    }
+
     // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
     if (!this->use_pack_untilize) {
         TT_FATAL(
@@ -181,6 +194,15 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(
     if (!this->use_multicore) {
         return detail::untilize_with_unpadding_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+    }
+    if (this->sub_core_grids.has_value()) {
+        // Use sub_core_grids implementation for interleaved tensors
+        return detail::untilize_with_unpadding_multi_core_sub_core_grids(
+            input_tensor_a,
+            output_tensor,
+            this->use_pack_untilize,
+            this->fp32_dest_acc_en,
+            this->sub_core_grids.value());
     }
     if (!this->enough_space_height) {
         return detail::untilize_with_unpadding_multi_core_block_interleaved(

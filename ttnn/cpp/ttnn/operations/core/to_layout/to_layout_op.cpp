@@ -100,8 +100,16 @@ Tensor to_layout_impl(
         if (not requires_padding_change(tensor, layout)) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
-                TT_FATAL(!sub_core_grids.has_value(), "Untilize OP does not currently support sub core grid");
-                return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize);
+                // Note: untilize with sub_core_grids only supports INTERLEAVED memory layout
+                if (sub_core_grids.has_value()) {
+                    TT_FATAL(
+                        tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                        "Untilize with sub_core_grids only supports INTERLEAVED memory layout");
+                    TT_FATAL(
+                        output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                        "Untilize with sub_core_grids only supports INTERLEAVED output memory layout");
+                }
+                return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize, true, sub_core_grids);
             } else if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
                     const auto tensor_tile = tensor.tensor_spec().tile();
@@ -133,15 +141,22 @@ Tensor to_layout_impl(
                 output_memory_config =
                     memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
             }
+            // Note: untilize_with_unpadding with sub_core_grids only supports INTERLEAVED memory layout
+            if (sub_core_grids.has_value()) {
+                TT_FATAL(
+                    tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                    "Untilize with unpadding with sub_core_grids only supports INTERLEAVED memory layout");
+                TT_FATAL(
+                    output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                    "Untilize with unpadding with sub_core_grids only supports INTERLEAVED output memory layout");
+            }
             Shape output_tensor_end(SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
             int logical_rank = tensor.logical_shape().rank();
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.logical_shape()[index] - 1;
             }
-            TT_FATAL(
-                !sub_core_grids.has_value(), "Untilize with unpadding OP does not currently support sub core grid");
-            tensor =
-                ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
+            tensor = ttnn::untilize_with_unpadding(
+                tensor, output_tensor_end, output_memory_config, use_multicore_untilize, true, sub_core_grids);
             return ttnn::reshape(tensor, ttnn::Shape{output_shape});
 
         } else if (layout == ttnn::TILE_LAYOUT) {

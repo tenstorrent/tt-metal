@@ -220,6 +220,9 @@ class TransformerBlock(LightweightModule):
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
+        # if mode == "decode" and self.layer_num == 31:
+        #     breakpoint()
+
         # Choose the correct rotation matrices based on the mode
         rot_mats = (
             rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
@@ -228,6 +231,8 @@ class TransformerBlock(LightweightModule):
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode, norm_config=self.model_config["ATTN_NORM_CONFIG"])
 
+        # if mode == "decode" and self.layer_num == 31:
+        #     breakpoint()
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -241,6 +246,9 @@ class TransformerBlock(LightweightModule):
             kv_cache=kv_cache,
         )
 
+        # if mode == "decode" and self.layer_num == 31:
+        #     breakpoint()
+
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
                 residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
@@ -252,6 +260,9 @@ class TransformerBlock(LightweightModule):
             hidden_states = attn_out
 
         hidden_states = self.ff_norm(hidden_states, mode, norm_config=self.model_config["FF_NORM_CONFIG"])
+        # if mode == "decode" and self.layer_num == 31:
+        #     breakpoint()
+
         if self.pre_ff_norm is not None:
             # The output of the ff_norm is replicated across the device
             # but the residual is fractured across the devices
@@ -282,6 +293,8 @@ class TransformerBlock(LightweightModule):
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
 
+        # if mode == "decode" and self.layer_num == 31:
+        #     breakpoint()
         hidden_states = self.feed_forward.forward(hidden_states, mode)
 
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
@@ -305,6 +318,9 @@ class TransformerBlock(LightweightModule):
                 )
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
+
+        # if mode == "decode" and self.layer_num == 31:
+        #     breakpoint()
 
         out = ttnn.add(
             residual,

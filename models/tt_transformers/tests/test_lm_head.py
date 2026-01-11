@@ -51,7 +51,10 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
         mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, cache_hf=True, prefetcher=prefetcher
     )
     model_args.n_layers = 1
-    model_args.build_prefetcher_configs("decode")
+
+    if use_prefetcher:
+        model_args.build_prefetcher_configs("decode")
+
     state_dict = model_args.load_state_dict()
 
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
@@ -88,7 +91,6 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
     # shard shape is 32, 16896 // 24
     # sharded on 24 cores
     torch_input = torch.randn(1, 1, seq_len, model_args.dim, dtype=torch.bfloat16)
-    breakpoint()
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(  # shape: 1,1,32,4096, replicated on each device
         torch_input,
@@ -100,7 +102,6 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
         else model_args.model_config["LM_HEAD_INPUT_MEMCFG"],
         layout=ttnn.TILE_LAYOUT,
     )
-    breakpoint()
 
     logger.info("Run LM_Head")
     tt_output = tt_model(tt_input)
@@ -113,6 +114,7 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
     tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.vocab_size]
 
     pcc_required = 0.99
+    breakpoint()
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

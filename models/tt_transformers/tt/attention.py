@@ -537,7 +537,6 @@ class Attention(LightweightModule):
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
-
         ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(
             values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table

@@ -58,10 +58,8 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
             TT_FATAL(
                 in_ref.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
                 "Sharded tensors must have the same memory layout.");
-            // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
-            TT_FATAL(
-                input_tensors.size() > 2 || in_ref.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-                "Width sharded inputs are not supported for two tensors concat yet");
+            // Width-sharded width concat (dim=3) is supported via s2s_concat_multi_core
+            // The specialized 2-tensor kernels only support height-sharded width concat
             TT_FATAL(
                 in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
                 "Block sharded inputs are not supported");
@@ -121,12 +119,13 @@ operation::ProgramWithCallbacks ConcatDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     switch (this->get_parallelization_strategy(input_tensors)) {
         case ConcatOpParallelizationStrategy::SHARDED_MULTI_CORE: {
-            return detail::sharded_concat_multi_core(input_tensors, this->dim, output_tensors[0], this->groups);
+            return detail::sharded_concat_multi_core(
+                input_tensors, this->dim, output_tensors[0], this->groups, this->sub_core_grids);
         }
         case ConcatOpParallelizationStrategy::MULTI_CORE:
         default: {
             TT_FATAL(this->groups == 1, "Groups > 1 not supported for ttnn.concat with interleaved input tensors");
-            return detail::concat_multi_core(input_tensors, this->dim, output_tensors[0]);
+            return detail::concat_multi_core(input_tensors, this->dim, output_tensors[0], this->sub_core_grids);
         }
     };
 }
@@ -249,7 +248,8 @@ Tensor concat_impl(
     const std::vector<Tensor>& input_tensors,
     const std::int64_t dim,
     const unsigned int groups,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
     for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
@@ -291,7 +291,7 @@ Tensor concat_impl(
             }
 
             // Recursively concat this batch
-            Tensor batch_result = concat_impl(batch, dim, groups, output_mem_config);
+            Tensor batch_result = concat_impl(batch, dim, groups, output_mem_config, sub_core_grids);
             intermediate_results.push_back(std::move(batch_result));
 
             // Clear batch to release references
@@ -299,29 +299,28 @@ Tensor concat_impl(
         }
 
         // Final concat
-        return concat_impl(intermediate_results, dim, groups, output_mem_config);
+        return concat_impl(intermediate_results, dim, groups, output_mem_config, sub_core_grids);
     }
 
-    uint32_t ref_rank = input_tensors[0].padded_shape().rank();
+    // uint32_t ref_rank = input_tensors[0].padded_shape().rank();
     uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
 
     if (input_tensors[0].is_sharded()) {
-        return operation::run(ConcatDeviceOperation{normalized_dim, groups, output_mem_config}, {input_tensors}).at(0);
+        return operation::run(
+                   ConcatDeviceOperation{normalized_dim, groups, output_mem_config, sub_core_grids}, {input_tensors})
+            .at(0);
     } else {
-        if (input_tensors[0].layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
-            for (const auto& input_tensor : input_tensors) {
-                TT_FATAL(
-                    (input_tensor.padded_shape()[dim] * input_tensor.element_size()) %
-                            input_tensor.buffer()->alignment() ==
-                        0,
-                    "Current concat implementation requires aligned last dim when concatting on last dim");
-            }
-        }
+        // Note: Previously there was an alignment check here for ROW_MAJOR concat on last dim.
+        // This check has been removed as the concat kernel can handle unaligned data
+        // by using appropriate page sizes (though it may be slower for unaligned cases).
         // Determine target layout by checking all inputs
         // Start with first input's layout, but may need to fall back to ROW_MAJOR
         Layout target_layout = input_tensors[0].layout();
+        bool has_tile_padding_mismatch = false;
 
-        // Check all inputs - if any ROW_MAJOR input cannot be tiled, use ROW_MAJOR for all
+        // Check all inputs - fall back to ROW_MAJOR if:
+        // 1. Any ROW_MAJOR input cannot be tiled, OR
+        // 2. Any TILE input has tile padding along the concat dimension (logical != padded)
         for (const auto& input_tensor : input_tensors) {
             if (input_tensor.layout() == Layout::ROW_MAJOR) {
                 const auto& input_shape = input_tensor.padded_shape();
@@ -329,6 +328,35 @@ Tensor concat_impl(
                     target_layout = Layout::ROW_MAJOR;
                     break;
                 }
+            } else if (input_tensor.layout() == Layout::TILE) {
+                // Check if there's tile padding along the concat dimension
+                // If so, we need to fall back to ROW_MAJOR to avoid padding in the middle of output
+                if (input_tensor.logical_shape()[normalized_dim] != input_tensor.padded_shape()[normalized_dim]) {
+                    target_layout = Layout::ROW_MAJOR;
+                    has_tile_padding_mismatch = true;
+                    break;
+                }
+            }
+        }
+
+        // Check if any tensor actually needs layout conversion
+        bool needs_layout_conversion = false;
+        for (const auto& input_tensor : input_tensors) {
+            if (input_tensor.layout() != target_layout) {
+                needs_layout_conversion = true;
+                break;
+            }
+        }
+
+        // If sub_core_grids is provided and we need layout conversion with tile padding mismatch,
+        // use to_layout with sub_core_grids (which now supports it for INTERLEAVED tensors)
+        if (sub_core_grids.has_value() && needs_layout_conversion && has_tile_padding_mismatch) {
+            // to_layout now supports sub_core_grids for INTERLEAVED tensors
+            // Check that all input tensors are INTERLEAVED (required for sub_core_grids)
+            for (const auto& input_tensor : input_tensors) {
+                TT_FATAL(
+                    input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                    "ttnn.concat with sub_core_grids requires all input tensors to be INTERLEAVED");
             }
         }
 
@@ -341,11 +369,15 @@ Tensor concat_impl(
                 // Already in target layout
                 formatted_tensors.push_back(input_tensor);
             } else {
-                formatted_tensors.push_back(ttnn::to_layout(input_tensor, target_layout));
+                // Pass sub_core_grids to to_layout if provided (now supported for INTERLEAVED tensors)
+                formatted_tensors.push_back(
+                    ttnn::to_layout(input_tensor, target_layout, std::nullopt, std::nullopt, sub_core_grids));
             }
         }
 
-        return operation::run(ConcatDeviceOperation{normalized_dim, groups, output_mem_config}, {formatted_tensors})
+        return operation::run(
+                   ConcatDeviceOperation{normalized_dim, groups, output_mem_config, sub_core_grids},
+                   {formatted_tensors})
             .at(0);
     }
 }

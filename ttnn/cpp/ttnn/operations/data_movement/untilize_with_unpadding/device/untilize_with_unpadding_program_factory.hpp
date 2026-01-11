@@ -24,4 +24,7 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_with_unpadding_multi_core
 tt::tt_metal::operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interleaved(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en);
 
+tt::tt_metal::operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sub_core_grids(
+    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en, const CoreRangeSet& sub_core_grids);
+
 }  // namespace ttnn::operations::data_movement::detail

@@ -595,7 +595,6 @@ class RotarySetup(LightweightModule):
             rot_idxs, self.sin_matrix, layout=embedding_layout, memory_config=mem_config
         )  # [1, batch, head_dim]
 
-        # # breakpoint()
         cos = ttnn.reshape(
             cos,
             ttnn.Shape(

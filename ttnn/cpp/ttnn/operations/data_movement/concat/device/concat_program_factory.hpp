@@ -27,9 +27,16 @@ tt::tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output);
 
 tt::tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
-    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups = 1);
+    const std::vector<Tensor>& input_tensors,
+    uint32_t dim,
+    Tensor& output,
+    unsigned int groups = 1,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
 
 tt::tt_metal::operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor>& input_tensors, uint32_t dim, const Tensor& output);
+    const std::vector<Tensor>& input_tensors,
+    uint32_t dim,
+    const Tensor& output,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::operations::data_movement::detail

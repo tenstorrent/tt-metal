@@ -295,7 +295,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
-            31,  # num_layers, if None -> defaults to all layers
+            32,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
@@ -707,7 +707,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1, "worker_l1_size": 1445000}],
+    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1, "worker_l1_size": 1492000}],
     indirect=True,
 )
 @pytest.mark.parametrize(

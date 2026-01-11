@@ -139,7 +139,7 @@ class Transformer(LightweightModule):
         # Initialize on-device sampling if supported
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = self.args.vocab_size // sampling_splits <= 64 * 1024
+        self._supports_on_device_sampling = False  # self.args.vocab_size // sampling_splits <= 64 * 1024
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
@@ -431,7 +431,6 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-
         rot_mats_global = self.rope_setup.get_rot_mats(
             rot_mat_idxs, prefetcher=self.prefetcher if self.prefetcher is not None else None
         )
@@ -471,16 +470,21 @@ class Transformer(LightweightModule):
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
                 num_links=num_links,
-                memory_config=tt_logits.memory_config(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cluster_axis=cluster_axis,
                 topology=self.args.ccl_topology(),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
+                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
 
-        tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+        tt_logits = ttnn.untilize(
+            tt_logits,
+            use_multicore=True,
+            sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
+        )
 
         if not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations

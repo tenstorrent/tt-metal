@@ -59,7 +59,8 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     const ttnn::Shape& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    bool use_pack_untilize) {
+    bool use_pack_untilize,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::FLOAT32;
 
     ttnn::SmallVector<uint32_t> output_end_vector;
@@ -98,7 +99,8 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
                                   use_pack_untilize,
                                   fp32_dest_acc_en,
                                   enough_space_width,
-                                  enough_space_height},
+                                  enough_space_height,
+                                  sub_core_grids},
             {input_tensor},
             {},
             {})[0];

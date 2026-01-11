@@ -26,6 +26,9 @@ void bind_concat(py::module& module) {
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             groups (int, optional): When `groups` is set to a value greater than 1, the inputs are split into N `groups` partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to `1`. Currently, groups > `1` is only supported for two height sharded input tensors.
 
+        Keyword Args:
+            sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grid to use for interleaved (L1 or DRAM) output tensors. If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to `None`.
+
         Returns:
             ttnn.Tensor: the output tensor.
     )doc";
@@ -41,13 +44,17 @@ void bind_concat(py::module& module) {
                const int dim,
                std::optional<ttnn::Tensor>& optional_output_tensor,
                std::optional<ttnn::MemoryConfig>& memory_config,
-               const int groups) { return self(tensors, dim, memory_config, optional_output_tensor, groups); },
+               const int groups,
+               const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
+                return self(tensors, dim, memory_config, optional_output_tensor, groups, sub_core_grids);
+            },
             py::arg("tensors"),
             py::arg("dim") = 0,
             py::kw_only(),
             py::arg("output_tensor").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("groups") = 1});
+            py::arg("groups") = 1,
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::data_movement::detail
