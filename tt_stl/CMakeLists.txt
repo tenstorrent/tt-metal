@@ -71,20 +71,24 @@ set_target_properties(
             "${CMAKE_BINARY_DIR}/lib"
 )
 
-# Install library and headers (matches tt_metal's pattern)
-# Wrapped in TT_INSTALL to match tt_metal's install handling
+# Install headers and export (NOT the library - see below)
 if(TT_INSTALL)
     install(
         TARGETS
             tt_stl
         EXPORT Metalium
-        LIBRARY
-            COMPONENT metalium-runtime
+        # NOTE: Intentionally NOT including LIBRARY here due to CMake path resolution bug
+        # when LIBRARY_OUTPUT_DIRECTORY is set. The library is installed separately below.
         FILE_SET
         api
             DESTINATION COMPONENT
             metalium-dev
     )
+
+    # Install the library file using generator expression to get the actual file location.
+    # This works around CMake's install(TARGETS) path resolution bug when LIBRARY_OUTPUT_DIRECTORY is set.
+    # The $<TARGET_FILE:tt_stl> generator expression resolves to the actual library path at build time.
+    install(FILES $<TARGET_FILE:tt_stl> DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
 endif()
 
 # Set BUILD_RPATH for build-time linking (crucial for Fedora RUNPATH behavior)
