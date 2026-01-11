@@ -1,0 +1,40 @@
+chips: {
+  0: [0,0,0,0],
+  4: [1,0,0,0],
+  1: [0,0,0,0],
+  5: [1,0,0,0],
+  2: [0,0,0,0],
+  6: [1,0,0,0],
+  3: [0,0,0,0],
+  7: [1,0,0,0],
+}
+
+ethernet_connections: [
+  [{chip: 0, chan: 8}, {chip: 4, chan: 0}],
+  [{chip: 0, chan: 9}, {chip: 4, chan: 1}],
+  [{chip: 1, chan: 8}, {chip: 5, chan: 0}],
+  [{chip: 1, chan: 9}, {chip: 5, chan: 1}],
+  [{chip: 2, chan: 8}, {chip: 6, chan: 0}],
+  [{chip: 2, chan: 9}, {chip: 6, chan: 1}],
+  [{chip: 3, chan: 8}, {chip: 7, chan: 0}],
+  [{chip: 3, chan: 9}, {chip: 7, chan: 1}],
+]
+
+# harvest_mask is the bit indicating which tensix row is harvested. So bit 0 = first tensix row; bit 1 = second tensix row etc...
+harvesting: [
+  0: {noc_translation: True, harvest_mask: 40},
+  1: {noc_translation: True, harvest_mask: 640},
+  2: {noc_translation: True, harvest_mask: 768},
+  3: {noc_translation: True, harvest_mask: 12},
+  4: {noc_translation: True, harvest_mask: 258},
+  5: {noc_translation: True, harvest_mask: 80},
+  6: {noc_translation: True, harvest_mask: 17},
+  7: {noc_translation: True, harvest_mask: 6},
+]
+
+chips_with_mmio: [
+  0: 0,
+  1: 1,
+  2: 2,
+  3: 3,
+]
