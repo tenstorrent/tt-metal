@@ -284,7 +284,7 @@ inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool 
                     counted = true;
                 }
 
-                TT_FATAL(this->all_data.contains(core));
+                TT_FATAL(this->all_data.contains(core), "Core data not found in all_data map");
                 this->all_data[core][0].data.push_back(datum);
                 this->all_data[core][0].valid.push_back(true);
             }

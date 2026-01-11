@@ -53,7 +53,9 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
 
             end_index = profile_buffer[BUFFER_END_INDEX];
 
-            TT_FATAL(end_index < (DPRINT_BUFFER_SIZE / sizeof(uint32_t)));
+            TT_FATAL(
+                end_index < (DPRINT_BUFFER_SIZE / sizeof(uint32_t)),
+                "End index exceeds DPRINT buffer size");
 
             uint32_t step = (end_index - MARKER_DATA_START) / TIMER_DATA_UINT32_SIZE;
             uint32_t timer_id = 1;

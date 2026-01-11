@@ -436,8 +436,8 @@ bool RunPipelinedWorkersTest(
         device_tensors.push_back(host_tensors[i].to_device(mesh_device.get(), mem_configs[i]));
         log_info(tt::LogTest, "Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
-    TT_FATAL(device_tensors.size() == num_tensors);
-    TT_FATAL(device_tensors.size() == host_tensors.size());
+    TT_FATAL(device_tensors.size() == num_tensors, "Device tensors size must match expected number of tensors");
+    TT_FATAL(device_tensors.size() == host_tensors.size(), "Device tensors size must match host tensors size");
 
     // MAIN STUFF
 

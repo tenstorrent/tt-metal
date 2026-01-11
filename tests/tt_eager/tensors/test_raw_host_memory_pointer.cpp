@@ -164,7 +164,7 @@ void test_raw_host_memory_pointer() {
     tt::tt_metal::memcpy(tensor_for_printing, e_dev);
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
-        TT_FATAL(element == bfloat16(10.0f));
+        TT_FATAL(element == bfloat16(10.0f), "Element value mismatch: expected 10.0f");
     }
 }
 

@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_FATAL(false, "Assertion failed");
+            TT_FATAL(false, "Command line argument validation failed");
         }
         TT_FATAL(input_size != 0, "--input-size should not be zero");
 

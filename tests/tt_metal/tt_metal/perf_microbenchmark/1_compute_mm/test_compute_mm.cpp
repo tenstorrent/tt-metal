@@ -1470,11 +1470,11 @@ void prepare_inputs(
             CoreCoord core = {(std::size_t)c, (std::size_t)r};
             auto* target_device = device->get_devices()[0];
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in0_addr, in0);
-            TT_FATAL(pass, "Assertion failed");
+            TT_FATAL(pass, "Failed to write in0 data to device L1");
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in1_addr, in1);
-            TT_FATAL(pass, "Assertion failed");
+            TT_FATAL(pass, "Failed to write in1 data to device L1");
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in2_cb_addr, in2);
-            TT_FATAL(pass, "Assertion failed");
+            TT_FATAL(pass, "Failed to write in2 circular buffer data to device L1");
         }
     }
 }

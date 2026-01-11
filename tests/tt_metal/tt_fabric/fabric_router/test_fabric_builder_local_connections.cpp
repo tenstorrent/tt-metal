@@ -105,7 +105,9 @@ protected:
 
             for (const auto& target : conn_targets) {
                 if (target.type == ConnectionType::MESH_TO_Z || target.type == ConnectionType::Z_TO_MESH) {
-                    TT_FATAL(target.target_direction.has_value());
+                    TT_FATAL(
+                        target.target_direction.has_value(),
+                        "Target direction must be specified for MESH_TO_Z or Z_TO_MESH connection types");
                     auto target_dir = target.target_direction.value();
 
                     if (!targets.contains(target_dir)) {

@@ -466,9 +466,8 @@ bool RunWriteBWTest(
 
     const uint32_t num_bytes_per_send = local_chip_edm_builder.get_eth_buffer_size_bytes();
     const uint32_t pages_per_send = num_bytes_per_send / page_size;
-    TT_FATAL(num_bytes_per_send > 0, "Assertion failed");
-    TT_FATAL(num_bytes_per_send >= page_size, "Assertion failed");
-    TT_FATAL(num_bytes_per_send >= page_size, "Assertion failed");
+    TT_FATAL(num_bytes_per_send > 0, "Ethernet buffer size must be positive");
+    TT_FATAL(num_bytes_per_send >= page_size, "Ethernet buffer size must be at least as large as page size");
     const uint32_t num_messages_to_send = (((num_pages_total * page_size) - 1) / num_bytes_per_send) + 1;
     log_info(tt::LogTest, "num_bytes_per_send={}", num_bytes_per_send);
     log_info(tt::LogTest, "page_size={}", page_size);
@@ -735,7 +734,7 @@ int TestEntrypoint(
         eth_sender_core = *eth_sender_core_iter;
         eth_sender_core_iter++;
     } while (device_id != 1);
-    TT_FATAL(device_id == 1, "Assertion failed");
+    TT_FATAL(device_id == 1, "device_id must equal 1 for this test configuration");
     const auto& mesh_device_1 = test_fixture.devices_.at(device_id);
 
     bool success = false;

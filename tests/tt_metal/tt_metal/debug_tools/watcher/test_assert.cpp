@@ -106,7 +106,10 @@ static void RunTest(
                     }
                     break;
                 case HalProcessorClassType::COMPUTE:
-                    TT_FATAL(0 <= processor_id && processor_id < 3);
+                    TT_FATAL(
+                        0 <= processor_id && processor_id < 3,
+                        "Processor ID for compute kernel must be in range [0, 3), got {}",
+                        processor_id);
                     assert_kernel = CreateKernel(
                         program_,
                         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
