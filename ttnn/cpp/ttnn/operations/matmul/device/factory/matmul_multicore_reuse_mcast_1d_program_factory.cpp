@@ -2404,7 +2404,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         shared_cbs,
         false,
         CoreCoord{0, 0},
-        all_cores_vec,
+        worker_cores_vec,
         0,
         Matmul1DType::GATHER_IN0};
 }
@@ -2590,6 +2590,10 @@ inline void override_gather_in0_program_parameters(
             UpdateDynamicCircularBufferAddress(program, cb_output, *out_buffer);
         }
     }
+
+    // Update in1 tensor address for all worker cores.
+    // Note: override_variables.cores only contains worker cores (not hop/idle cores),
+    // so it's safe to unconditionally update index [1] which holds in1_tensor_addr.
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
     for (const auto& core : override_variables.cores) {
         auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
