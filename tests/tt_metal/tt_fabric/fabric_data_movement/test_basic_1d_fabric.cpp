@@ -1875,7 +1875,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1, RoutingDire
 
 TEST_F(Galaxy1x32Fabric1DFixture, TestUnicastRaw_AllHops) {
     const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-    TT_ASSERT(num_devices == 32, "1x32 mesh required for this test");
+    TT_FATAL(num_devices == 32, "1x32 mesh required for this test");
     for (uint32_t hops = 1; hops < num_devices; hops++) {
         RunTestUnicastRaw(this, hops, RoutingDirection::E);
     }

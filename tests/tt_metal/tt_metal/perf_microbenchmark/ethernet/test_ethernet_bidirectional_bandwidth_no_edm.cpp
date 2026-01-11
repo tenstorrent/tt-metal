@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
     TT_FATAL(argc >= 4, "Insufficient command-line arguments");
     std::size_t arg_idx = 1;
     std::size_t num_sample_counts = std::stoi(argv[arg_idx++]);
-    TT_ASSERT(num_sample_counts > 0);
+    TT_FATAL(num_sample_counts > 0, "Assertion failed");
     log_trace(tt::LogTest, "num_sample_counts: {}", std::stoi(argv[arg_idx]));
     std::vector<std::size_t> sample_counts;
     for (std::size_t i = 0; i < num_sample_counts; i++) {
@@ -199,7 +199,7 @@ int main(int argc, char** argv) {
 
     std::size_t num_sample_sizes = std::stoi(argv[arg_idx++]);
     std::vector<std::size_t> sample_sizes;
-    TT_ASSERT(num_sample_sizes > 0);
+    TT_FATAL(num_sample_sizes > 0, "Assertion failed");
     log_trace(tt::LogTest, "num_sample_sizes: {}", num_sample_sizes);
     for (std::size_t i = 0; i < num_sample_sizes; i++) {
         sample_sizes.push_back(std::stoi(argv[arg_idx++]));
@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
 
     std::size_t num_channel_counts = std::stoi(argv[arg_idx++]);
     std::vector<std::size_t> channel_counts;
-    TT_ASSERT(num_channel_counts > 0);
+    TT_FATAL(num_channel_counts > 0, "Assertion failed");
     log_trace(tt::LogTest, "num_channel_counts: {}", num_channel_counts);
     for (std::size_t i = 0; i < num_channel_counts; i++) {
         channel_counts.push_back(std::stoi(argv[arg_idx++]));
@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
     const auto& device_0 = test_fixture.devices_.at(2);
     const auto& active_eth_cores = device_0->get_devices()[0]->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
-    TT_ASSERT(eth_sender_core_iter != active_eth_cores.end());
+    TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "Assertion failed");
     auto eth_sender_core = *eth_sender_core_iter;
 
     auto [device_id, eth_receiver_core] = device_0->get_devices()[0]->get_connected_ethernet_core(eth_sender_core);

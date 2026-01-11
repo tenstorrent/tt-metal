@@ -105,7 +105,7 @@ protected:
 
             for (const auto& target : conn_targets) {
                 if (target.type == ConnectionType::MESH_TO_Z || target.type == ConnectionType::Z_TO_MESH) {
-                    TT_ASSERT(target.target_direction.has_value());
+                    TT_FATAL(target.target_direction.has_value());
                     auto target_dir = target.target_direction.value();
 
                     if (!targets.contains(target_dir)) {
