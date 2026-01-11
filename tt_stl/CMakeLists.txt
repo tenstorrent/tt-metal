@@ -71,20 +71,21 @@ set_target_properties(
             "${CMAKE_BINARY_DIR}/lib"
 )
 
-# Install EXPORT and FILE_SET via install(TARGETS) - but NOT the library itself
-# because install(TARGETS) LIBRARY has path resolution issues when LIBRARY_OUTPUT_DIRECTORY is set
-install(
-    TARGETS
-        tt_stl
-    EXPORT Metalium
-    LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT metalium-runtime
-    FILE_SET
-    api
-        DESTINATION COMPONENT
-        metalium-dev
-)
+# Install library and headers (matches tt_metal's pattern)
+# Wrapped in TT_INSTALL to match tt_metal's install handling
+if(TT_INSTALL)
+    install(
+        TARGETS
+            tt_stl
+        EXPORT Metalium
+        LIBRARY
+            COMPONENT metalium-runtime
+        FILE_SET
+        api
+            DESTINATION COMPONENT
+            metalium-dev
+    )
+endif()
 
 # Set BUILD_RPATH for build-time linking (crucial for Fedora RUNPATH behavior)
 # This mimics tt_metal's approach for consistent behavior across Ubuntu and Fedora
