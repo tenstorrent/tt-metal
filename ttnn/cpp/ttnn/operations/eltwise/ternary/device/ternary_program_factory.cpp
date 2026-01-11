@@ -138,7 +138,6 @@ void detect_broadcasts(
 void setup_reader_defines(
     std::map<std::string, std::string>& reader_defines,
     ttnn::operations::ternary::TernaryVariant variant,
-    ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
     const ttnn::Tensor& predicate_tensor,
     const std::optional<ttnn::Tensor>& value_true_tensor,
     const std::optional<ttnn::Tensor>& value_false_tensor,
@@ -1056,7 +1055,6 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     setup_reader_defines(
         reader_defines,
         variant,
-        broadcast_type,
         predicate_tensor,
         value_true_tensor,
         value_false_tensor,

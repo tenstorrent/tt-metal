@@ -497,7 +497,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
             const std::vector<Tensor>& output_tensors) {
             const auto& semaphore = static_cast<const RingAttentionAllGatherAsync*>(operation)->semaphore;
             // update senders
