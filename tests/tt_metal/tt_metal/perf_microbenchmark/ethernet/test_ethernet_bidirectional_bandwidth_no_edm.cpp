@@ -186,7 +186,7 @@ int main(int argc, char** argv) {
     // argv[1]: num_samples
     // argv[2]: sample_page_size
     // argv[3]: max_channels_per_direction
-    assert(argc >= 4);
+    TT_FATAL(argc >= 4, "Insufficient command-line arguments");
     std::size_t arg_idx = 1;
     std::size_t num_sample_counts = std::stoi(argv[arg_idx++]);
     TT_ASSERT(num_sample_counts > 0);

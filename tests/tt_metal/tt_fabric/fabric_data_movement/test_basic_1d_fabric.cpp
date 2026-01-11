@@ -1664,10 +1664,11 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     // Check topology and fabric config
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    assert(
+    TT_FATAL(
         (topology == Topology::Linear || topology == Topology::Ring) &&
         (fabric_config == tt_fabric::FabricConfig::FABRIC_1D ||
-         fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING));
+         fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING),
+        "Test requires Linear or Ring topology with FABRIC_1D or FABRIC_1D_RING config");
 
     // Find a device num_hops away in specified direction.
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);

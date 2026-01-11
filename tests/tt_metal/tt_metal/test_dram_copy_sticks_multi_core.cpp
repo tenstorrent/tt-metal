@@ -85,7 +85,7 @@ int main() {
         auto src_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
-        assert(src_dram_buffer->size() % (num_cores_r * num_cores_c) == 0);
+        TT_FATAL(src_dram_buffer->size() % (num_cores_r * num_cores_c) == 0, "Buffer size must be evenly divisible by number of cores");
         uint32_t per_core_l1_size = src_dram_buffer->size() / (num_cores_r * num_cores_c);
         std::unordered_map<CoreCoord, uint32_t> core_to_l1_addr;
         for (int i = start_core.y; i < start_core.y + num_cores_r; i++) {

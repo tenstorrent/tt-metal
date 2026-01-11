@@ -78,7 +78,7 @@ int main() {
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         int num_cbs = 1;  // works at the moment
-        assert(num_tiles % num_cbs == 0);
+        TT_FATAL(num_tiles % num_cbs == 0, "Number of tiles must be divisible by number of circular buffers");
         int num_tiles_per_cb = num_tiles / num_cbs;
 
         uint32_t cb0_index = 0;
