@@ -101,3 +101,12 @@
   timeout: 75
   model-name: gemma-3-27b-it
   model-type: ViT
+
+- name: t3k_ViT_Gemma3_perf_tests_op_to_op
+  cmd: run_t3000_gemma3_tests_op_to_op
+  sku: wh_llmbox
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+  timeout: 25
+  model-name: gemma-3-27b-it
+  model-type: ViT

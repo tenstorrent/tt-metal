@@ -13,7 +13,7 @@
 - name: t3k_mixtral_tests
   cmd: run_t3000_mixtral_tests
   sku: wh_llmbox
-  owner_id: U03PUAKE719 # Harry Zhou
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   timeout: 50
 
@@ -27,7 +27,7 @@
 - name: t3k_llama3_tests
   cmd: run_t3000_llama3_tests
   sku: wh_llmbox
-  owner_id: U03PUAKE719 # Miguel Tairum
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   timeout: 60
 
