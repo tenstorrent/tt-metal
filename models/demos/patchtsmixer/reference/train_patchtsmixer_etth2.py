@@ -27,9 +27,9 @@ def main():
     # Hyperparameters (kept small to be CPU-friendly)
     context_length = 512
     forecast_horizon = 96
-    batch_size = 64  # match PyTorch implementation
-    num_workers = 4  # adjust to your CPU
-    num_train_epochs = 10  # match PyTorch implementation
+    batch_size = 64
+    num_workers = 4
+    num_train_epochs = 10
 
     dataset = "ETTh2"
     dataset_path = f"https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/{dataset}.csv"
@@ -128,7 +128,7 @@ def main():
         num_input_channels=len(forecast_columns),
         patch_stride=patch_length,
         d_model=16,  # small hidden dim
-        num_layers=4,  # fewer layers than blog (8) to speed up
+        num_layers=4,
         expansion_factor=2,
         dropout=0.1,
         head_dropout=0.1,
