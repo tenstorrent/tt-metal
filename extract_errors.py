@@ -17,6 +17,7 @@ Entries without "FAILURE MESSAGE:" are skipped.
 import json
 import sys
 import re
+from datetime import datetime
 
 # Set to True to extract all errors, False to only extract non-deterministic errors
 EXTRACT_ALL_ERRORS = True
@@ -69,6 +70,39 @@ def extract_failing_run_url(entry):
     return None
 
 
+def format_timestamp(timestamp_str):
+    """Convert Unix timestamp to readable format like 'January 3rd, 5:32pm, 26.43 seconds'."""
+    try:
+        # Parse the timestamp (it's a float string like "1767911966.500619")
+        ts_float = float(timestamp_str)
+        dt = datetime.fromtimestamp(ts_float)
+
+        # Format month name with ordinal day
+        day = dt.day
+        # Add ordinal suffix (1st, 2nd, 3rd, 4th, etc.)
+        if 10 <= day % 100 <= 20:
+            suffix = "th"
+        else:
+            suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+
+        month_name = dt.strftime("%B")
+        date_part = f"{month_name} {day}{suffix}"
+
+        # Format time in 12-hour format with am/pm
+        hour_12 = dt.strftime("%I").lstrip("0") or "12"  # Remove leading zero, handle midnight
+        minute = dt.strftime("%M")
+        am_pm = dt.strftime("%p").lower()
+        time_part = f"{hour_12}:{minute}{am_pm}"
+
+        # Extract seconds with decimal precision
+        seconds_with_decimal = ts_float % 60
+        seconds_part = f"{seconds_with_decimal:.2f} seconds"
+
+        return f"{date_part}, {time_part}, {seconds_part}"
+    except (ValueError, OSError, TypeError):
+        return None
+
+
 def main():
     input_file = "build_slack_export_with_threads.json"
     output_file = "all_errors.json"
@@ -98,9 +132,12 @@ def main():
         if error_msg:
             # Extract failing run URL
             failing_run_url = extract_failing_run_url(entry)
-            # Save as tuple: [error_message, failing_run_url]
-            # Use None if URL not found
-            errors.append([error_msg, failing_run_url])
+            # Extract and format timestamp
+            timestamp_str = entry.get("timestamp", "")
+            formatted_timestamp = format_timestamp(timestamp_str) if timestamp_str else None
+            # Save as list: [error_message, failing_run_url, formatted_timestamp]
+            # Use None if URL or timestamp not found
+            errors.append([error_msg, failing_run_url, formatted_timestamp])
         else:
             skipped += 1
 

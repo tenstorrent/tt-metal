@@ -471,20 +471,53 @@ def download_and_extract_messages():
     SLACK_TOKEN = secrets["slack_token"]
     CHANNEL_ID = secrets["channel_id"]
 
-    # Delete output file if it already exists
+    # Check if output file exists and get the newest timestamp for incremental updates
+    newest_existing_timestamp = None
+    existing_replies = []
     if os.path.exists(OUTPUT_FILE):
-        print(f"Deleting existing {OUTPUT_FILE}...")
-        os.remove(OUTPUT_FILE)
+        try:
+            with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
+                existing_replies = json.load(f)
+            if existing_replies:
+                timestamps = [float(r.get("timestamp", 0)) for r in existing_replies if r.get("timestamp")]
+                if timestamps:
+                    newest_existing_timestamp = max(timestamps)
+                    newest_date = datetime.fromtimestamp(newest_existing_timestamp).strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"Found existing {OUTPUT_FILE} with {len(existing_replies)} replies (newest: {newest_date})")
+                    print(f"Will fetch new messages/replies since then...")
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Warning: Could not read existing {OUTPUT_FILE}: {e}")
+            print(f"Will fetch all messages from {START_DATE_STR}...")
+
+    # If no existing file or couldn't read it, start fresh
+    if newest_existing_timestamp is None:
+        if os.path.exists(OUTPUT_FILE):
+            print(f"Deleting existing {OUTPUT_FILE}...")
+            os.remove(OUTPUT_FILE)
 
     client = WebClient(token=SLACK_TOKEN)
-    oldest_timestamp = get_unix_timestamp(START_DATE_STR)
+    # Use newest existing timestamp + 1 second as oldest if doing incremental update
+    # Otherwise use the configured start date
+    # For incremental updates, also fetch parent messages from the last 30 days to catch new replies to existing threads
+    if newest_existing_timestamp:
+        # Fetch parent messages from 30 days ago to catch new replies to existing threads
+        # But only process replies newer than newest_existing_timestamp
+        thirty_days_ago = time.time() - (30 * 24 * 60 * 60)
+        oldest_timestamp = min(thirty_days_ago, newest_existing_timestamp + 1)
+        print(f"Incremental update: fetching parent messages from last 30 days to catch new replies")
+        print(
+            f"Will only process replies newer than {datetime.fromtimestamp(newest_existing_timestamp).strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+    else:
+        oldest_timestamp = get_unix_timestamp(START_DATE_STR)
 
     all_messages = []
     cursor = None
 
-    print(f"Fetching messages from {START_DATE_STR}...")
-
     # First pass: collect all messages without fetching replies
+    print(
+        f"Fetching parent messages from {datetime.fromtimestamp(oldest_timestamp).strftime('%Y-%m-%d %H:%M:%S')} up to current time..."
+    )
     while True:
         try:
             response = client.conversations_history(
@@ -494,7 +527,17 @@ def download_and_extract_messages():
             messages = response["messages"]
             all_messages.extend(messages)
 
-            print(f"Retrieved {len(messages)} parent messages... (Total so far: {len(all_messages)})")
+            # Log date range of current batch
+            if messages:
+                first_msg_ts = float(messages[0].get("ts", 0))
+                last_msg_ts = float(messages[-1].get("ts", 0))
+                first_date = datetime.fromtimestamp(first_msg_ts).strftime("%Y-%m-%d %H:%M:%S")
+                last_date = datetime.fromtimestamp(last_msg_ts).strftime("%Y-%m-%d %H:%M:%S")
+                print(
+                    f"Retrieved {len(messages)} parent messages (range: {last_date} to {first_date})... (Total so far: {len(all_messages)})"
+                )
+            else:
+                print(f"Retrieved {len(messages)} parent messages... (Total so far: {len(all_messages)})")
 
             if response["has_more"]:
                 cursor = response["response_metadata"]["next_cursor"]
@@ -518,7 +561,8 @@ def download_and_extract_messages():
     print(f"\nFound {total_with_replies} messages with replies. Fetching replies...")
 
     # Second pass: fetch replies and extract structured information
-    all_replies_structured = []
+    # Start with existing replies if doing incremental update
+    all_replies_structured = existing_replies.copy() if newest_existing_timestamp else []
     nd_failures = []
     current_index = 0
 
@@ -530,6 +574,11 @@ def download_and_extract_messages():
 
             # Extract structured information from all replies
             for reply in replies:
+                reply_timestamp = float(reply.get("ts", 0))
+                # Skip if this reply is older than our newest existing timestamp (incremental update)
+                if newest_existing_timestamp and reply_timestamp <= newest_existing_timestamp:
+                    continue
+
                 structured_data = extract_structured_info_from_reply(reply)
                 all_replies_structured.append(structured_data)
 
@@ -540,6 +589,22 @@ def download_and_extract_messages():
 
     # Save all replies in structured format
     print(f"\nFound {len(all_replies_structured)} total replies. Saving to {OUTPUT_FILE}...")
+
+    # Log date range of fetched replies
+    if all_replies_structured:
+        timestamps = [float(r.get("timestamp", 0)) for r in all_replies_structured if r.get("timestamp")]
+        if timestamps:
+            oldest_ts = min(timestamps)
+            newest_ts = max(timestamps)
+            oldest_date = datetime.fromtimestamp(oldest_ts).strftime("%Y-%m-%d %H:%M:%S")
+            newest_date = datetime.fromtimestamp(newest_ts).strftime("%Y-%m-%d %H:%M:%S")
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"Reply date range: {oldest_date} to {newest_date}")
+            print(f"Current time: {current_time}")
+            if newest_ts < time.time() - 300:  # If newest is more than 5 minutes old
+                print(f"WARNING: Newest reply is from {newest_date}, which is older than current time {current_time}")
+                print("         There may be newer replies that weren't fetched. Consider running the script again.")
+
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(all_replies_structured, f, indent=2, ensure_ascii=False)
 
