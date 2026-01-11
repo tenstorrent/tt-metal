@@ -553,8 +553,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
        for better precision, so b_dtype should be BFLOAT16 to match the actual data format */
     const auto b_dtype = b.has_value() ? b->dtype()
                          : is_quant_op ? DataType::FLOAT32
-                         : is_sfpu_op  ? (is_block_float(a_dtype) ? DataType::BFLOAT16 : a_dtype)
-                                       : DataType::BFLOAT16;
+                         //  : is_sfpu_op  ? (is_block_float(a_dtype) ? DataType::BFLOAT16 : a_dtype)
+                         : is_sfpu_op ? a_dtype
+                                      : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
