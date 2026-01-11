@@ -38,7 +38,6 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     LM_HEAD_INPUT_GRID,
     LM_HEAD_OUTPUT_GRID,
     LlamaOptimizations,
-    must_use_default_matmul,
     num_to_core_range_set,
     num_to_coregrid,
 )
@@ -539,14 +538,24 @@ class TtQwenModelArgs(TtModelArgs):
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
 
-            def w2_prg_config(seq_len, batch_size):
-                if must_use_default_matmul(seq_len, batch_size):
+            def w2_prg_config(seq_len):
+                if seq_len == 128:
+                    return self.matmul_1d_config(
+                        # 128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
+                        128,
+                        3200,
+                        1280,
+                        grid=ttnn.CoreGrid(x=7, y=10),
+                        overwrite_per_core_k=10,
+                    )
+                # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
+                if seq_len < 4096:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(5, 10),
                         in0_block_w=4,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=math.ceil(seq_len / self.tile_size / 8),  # M / TILE_HEIGHT / grid height
+                        per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
                         per_core_N=math.ceil(1280 / 32 / 5),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
