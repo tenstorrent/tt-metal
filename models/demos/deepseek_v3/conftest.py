@@ -118,7 +118,7 @@ def mesh_device(request, device_params):
             logger.info(
                 f"Selected MESH_DEVICE: '{system_name}' - mesh shape will be set to: {system_name_to_mesh_shape(system_name)}"
             )
-            return system_name_to_mesh_shape(system_name)
+            return system_name_to_mesh_shape(system_name.upper())
 
     mesh_shape = get_mesh_shape(requested_system_name)
     updated_device_params = get_updated_device_params(device_params)
@@ -250,14 +250,18 @@ def get_current_device_type() -> str:
     valid_system_names = get_valid_system_names()
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
-        raise ValueError(f"Invalid system name: {system_name}. Must be one of {', '.join(valid_system_names)} or AUTO")
+        raise ValueError(
+            f"Invalid system name: {requested_system_name}. Must be one of {', '.join(valid_system_names)} or AUTO"
+        )
 
     upper_name = requested_system_name.upper()
-    if upper_name is "AUTO":
+    if upper_name == "AUTO":
         system_name = automatically_detect_current_device_type()
-        logger.warning(f"MESH_DEVICE environment variable is not set - falling back to hardware detection")
+        logger.warning(f"MESH_DEVICE was set to 'AUTO' - detected device type: '{system_name}'")
+    else:
+        system_name = upper_name
 
-    if upper_name not in valid_system_names:
+    if system_name not in valid_system_names:
         raise ValueError(f"Invalid system name: {system_name}. Must be one of {', '.join(valid_system_names)}")
 
     return system_name
@@ -281,8 +285,7 @@ def pytest_collection_modifyitems(config, items):
         current_device = get_current_device_type()
         logger.debug(f"Current detected device type: {current_device}")
     except Exception as e:
-        logger.warning(f"Could not determine device type during collection: {e}")
-        return
+        pytest.exit(f"Could not determine device type during collection: {e}", returncode=1)
 
     for item in items:
         marker = item.get_closest_marker("requires_device")

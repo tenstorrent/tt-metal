@@ -11,7 +11,6 @@ from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "shape",
     [
@@ -62,7 +61,6 @@ def test_reduce_sum_single_device(device, shape):
     assert_with_pcc(torch_output, tt_output_torch, pcc=0.99)
 
 
-@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "shape",
