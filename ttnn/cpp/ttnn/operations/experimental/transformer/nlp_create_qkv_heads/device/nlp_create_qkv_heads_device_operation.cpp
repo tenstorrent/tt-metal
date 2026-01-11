@@ -238,13 +238,12 @@ NlpCreateHeadsDeviceOperation::tensor_return_value_t NlpCreateHeadsDeviceOperati
 }
 
 NlpCreateHeadsDeviceOperation::program_factory_t NlpCreateHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor_q;
     if (input_tensor.is_sharded()) {
         return Sharded{};
-    } else {
-        return Interleaved{};
     }
+    return Interleaved{};
 }
 
 }  // namespace ttnn::operations::experimental::transformer

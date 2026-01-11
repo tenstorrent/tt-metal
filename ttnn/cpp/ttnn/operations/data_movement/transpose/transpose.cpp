@@ -136,7 +136,7 @@ MassagedTranspose build_memory_config_transpose(BaseTransposeType base_transpose
                          int64_t dim1,
                          int64_t dim2,
                          const std::optional<MemoryConfig>& memory_config,
-                         const std::optional<float>& pad_value) -> bool {
+                         const std::optional<float>& /*pad_value*/) -> bool {
             *target_memory_config = memory_config;
             if (!memory_config.has_value()) {
                 return false;
@@ -151,7 +151,7 @@ MassagedTranspose build_memory_config_transpose(BaseTransposeType base_transpose
         .pre_transform = [](const ttnn::Tensor& input_tensor,
                             int64_t dim1,
                             int64_t dim2,
-                            const std::optional<MemoryConfig>& memory_config,
+                            const std::optional<MemoryConfig>& /*memory_config*/,
                             const std::optional<float>& pad_value) -> OwnedTransposeArgs {
             return std::make_tuple(input_tensor, dim1, dim2, input_tensor.memory_config(), pad_value);
         },

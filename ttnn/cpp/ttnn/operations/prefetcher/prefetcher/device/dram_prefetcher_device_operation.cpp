@@ -10,7 +10,7 @@
 namespace ttnn::operations::dram_prefetcher {
 
 DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::DramPrefetcherProgramFactory{};
 }
 
@@ -79,7 +79,7 @@ void DramPrefetcherOperation::validate_on_program_cache_hit(
 }
 
 spec_return_value_t DramPrefetcherOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     return TensorSpec(
         ttnn::Shape{32, 32},
         tt::tt_metal::TensorLayout(

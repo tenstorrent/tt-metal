@@ -241,11 +241,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     }
     const auto& q_cores_updated = CoreRangeSet(q_cores_vector);
     std::vector<CoreRange> sem_cores_vector;
-    if (operation_attributes.num_links == 4) {
-        sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
-    } else {
-        sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
-    }
+    sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
     range_count = 0;
     for (auto cr : ring_core_ranges) {
         sem_cores_vector.push_back(cr);
