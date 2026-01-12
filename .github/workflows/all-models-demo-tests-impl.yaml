@@ -67,7 +67,7 @@ jobs:
               tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-70b"]'
               ;;
             BH-6U)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-70b"]'
+              tt_transformers_models='[]'
               ;;
           esac
 
