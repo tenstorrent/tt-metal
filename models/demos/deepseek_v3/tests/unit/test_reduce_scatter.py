@@ -70,6 +70,11 @@ def _get_tensors(
     return tt_input, torch_reference
 
 
+@pytest.mark.requires_device(
+    [
+        "TG",
+    ]
+)  # TODO: Add N300, T3K, DUAL, QUAD
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize("enable_trace", [True])
 @pytest.mark.parametrize(

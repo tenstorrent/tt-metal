@@ -25,6 +25,7 @@ DEEPSEEK_SHAPE_PERM_LAYOUT_MEM = [
 ]
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )
