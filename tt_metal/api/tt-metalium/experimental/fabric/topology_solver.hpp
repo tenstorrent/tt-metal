@@ -59,7 +59,7 @@ public:
      * @param node The node ID to get neighbors for
      * @return const std::vector<NodeId>& Vector of neighbor node IDs
      */
-    const std::vector<NodeId>& get_neighbors(NodeId node) const;
+    const std::vector<NodeId>& get_neighbors(const NodeId& node) const;
 
     /**
      * @brief Print adjacency map for debugging

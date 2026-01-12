@@ -32,7 +32,7 @@ const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_nodes() const {
 }
 
 template <typename NodeId>
-const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_neighbors(NodeId node) const {
+const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_neighbors(const NodeId& node) const {
     auto it = adj_map_.find(node);
     if (it != adj_map_.end()) {
         return it->second;
