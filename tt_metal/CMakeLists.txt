@@ -306,21 +306,28 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 
-# Output library directly to build/lib (not build/lib64) for CI tar artifacts
-# This prevents ODR violations in multiprocess tests where different processes
-# might load the library from different locations (original vs copied)
-# CI tar artifacts expect libraries in build/lib regardless of CMAKE_INSTALL_LIBDIR
-set_target_properties(
-    tt_metal
-    PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY
-            "${CMAKE_BINARY_DIR}/lib"
-)
+# Set BUILD_RPATH for build-time linking (crucial for Fedora RUNPATH behavior)
+# This uses BUILD_WITH_INSTALL_RPATH=FALSE so CMAKE_BUILD_RPATH_USE_LINK_PATH
+# automatically adds MPI and other linked library directories to BUILD_RPATH.
+tt_set_library_rpath(tt_metal)
 
-# Set INSTALL_RPATH - $ORIGIN must come first for RPM's brp-check-rpaths
-# Using BUILD_WITH_INSTALL_RPATH=TRUE embeds INSTALL_RPATH at build time, so install(FILES)
-# copies the library with the correct RPATH already set (no post-install fixup needed).
-# This works because tt_metal.so and its dependencies are all in build/lib, so $ORIGIN resolves correctly.
+# On Fedora/RHEL (lib64), set LIBRARY_OUTPUT_DIRECTORY to build/lib for consistent tar artifact layout.
+# The lib64->lib symlink ensures install(TARGETS) can still find the library.
+# On Ubuntu (lib), do NOT set LIBRARY_OUTPUT_DIRECTORY - it triggers a CMake path resolution bug
+# where install(TARGETS) can't find the library. Without it, the library goes to the default
+# location and install(TARGETS) works correctly.
+if(NOT CMAKE_INSTALL_LIBDIR STREQUAL "lib")
+    set_target_properties(
+        tt_metal
+        PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY
+                "${CMAKE_BINARY_DIR}/lib"
+    )
+endif()
+
+# Set INSTALL_RPATH after distributed subdirectory is processed
+# $ORIGIN must come first - it allows the library to find sibling libraries in the install directory
+# RPM's brp-check-rpaths requires $ORIGIN to be first, so we must not add any system paths before it.
 set(TT_METAL_INSTALL_RPATH "$ORIGIN")
 
 if(TT_METAL_USING_ULFM)
@@ -332,8 +339,10 @@ endif()
 set_target_properties(
     tt_metal
     PROPERTIES
+        # Prevent build paths from leaking into install RPATH
         BUILD_WITH_INSTALL_RPATH
-            TRUE
+            FALSE
+        # We manually constructed the RPATH, so don't let CMake auto-append paths
         INSTALL_RPATH_USE_LINK_PATH
             FALSE
         INSTALL_RPATH
@@ -346,21 +355,17 @@ if(TT_METAL_BUILD_TESTS)
 endif()
 
 if(TT_INSTALL)
-    # Export and headers only - library installed separately due to CMake LIBRARY_OUTPUT_DIRECTORY bug
     install(
         TARGETS
             tt_metal
         EXPORT Metalium
+        LIBRARY
+            COMPONENT metalium-runtime
         FILE_SET
         api
             DESTINATION COMPONENT
             metalium-dev
     )
-
-    # Install library using generator expression (works around CMake path resolution bug)
-    # Since BUILD_WITH_INSTALL_RPATH=TRUE, the library already has correct RPATH embedded
-    install(FILES $<TARGET_FILE:tt_metal> DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
-
     install(EXPORT Metalium NAMESPACE TT:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-metalium COMPONENT metalium-dev)
 
     install(

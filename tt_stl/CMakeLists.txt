@@ -56,54 +56,36 @@ target_precompile_headers(
 
 target_link_libraries(metal_common_pch PRIVATE tt_stl)
 
-# Output library directly to build/lib (not build/lib64) for CI tar artifacts.
-# This matches the pattern used by tt_metal and other core libraries.
-# On Fedora/AlmaLinux (where CMAKE_INSTALL_LIBDIR=lib64), the top-level symlink
-# lib64 -> lib ensures CMake's install(TARGETS) can find the file via the lib64 path.
-# This approach:
-# - Uses a single canonical location (build/lib/) to avoid ODR violations
-# - Works with install(TARGETS) via the lib64 -> lib symlink on Fedora/AlmaLinux
-# - Matches tar artifact layout expectations (build/lib/)
-set_target_properties(
-    tt_stl
-    PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY
-            "${CMAKE_BINARY_DIR}/lib"
-)
+# Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
+tt_set_library_rpath(tt_stl)
 
-# Set RPATH properties BEFORE install() calls
-# Using BUILD_WITH_INSTALL_RPATH=TRUE embeds INSTALL_RPATH at build time, so install(FILES)
-# copies the library with the correct RPATH already set (no post-install fixup needed).
-# This works for tt_stl because all its dependencies are INTERFACE (header-only),
-# so it doesn't need BUILD_RPATH to find libraries at build time.
-set_target_properties(
-    tt_stl
-    PROPERTIES
-        BUILD_WITH_INSTALL_RPATH
-            TRUE
-        INSTALL_RPATH_USE_LINK_PATH
-            FALSE
-        INSTALL_RPATH
-            "$ORIGIN"
-)
+# On Fedora/RHEL (lib64), set LIBRARY_OUTPUT_DIRECTORY to build/lib for consistent tar artifact layout.
+# The lib64->lib symlink ensures install(TARGETS) can still find the library.
+# On Ubuntu (lib), do NOT set LIBRARY_OUTPUT_DIRECTORY - it triggers a CMake path resolution bug
+# where install(TARGETS) can't find the library. Without it, the library goes to the default
+# location and install(TARGETS) works correctly.
+if(NOT CMAKE_INSTALL_LIBDIR STREQUAL "lib")
+    set_target_properties(
+        tt_stl
+        PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY
+                "${CMAKE_BINARY_DIR}/lib"
+    )
+endif()
 
 # Install target to Metalium export set (required because tt_metal depends on tt_stl)
-# Uses install(FILES) workaround for CMake's LIBRARY_OUTPUT_DIRECTORY path resolution bug
 if(TT_INSTALL)
-    # Export and headers only - library installed separately due to CMake bug
     install(
         TARGETS
             tt_stl
         EXPORT Metalium
+        LIBRARY
+            COMPONENT metalium-runtime
         FILE_SET
         api
             DESTINATION COMPONENT
             metalium-dev
     )
-
-    # Install library using generator expression (works around CMake path resolution bug)
-    # Since BUILD_WITH_INSTALL_RPATH=TRUE, the library already has $ORIGIN RPATH embedded
-    install(FILES $<TARGET_FILE:tt_stl> DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
 endif()
 
 if(TT_METAL_BUILD_TESTS)
