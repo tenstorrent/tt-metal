@@ -58,24 +58,25 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     CoreCoord core_grid_offset) {
     auto* mesh_device = input_tensor.device();
 
+    // hardcoded constants
     const uint32_t ring_size = 8;
+
+    // choose cores
     const uint32_t num_directions_per_link = 2;
-    const uint32_t num_cores_per_link = num_directions_per_link;
+    const auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
+        num_links, num_directions_per_link, mesh_device, sub_device_id, core_grid_offset);
 
-    const auto [all_core_range, all_cores] =
-        ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
-
-    std::vector<CoreRange> sender_worker_core_ranges;
+    std::vector<CoreRange> worker_core_ranges;
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             const auto& worker_core = all_cores[core_id++];
-            sender_worker_core_ranges.emplace_back(worker_core);
+            worker_core_ranges.emplace_back(worker_core);
         }
     }
-    CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
+    CoreRangeSet worker_core_range_set = CoreRangeSet(worker_core_ranges);
 
-    // Tensor Info
+    // tensor info
     const auto& input_tensor_shape = input_tensor.padded_shape();
     TT_FATAL(
         !(input_tensor_shape[-2] % tt::constants::TILE_HEIGHT),
@@ -122,31 +123,33 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{input_cb_index, df}})
             .set_page_size(input_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_input_config);
+    CreateCircularBuffer(program, worker_core_range_set, cb_input_config);
     uint32_t intermediate_cb_index = tt::CB::c_in1;
     tt::tt_metal::CircularBufferConfig cb_intermediate_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_cb_index, df}})
             .set_page_size(intermediate_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_intermediate_config);
+    CreateCircularBuffer(program, worker_core_range_set, cb_intermediate_config);
     uint32_t reader_output_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig cb_reader_output_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{reader_output_cb_index, df}})
             .set_page_size(reader_output_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reader_output_config);
+    CreateCircularBuffer(program, worker_core_range_set, cb_reader_output_config);
     uint32_t compute_output_cb_index = tt::CB::c_in3;
     tt::tt_metal::CircularBufferConfig cb_compute_output_config =
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{compute_output_cb_index, df}})
             .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
+    CreateCircularBuffer(program, worker_core_range_set, cb_compute_output_config);
 
+    // handle output sharded tensors using ShardedAddrGen
     bool output_is_sharded = output_tensor.is_sharded();
     std::map<std::string, std::string> writer_compute_defines;
     if (output_is_sharded) {
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
 
-    std::vector<uint32_t> sender_reader_compile_args = {
+    // reader
+    std::vector<uint32_t> reader_ct_args = {
         ring_index,               // my_chip_id
         ring_size,                // ring_size
         input_cb_index,           // cb_input_id
@@ -162,22 +165,18 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         slice_Ht,                 // slice_Ht
         slice_Wt,                 // slice_Wt
     };
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(reader_ct_args);
 
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_reader_compile_args);
-
-    std::string sender_reader_kernel_path =
+    std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/kernels/"
         "deepseek_reduce_scatter_reader.cpp";
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        sender_reader_kernel_path,
-        sender_worker_core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args));
+        program, reader_kernel_path, worker_core_range_set, tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-    // Writer
-    std::vector<uint32_t> sender_writer_compile_args = {
+    // writer
+    std::vector<uint32_t> writer_ct_args = {
         ring_index,                     // my_chip_id
         ring_size,                      // ring_size
         compute_output_cb_index,        // cb_compute_output_id
@@ -189,33 +188,32 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         input_channel_num_pages,        // input_channel_num_pages
         output_channel_num_pages,       // output_channel_num_pages
         input_tensor_B,                 // input_tensor_B
-        input_tensor_Wt,                //         input_tensor_Wt
+        input_tensor_Wt,                // input_tensor_Wt
         slice_C,                        // slice_C
         slice_Ht,                       // slice_Ht
         slice_Wt,                       // slice_Wt
     };
-
-    tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(writer_ct_args);
     if (output_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
+        shard_builder::extend_sharding_compile_time_args(output_tensor, writer_ct_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
     }
 
-    std::string sender_writer_kernel_path =
+    std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/kernels/"
         "deepseek_reduce_scatter_writer.cpp";
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        sender_writer_kernel_path,
-        sender_worker_core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
+        writer_kernel_path,
+        worker_core_range_set,
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args, writer_compute_defines));
 
-    // Reduce kernel
-    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
-    sender_reduce_kernel_config.compile_args = {
-        input_cb_index,           //         input_cb_id
+    // reduce
+    auto reduce_kernel_config = tt::tt_metal::ComputeConfig{};
+    reduce_kernel_config.compile_args = {
+        input_cb_index,           // input_cb_id
         intermediate_cb_index,    // intermediate_cb
         compute_output_cb_index,  // output_cb
         tile_granularity,         // tile_granularity
@@ -224,13 +222,14 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         slice_C,                  // slice_C
     };
 
-    std::string sender_reduce_kernel_path =
+    std::string reduce_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/kernels/deepseek_reduction.cpp";
 
-    auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
-        program, sender_reduce_kernel_path, sender_worker_core_range_set, sender_reduce_kernel_config);
+    auto reduce_kernel_id =
+        tt::tt_metal::CreateKernel(program, reduce_kernel_path, worker_core_range_set, reduce_kernel_config);
 
-    auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
+    // runtime args
+    auto worker_core_iter = worker_core_range_set.ranges().cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             auto core = *((worker_core_iter++)->begin());
@@ -246,8 +245,8 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
 
             uint32_t chunks_per_sync_val = 1;
-            log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
+            // reader
             std::vector<uint32_t> reader_rt_args = {
                 input_tensor.buffer()->address(),          // input_tensor_address
                 intermediate_tensor.buffer()->address(),   // intermediate_tensor_address
@@ -259,9 +258,10 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 start_pages_read_in_row,                   // start_pages_read_in_row
                 start_row_offset,                          // start_row_offset (unused by dim0 kernel)
             };
+
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
-            // Writer RT args
+            // writer
             std::vector<uint32_t> writer_rt_args = {
                 intermediate_tensor.buffer()->address(),                       // intermediate_tensor_address
                 output_tensor.buffer()->address(),                             // output_tensor_address
@@ -277,7 +277,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 start_tiles_read,         // start_tiles_read
                 start_tiles_to_read,      // tiles_to_read
             };
-
             if (output_is_sharded) {
                 shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
             }
@@ -300,11 +299,12 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
 
+            // reduce
             std::vector<uint32_t> reduce_rt_args = {
                 start_tiles_read,     // start_tiles_read
                 start_tiles_to_read,  // start_tiles_to_read
                 dir};                 // dir
-            tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, reduce_rt_args);
+            tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_id, {core}, reduce_rt_args);
         }
     }
 
@@ -330,18 +330,18 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
             std::vector<std::vector<RuntimeArgsData>> reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
             std::vector<std::vector<RuntimeArgsData>> writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 
-            // sender reader
-            auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input_tensor.buffer()->address();
-            worker_reader_sender_runtime_args[1] = intermediate_tensor.buffer()->address();
-            worker_reader_sender_runtime_args[2] = multidevice_semaphores.at(dir).address();
+            // reader
+            auto& reader_rt_args = reader_runtime_args[core.x][core.y];
+            reader_rt_args[0] = input_tensor.buffer()->address();
+            reader_rt_args[1] = intermediate_tensor.buffer()->address();
+            reader_rt_args[2] = multidevice_semaphores.at(dir).address();
             // sender writer
-            auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = intermediate_tensor.buffer()->address();
-            worker_writer_sender_runtime_args[1] = output_tensor.buffer()->address();
-            worker_writer_sender_runtime_args[4] = multidevice_semaphores.at(dir).address();
-            worker_writer_sender_runtime_args[5] = multidevice_semaphores.at(num_directions_per_link).address();
-            worker_writer_sender_runtime_args[7] = barrier_semaphore.address();
+            auto& writer_rt_args = writer_runtime_args[core.x][core.y];
+            writer_rt_args[0] = intermediate_tensor.buffer()->address();
+            writer_rt_args[1] = output_tensor.buffer()->address();
+            writer_rt_args[4] = multidevice_semaphores.at(dir).address();
+            writer_rt_args[5] = multidevice_semaphores.at(num_directions_per_link).address();
+            writer_rt_args[7] = barrier_semaphore.address();
         }
     }
 }
