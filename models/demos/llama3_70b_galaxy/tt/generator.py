@@ -343,7 +343,7 @@ class Generator:
                 return replace(params, **updates)
 
             sampling_params = _scatter_params_to_slots(sampling_params, empty_slots)
-            print("sampling_params_scattered", sampling_params, "empty_slots", empty_slots)
+            # print("sampling_params_scattered", sampling_params, "empty_slots", empty_slots)
             sampling_module = self.model.sampling
 
             sampling_module.reset_sampling_params(sampling_params)
