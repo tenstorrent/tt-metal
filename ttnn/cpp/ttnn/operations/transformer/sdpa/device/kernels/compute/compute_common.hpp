@@ -569,7 +569,7 @@ void calculate_exponential_polynomial_init() {
     init_clamp_loadmacro<SCALE>();
 }
 
-template <bool USE_SFPARECIP_INSTR, bool SCALE_EN, int ITERATIONS, int POLY_DEGREE>
+template <bool SCALE_EN, int ITERATIONS, bool USE_SFPARECIP_INSTR, int POLY_DEGREE>
 void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) {
     // Clamp values < -88.5 to 0.
     run_clamp_loadmacro();
@@ -582,7 +582,7 @@ void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) 
         .set(ADDR_MOD_7);
 
     if (USE_SFPARECIP_INSTR) {
-#ifdef !ARCH_BLACKHOLE
+#ifndef ARCH_BLACKHOLE
         ASSERT(false, "TTI_SFPARECIP instruction only supported on Blackhole");
 #endif
     } else {
@@ -695,9 +695,9 @@ void calculate_exponential_first_column(int scale_bf16) {
         }
     } else {
         if constexpr (DST_ACCUM_MODE) {
-            calculate_exponential_polynomial<0, true, ITERATIONS_HALF_FACE, 4>(scale_bf16);
+            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 4>(scale_bf16);
         } else {
-            calculate_exponential_polynomial<0, true, ITERATIONS_HALF_FACE, 2>(scale_bf16);
+            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 2>(scale_bf16);
         }
     }
 }
