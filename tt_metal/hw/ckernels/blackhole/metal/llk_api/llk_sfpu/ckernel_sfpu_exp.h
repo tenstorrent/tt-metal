@@ -23,7 +23,7 @@ sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
  *
  * The constraint on `val` is: 0 <= val < 128.0f
  * Note: Unlike _float_to_int32_ and _float_to_int32_positive, this function assumes that
- * value has been been divided by 2^23
+ * value has been been divided by 2^23. Output value will be scaled by 2^23 compared to 'val'.
  * If that was not the case, we would have had to shift by `exp - 23` instead of `exp`
  * This saves 1 SFPADDI instruction.
  */
