@@ -7,6 +7,8 @@ hooks:
   Stop:
     - hooks:
         - type: command
+          command: ".claude/scripts/logging/auto_commit.sh ttnn-factory-builder"
+        - type: command
           command: "echo 'LOGGING REMINDER: If logging is enabled, ensure execution log is written before completing.'"
 ---
 
@@ -298,8 +300,9 @@ untilize(...);
 
 ## Reference Material
 
-**Required reading** (read in full - ~210 lines):
+**Required reading** (read in full):
 - `.claude/references/ttnn-cb-memory-fundamentals.md` - CB page concepts, sync rules, tilize/untilize patterns
+- `.claude/references/agent-execution-logging.md` - **READ THIS FILE** for git commit requirements (Part 1 is ALWAYS required)
 
 **Stage-specific reference** (load sections on demand):
 - `.claude/references/factory-builder-stages.md` - Full TDD cycles, test templates, implementation code
@@ -393,16 +396,71 @@ Both can READ and WRITE. Check spec's "Kernel Data Movement" table for actual fu
 
 ---
 
-## Execution Logging (Conditional)
+## Git Commits (ALWAYS REQUIRED)
 
-Logging is **OPTIONAL**. Enable only if the main agent includes "with execution logging", "enable logging", or similar in the prompt.
+Git commits are **MANDATORY** regardless of breadcrumb settings. Read `.claude/references/agent-execution-logging.md` Part 1.
 
-**If logging is NOT enabled**: Skip all logging steps below.
+### When to Commit
+- **MUST**: After each stage passes (stage 4, 5, 6)
+- **MUST**: After any successful build
+- **MUST**: Before handoff to kernel-writer
+- **SHOULD**: After fixing any bug
 
-**If logging IS enabled**: Follow the instructions in `.claude/references/agent-execution-logging.md`:
+### Commit Message Format
+```
+[ttnn-factory-builder] stage {N}: {concise description}
+
+- {key change 1}
+- {key change 2}
+
+operation: {operation_name}
+build: PASSED
+tests: stage{N}=PASS
+```
+
+### Example Commits
+```bash
+# After stage 5
+git add -A && git commit -m "$(cat <<'EOF'
+[ttnn-factory-builder] stage 5: CB config and work distribution
+
+- Configured 5 circular buffers (c_0, c_1, c_2, c_3, c_16)
+- Single-core work distribution
+
+operation: reduce_avg_w_rm
+build: PASSED
+tests: stage5=PASS
+EOF
+)"
+
+# After stage 6
+git add -A && git commit -m "$(cat <<'EOF'
+[ttnn-factory-builder] stage 6: stub kernels
+
+- Created reader/compute/writer stub kernels
+- Verified no hang (CB sync balanced)
+
+operation: reduce_avg_w_rm
+build: PASSED
+tests: stage6=PASS
+EOF
+)"
+```
+
+---
+
+## Breadcrumbs (Conditional)
+
+Breadcrumbs are **CONDITIONAL**. Check your invocation prompt:
+- "with execution logging", "enable logging", "with breadcrumbs" → **ENABLED**
+- None of these phrases → **DISABLED**
+
+**If DISABLED**: Skip breadcrumb steps. Git commits still required.
+
+**If ENABLED**: You MUST follow ALL breadcrumb instructions in `.claude/references/agent-execution-logging.md` Part 2:
 - **Agent name**: `ttnn-factory-builder`
 - **Predecessor**: `ttnn-operation-scaffolder`
 - **Agent-specific events**: `cb_config`, `work_distribution`, `tdd_cycle`, `cb_audit`, `cb_sync_summary`, `hang_debug`
-- **Agent-specific log sections**: CB Configuration Audit, CB Sync Verification, Work Distribution (see reference)
+- **Agent-specific log sections**: CB Configuration Audit, CB Sync Verification, Work Distribution
 
-**CRITICAL for Stage 6**: If logging is enabled, you MUST log `cb_sync_summary` before completing Stage 6 to verify push/pop balance.
+**CRITICAL if breadcrumbs enabled**: You MUST log `cb_sync_summary` before completing Stage 6 to verify push/pop balance.

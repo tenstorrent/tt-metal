@@ -8,6 +8,8 @@ hooks:
   Stop:
     - hooks:
         - type: command
+          command: ".claude/scripts/logging/auto_commit.sh ttnn-kernel-writer"
+        - type: command
           command: "echo 'LOGGING REMINDER: If logging is enabled, ensure execution log is written before completing.'"
 ---
 
@@ -37,7 +39,8 @@ You implement according to the design. You do NOT redesign.
 
 1. **Kernel Design Document** (`kernel_design.md`) - Your implementation guide
 2. **CB Fundamentals** (`.claude/references/ttnn-cb-memory-fundamentals.md`) - CB sync rules
-3. **Helper headers** (only for API reference, design already specifies what to use)
+3. **Logging & Git Protocol** (`.claude/references/agent-execution-logging.md`) - **READ THIS FILE** for git commit requirements
+4. **Helper headers** (only for API reference, design already specifies what to use)
 
 ## Implementation Rules
 
@@ -299,16 +302,57 @@ Report:
 
 ---
 
-## Execution Logging (Conditional)
+## Git Commits (ALWAYS REQUIRED)
 
-Logging is **OPTIONAL**. Enable only if the main agent includes "with execution logging", "enable logging", or similar in the prompt.
+Git commits are **MANDATORY** regardless of breadcrumb settings. Read `.claude/references/agent-execution-logging.md` Part 1.
 
-**If logging is NOT enabled**: Skip all logging steps below.
+### When to Commit
+- **MUST**: After stage 7 tests pass (before handoff)
+- **MUST**: After any successful build (if you modified host files)
+- **SHOULD**: After implementing each kernel
+- **SHOULD**: After fixing any bug
 
-**If logging IS enabled**: Follow the instructions in `.claude/references/agent-execution-logging.md`:
+### Commit Message Format
+```
+[ttnn-kernel-writer] stage 7: {concise description}
+
+- {key change 1}
+- {key change 2}
+
+operation: {operation_name}
+build: {PASSED|SKIPPED}
+tests: {stage7 results}
+```
+
+### File Type Awareness (CRITICAL)
+
+| File Location | Rebuild Required? |
+|---------------|-------------------|
+| `device/kernels/**/*.cpp` | NO (runtime compile) |
+| `device/*.cpp` (factory, device_op) | **YES** |
+
+**If you modify ANY file outside `device/kernels/`:**
+1. Run `./build_metal.sh -b Debug`
+2. Verify build succeeds
+3. THEN run tests
+4. THEN commit
+
+**Tests against stale builds produce FALSE RESULTS.**
+
+---
+
+## Breadcrumbs (Conditional)
+
+Breadcrumbs are **CONDITIONAL**. Check your invocation prompt:
+- "with execution logging", "enable logging", "with breadcrumbs" → **ENABLED**
+- None of these phrases → **DISABLED**
+
+**If DISABLED**: Skip breadcrumb steps. Git commits still required.
+
+**If ENABLED**: You MUST follow ALL breadcrumb instructions in `.claude/references/agent-execution-logging.md` Part 2:
 - **Agent name**: `ttnn-kernel-writer`
 - **Predecessor**: `ttnn-kernel-designer`
-- **Agent-specific events**: `design_compliance`, `cb_wrapper_check`, `correctness_test`, `numerical_debug`, `design_compliance_summary`
-- **Agent-specific log sections**: Design Compliance, Redundant CB Operation Check, Correctness Test Results (see reference)
+- **Agent-specific events**: `design_compliance`, `cb_wrapper_check`, `correctness_test`, `numerical_debug`, `design_compliance_summary`, `host_file_modified`
+- **Agent-specific log sections**: Design Compliance, Redundant CB Operation Check, Correctness Test Results, Host Files Modified
 
-**CRITICAL**: If logging is enabled, you MUST log `design_compliance_summary` before completing to verify helper usage compliance.
+**CRITICAL if breadcrumbs enabled**: You MUST log `design_compliance_summary` before completing.
