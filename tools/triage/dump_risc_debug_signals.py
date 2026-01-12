@@ -96,7 +96,7 @@ def dump_risc_debug_signals(
             risc_name,
             location,
             False,
-            f"Failed to halt core {risc_name} at {location.to_user_str()} on device {location.device.id}.",
+            f"Failed to halt core.",
         )
 
         # Return the collected debug bus signals
