@@ -509,7 +509,7 @@ FORCE_INLINE void noc_async_read_one_packet(
 
     WAYPOINT("NAOW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
+    ncrisc_noc_fast_read<noc_mode, true>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
     WAYPOINT("NAOD");
 }
 
