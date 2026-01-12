@@ -3,7 +3,7 @@
 #  Modified by Zhiqi Li
 # ---------------------------------------------
 
-import mmcv
+import json
 from nuscenes.nuscenes import NuScenes
 from PIL import Image
 from nuscenes.utils.geometry_utils import view_points, box_in_image, BoxVisibility
@@ -244,6 +244,7 @@ def get_predicted_data(
     boxes = pred_anns
     # Make list of Box objects including coord system transforms.
     box_list = []
+    filtered_count = 0
     for box in boxes:
         if use_flat_vehicle_coordinates:
             # Move box to ego vehicle coord system parallel to world z plane.
@@ -259,11 +260,15 @@ def get_predicted_data(
             box.translate(-np.array(cs_record["translation"]))
             box.rotate(Quaternion(cs_record["rotation"]).inverse)
 
-        if sensor_record["modality"] == "camera" and not box_in_image(
-            box, cam_intrinsic, imsize, vis_level=box_vis_level
-        ):
-            continue
+        if sensor_record["modality"] == "camera":
+            is_visible = box_in_image(box, cam_intrinsic, imsize, vis_level=box_vis_level)
+            if not is_visible:
+                filtered_count += 1
+                continue
         box_list.append(box)
+
+    if filtered_count > 0 and len(boxes) > 0:
+        print(f"  Filtered out {filtered_count}/{len(boxes)} boxes not visible in camera")
 
     return data_path, box_list, cam_intrinsic
 
@@ -454,6 +459,8 @@ def render_sample_data(
             assert False
         elif sensor_modality == "camera":
             # Load boxes and image.
+            all_records = [record for record in pred_data["results"][sample_toekn] if record["detection_score"] > 0.2]
+            print(f"Found {len(all_records)} predictions with score > 0.2 for {sd_record['channel']}")
             boxes = [
                 Box(
                     record["translation"],
@@ -462,13 +469,14 @@ def render_sample_data(
                     name=record["detection_name"],
                     token="predicted",
                 )
-                for record in pred_data["results"][sample_toekn]
-                if record["detection_score"] > 0.2
+                for record in all_records
             ]
+            print(f"Created {len(boxes)} Box objects")
 
             data_path, boxes_pred, camera_intrinsic = get_predicted_data(
                 sample_data_token, box_vis_level=box_vis_level, pred_anns=boxes
             )
+            print(f"After transformation, {len(boxes_pred)} boxes visible in {sd_record['channel']}")
             _, boxes_gt, _ = nusc.get_sample_data(sample_data_token, box_vis_level=box_vis_level)
             if ind == 3:
                 j += 1
@@ -523,9 +531,13 @@ def render_sample_data(
 
 
 if __name__ == "__main__":
-    nusc = NuScenes(version="v1.0-trainval", dataroot="./data/nuscenes", verbose=True)
+    nusc = NuScenes(version="v1.0-mini", dataroot="models/experimental/BEVFormerV2/data/nuscenes", verbose=True)
     # render_annotation('7603b030b42a4b1caa8c443ccc1a7d52')
-    bevformer_results = mmcv.load("test/bevformer_base/Thu_Jun__9_16_22_37_2022/pts_bbox/results_nusc.json")
+    with open("models/experimental/BEVFormerV2/bevformerv2-r50-t1-base-24ep/pts_bbox.json", "r") as f:
+        bevformer_results = json.load(f)
     sample_token_list = list(bevformer_results["results"].keys())
-    for id in range(0, 10):
+    print(f"Found {len(sample_token_list)} samples in results")
+    # Only process up to 10 samples or the number available, whichever is smaller
+    num_samples = min(10, len(sample_token_list))
+    for id in range(num_samples):
         render_sample_data(sample_token_list[id], pred_data=bevformer_results, out_path=sample_token_list[id])

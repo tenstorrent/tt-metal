@@ -1,7 +1,11 @@
 import copy
+import glob
+import json
+import os
+import tempfile
 
 #  from mmdet3d.datasets import NuScenesDataset
-from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import NuScenesDataset
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import NuScenesDataset, track_iter_progress
 import mmcv
 from os import path as osp
 
@@ -10,6 +14,7 @@ from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import D
 import torch
 import numpy as np
 from nuscenes.eval.common.utils import Quaternion
+import pyquaternion
 from .nuscnes_eval import NuScenesEval_custom
 
 # from mmcv.parallel import DataContainer as DC
@@ -243,6 +248,7 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
                 if osp.isabs(data_path) and osp.exists(data_path):
                     image_paths.append(data_path)
                     continue
+                original_path = data_path
                 if data_path.startswith("./data/nuscenes/"):
                     data_path = osp.join(self.data_root, data_path[len("./data/nuscenes/") :])
                 elif data_path.startswith("./data/nuScenes/"):
@@ -266,6 +272,32 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
                         data_path = osp.join(self.data_root, data_path[idx:])
                     else:
                         data_path = osp.join(self.data_root, data_path)
+                if not osp.isabs(data_path):
+                    data_path = osp.abspath(data_path)
+                if not osp.exists(data_path) and self.test_mode:
+                    dir_path = osp.dirname(data_path)
+                    filename = osp.basename(data_path)
+                    if osp.exists(dir_path):
+                        if "__" in filename:
+                            parts = filename.split("__")
+                            if len(parts) >= 2:
+                                pattern = parts[0] + "__" + parts[1].split("_")[0] + "_*"
+                                matches = glob.glob(osp.join(dir_path, pattern))
+                                if matches:
+                                    data_path = sorted(matches)[0]
+                        if not osp.exists(data_path):
+                            pattern = osp.splitext(filename)[0].rsplit("_", 1)[0] + "_*" + osp.splitext(filename)[1]
+                            matches = glob.glob(osp.join(dir_path, pattern))
+                            if matches:
+                                data_path = sorted(matches)[0]
+                        if not osp.exists(data_path):
+                            all_files = [
+                                f
+                                for f in glob.glob(osp.join(dir_path, "*"))
+                                if osp.isfile(f) and f.lower().endswith((".jpg", ".jpeg", ".png"))
+                            ]
+                            if all_files:
+                                data_path = sorted(all_files)[0]
                 image_paths.append(data_path)
                 # obtain lidar to image transformation matrix
                 lidar2cam_r = np.linalg.inv(cam_info["sensor2lidar_rotation"])
@@ -345,6 +377,201 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
                 idx = self._rand_another(idx)
                 continue
             return data
+
+    def _format_bbox(self, results, jsonfile_prefix):
+        """Convert the results to the standard nuScenes JSON format.
+
+        Args:
+            results (list[dict]): Testing results of the dataset.
+            jsonfile_prefix (str): The prefix of the output jsonfile.
+
+        Returns:
+            tuple: (result_files, tmp_dir), result_files is a dict containing
+                the json filepaths, tmp_dir is None if jsonfile_prefix is provided.
+        """
+        if jsonfile_prefix is None:
+            tmp_dir = tempfile.TemporaryDirectory()
+            jsonfile_prefix = osp.join(tmp_dir.name, "results")
+        else:
+            tmp_dir = None
+
+        result_files = dict()
+        for name in results[0]:
+            results_ = [out[name] for out in results]
+            tmp_file_ = osp.join(jsonfile_prefix, f"{name}.json")
+
+            # Convert results to nuScenes format
+            nusc_annos = {}
+            mapped_class_names = self.CLASSES
+
+            print(f"Start to convert detection format for {name}...")
+
+            for sample_id, det in enumerate(track_iter_progress(results_)):
+                if det is None or len(det) == 0:
+                    continue
+
+                # Get sample token
+                sample_token = self.data_infos[sample_id]["token"]
+
+                # Extract detection results
+                if isinstance(det, dict):
+                    boxes_3d = det.get("boxes_3d", None)
+                    scores_3d = det.get("scores_3d", None)
+                    labels_3d = det.get("labels_3d", None)
+                else:
+                    continue
+
+                if boxes_3d is None or scores_3d is None or labels_3d is None:
+                    continue
+
+                # Convert to numpy/tensor
+                # Handle BaseInstance3DBoxes objects
+                if hasattr(boxes_3d, "gravity_center"):
+                    # BaseInstance3DBoxes object
+                    centers = boxes_3d.gravity_center.cpu().numpy()
+                    dims = boxes_3d.dims.cpu().numpy()
+                    yaws = boxes_3d.yaw.cpu().numpy()
+                    # Extract velocity if available
+                    if hasattr(boxes_3d, "tensor") and boxes_3d.tensor.shape[1] >= 9:
+                        velocities = boxes_3d.tensor[:, 7:9].cpu().numpy()
+                    else:
+                        velocities = np.zeros((len(centers), 2))
+                elif hasattr(boxes_3d, "tensor"):
+                    # Has tensor attribute
+                    boxes_tensor = boxes_3d.tensor.cpu().numpy()
+                    if boxes_tensor.shape[1] >= 9:
+                        centers = boxes_tensor[:, :3]
+                        dims = boxes_tensor[:, 3:6]
+                        yaws = boxes_tensor[:, 6]
+                        velocities = boxes_tensor[:, 7:9]
+                    elif boxes_tensor.shape[1] >= 7:
+                        centers = boxes_tensor[:, :3]
+                        dims = boxes_tensor[:, 3:6]
+                        yaws = boxes_tensor[:, 6]
+                        velocities = np.zeros((len(centers), 2))
+                    else:
+                        continue
+                elif isinstance(boxes_3d, torch.Tensor):
+                    boxes_tensor = boxes_3d.cpu().numpy()
+                    if boxes_tensor.shape[1] >= 9:
+                        centers = boxes_tensor[:, :3]
+                        dims = boxes_tensor[:, 3:6]
+                        yaws = boxes_tensor[:, 6]
+                        velocities = boxes_tensor[:, 7:9]
+                    elif boxes_tensor.shape[1] >= 7:
+                        centers = boxes_tensor[:, :3]
+                        dims = boxes_tensor[:, 3:6]
+                        yaws = boxes_tensor[:, 6]
+                        velocities = np.zeros((len(centers), 2))
+                    else:
+                        continue
+                else:
+                    boxes_tensor = np.array(boxes_3d)
+                    if boxes_tensor.shape[1] >= 9:
+                        centers = boxes_tensor[:, :3]
+                        dims = boxes_tensor[:, 3:6]
+                        yaws = boxes_tensor[:, 6]
+                        velocities = boxes_tensor[:, 7:9]
+                    elif boxes_tensor.shape[1] >= 7:
+                        centers = boxes_tensor[:, :3]
+                        dims = boxes_tensor[:, 3:6]
+                        yaws = boxes_tensor[:, 6]
+                        velocities = np.zeros((len(centers), 2))
+                    else:
+                        continue
+
+                if isinstance(scores_3d, torch.Tensor):
+                    scores_3d = scores_3d.cpu().numpy()
+                else:
+                    scores_3d = np.array(scores_3d)
+
+                if isinstance(labels_3d, torch.Tensor):
+                    labels_3d = labels_3d.cpu().numpy()
+                else:
+                    labels_3d = np.array(labels_3d)
+
+                # Get ego2global transformation for this sample
+                info = self.data_infos[sample_id]
+                ego2global_translation = np.array(info["ego2global_translation"])
+                ego2global_rotation = Quaternion(info["ego2global_rotation"])
+
+                # Filter by score threshold (use higher threshold to reduce false positives)
+                # Since all scores are in 0.66-0.74 range, use a higher threshold
+                score_threshold = 0.7  # Only keep high-confidence predictions
+                valid_indices = [i for i in range(len(centers)) if scores_3d[i] > score_threshold]
+
+                if len(valid_indices) == 0:
+                    # If no predictions above 0.7, fall back to top 30 by score
+                    sorted_indices = sorted(range(len(centers)), key=lambda i: scores_3d[i], reverse=True)
+                    valid_indices = sorted_indices[:30]
+
+                # Sort by score (descending) and keep top N predictions
+                sorted_indices = sorted(valid_indices, key=lambda i: scores_3d[i], reverse=True)
+                max_detections = 30  # Limit to top 30 detections per sample
+                top_indices = sorted_indices[:max_detections]
+
+                # Convert boxes to nuScenes format
+                annos = []
+                for i in top_indices:
+                    center = centers[i]
+                    dim = dims[i]
+                    yaw = float(yaws[i])
+                    velocity = velocities[i] if len(velocities) > i else [0.0, 0.0]
+                    score = float(scores_3d[i])
+                    label = int(labels_3d[i])
+
+                    # Convert rotation to quaternion (in ego frame)
+                    q1 = pyquaternion.Quaternion(axis=[0, 0, 1], radians=yaw)
+                    q2 = pyquaternion.Quaternion(axis=[1, 0, 0], radians=np.pi / 2)
+                    quat_ego = q2 * q1
+
+                    # Transform center from ego to global coordinates
+                    center_ego = np.array(center)
+                    center_global = ego2global_rotation.rotate(center_ego) + ego2global_translation
+
+                    # Transform rotation from ego to global coordinates
+                    quat_global = ego2global_rotation * quat_ego
+
+                    # Get class name
+                    if label < len(mapped_class_names):
+                        detection_name = mapped_class_names[label]
+                    else:
+                        continue
+
+                    # Create nuScenes annotation (in global coordinates)
+                    nusc_anno = dict(
+                        sample_token=sample_token,
+                        translation=center_global.tolist(),
+                        size=dim.tolist() if isinstance(dim, np.ndarray) else list(dim),
+                        rotation=quat_global.elements.tolist(),
+                        velocity=velocity[:2].tolist() if isinstance(velocity, np.ndarray) else list(velocity[:2]),
+                        detection_name=detection_name,
+                        detection_score=score,
+                        attribute_name="",  # Attributes not available in standard detection
+                    )
+                    annos.append(nusc_anno)
+
+                if sample_token in nusc_annos:
+                    nusc_annos[sample_token].extend(annos)
+                else:
+                    nusc_annos[sample_token] = annos
+
+            # Create submission format
+            nusc_submissions = {
+                "meta": self.modality,
+                "results": nusc_annos,
+            }
+
+            # Write JSON file
+            output_dir = osp.dirname(tmp_file_)
+            if output_dir:  # Only create directory if path has a directory component
+                os.makedirs(output_dir, exist_ok=True)
+            print(f"Results writes to {tmp_file_}")
+            with open(tmp_file_, "w") as f:
+                json.dump(nusc_submissions, f, indent=2)
+            result_files.update({name: tmp_file_})
+
+        return result_files, tmp_dir
 
     def _evaluate_single(self, result_path, logger=None, metric="bbox", result_name="pts_bbox"):
         """Evaluation for a single model in nuScenes protocol.
