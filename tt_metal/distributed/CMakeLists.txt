@@ -31,16 +31,9 @@ if(NOT DEFINED ENABLE_DISTRIBUTED)
     set(ENABLE_DISTRIBUTED OFF)
 endif()
 
-# Include centralized MPI configuration
-# This sets ULFM_PREFIX with appropriate defaults
-include(${CMAKE_SOURCE_DIR}/cmake/mpi-config.cmake)
-
-# Configure MPI library support using centralized logic
-# This handles:
-# 1. Detection of custom ULFM MPI (Ubuntu) or System MPI (Fedora)
-# 2. Setup of OpenMPI::MPI target
-# 3. Setting USE_MPI and TT_METAL_USING_ULFM variables
-tt_configure_mpi(${ENABLE_DISTRIBUTED} USE_MPI)
+# MPI is configured in parent scope (tt_metal/CMakeLists.txt) before this subdirectory
+# Variables USE_MPI, TT_METAL_USING_ULFM, TT_METAL_MPI_LIB_DIR, and OpenMPI::MPI target
+# are inherited from parent scope
 
 # Add appropriate source files based on MPI configuration
 if(NOT ENABLE_DISTRIBUTED)

@@ -26,6 +26,7 @@ endif()
 function(tt_configure_mpi enable_distributed use_mpi_out_var)
     set(${use_mpi_out_var} FALSE PARENT_SCOPE)
     set(TT_METAL_USING_ULFM FALSE PARENT_SCOPE)
+    set(TT_METAL_MPI_LIB_DIR "" PARENT_SCOPE)
 
     # Early exit if distributed compute is disabled
     if(NOT ${enable_distributed})
@@ -43,6 +44,7 @@ function(tt_configure_mpi enable_distributed use_mpi_out_var)
     if(EXISTS "${ULFM_PREFIX}/lib/libmpi.so.40")
         message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
         set(TT_METAL_USING_ULFM TRUE PARENT_SCOPE)
+        set(TT_METAL_MPI_LIB_DIR "${ULFM_PREFIX}/lib" PARENT_SCOPE)
         set(${use_mpi_out_var} TRUE PARENT_SCOPE)
 
         add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
@@ -66,6 +68,17 @@ function(tt_configure_mpi enable_distributed use_mpi_out_var)
     endif()
 
     set(${use_mpi_out_var} TRUE PARENT_SCOPE)
+
+    # Extract MPI library directory for RPATH
+    # This is needed when BUILD_WITH_INSTALL_RPATH=TRUE so tests can find libmpi.so
+    if(MPI_C_LIBRARIES)
+        list(GET MPI_C_LIBRARIES 0 _first_mpi_lib)
+        if(_first_mpi_lib AND NOT _first_mpi_lib MATCHES "^-")
+            get_filename_component(_mpi_lib_dir "${_first_mpi_lib}" DIRECTORY)
+            set(TT_METAL_MPI_LIB_DIR "${_mpi_lib_dir}" PARENT_SCOPE)
+            message(STATUS "MPI library directory: ${_mpi_lib_dir}")
+        endif()
+    endif()
 
     # Check for OpenMPI version and warn if < 5 (missing ULFM)
     if(MPI_C_LIBRARY_VERSION_STRING MATCHES "Open MPI")

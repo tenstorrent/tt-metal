@@ -304,6 +304,12 @@ add_subdirectory(llrt)
 add_subdirectory(tools)
 add_subdirectory(impl)
 add_subdirectory(detail)
+
+# Configure MPI before distributed subdirectory so variables are available in both scopes
+# This sets USE_MPI, TT_METAL_USING_ULFM, TT_METAL_MPI_LIB_DIR, and creates OpenMPI::MPI target
+include(mpi-config)
+tt_configure_mpi(${ENABLE_DISTRIBUTED} USE_MPI)
+
 add_subdirectory(distributed)
 
 # Output library directly to build/lib (not build/lib64) for CI tar artifacts
@@ -319,17 +325,10 @@ set_target_properties(
 # Build INSTALL_RPATH - $ORIGIN must come first for RPM's brp-check-rpaths
 set(TT_METAL_INSTALL_RPATH "$ORIGIN")
 
-if(TT_METAL_USING_ULFM)
-    # Ubuntu builds with custom ULFM: Add the custom path after $ORIGIN
-    list(APPEND TT_METAL_INSTALL_RPATH "${ULFM_PREFIX}/lib")
-elseif(TARGET OpenMPI::MPI)
-    # System MPI: Extract library directory from MPI target for RPATH
-    # This is needed because MPI libs may be in non-standard paths (e.g., /usr/lib64/openmpi/lib)
-    get_target_property(_mpi_lib_location OpenMPI::MPI IMPORTED_LOCATION)
-    if(_mpi_lib_location)
-        get_filename_component(_mpi_lib_dir "${_mpi_lib_location}" DIRECTORY)
-        list(APPEND TT_METAL_INSTALL_RPATH "${_mpi_lib_dir}")
-    endif()
+# Add MPI library directory to RPATH so tests can find libmpi.so at runtime
+# TT_METAL_MPI_LIB_DIR is set by cmake/mpi-config.cmake for both ULFM and system MPI
+if(TT_METAL_MPI_LIB_DIR)
+    list(APPEND TT_METAL_INSTALL_RPATH "${TT_METAL_MPI_LIB_DIR}")
 endif()
 
 # Use BUILD_WITH_INSTALL_RPATH=TRUE so library has correct RPATH at build time.
