@@ -482,7 +482,30 @@ class TTNNWhisperAttention(TTNNModule):
                     {"cache_position": kwargs.get("cache_position")},
                 )
 
-        # SDPA
+        # SDPA with query padding for KV cache
+        # print(f"Shape of query before SDPA: {query.shape}")  # --- IGNORE ---
+        # print(f"Shape of key before SDPA: {key.shape}")  # --- IGNORE ---
+        # print(f"Shape of value before SDPA: {value.shape}")  # --- IGNORE ---
+
+        # Pad query if needed for causal SDPA with cache
+        original_q_len = query.shape[2]
+        kv_len = key.shape[2]
+        use_causal = self.is_causal and not is_cross
+
+        if use_causal and original_q_len < kv_len:
+            # Pad query: [B, H, q_len, D] -> [B, H, kv_len, D]
+            pad_len = kv_len - original_q_len
+            # Create zero padding on device
+            pad_shape = (query.shape[0], query.shape[1], pad_len, query.shape[3])
+            zero_pad = ttnn.zeros(
+                pad_shape,
+                device=query.device(),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=query.dtype,
+            )
+            query = ttnn.concat([zero_pad, query], dim=2)
+
         attn_out = self.sdpa(
             self,
             query,
@@ -494,5 +517,11 @@ class TTNNWhisperAttention(TTNNModule):
             is_causal=self.is_causal and not is_cross,
             transpose_output=True,
         )
+
+        # Slice output if query was padded
+        if use_causal and original_q_len < kv_len:
+            # Slice: [B, kv_len, H, D] -> [B, q_len, H, D]
+            attn_out = attn_out[:, -original_q_len:, :, :]
+
         attn_out = ttnn.reshape(attn_out.to_ttnn, (bsz, tgt_len, self.embed_dim))
         return self.out_proj(attn_out), None, past_key_value
