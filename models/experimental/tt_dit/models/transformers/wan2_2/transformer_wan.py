@@ -117,6 +117,16 @@ class WanTransformerBlock:
             packer_l1_acc=True,
         )
 
+        # NOTE: This really should be FP32 acc but there's an L1 OOM issue in distributed LN,
+        # which we're using to work around the large LN hang.
+        self.layernorm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
@@ -204,10 +214,8 @@ class WanTransformerBlock:
             shifted_temb_1BTD, 6, dim=2
         )
 
-        spatial_normed_1BND = self.norm1(
-            spatial_1BND, dynamic_weight=(1.0 + scale_msa_1B1D), dynamic_bias=shift_msa_1B1D
-        )
-        # spatial_normed_1BND = spatial_normed_1BND * (1.0 + scale_msa_1B1D) + shift_msa_1B1D
+        spatial_normed_1BND = self.norm1(spatial_1BND, compute_kernel_config=self.layernorm_compute_kernel_config)
+        spatial_normed_1BND = spatial_normed_1BND * (1.0 + scale_msa_1B1D) + shift_msa_1B1D
 
         # Self attention on spatial
         spatial_attn_1BND = self.attn1(
@@ -224,7 +232,7 @@ class WanTransformerBlock:
         spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_attn_1BND, gate_msa_1B1D)
 
         # Cross attention on prompt
-        spatial_normed_1BND = self.norm2(spatial_1BND)
+        spatial_normed_1BND = self.norm2(spatial_1BND, compute_kernel_config=self.layernorm_compute_kernel_config)
 
         attn_output_1BND = self.attn2(
             spatial_1BND=spatial_normed_1BND,
@@ -234,11 +242,9 @@ class WanTransformerBlock:
         spatial_1BND = spatial_1BND + attn_output_1BND
 
         # Feed Forward
-        spatial_normed_1BND = self.norm3(
-            spatial_1BND, dynamic_weight=(1.0 + c_scale_msa_1B1D), dynamic_bias=c_shift_msa_1B1D
-        )
+        spatial_normed_1BND = self.norm3(spatial_1BND, compute_kernel_config=self.layernorm_compute_kernel_config)
 
-        # spatial_normed_1BND = spatial_normed_1BND * (1 + c_scale_msa_1B1D) + c_shift_msa_1B1D
+        spatial_normed_1BND = spatial_normed_1BND * (1 + c_scale_msa_1B1D) + c_shift_msa_1B1D
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(

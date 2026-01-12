@@ -224,6 +224,8 @@ class DistributedRMSNorm(Module):
 class DistributedLayerNorm(Module):
     """
     Implements LayerNorm on an activation sharded on the reduction dimension.
+
+    Requires gamma and beta, which will be created if not provided.
     """
 
     def __init__(
@@ -247,6 +249,7 @@ class DistributedLayerNorm(Module):
         self.ccl_manager = ccl_manager
         self.mesh_width = tuple(mesh_device.shape)[mesh_axis]
         self.TILE_SIZE = 32
+        self.workaround = not (norm_elementwise_affine and bias)
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -263,68 +266,72 @@ class DistributedLayerNorm(Module):
 
         self.weight = (
             Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
-            if self.norm_elementwise_affine
+            if norm_elementwise_affine or self.workaround
             else None
         )
         self.bias = (
             Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
-            if self.use_bias
+            if (norm_elementwise_affine and bias) or self.workaround
             else None
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
         bias = state.pop("bias", None)
-        assert (weight is not None) == self.norm_elementwise_affine
-        assert (bias is not None) == self.use_bias
 
-        if self.norm_elementwise_affine:
+        if self.workaround:
+            # TODO: make logging less noisy
+            # logger.debug(
+            #     "DistributedLayerNorm initialized with norm_elementwise_affine=False. Creating gamma and beta tensors to meet op requirements."
+            # )
+
+            assert self.norm_elementwise_affine == (weight is not None)
+            assert self.use_bias == (bias is not None)
+
+            if weight is None:
+                weight = torch.ones(self.embedding_dim)
+            if bias is None:
+                bias = torch.zeros(self.embedding_dim)
+
+        if weight is not None:
             state["weight"] = (
                 weight.reshape(self.mesh_width, -1, self.TILE_SIZE)
                 .permute(1, 0, 2)
                 .reshape(-1, self.TILE_SIZE * self.mesh_width)
             )
 
-        if self.use_bias:
+        if bias is not None:
             state["bias"] = (
                 bias.reshape(self.mesh_width, -1, self.TILE_SIZE)
                 .permute(1, 0, 2)
                 .reshape(-1, self.TILE_SIZE * self.mesh_width)
             )
 
-    def forward(
-        self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None
-    ) -> ttnn.Tensor:
-        assert (dynamic_weight is None) == (
-            dynamic_bias is None
-        ), "dynamic_weight and dynamic_bias must be either both provided or both None"
-        if dynamic_weight is not None:
-            assert (
-                not self.norm_elementwise_affine
-            ), "Module must not have weight and bias parameters when dynamic_weight and dynamic_bias are provided"
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+        assert (
+            self.weight is not None and self.bias is not None
+        ), "weight and bias must be initialized before calling forward"
+        stats = ttnn.layer_norm_pre_all_gather(x)
 
-            weight = dynamic_weight
-            bias = dynamic_bias
-        else:
-            weight = self.weight.data if self.weight is not None else None
-            bias = self.bias.data if self.bias is not None else None
+        if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+            stats = ttnn.experimental.all_gather_async(
+                stats,
+                dim=len(x.shape) - 1,
+                cluster_axis=self.mesh_axis,
+                mesh_device=x.device(),
+                topology=self.ccl_manager.topology,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
+                persistent_output_tensor=self.ccl_manager.get_ag_ping_pong_buffer(
+                    stats.shape, len(stats.shape) - 1, self.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+            )
 
-        stats = ttnn.experimental.dit_layernorm_pre_allgather(
-            x,
-            compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-        )
-
-        stats = self.ccl_manager.all_gather_persistent_buffer(
-            stats,
-            dim=len(x.shape) - 1,
-            mesh_axis=self.mesh_axis,
-        )
-
-        x = ttnn.experimental.dit_layernorm_post_allgather(
+        x = ttnn.layer_norm_post_all_gather(
             x,
             stats,
-            weight=weight,
-            bias=bias,
+            weight=self.weight.data if self.weight is not None else None,
+            bias=self.bias.data if self.bias is not None else None,
             epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
         )
