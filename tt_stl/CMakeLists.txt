@@ -71,26 +71,40 @@ set_target_properties(
             "${CMAKE_BINARY_DIR}/lib"
 )
 
-# Set BUILD_RPATH for build-time linking (crucial for Fedora RUNPATH behavior)
-# This mimics tt_metal's approach for consistent behavior across Ubuntu and Fedora
-tt_set_library_rpath(tt_stl)
-
-# Set INSTALL_RPATH for the installed library
-# $ORIGIN must come first for RPM's brp-check-rpaths
-# Using BUILD_WITH_INSTALL_RPATH=FALSE ensures BUILD_RPATH is used during development
-# and INSTALL_RPATH is only applied after cmake --install
+# Set RPATH properties BEFORE install() calls
+# Using BUILD_WITH_INSTALL_RPATH=TRUE embeds INSTALL_RPATH at build time, so install(FILES)
+# copies the library with the correct RPATH already set (no post-install fixup needed).
+# This works for tt_stl because all its dependencies are INTERFACE (header-only),
+# so it doesn't need BUILD_RPATH to find libraries at build time.
 set_target_properties(
     tt_stl
     PROPERTIES
-        # Prevent build paths from leaking into install RPATH
         BUILD_WITH_INSTALL_RPATH
-            FALSE
-        # Don't let CMake auto-append paths
+            TRUE
         INSTALL_RPATH_USE_LINK_PATH
             FALSE
         INSTALL_RPATH
             "$ORIGIN"
 )
+
+# Install target to Metalium export set (required because tt_metal depends on tt_stl)
+# Uses install(FILES) workaround for CMake's LIBRARY_OUTPUT_DIRECTORY path resolution bug
+if(TT_INSTALL)
+    # Export and headers only - library installed separately due to CMake bug
+    install(
+        TARGETS
+            tt_stl
+        EXPORT Metalium
+        FILE_SET
+        api
+            DESTINATION COMPONENT
+            metalium-dev
+    )
+
+    # Install library using generator expression (works around CMake path resolution bug)
+    # Since BUILD_WITH_INSTALL_RPATH=TRUE, the library already has $ORIGIN RPATH embedded
+    install(FILES $<TARGET_FILE:tt_stl> DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
+endif()
 
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(tests)
