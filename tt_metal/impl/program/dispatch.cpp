@@ -338,46 +338,47 @@ uint32_t finalize_kernel_bins(
                 kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
-            for (uint32_t binary_idx = 0; binary_idx < num_binaries; binary_idx++) {
+            for (uint32_t i = 0; i < num_binaries; i++) {
                 uint32_t kernel_text_offset = 0;
                 if (hal.get_core_kernel_stored_in_config_buffer(programmable_core_type)) {
                     kernel_text_offset = offset;
-                    offset += binaries[binary_idx]->get_packed_size();
+                    offset += binaries[i]->get_packed_size();
                     offset = tt::align(offset, l1_alignment);
                 } else {
-                    kernel_text_offset = binaries[binary_idx]->get_text_addr();
+                    kernel_text_offset = binaries[i]->get_text_addr();
                 }
-                // uint32_t processor_index = hal.get_processor_index(
-                //     programmable_core_type, kernel->get_kernel_processor_class(),
-                //     kernel->get_kernel_processor_type(i));
-                // kg->kernel_text_offsets[processor_index] = kernel_text_offset;
-                // kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
-                if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-                    for (uint32_t j = kernel->get_kernel_processor_type(binary_idx);
-                         j < kernel->get_kernel_processor_type(binary_idx) +
-                                 std::get<experimental::QuasarDataMovementConfig>(kernel->config())
-                                     .num_processors_per_cluster;
-                         j++) {
-                        const uint32_t processor_index =
-                            hal.get_processor_index(programmable_core_type, kernel->get_kernel_processor_class(), j);
-                        kg->kernel_text_offsets[processor_index] = kernel_text_offset;
-                        kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
-                    }
-                } else {
-                    const uint32_t processor_index = hal.get_processor_index(
-                        programmable_core_type,
-                        kernel->get_kernel_processor_class(),
-                        kernel->get_kernel_processor_type(binary_idx));
-                    kg->kernel_text_offsets[processor_index] = kernel_text_offset;
-                    kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
-                }
+                uint32_t processor_index = hal.get_processor_index(
+                    programmable_core_type, kernel->get_kernel_processor_class(), kernel->get_kernel_processor_type(i));
+                kg->kernel_text_offsets[processor_index] = kernel_text_offset;
+                kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
+                // if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                //     for (uint32_t j = kernel->get_kernel_processor_type(binary_idx);
+                //          j < kernel->get_kernel_processor_type(binary_idx) +
+                //                  std::get<experimental::QuasarDataMovementConfig>(kernel->config())
+                //                      .num_processors_per_cluster;
+                //          j++) {
+                //         const uint32_t processor_index =
+                //             hal.get_processor_index(programmable_core_type, kernel->get_kernel_processor_class(), j);
+                //         kg->kernel_text_offsets[processor_index] = kernel_text_offset;
+                //         log_info(tt::LogMetal, "kernel text offset for processor {} is {}", processor_index,
+                //         kernel_text_offset); kernel_config.kernel_text_offset()[processor_index] =
+                //         kernel_text_offset;
+                //     }
+                // } else {
+                //     const uint32_t processor_index = hal.get_processor_index(
+                //         programmable_core_type,
+                //         kernel->get_kernel_processor_class(),
+                //         kernel->get_kernel_processor_type(binary_idx));
+                //     kg->kernel_text_offsets[processor_index] = kernel_text_offset;
+                //     kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
+                // }
 
                 hal.set_iram_text_size(
                     kg->launch_msg.view(),
                     programmable_core_type,
                     kernel->get_kernel_processor_class(),
-                    kernel->get_kernel_processor_type(binary_idx),
-                    binaries[binary_idx]->get_text_size());
+                    kernel->get_kernel_processor_type(i),
+                    binaries[i]->get_text_size());
             }
         }
         max_offset = std::max(offset, max_offset);
