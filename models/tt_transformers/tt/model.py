@@ -552,7 +552,8 @@ class Transformer(LightweightModule):
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
-            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+            last_token_chunk_index = (get_last_token // 32) * 32
+            x = ttnn.slice(x, (0, 0, last_token_chunk_index, 0), (1, 1, last_token_chunk_index + 32, x.shape[-1]))
 
         # Output norm
         x = self.norm(x, mode=mode)

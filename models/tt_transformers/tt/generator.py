@@ -171,13 +171,13 @@ class Generator:
         page_table=None,
         kv_cache=None,
         model_id=-1,
+        last_token_idx=None,
     ):
         host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
-
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
@@ -187,6 +187,7 @@ class Generator:
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
+            get_last_token=last_token_idx,
         )
         logger.info("Done Compiling Model")
 
@@ -200,6 +201,7 @@ class Generator:
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
+            get_last_token=last_token_idx,
         )
         ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Prefill Trace")
@@ -224,6 +226,7 @@ class Generator:
                 page_table=page_table,
                 kv_cache=kv_cache,
                 model_id=model_id,
+                last_token_idx=last_token_idx,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
@@ -368,11 +371,6 @@ class Generator:
                     num_cached_tokens=num_cached_tokens,
                     **local_kwargs,
                 )
-            if enable_trace_current_prompt:
-                # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
-                # We need to do this here, because we can't do this part in forward() if we have trace enabled
-                # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
-                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
 
             # We have to dispatch copy to host to avoid corruption by the next user's prefill
             out_list.append(logits.cpu(blocking=False))
@@ -493,7 +491,7 @@ class Generator:
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
-                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                    get_last_token=last_token_idx_in_chunk,
                     kv_cache=kv_cache,
                 )
 
@@ -521,7 +519,7 @@ class Generator:
                 rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=(last_token_idx // 32) * 32,
+                get_last_token=last_token_idx,
                 kv_cache=kv_cache,
             )
             return tt_logits
@@ -850,7 +848,7 @@ class Generator:
             vision_tokens,
             page_table=tt_page_table,
             kv_cache=kv_cache,
-            get_last_token=(last_token_idx // 32) * 32,
+            get_last_token=last_token_idx,
             cross_page_table=tt_cross_page_table,
             text_only_inference=text_only_inference,
         )
