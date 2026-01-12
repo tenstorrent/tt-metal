@@ -134,7 +134,8 @@ CoreRangeSet get_worker_grid(
                 "Native L1 sharding using input tensor A grid for worker grid {}",
                 input_tensor_a.shard_spec()->grid.str());
             return get_tensor_grid(input_tensor_a);
-        } else if (input_tensor_b && input_tensor_b->is_sharded()) {
+        }
+        if (input_tensor_b && input_tensor_b->is_sharded()) {
             log_debug(
                 tt::LogOp,
                 "Native L1 sharding using input tensor B grid for worker grid {}",
