@@ -7,9 +7,11 @@ import ttnn
 
 from models.experimental.grok.tt.grok_model import TtTransformer
 from models.experimental.grok.tt.model_config import TtModelArgs
+import pytest
 
 
-def test_load_dummy_weights(t3k_mesh_device):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_load_dummy_weights(mesh_device):
     # Set to incorrect paths to test dummy weight loading
 
     backup_cache_path = TtModelArgs.DEFAULT_CACHE_PATH
@@ -21,11 +23,11 @@ def test_load_dummy_weights(t3k_mesh_device):
         TtModelArgs.DEFAULT_TOKENIZER_PATH = "this/path/does/not/exist"
         TtModelArgs.DEFAULT_CKPT_DIR = "this/path/does/not/exist"
 
-        model_args = TtModelArgs(t3k_mesh_device, dummy_weights=True)
+        model_args = TtModelArgs(mesh_device, dummy_weights=True)
         model_args.n_layers = 1
         state_dict = model_args.load_state_dict()
         tt_model = TtTransformer(
-            mesh_device=t3k_mesh_device,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             args=model_args,
             layers=list(range(model_args.n_layers)),

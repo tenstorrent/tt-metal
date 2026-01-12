@@ -102,11 +102,11 @@ void validate_qkv_shapes(
     auto [batch_num_value, value_heads, seq_len_value, embedding_dim_value] =
         value->get_value().logical_shape().to_array_4D();
 
-    if (batch_num != batch_num_key || batch_num != batch_num_value || seq_len != seq_len_key ||
-        seq_len != seq_len_value || embedding_dim != embedding_dim_key || embedding_dim != embedding_dim_value) {
+    if (batch_num != batch_num_key || batch_num != batch_num_value || seq_len_key != seq_len_value ||
+        embedding_dim != embedding_dim_key || embedding_dim != embedding_dim_value) {
         throw std::invalid_argument(fmt::format(
-            "query, key, and value must have the same shape, except for the number of heads. Got shapes: "
-            "query={}, key={}, value={}",
+            "Query, key, and value must have matching batch_num and embedding_dim. Key and value must have matching "
+            "seq_len. Got shapes: query={}, key={}, value={}",
             query->get_value().logical_shape(),
             key->get_value().logical_shape(),
             value->get_value().logical_shape()));

@@ -298,7 +298,7 @@ SliceRmShardedProgramFactory::cached_program_t SliceRmShardedProgramFactory::cre
 
 void SliceRmShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& args,
+    const operation_attributes_t& /*args*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto* src_buffer_a = tensor_args.input.buffer();
