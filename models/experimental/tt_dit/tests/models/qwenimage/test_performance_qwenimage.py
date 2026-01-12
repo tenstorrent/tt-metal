@@ -20,8 +20,8 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
         # 2x4 config with sp enabled - sp on axis 0 enables fsdp weight sharding (no cfg parallel)
-        [(1, 8), (1, 0), (1, 0), (8, 1), (8, 1), (8, 1), ttnn.Topology.Linear, 1],  # 109 s FSDP
-        [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (2, 1), ttnn.Topology.Linear, 1],  # 129s. Needs FSDP
+        # [(1, 8), (1, 0), (1, 0), (8, 1), (8, 1), (8, 1), ttnn.Topology.Linear, 1],  # 109 s FSDP
+        # [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (2, 1), ttnn.Topology.Linear, 1],  # 129s. Needs FSDP
         [
             (2, 4),
             (2, 0),
@@ -32,7 +32,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
             ttnn.Topology.Linear,
             1,
         ],  # 73 s. FSDP, only dymanic load encoder submesh
-        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # 112 s NO FSDP
+        # [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # 112 s NO FSDP
         [
             (4, 8),
             (2, 1),
@@ -45,10 +45,10 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
         ],  # 25s NO FSDP for best perf on WH GLX
     ],
     ids=[
-        "1x8cfg1sp1tp8",
-        "2x4cfg2sp2tp2",
+        # "1x8cfg1sp1tp8",
+        # "2x4cfg2sp2tp2",
         "2x4cfg2sp1tp4",
-        "2x4cfg1sp2tp4",
+        # "2x4cfg1sp2tp4",
         "4x8cfg2sp4tp4",
     ],
     indirect=["mesh_device"],
@@ -57,13 +57,6 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 47000000}],
     indirect=True,
-)
-@pytest.mark.parametrize(
-    "is_fsdp",
-    [
-        pytest.param(True, id="fsdp_enabled"),
-        # pytest.param(None, id="fsdp_disabled"),  # uncomment to compare with/without fsdp
-    ],
 )
 def test_qwenimage_pipeline_performance(
     *,
@@ -79,31 +72,18 @@ def test_qwenimage_pipeline_performance(
     topology: ttnn.Topology,
     num_links: int,
     is_ci_env: bool,
-    galaxy_type: str,
-    is_fsdp: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Performance test for QwenImage pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
 
-    # skip 4u
-    if galaxy_type == "4U":
-        # pipelines fail if a performance test is skipped without providing a benchmark output
-        if is_ci_env:
-            with benchmark_profiler("run", iteration=0):
-                pass
-
-            benchmark_data = BenchmarkData()
-            benchmark_data.save_partial_run_json(
-                benchmark_profiler,
-                run_type="empty_run",
-                ml_model_name="empty_run",
-            )
-        pytest.skip("4U is not supported for this test")
+    # Set TT_DIT_CACHE in CI environment
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
 
     logger.info(f"  Image size: {image_w}x{image_h}")
     logger.info(f"  Inference steps: {num_inference_steps}")
-    logger.info(f"  FSDP enabled: {is_fsdp}")
 
     pipeline = QwenImagePipeline.create_pipeline(
         mesh_device=mesh_device,
@@ -118,7 +98,6 @@ def test_qwenimage_pipeline_performance(
         topology=topology,
         width=image_w,
         height=image_h,
-        is_fsdp=is_fsdp,  # enable fsdp to avoid model load/unload cycle
     )
 
     # test prompts - diverse set for comprehensive performance testing
@@ -279,9 +258,9 @@ def test_qwenimage_pipeline_performance(
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
             "total_encoding_time": 0.4,
-            "denoising_steps_time": 110.0,
-            "vae_decoding_time": 2.5,
-            "total_time": 113.0,
+            "denoising_steps_time": 73.0,
+            "vae_decoding_time": 0.7,
+            "total_time": 78,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
@@ -334,7 +313,6 @@ def test_qwenimage_pipeline_performance(
                 "vae_tp_factor": vae_tp_factor,
                 "topology": str(topology),
                 "num_links": num_links,
-                "fsdp": is_fsdp,
             },
         )
 

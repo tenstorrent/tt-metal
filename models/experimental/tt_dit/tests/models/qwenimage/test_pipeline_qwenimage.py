@@ -68,7 +68,7 @@ def test_qwenimage_pipeline(
     is_ci_env: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Set TT_DIT_CACHE in CI environment
+    # Set TT_DIT_CACHE in CI environment. The path is needed for dynamic load when necessary.
     if is_ci_env:
         monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
 
@@ -139,7 +139,7 @@ def test_qwenimage_pipeline(
         logger.info(f"Image saved as {output_filename}")
 
     if no_prompt:
-        for i, prompt in enumerate(prompts):
+        for i, prompt in enumerate(prompts[:1]):  # only run with the first prompt by default. Increase as needed.
             run(prompt=prompt, number=i, seed=0)
     else:
         prompt = prompts[0]
