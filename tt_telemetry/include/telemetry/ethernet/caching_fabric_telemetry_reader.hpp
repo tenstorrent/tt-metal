@@ -45,8 +45,8 @@ public:
     CachingFabricTelemetryReader(
         tt::ChipId chip_id,
         uint32_t channel,
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::unique_ptr<tt::tt_metal::Hal>& hal);
 
     CachingFabricTelemetryReader(const CachingFabricTelemetryReader&) = delete;
     CachingFabricTelemetryReader& operator=(const CachingFabricTelemetryReader&) = delete;

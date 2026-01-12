@@ -2310,7 +2310,11 @@ FORCE_INLINE void initialize_fabric_telemetry() {
     const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
 
     // Zero the entire telemetry structure to clear any garbage values
-    memset(const_cast<FabricTelemetry*>(fabric_telemetry), 0, sizeof(FabricTelemetry));
+    // Use volatile-aware loop instead of memset to preserve hardware access semantics
+    volatile std::uint8_t* telemetry_bytes = reinterpret_cast<volatile std::uint8_t*>(fabric_telemetry);
+    for (std::size_t i = 0; i < sizeof(FabricTelemetry); ++i) {
+        telemetry_bytes[i] = 0;
+    }
 
     // Populate static_info fields with compile-time topology information
     fabric_telemetry->static_info.mesh_id = routing_table_l1->my_mesh_id;

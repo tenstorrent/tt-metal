@@ -11,8 +11,9 @@
  */
 
  #include <chrono>
- #include <optional>
- #include <string>
+#include <deque>
+#include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -22,6 +23,7 @@
 
 #include <telemetry/metric.hpp>
 #include <topology/topology.hpp>
+#include <utils/monotonic_queue.hpp>
 
 namespace tt::scaleout_tools::fsd::proto {
 class FactorySystemDescriptor;
@@ -435,9 +437,10 @@ private:
     bool first_update_ = true;
 };
 
-class FabricTxPeakBandwidthMetric : public DoubleMetric {
+// Active bandwidth: Bandwidth calculated over non-idle time (elapsed_active_cycles)
+class FabricTxActiveBandwidthMetric : public DoubleMetric {
 public:
-    FabricTxPeakBandwidthMetric(
+    FabricTxActiveBandwidthMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
@@ -466,9 +469,45 @@ private:
     bool first_update_ = true;
 };
 
-class FabricRxPeakBandwidthMetric : public DoubleMetric {
+// Max bandwidth: Maximum bandwidth observed over a moving window of recent samples
+// Uses monotonic queue for O(1) amortized max retrieval
+class FabricTxMaxBandwidthMetric : public DoubleMetric {
 public:
-    FabricRxPeakBandwidthMetric(
+    FabricTxMaxBandwidthMetric(
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        uint32_t channel,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
+        std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader = nullptr,
+        tt::ARCH arch = tt::ARCH::Invalid);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
+
+private:
+    static constexpr size_t MOVING_WINDOW_SIZE = 10;
+
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    uint32_t channel_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
+    std::optional<PhysicalLinkInfo> link_info_;
+    std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader_;
+    tt::ARCH arch_;
+
+    uint64_t prev_words_ = 0;
+    uint64_t prev_cycles_ = 0;
+    bool first_update_ = true;
+    MonotonicQueue<double> mono_queue_{MOVING_WINDOW_SIZE};
+};
+
+class FabricRxActiveBandwidthMetric : public DoubleMetric {
+public:
+    FabricRxActiveBandwidthMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
@@ -495,6 +534,40 @@ private:
     uint64_t prev_words_ = 0;
     uint64_t prev_cycles_ = 0;
     bool first_update_ = true;
+};
+
+class FabricRxMaxBandwidthMetric : public DoubleMetric {
+public:
+    FabricRxMaxBandwidthMetric(
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        uint32_t channel,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
+        std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader = nullptr,
+        tt::ARCH arch = tt::ARCH::Invalid);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
+
+private:
+    static constexpr size_t MOVING_WINDOW_SIZE = 10;
+
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    uint32_t channel_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
+    std::optional<PhysicalLinkInfo> link_info_;
+    std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader_;
+    tt::ARCH arch_;
+
+    uint64_t prev_words_ = 0;
+    uint64_t prev_cycles_ = 0;
+    bool first_update_ = true;
+    MonotonicQueue<double> mono_queue_{MOVING_WINDOW_SIZE};
 };
 
 class FabricTxHeartbeatMetric : public UIntMetric {
@@ -576,9 +649,9 @@ void create_ethernet_metrics(
     std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    std::unique_ptr<tt::umd::Cluster>& cluster,
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
     const std::unique_ptr<TopologyHelper>& topology_translation,
-    const std::unique_ptr<tt::tt_metal::Hal>& hal,
+    std::unique_ptr<tt::tt_metal::Hal>& hal,
     const std::unordered_map<tt::ChipId, std::shared_ptr<CachingARCTelemetryReader>>& arc_telemetry_reader_by_chip_id,
     bool mmio_only = false);

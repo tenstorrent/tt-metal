@@ -16,8 +16,8 @@
 CachingFabricTelemetryReader::CachingFabricTelemetryReader(
     tt::ChipId chip_id,
     uint32_t channel,
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
-    const std::unique_ptr<tt::tt_metal::Hal>& hal) :
+    std::unique_ptr<tt::umd::Cluster>& cluster,
+    std::unique_ptr<tt::tt_metal::Hal>& hal) :
     chip_id_(chip_id), channel_(channel), cluster_(cluster.get()), hal_(hal.get()) {
     TT_FATAL(cluster_ != nullptr, "CachingFabricTelemetryReader: cluster cannot be null");
     TT_FATAL(hal_ != nullptr, "CachingFabricTelemetryReader: hal cannot be null");
