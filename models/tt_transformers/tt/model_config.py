@@ -480,11 +480,6 @@ class ModelArgs:
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
         self.tile_size = 32
-
-        # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
-        # We currently disable this fusion of ops for vision-capable models
-        self.use_qk_fused = not self.is_vision()
-
         self.is_70b = False
         self.is_90b = False
         self.fuse_qkv = False
@@ -638,6 +633,10 @@ class ModelArgs:
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
         self.processor = None if dummy_weights else self.create_processor()
+
+        # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
+        # We currently disable this fusion of ops for vision-capable models
+        self.use_qk_fused = not self.is_vision()
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
