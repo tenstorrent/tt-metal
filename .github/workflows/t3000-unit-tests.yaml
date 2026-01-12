@@ -28,6 +28,7 @@ on:
           - dits
           - deepseek
           - gpt-oss
+          - tttv2 modules
   schedule:
     - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
 
