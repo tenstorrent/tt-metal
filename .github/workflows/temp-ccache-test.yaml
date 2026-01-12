@@ -64,7 +64,7 @@ jobs:
           path: docker-job
 
       - name: Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -479,7 +479,7 @@ jobs:
           path: docker-job
 
       - name: Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
 
