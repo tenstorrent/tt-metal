@@ -44,13 +44,20 @@ using ttnn::distributed::MeshMapperConfig;
 tt::tt_metal::distributed::MeshWorkload get_workload(
     const ttnn::Tensor& inputA, tt::tt_metal::GlobalSemaphore& semaphore);
 int main() {
+    // Input Tensor Shape
     int M = 1024;
     int N = 128;
+
+    // Mesh Shape for N300. If you have more than one device, run export TT_VISIBLE_DEVICES="0" to make sure only one
+    // device is visible.
     auto mesh_shape = tt::tt_metal::distributed::MeshShape({1, 2});
+    // Enable fabric for kernels in a 1D Mesh. Fabric is disabled by default.
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     auto mesh_device =
         tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(mesh_shape));
     auto& command_queue = mesh_device->mesh_command_queue();
+
+    // Create Input Tensor
     std::vector<float> inputA_data(M * N, 1);
     ttnn::Shape shapeA = ttnn::Shape({M, N});
     auto inputA_host_buffer = tt::tt_metal::HostBuffer(std::move(inputA_data));
@@ -67,12 +74,13 @@ int main() {
                 MeshMapperConfig::Replicate(),
                 MeshMapperConfig::Shard(0),
             }});
-
     inputA = ttnn::distributed::distribute_tensor(inputA, *inputA_mesh_mapper, *mesh_device);
 
     const auto available_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, mesh_device->get_sub_device_ids().at(0));
+    // Create a semaphore that is shared across all devices in the mesh.
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), available_cores, 0);
+
     try {
         auto workload = get_workload(inputA, semaphore);
         tt::tt_metal::distributed::EnqueueMeshWorkload(command_queue, workload, true);
@@ -99,7 +107,7 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
             ttnn::ccl::get_physical_neighbor_from_physical_coord(inputA, coord, -1, tt::tt_fabric::Topology::Linear, 1);
         const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
 
-        log_info(
+        log_debug(
             tt::LogAlways,
             "Creating program for coord {}, {}. Forward = {}, Backward = {}",
             coord,
@@ -121,6 +129,8 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
             device_id,
             semaphore.address(),
         };
+
+        // Used by  FabricConnectionManager::build_from_args to make the connection.
         reader_rt_args.push_back(forward_coord.has_value());
         if (forward_coord.has_value()) {
             const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
@@ -128,7 +138,6 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, reader_rt_args);
         }
-
         reader_rt_args.push_back(backward_coord.has_value());
         if (backward_coord.has_value()) {
             const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
@@ -138,8 +147,6 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
         }
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel, tt::tt_metal::CoreRange{core, core}, reader_rt_args);
 
-        auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-        log_info(tt::LogOp, "Packet header size = {}, Runtime args = {}", packet_header_size, reader_rt_args);
         mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(coord), std::move(program));
         device_id++;
     }

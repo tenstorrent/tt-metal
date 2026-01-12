@@ -30,7 +30,6 @@ void kernel_main() {
     pkt_semaphore_hdr->to_noc_unicast_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, static_cast<uint32_t>(1)});  // increment 1
 
-    // Perform remote semaphore increment
     tt::tt_fabric::WorkerToFabricEdmSender cur_connection;
 
     // Device 0 has a forward connection to Device 1
@@ -41,6 +40,7 @@ void kernel_main() {
         cur_connection = fabric_connection.get_backward_connection();
     }
 
+    // Perform semaphore increment on the opposite device via fabric.
     cur_connection.wait_for_empty_write_slot();
     fabric_set_unicast_route<false>(pkt_semaphore_hdr, 1);
     cur_connection.send_payload_flush_blocking_from_address((uint32_t)pkt_semaphore_hdr, sizeof(PACKET_HEADER_TYPE));
