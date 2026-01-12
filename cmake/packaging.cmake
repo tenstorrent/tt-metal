@@ -334,8 +334,9 @@ include(CPack)
 # CMake install(TARGETS) Bug with LIBRARY_OUTPUT_DIRECTORY
 # --------------------------------------------------------
 # When LIBRARY_OUTPUT_DIRECTORY is set, CMake's install(TARGETS ... LIBRARY)
-# command fails to locate the library file on some systems (notably Ubuntu).
-# The error manifests as "file INSTALL cannot find <path>/libfoo.so".
+# command fails to locate the library file on some systems.
+# The error manifests as "file INSTALL cannot find <path>/libfoo.so"
+# even if the library file exists at the specified location.
 #
 # Root cause: CMake's internal path resolution for install(TARGETS) doesn't
 # properly account for LIBRARY_OUTPUT_DIRECTORY in all cases. On Fedora, a
