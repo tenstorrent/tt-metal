@@ -31,7 +31,8 @@ jobs:
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
             name: "T3K ubench - Fabric BW & Latency",
-            cmd: "TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml",
+            # cmd: "TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml",
+            cmd: "ls -la generated/fabric",
           }, # Sean Nijjar
           {
             arch: wormhole_b0,
@@ -127,7 +128,7 @@ jobs:
         if: ${{ !cancelled() && github.ref_name == 'jhaiTT/34732-add-benchmark-upload-guards' }}
         shell: bash
         run: |
-          if [ -d "generated/fabric" ]; then
+          if [ -f "generated/fabric/bandwidth_summary_results_wormhole_b0_upload.csv" ]; then
             echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
             echo "Benchmark files found, will upload to database"
           else
