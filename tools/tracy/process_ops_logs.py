@@ -349,24 +349,28 @@ def import_tracy_op_logs(
             assert opID in ops, f"Op time for op {opID} must present. OpID: {opID}, Name: {op['name']}"
             ops[opID]["host_time"] = op
 
-    parent_mask = df["special_parent_text"].str.contains("id:", na=False)
-    if parent_mask.any():
-        child_df = df[parent_mask].copy()
-        child_df["parentOpID"] = child_df["special_parent_text"].str.rsplit(":", n=1).str[-1].astype(int)
+    # Convert special_parent_text to string type to ensure .str accessor works
+    # This handles cases where the column might be inferred as float (e.g., all NaN values)
+    if "special_parent_text" in df.columns:
+        df["special_parent_text"] = df["special_parent_text"].fillna("").astype(str)
+        parent_mask = df["special_parent_text"].str.contains("id:", na=False)
+        if parent_mask.any():
+            child_df = df[parent_mask].copy()
+            child_df["parentOpID"] = child_df["special_parent_text"].str.rsplit(":", n=1).str[-1].astype(int)
 
-        # Only process children of ops we know about
-        child_df = child_df[child_df["parentOpID"].isin(ops)]
+            # Only process children of ops we know about
+            child_df = child_df[child_df["parentOpID"].isin(ops)]
 
-        if not child_df.empty:
-            # Aggregate durations by (parentOpID, name)
-            summary = child_df.groupby(["parentOpID", "name"])["exec_time_ns"].sum()
-            for (pID, name), total_ns in summary.items():
-                opData = ops[pID]
-                if "child_calls" not in opData:
-                    opData["child_calls"] = {}
-                cc = opData["child_calls"]
-                # Use name as key, add up total execution time
-                cc[name] = cc.get(name, 0) + int(total_ns)
+            if not child_df.empty:
+                # Aggregate durations by (parentOpID, name)
+                summary = child_df.groupby(["parentOpID", "name"])["exec_time_ns"].sum()
+                for (pID, name), total_ns in summary.items():
+                    opData = ops[pID]
+                    if "child_calls" not in opData:
+                        opData["child_calls"] = {}
+                    cc = opData["child_calls"]
+                    # Use name as key, add up total execution time
+                    cc[name] = cc.get(name, 0) + int(total_ns)
 
     return ops, signposts, traceReplays
 
