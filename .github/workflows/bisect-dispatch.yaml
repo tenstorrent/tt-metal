@@ -73,10 +73,10 @@ jobs:
 
           # Determine runs-on labels based on runner type
 
-          if [[ "$RUNNER_LABEL" == *"topology-6u"* ]]; then
-            # Galaxy/topology-6u runners require bare-metal (not cloud-virtual-machine)
+          if [[ "$RUNNER_LABEL" == *"topology-6u"* ]] || [[ "$RUNNER_LABEL" == "BH-LoudBox" ]]; then
+            # Galaxy/topology-6u runners and BH-LoudBox require bare-metal (not cloud-virtual-machine)
             RUNS_ON='["'$RUNNER_LABEL'", "in-service", "bare-metal"]'
-          elif [[ "$RUNNER_LABEL" =~ ^(N150|N300|P150|P100|config-t3000|BH-LoudBox)$ ]]; then
+          elif [[ "$RUNNER_LABEL" =~ ^(N150|N300|P150|P100|config-t3000)$ ]]; then
             # Standard single-card runners use cloud-virtual-machine
             RUNS_ON='["'$RUNNER_LABEL'", "in-service", "cloud-virtual-machine"]'
           else
