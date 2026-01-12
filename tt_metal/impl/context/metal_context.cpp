@@ -318,19 +318,19 @@ void MetalContext::initialize(
 
         // Launch async tasks for each device
         for (ChipId device_id : all_devices) {
-            futures.emplace_back(detail::async([this, device_id]() {
-                ClearNocData(device_id);
+            // futures.emplace_back(detail::async([this, device_id]() {
+            ClearNocData(device_id);
 
-                reset_cores(device_id);
+            reset_cores(device_id);
 
-                initialize_and_launch_firmware(device_id);
-            }));
+            initialize_and_launch_firmware(device_id);
+            // }));
         }
 
         // Wait for all async tasks to complete
-        for (auto& fut : futures) {
-            fut.wait();
-        }
+        // for (auto& fut : futures) {
+        //     fut.wait();
+        // }
     }
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
