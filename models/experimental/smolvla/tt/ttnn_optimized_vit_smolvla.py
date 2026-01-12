@@ -47,9 +47,10 @@ SMOLVLA_VISION_CONFIG = {
     "layer_norm_eps": 1e-6,
 }
 
-# Core grid for TT operations - optimized for 1024 patches
-# 1024 patches = 32x32, which divides well across 8x8 core grid
-CORE_GRID = ttnn.CoreGrid(y=8, x=8)
+# Core grid for TT operations
+# Blackhole (P150) uses 10x12 grid (120 cores)
+# 1024 patches = 32x32, divides across 10x12 for better utilization
+CORE_GRID = ttnn.CoreGrid(y=10, x=12)  # Blackhole optimized
 
 
 # ============================================================================

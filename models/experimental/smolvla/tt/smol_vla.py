@@ -35,6 +35,7 @@ import torch.nn.functional as F
 from PIL import Image
 from safetensors.torch import load_file as safetensors_load_file
 from transformers import AutoConfig, AutoProcessor
+import torchvision.transforms.functional as TF
 
 import ttnn
 from models.tt_transformers.tt.common import get_block_size, get_padded_prefill_len, num_blocks_in_seq
@@ -53,6 +54,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 class PerfCheckpoints:
     checkpoints: ClassVar[List[Dict[str, int]]] = None
+    enabled: ClassVar[bool] = False  # Disable by default for perf
 
     def __init__(self):
         self.times = {}
@@ -61,6 +63,8 @@ class PerfCheckpoints:
         self.present_keys_counter = {}
 
     def checkpoint(self, key):
+        if not self.enabled:
+            return  # Skip if disabled
         if key not in self.present_keys_counter:
             self.present_keys_counter[key] = 0
             new_key = f"{key}_{self.present_keys_counter[key]}"
@@ -413,7 +417,7 @@ def smolvla_patch_embeddings_tt(
         bias=proj_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.deallocate(pixel_values)
 
@@ -448,7 +452,7 @@ def smolvla_attention_tt(
         bias=qkv_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.reallocate(hidden_states)
 
@@ -467,7 +471,7 @@ def smolvla_attention_tt(
         key,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.deallocate(query)
     ttnn.deallocate(key)
@@ -484,7 +488,7 @@ def smolvla_attention_tt(
         value,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
@@ -502,7 +506,7 @@ def smolvla_attention_tt(
         bias=proj_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.deallocate(context_layer)
 
@@ -528,7 +532,7 @@ def smolvla_mlp_tt(
         bias=fc1_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
         activation="gelu",
     )
 
@@ -539,7 +543,7 @@ def smolvla_mlp_tt(
         bias=fc2_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.deallocate(intermediate)
 
@@ -639,14 +643,14 @@ def smolvla_vlm_kv_projection_tt(
         k_weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     v = ttnn.linear(
         hidden_states,
         v_weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     return k, v
 
@@ -683,7 +687,7 @@ def smolvla_expert_attention_tt(
         q_weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
 
     # K/V source depends on layer type
@@ -700,7 +704,7 @@ def smolvla_expert_attention_tt(
         k_weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
 
     # V projection
@@ -709,7 +713,7 @@ def smolvla_expert_attention_tt(
         v_weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
 
     # Reshape for multi-head attention
@@ -805,7 +809,7 @@ def smolvla_expert_attention_tt(
         o_weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.deallocate(context)
 
@@ -830,7 +834,7 @@ def smolvla_expert_mlp_tt(
         gate_weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
         activation="silu",
     )
 
@@ -840,7 +844,7 @@ def smolvla_expert_mlp_tt(
         up_weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
 
     # SwiGLU: SiLU(gate) * up
@@ -854,7 +858,7 @@ def smolvla_expert_mlp_tt(
         down_weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.deallocate(intermediate)
 
@@ -1010,7 +1014,7 @@ def smolvla_action_heads_tt(
         bias=action_out_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
 
     return actions
@@ -1350,7 +1354,7 @@ class SmolVLAVisionEncoder(nn.Module):
             bias=self.tt_embed_params["proj_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            core_grid=ttnn.CoreGrid(y=10, x=12),
         )
         ttnn.deallocate(pixel_values)
 
@@ -1429,7 +1433,7 @@ class SmolVLAVisionEncoder(nn.Module):
             bias=layer_params["qkv_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            core_grid=ttnn.CoreGrid(y=10, x=12),
         )
 
         # Split QKV and reshape for multi-head attention
@@ -1449,7 +1453,7 @@ class SmolVLAVisionEncoder(nn.Module):
             key,  # Key is already transposed by split_query_key_value_and_split_heads
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            core_grid=ttnn.CoreGrid(y=10, x=12),
         )
         ttnn.deallocate(query)
         ttnn.deallocate(key)
@@ -1463,7 +1467,7 @@ class SmolVLAVisionEncoder(nn.Module):
             value,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            core_grid=ttnn.CoreGrid(y=10, x=12),
         )
         ttnn.deallocate(attn_probs)
         ttnn.deallocate(value)
@@ -1481,7 +1485,7 @@ class SmolVLAVisionEncoder(nn.Module):
             bias=layer_params["proj_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            core_grid=ttnn.CoreGrid(y=10, x=12),
         )
         ttnn.deallocate(attn_output)
 
@@ -1496,7 +1500,7 @@ class SmolVLAVisionEncoder(nn.Module):
             bias=layer_params["fc1_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            core_grid=ttnn.CoreGrid(y=10, x=12),
             activation="gelu",  # SigLIP uses GELU
         )
 
@@ -1507,7 +1511,7 @@ class SmolVLAVisionEncoder(nn.Module):
             bias=layer_params["fc2_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            core_grid=ttnn.CoreGrid(y=10, x=12),
         )
         ttnn.deallocate(hidden)
 
@@ -2314,7 +2318,7 @@ class SmolVLAActionHeads(nn.Module):
             bias=self.tt_params["action_in_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            core_grid=ttnn.CoreGrid(y=10, x=12),
         )
 
     def predict_velocity(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -2361,7 +2365,7 @@ class SmolVLAActionHeads(nn.Module):
             bias=self.tt_params["time_mlp_in_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            core_grid=ttnn.CoreGrid(y=10, x=12),
         )
         ttnn.deallocate(sinusoidal_emb)
 
@@ -2373,7 +2377,7 @@ class SmolVLAActionHeads(nn.Module):
             bias=self.tt_params["time_mlp_out_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            core_grid=ttnn.CoreGrid(y=10, x=12),
         )
         ttnn.deallocate(hidden)
 
@@ -2685,7 +2689,60 @@ class SmolVLAForActionPrediction(nn.Module):
         # Load text embedding layer for instruction token embedding
         self._init_text_embeddings(state_dict)
 
+        # Cache for preprocessed data to avoid repeated HF processor calls
+        self._processor_cache = {}
+        self._cache_enabled = True
+        self._use_fast_preprocess = True  # Enable fast preprocessing
+
+        # Pre-compute normalization values for fast preprocessing
+        # SmolVLM/SigLIP uses simple 0.5 normalization (maps [0,1] to [-1,1])
+        self._img_mean = [0.5, 0.5, 0.5]
+        self._img_std = [0.5, 0.5, 0.5]
+        self._target_size = 512  # SmolVLM vision encoder input size (512x512)
+
         logger.info("SmolVLA model initialized successfully")
+
+    def _fast_preprocess_images(self, images: List[Image.Image]) -> torch.Tensor:
+        """
+        Lightweight image preprocessing - bypasses heavy HF processor.
+        ~10x faster than HF processor for simple cases.
+
+        Produces [batch, C, H, W] format for single-image path.
+        """
+        processed = []
+        for img in images:
+            # Resize to target size (512x512 for SmolVLA vision encoder)
+            img_resized = TF.resize(img, [self._target_size, self._target_size])
+            # Convert to tensor [C, H, W] in [0, 1]
+            img_tensor = TF.to_tensor(img_resized)
+            # Normalize: SigLIP uses simple 0.5 normalization (maps [0,1] to [-1,1])
+            img_tensor = TF.normalize(img_tensor, mean=self._img_mean, std=self._img_std)
+            processed.append(img_tensor)
+
+        # Stack to [B, C, H, W] - single image format
+        return torch.stack(processed)
+
+    def _fast_tokenize(self, instruction: str, num_images: int) -> torch.Tensor:
+        """
+        Fast tokenization using cached tokenizer.
+
+        For single-image path (no tiling), we get 64 vision tokens per image
+        (1024 patches from 512x512 image, pooled 4x4 = 64 tokens).
+        """
+        # Each image produces 64 vision tokens after connector pooling
+        # We need 64 <image> placeholders per image to match
+        vision_tokens_per_image = 64
+        image_tokens = "<image>" * (num_images * vision_tokens_per_image)
+        text = f"{image_tokens}{instruction}" if instruction else f"{image_tokens}What action should the robot take?"
+
+        # Use tokenizer directly (faster than full processor)
+        tokens = self.processor.tokenizer(
+            text,
+            return_tensors="pt",
+            padding=False,
+            truncation=True,
+        )
+        return tokens["input_ids"]
 
     def _init_text_embeddings(self, state_dict: Optional[Dict[str, torch.Tensor]]):
         """
@@ -2999,14 +3056,14 @@ class SmolVLAForActionPrediction(nn.Module):
                 self.tt_vlm_k_proj,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
-                core_grid=ttnn.CoreGrid(y=8, x=8),
+                core_grid=ttnn.CoreGrid(y=10, x=12),
             )
             v_context = ttnn.linear(
                 projected_features,
                 self.tt_vlm_v_proj,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
-                core_grid=ttnn.CoreGrid(y=8, x=8),
+                core_grid=ttnn.CoreGrid(y=10, x=12),
             )
             return k_context, v_context
         elif self.vlm_k_proj is not None:
@@ -3356,17 +3413,38 @@ class SmolVLAForActionPrediction(nn.Module):
             text_prompt = f"{image_tokens}What action should the robot take?"
 
         CHECKPOINTS.checkpoint("start_PROCESSOR_CPU")
-        inputs = self.processor(
-            images=images if images else None,
-            text=text_prompt,
-            return_tensors="pt",
-        )
+
+        if self._use_fast_preprocess and images:
+            # Fast path: lightweight preprocessing
+            CHECKPOINTS.checkpoint("start_FAST_PREPROCESS")
+            pixel_values_fast = self._fast_preprocess_images(images)
+            input_ids = self._fast_tokenize(instruction, num_images)
+            CHECKPOINTS.checkpoint("end_FAST_PREPROCESS")
+
+            # Create inputs dict mimicking HF processor output
+            inputs = {
+                "pixel_values": pixel_values_fast,
+                "input_ids": input_ids,
+            }
+        else:
+            # Standard HF processor path
+            inputs = self.processor(
+                images=images if images else None,
+                text=text_prompt,
+                return_tensors="pt",
+            )
+
         CHECKPOINTS.checkpoint("end_PROCESSOR_CPU")
 
         pixel_values = inputs.get("pixel_values", inputs.get("images"))
         if pixel_values is not None:
             pixel_values = pixel_values.to(torch.bfloat16)
         CHECKPOINTS.checkpoint("end_PREPROCESS")
+
+        # ========================================
+        # PURE MODEL TIME STARTS HERE
+        # ========================================
+        CHECKPOINTS.checkpoint("start_PUREMODEL")
 
         # Vision encoding
         CHECKPOINTS.checkpoint("start_VISIONFORWARD")
@@ -3407,6 +3485,10 @@ class SmolVLAForActionPrediction(nn.Module):
             projected_features = torch.zeros(1, 1, self.config.text_hidden_size)
         CHECKPOINTS.checkpoint("end_VISIONFORWARD")
 
+        # Flush profiler buffer after vision forward (~1000+ ops)
+        if self.ttnn_device is not None:
+            ttnn.ReadDeviceProfiler(self.ttnn_device)
+
         # ========================================
         # Compute VLM K/V Cache for Expert Cross-Attention
         # ========================================
@@ -3421,12 +3503,14 @@ class SmolVLAForActionPrediction(nn.Module):
         CHECKPOINTS.checkpoint("start_VLMKVCOMPUTE")
 
         # Convert projected_features to torch for VLM forward
+        CHECKPOINTS.checkpoint("start_TT_TO_CPU")
         if isinstance(projected_features, ttnn.Tensor):
             projected_features_cpu = ttnn.to_torch(projected_features).float()
         elif projected_features.dtype == torch.bfloat16:
             projected_features_cpu = projected_features.float()
         else:
             projected_features_cpu = projected_features
+        CHECKPOINTS.checkpoint("end_TT_TO_CPU")
 
         # ========================================
         # Build merged prefix embeddings: vision + instruction
@@ -3434,10 +3518,12 @@ class SmolVLAForActionPrediction(nn.Module):
         # The VLM context needs BOTH vision and instruction tokens for
         # the model to follow language instructions correctly.
 
+        CHECKPOINTS.checkpoint("start_PREFIXBUILD")
         prefix_embeds = self._build_prefix_embeddings(
             projected_features_cpu,  # [batch, vision_tokens, 960]
             inputs,  # Contains input_ids for instruction tokens
         )
+        CHECKPOINTS.checkpoint("end_PREFIXBUILD")
         logger.info(f"Built prefix embeddings: {prefix_embeds.shape}")
 
         # Compute full VLM K/V cache by running VLM layers
@@ -3450,6 +3536,7 @@ class SmolVLAForActionPrediction(nn.Module):
         # Use K/V cache - already on TT when compute_vlm_kv_cache uses TT path
         vlm_kv_cache = None
 
+        CHECKPOINTS.checkpoint("start_KVCACHE_TRANSFER")
         if self.ttnn_device is not None:
             vlm_kv_cache = {}
             for layer_idx, (k, v) in vlm_kv_cache_cpu.items():
@@ -3482,8 +3569,13 @@ class SmolVLAForActionPrediction(nn.Module):
                 )
             else:
                 logger.warning("No VLM K/V cache computed, using fallback")
+        CHECKPOINTS.checkpoint("end_KVCACHE_TRANSFER")
 
         CHECKPOINTS.checkpoint("end_VLMKVCOMPUTE")
+
+        # Flush profiler buffer after VLM K/V computation
+        if self.ttnn_device is not None:
+            ttnn.ReadDeviceProfiler(self.ttnn_device)
 
         # ========================================
         # Flow Matching Inference Loop
@@ -3514,6 +3606,7 @@ class SmolVLAForActionPrediction(nn.Module):
 
         if use_tt:
             # TT-accelerated flow matching loop - ALL ON TT, NO CPU SYNC UNTIL END
+            CHECKPOINTS.checkpoint("start_FLOWMATCH_SETUP")
 
             # Convert noisy_actions to TT ONCE before loop
             noisy_actions_tt = ttnn.from_torch(
@@ -3530,6 +3623,7 @@ class SmolVLAForActionPrediction(nn.Module):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
+            CHECKPOINTS.checkpoint("end_FLOWMATCH_SETUP")
 
             for step in range(num_inference_steps):
                 t = step / num_inference_steps
@@ -3579,10 +3673,16 @@ class SmolVLAForActionPrediction(nn.Module):
                     ttnn.deallocate(noisy_actions_tt)
                     noisy_actions_tt = noisy_actions_new
 
+                    # Flush profiler buffer every 5 expert steps to prevent overflow
+                    if (step + 1) % 5 == 0:
+                        ttnn.ReadDeviceProfiler(self.ttnn_device)
+
             # Convert back to torch ONCE after loop
+            CHECKPOINTS.checkpoint("start_FLOWMATCH_FINALIZE")
             ttnn.deallocate(dt_tt)
             noisy_actions = ttnn.to_torch(noisy_actions_tt).float()
             ttnn.deallocate(noisy_actions_tt)
+            CHECKPOINTS.checkpoint("end_FLOWMATCH_FINALIZE")
         else:
             # CPU flow matching loop
             for step in range(num_inference_steps):
@@ -3619,6 +3719,7 @@ class SmolVLAForActionPrediction(nn.Module):
         # Extract final actions (trim to actual action_dim)
         actions = noisy_actions[:, :, :action_dim]
 
+        CHECKPOINTS.checkpoint("end_PUREMODEL")
         CHECKPOINTS.checkpoint("end_ACTIONPREDICTION")
 
         # Return as numpy
@@ -3764,6 +3865,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="SmolVLA Model Test")
     parser.add_argument("--cpu-only", action="store_true", help="Run CPU test only (no TT device)")
+    parser.add_argument("--compare", action="store_true", help="Compare CPU vs TT outputs")
     parser.add_argument("--iterations", type=int, default=5, help="Number of iterations for timing")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     args = parser.parse_args()
@@ -3774,6 +3876,81 @@ if __name__ == "__main__":
     if args.cpu_only:
         logging.basicConfig(level=logging.INFO, force=True)
         test_smolvla_cpu_only("lerobot/smolvla_base")
+    elif args.compare:
+        # Compare CPU vs TT outputs
+        print("=" * 60)
+        print("SmolVLA CPU vs TT Comparison")
+        print("=" * 60)
+
+        # Create test image
+        test_image = Image.new("RGB", (512, 512), color=(128, 128, 128))
+        instruction = "pick up the object"
+
+        # Run CPU inference first
+        print("\n1. Running CPU inference (no TT device)...")
+        vla_cpu = SmolVLAForActionPrediction.from_pretrained(
+            repo_id="lerobot/smolvla_base",
+            ttnn_device=None,  # CPU only
+        )
+
+        cpu_actions = []
+        for i in range(3):
+            action = vla_cpu.predict_action(
+                images=[test_image],
+                instruction=instruction,
+            )
+            cpu_actions.append(action[0, :6].copy())
+            action_str = ", ".join([f"{v:+.3f}" for v in action[0, :6]])
+            print(f"  CPU Iteration {i+1}: [{action_str}]")
+
+        del vla_cpu  # Free memory
+
+        # Run TT inference
+        print("\n2. Running TT inference...")
+        device = ttnn.open_device(device_id=0)
+
+        try:
+            vla_tt = SmolVLAForActionPrediction.from_pretrained(
+                repo_id="lerobot/smolvla_base",
+                ttnn_device=device,
+            )
+
+            tt_actions = []
+            for i in range(3):
+                CHECKPOINTS.reset()
+                action = vla_tt.predict_action(
+                    images=[test_image],
+                    instruction=instruction,
+                )
+                tt_actions.append(action[0, :6].copy())
+                action_str = ", ".join([f"{v:+.3f}" for v in action[0, :6]])
+                print(f"  TT Iteration {i+1}: [{action_str}]")
+
+            # Compare results
+            print("\n" + "=" * 60)
+            print("COMPARISON RESULTS")
+            print("=" * 60)
+
+            for i in range(3):
+                cpu_act = cpu_actions[i]
+                tt_act = tt_actions[i]
+                diff = np.abs(cpu_act - tt_act)
+                max_diff = diff.max()
+                mean_diff = diff.mean()
+
+                # Compute PCC
+                cpu_flat = cpu_act.flatten()
+                tt_flat = tt_act.flatten()
+                pcc = np.corrcoef(cpu_flat, tt_flat)[0, 1]
+
+                print(f"\nIteration {i+1}:")
+                print(f"  CPU:  [{', '.join([f'{v:+.3f}' for v in cpu_act])}]")
+                print(f"  TT:   [{', '.join([f'{v:+.3f}' for v in tt_act])}]")
+                print(f"  Max diff: {max_diff:.4f}, Mean diff: {mean_diff:.4f}, PCC: {pcc:.4f}")
+
+        finally:
+            print("\nClosing TT device...")
+            ttnn.close_device(device)
     else:
         # Run full TT test with checkpoints
         print("=" * 60)
@@ -3799,45 +3976,36 @@ if __name__ == "__main__":
             print("-" * 60)
             print("Running inference...")
 
-            # Run inference with checkpoints
-            results = []
+            # Run inference with simple timing (no checkpoint overhead)
+            import time
+
+            times = []
             for i in range(args.iterations):
-                CHECKPOINTS.reset()
+                t_start = time.perf_counter()
                 action = vla.predict_action(
                     images=[test_image],
                     instruction="pick up the object",
                 )
-                results.append(CHECKPOINTS.analyze())
+                t_end = time.perf_counter()
+                times.append((t_end - t_start) * 1000)  # ms
                 action_str = ", ".join([f"{v:+.3f}" for v in action[0, :6]])
-                print(f"  Iteration {i+1}: predicted action = [{action_str}]")
+                print(f"  Iteration {i+1}: {times[-1]:.2f} ms, action = [{action_str}]")
 
-            # Combine timing results (skip first iteration for warmup)
-            if len(results) > 1:
-                combined_results = {k: 0.0 for k in results[0].keys()}
-                for r in results[1:]:  # Skip warmup
-                    for k, v in r.items():
-                        combined_results[k] += v
-                # Convert to milliseconds and average
-                avg_results = {k: round(v * 1000 / (len(results) - 1), 3) for k, v in combined_results.items()}
-                avg_results = dict(sorted(avg_results.items(), key=lambda x: x[1], reverse=True))
-
-                print("=" * 60)
-                print("CHECKPOINT TIMINGS (avg over iterations 2-N)")
-                print("=" * 60)
-                for name, time_ms in avg_results.items():
-                    print(f"  {name}: {time_ms:.3f} ms")
-
-                # Get total end-to-end time (ACTIONPREDICTION is the outer wrapper)
-                total_key = [k for k in avg_results.keys() if "ACTIONPREDICTION" in k]
-                if total_key:
-                    total_time_ms = avg_results[total_key[0]]
-                else:
-                    total_time_ms = sum(avg_results.values())  # fallback
-
-                print("-" * 60)
-                print(f"  END-TO-END: {total_time_ms:.3f} ms")
-                print(f"  FPS: {1000/total_time_ms:.2f}")
-                print("=" * 60)
+            # Report timing
+            print("=" * 60)
+            print(f"TIMING RESULTS ({args.iterations} iterations)")
+            print("=" * 60)
+            times_arr = np.array(times)
+            print(f"  First iteration: {times[0]:.2f} ms")
+            print(f"  Last iteration:  {times[-1]:.2f} ms")
+            if len(times) > 1:
+                print(f"  Mean (iter 2-N): {times_arr[1:].mean():.2f} ms")
+                print(f"  Std (iter 2-N):  {times_arr[1:].std():.2f} ms")
+            print("-" * 60)
+            last_time_ms = times[-1]
+            print(f"  END-TO-END (last): {last_time_ms:.2f} ms")
+            print(f"  FPS (last iter):   {1000/last_time_ms:.2f}")
+            print("=" * 60)
         finally:
             print("Closing TT device...")
             ttnn.close_device(device)
