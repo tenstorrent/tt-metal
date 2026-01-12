@@ -127,7 +127,7 @@
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
 // Fabric transaction counters (similar to NoC counters)
-// 3 barrier types × 8 DMs × 4 bytes = 96 bytes + 16 bytes padding for 16-byte alignment (Quasar has 8 DMs)
+// 3 barrier types × 8 DMs × 4 bytes = 96 bytes; +16 bytes padding = 112 bytes total (16-byte aligned, Quasar has 8 DMs)
 #define MEM_FABRIC_COUNTER_SIZE 4
 #define MEM_FABRIC_COUNTER_L1_SIZE (3 * 8 * MEM_FABRIC_COUNTER_SIZE + 16)
 #define MEM_FABRIC_COUNTER_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
