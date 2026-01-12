@@ -364,15 +364,15 @@ Make sure you are in the ``tt-metal`` directory and then build the example progr
 .. code-block:: bash
 
    export TT_METAL_HOME=$PWD
-   ./build_metal.sh --build-programming-examples
-   ./build/programming_examples/metal_example_lab_eltwise_binary
+   ./build_metal.sh
+   ./build/ttnn/examples/example_lab_eltwise_binary
 
 Make sure that the program executes correctly and that the output says "Test Passed" on the host terminal.
 
 Program Description
 ===================
 
-The main program for the code example being discussed is located in the file ``tt_metal/programming_examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
+The main program for the code example being discussed is located in the file ``ttnn/examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
 The first thing to emphasize is that all the code in this file executes on the host, although there are many API calls that cause activity on the device.
 
 Looking at the main function, we see that the host program first initializes input data for the operation and performs a reference computation on the host CPU.
@@ -463,8 +463,8 @@ The function then creates three circular buffers to enable data movement between
 A circular buffer is a FIFO buffer with configurable size.
 Creating a circular buffer simply means allocating sufficient device SRAM memory based on the specified configuration, and associating
 the specified circular buffer index with this SRAM memory and its configuration.
-In our example program, circular buffers are created with two tiles each to allow for double buffering. For example, reader kernel can be reading one tile
-while the compute kernel is processing the other tile, enabling pipelined execution.
+In our example program, circular buffers are created with two tiles each to allow for double buffering. For example, a reader kernel
+can be reading one tile while the compute kernel is processing the other tile, enabling pipelined execution.
 The number of tiles in a circular buffer can be adjusted to trade off memory for performance, but generally there are diminishing
 returns beyond a few tiles.
 
@@ -537,7 +537,7 @@ The function can be summarized by the following pseudo-code:
        transfer_tile_from_dram_to_circular_buffer(in1, i)
    }
 
-The reader kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/dataflow/read_tiles.cpp`` is responsible for transferring data
+The reader kernel in ``ttnn/examples/lab_eltwise_binary/kernels/dataflow/read_tiles.cpp`` is responsible for transferring data
 from device DRAM into circular buffers located in internal device SRAM, where it can be efficiently accessed by the compute kernel.
 The kernel reads the base addresses of the two input tensors in DRAM and the total number of tiles to process as runtime arguments.
 
@@ -569,7 +569,7 @@ read a new tile while the compute kernel is processing the previous one.
 Compute Kernel Code
 -------------------
 
-The compute kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp`` is responsible for performing the elementwise addition of two tiles.
+The compute kernel in ``ttnn/examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp`` is responsible for performing the elementwise addition of two tiles.
 
 The function can be summarized by the following pseudo-code:
 
@@ -636,8 +636,8 @@ them from it without conflicts.
 Writer Kernel Code
 ------------------
 
-The writer kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp`` is responsible for transferring
-computed results from circular buffers in internal device SRAM back to device DRAM.
+The writer kernel in ``ttnn/examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp`` is responsible for transferring
+computed results from the circular buffer in internal device SRAM back to device DRAM.
 The kernel code can be summarized by the following pseudo-code:
 
 .. code-block:: cpp
@@ -835,7 +835,7 @@ A simplified example of printing a full tile from an output CB in a writer kerne
        }
    }
 
-The ``cb_type`` parameter  to ``TileSlice`` specifies whether the CB is the input or output of the compute engine.
+The ``cb_type`` parameter to ``TileSlice`` specifies whether the CB is the input or output of the compute engine.
 The ``ptr_type`` parameter specifies whether we wish to get data from the read-side (front), or the write-side (back) of the CB.
 In writer kernels, these are most commonly set to ``TSLICE_OUTPUT_CB`` and ``TSLICE_RD_PTR``, respectively,
 to access the data that is about to be read from the CB.
@@ -899,7 +899,7 @@ Exercise 5: Using tt-triage to Debug a Hang
 To illustrate how ``tt-triage`` can be used to debug a hang, we will use the ``lab_eltwise_binary`` example program.
 You can introduce a very simple artificial hang by commenting out the calls to ``cb_pop_front``
 (as if you accidentally forgot them) in the compute kernel in
-``tt_metal/programming_examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp``.
+``ttnn/examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp``.
 
 With this change, for the first two tiles, the program should run normally, but then the reader kernel blocks waiting
 for space in the circular buffers, which from the host side looks like a hang.
@@ -915,7 +915,7 @@ To help pinpoint the problem, you can dump stack traces.
 Observe the output in the terminal. The output will show the call stacks for all RISC-V processors on all cores, including cores
 that are running firmware responsible for dispatching kernel code. You should ignore the cores that are running firmware,
 and focus on the cores that are running kernel code. In our example, these will be in location ``(0,0)``, since that is
-the core we specified in ``init_program()`` in ``tt_metal/programming_examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
+the core we specified in ``init_program()`` in ``ttnn/examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
 Another way to recognize relevant RISC-V processors is to look under the **Kernel Name** column, and
 look for kernel names of interest, such as ``read_tiles`` or ``write_tiles``.
 
@@ -961,7 +961,7 @@ Exercise 6: Using Device Profiling to Profile Kernels
 
    .. code-block:: bash
 
-      TT_METAL_DEVICE_PROFILER=1 ./build/programming_examples/metal_example_lab_eltwise_binary
+      TT_METAL_DEVICE_PROFILER=1 ./build/ttnn/examples/example_lab_eltwise_binary
 
 #. **Locate the CSV log file**
 
@@ -1107,6 +1107,8 @@ Then, adjust the code to perform matrix multiplication, by making the following 
 
 #. Copy the reference matrix multiplication code you created in Exercise 1.
    Adapt it to the ``bfloat16`` data type, so it can be used to verify TT-Metalium results.
+   When changing the inner loop, accumulate the result into an ordinary 32-bit ``float`` and only cast the result
+   into ``bfloat16`` once the full sum has been computed, to reduce precision loss.
 
 #. Update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
    pass required parameters to kernels (you may need to complete some of the other steps below to determine the correct parameters).
@@ -1154,7 +1156,8 @@ Then, adjust the code to perform matrix multiplication, by making the following 
 
 #. Run the program and verify the results by comparing the results with the reference matrix multiplication you created in Exercise 1.
    Note that because of the limited precision of bfloat16, the results may not be exactly the same as the reference results, but they should be
-   numerically close (relative differences on the order of a few percent for input data in the range of 0-1).
+   numerically close, with relative differences on the order of a few percent for input data in the range of 0-1. Note that the relative difference
+   may be higher if the reference solution doesn't use 32-bit ``float`` to accumulate the sum.
 
 #. Profile the performance of the implementation, taking note of the elapsed firmware time. This will be useful to compare
    against future labs when we optimize the implementation for performance.
