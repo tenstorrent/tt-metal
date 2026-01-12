@@ -10,10 +10,17 @@
 namespace ckernel::sfpu {
 
 /*
- * This function implements expm1(x) = exp(x) - 1 using a polynomial approximation algorithm
- * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
- * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
- * More specifically, it is the implementation of the `exp_21f` algorithm described in Section 5
+ * This function implements expm1(x) = exp(x) - 1 using a hybrid approach to avoid
+ * catastrophic cancellation when x is close to 0.
+ *
+ * Implementation strategy:
+ * - For |x| < 0.4: Uses a 3rd-order Taylor series expansion
+ *   expm1(x) ≈ x + x²/2 + x³/6, evaluated in Horner form
+ * - For |x| >= 0.4: Calls _sfpu_exp_21f_ (based on the exp_21f algorithm from
+ *   Moroz et al. 2022) and subtracts 1
+ *
+ * The Taylor series avoids the loss of precision that would occur when subtracting
+ * two nearly equal numbers (exp(x) - 1) for small x.
  *
  * @param val The input value (sfpi::vFloat vector), can be any floating point number
  *
@@ -31,30 +38,9 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
         // In Horner form, on reducing further : y = (val * (val * (val * 0.166f + 0.5f )+ 1)
         y = val * (sfpi::vConst1 + val * (sfpi::vFloat(0.5f) + val * sfpi::vFloat(0.166f)));
     }
-    v_elseif(val > sfpi::vFloat(-88.0f)) {
-        // Clamp to prevent overflow if x > 89
-        sfpi::vFloat threshold_high = sfpi::vFloat(89.f);
-        sfpi::vec_min_max(val, threshold_high);
-
-        // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
-        // z = (bias + x * factor * N_m; where:
-        // factor = 0x00b8aa3b (computed through log(e))
-        // bias = 0x3f800000
-
-        sfpi::vInt z = _float_to_int32_for_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
-        sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));
-        sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));
-
-        sfpi::vFloat d1 = sfpi::vFloat(sfpi::vConstFloatPrgm0);
-        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vConstIntPrgm1 + zif, 0);
-        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vConstIntPrgm2 + zif, 0);
-        d2 = d1 * d2;
-        zif = _float_to_int32_for_exp21f_(d2 * d3);
-
-        // Restore exponent
-        zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));
-
-        y = sfpi::reinterpret<sfpi::vFloat>(zii) - sfpi::vConst1;
+    v_else {
+        sfpi::vFloat exp_result = _sfpu_exp_21f_<true>(val);
+        y = exp_result - sfpi::vConst1;
     }
     v_endif;
     if constexpr (!is_fp32_dest_acc_en) {
