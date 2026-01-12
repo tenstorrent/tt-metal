@@ -29,10 +29,12 @@ def count_tests_in_directory(directory):
                         # and then check, does the function call have a name attribute
                         # and is the attribute name "parametrize"
                         # and does it have at least 2 arguments (param names and values)
-                        if (isinstance(dec, ast.Call) and 
-                            hasattr(dec.func, 'attr') and 
-                            dec.func.attr == 'parametrize' and 
-                            len(dec.args) >= 2):
+                        if (
+                            isinstance(dec, ast.Call)
+                            and hasattr(dec.func, "attr")
+                            and dec.func.attr == "parametrize"
+                            and len(dec.args) >= 2
+                        ):
                             # Get the second argument (the list/tuple of parameter values)
                             val = dec.args[1]
                             # If it's a list or tuple, multiply test count by number of values
