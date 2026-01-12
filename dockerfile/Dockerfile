@@ -208,7 +208,7 @@ RUN mkdir -p /etc && \
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
-RUN uv pip3 install $WHEEL_FILENAME
+RUN uv pip install $WHEEL_FILENAME
 
 #############################################################
 
