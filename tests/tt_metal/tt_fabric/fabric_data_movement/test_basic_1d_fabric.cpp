@@ -87,15 +87,15 @@ struct DualRiscMemMapHelper {
     uint32_t region_size;
     uint32_t num_packets;
 
-    DualRiscMemMapHelper(bool dual_risc, uint32_t num_pkts) : num_packets(num_pkts) {
+    DualRiscMemMapHelper(bool dual_risc, uint32_t num_pkts) :
+        data_space_size(dual_risc ? data_space_reserved_bytes / 2 : data_space_reserved_bytes),
+        region_size(data_space_size + test_results_size_bytes + notification_size_bytes),
+        num_packets(num_pkts) {
         static_assert(packet_header_reserved_bytes % 16 == 0, "packet_header_reserved_bytes must be 16-byte aligned");
         static_assert(test_results_size_bytes % 16 == 0, "test_results_size_bytes must be 16-byte aligned");
         static_assert(notification_size_bytes % 16 == 0, "notification_size_bytes must be 16-byte aligned");
         static_assert(
             data_space_reserved_bytes % 32 == 0, "data_space_reserved_bytes must be 32-byte aligned for halving");
-
-        data_space_size = dual_risc ? data_space_reserved_bytes / 2 : data_space_reserved_bytes;
-        region_size = data_space_size + test_results_size_bytes + notification_size_bytes;
 
         TT_FATAL(region_size % 16 == 0, "region_size must be 16-byte aligned");
         TT_FATAL(
