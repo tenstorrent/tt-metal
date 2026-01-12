@@ -39,7 +39,6 @@ def prepare_row_major_weight_bias(torch_weight_1d, num_simulated_devices):
     Returns:
         Reshaped tensor of shape (embedding_dim // (TILE_SIZE * num_simulated_devices), TILE_SIZE * num_simulated_devices)
     """
-    embedding_dim = torch_weight_1d.shape[0]
     # Reshape to interleave: [mesh_width, -1, TILE_SIZE] -> permute -> reshape
     # This matches: weight.reshape(mesh_width, -1, TILE_SIZE).permute(1, 0, 2).reshape(-1, TILE_SIZE * mesh_width)
     reshaped = (
