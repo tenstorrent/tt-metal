@@ -127,8 +127,7 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
-    // barrier
-    // multicast to entire ring of workers going in the same direction
+    // barrier - multicast to entire ring of workers going in the same direction
     uint64_t barrier_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
@@ -137,7 +136,6 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
-    // done barrier
 
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
@@ -148,7 +146,6 @@ void kernel_main() {
             actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
         }
 
-        // If not the last slice, write what's on cb_output_id forward
         uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
         if (i < (ring_size - 1)) {
             uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
@@ -159,92 +156,52 @@ void kernel_main() {
             uint32_t tiles_to_read = start_tiles_to_read;
 
             if (!direction) {
-                uint32_t backwards_offset = tile_granularity;
-                for (uint32_t k = 0; k < backwards_offset; ++k) {
+                for (uint32_t k = 0; k < tile_granularity; ++k) {
                     intermediate_pages_read_in_row++;
                     if (intermediate_pages_read_in_row == slice_Wt) {
                         intermediate_row_offset += input_tensor_Wt;
                         intermediate_pages_read_in_row -= slice_Wt;
                     }
                 }
-                tiles_read += backwards_offset;
+                tiles_read += tile_granularity;
             }
 
             while (tiles_read < tiles_to_read) {
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-
-                uint32_t tiles_read_in_current_direction = 0;
-                uint32_t tiles_to_read_in_current_direction = tile_granularity;
-
                 cb_wait_front(cb_output_id, tile_granularity);
-                size_t l1_read_addr = get_read_ptr(cb_output_id);
-                while (tiles_read_in_current_direction < tiles_to_read_in_current_direction) {
-                    uint32_t tiles_to_put_in_current_packet = tile_granularity;
+                size_t intermediate_l1_read_addr = get_read_ptr(cb_output_id);
 
-                    uint32_t intermediate_tile_one_id =
-                        intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
-                    intermediate_pages_read_in_row++;
-                    if (intermediate_pages_read_in_row == slice_Wt) {
-                        intermediate_row_offset += input_tensor_Wt;
-                        intermediate_pages_read_in_row -= slice_Wt;
-                    }
-                    auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                        intermediate_addrgen, intermediate_tile_one_id, 0);
-
-                    // Will have more cases once scatter-write supports more than 2 distinct addresses
-                    switch (tiles_to_put_in_current_packet) {
-                        case 2: {
-                            uint32_t intermediate_tile_two_id =
-                                intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
-                            intermediate_pages_read_in_row++;
-                            if (intermediate_pages_read_in_row == slice_Wt) {
-                                intermediate_row_offset += input_tensor_Wt;
-                                intermediate_pages_read_in_row -= slice_Wt;
-                            }
-
-                            auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                intermediate_addrgen, intermediate_tile_two_id, 0);
-                            fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                                fabric_connection,
-                                scatter_route_id,
-                                l1_read_addr,
-                                NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
-                            l1_read_addr += page_size * 2;
-                            tiles_read += 2;
-                            tiles_read_in_current_direction += 2;
-                            break;
-                        }
-                        case 1:
-                        default: {
-                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                fabric_connection,
-                                unicast_route_id,
-                                l1_read_addr,
-                                NocUnicastCommandHeader{noc_address0});
-                            l1_read_addr += page_size;
-                            tiles_read++;
-                            tiles_read_in_current_direction++;
-                            break;
-                        }
-                    }
-                    noc_async_writes_flushed();
+                uint32_t intermediate_tile_one_id =
+                    intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
+                intermediate_pages_read_in_row++;
+                if (intermediate_pages_read_in_row == slice_Wt) {
+                    intermediate_row_offset += input_tensor_Wt;
+                    intermediate_pages_read_in_row -= slice_Wt;
                 }
+
+                uint32_t intermediate_tile_two_id =
+                    intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
+                intermediate_pages_read_in_row++;
+                if (intermediate_pages_read_in_row == slice_Wt) {
+                    intermediate_row_offset += input_tensor_Wt;
+                    intermediate_pages_read_in_row -= slice_Wt;
+                }
+
+                auto intermediate_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                    intermediate_addrgen, intermediate_tile_one_id, 0);
+
+                auto intermediate_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                    intermediate_addrgen, intermediate_tile_two_id, 0);
+
+                // op hardcoded for each worker handling even multiple of 2 tiles, so always use scatter_write
+                fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                    fabric_connection,
+                    scatter_route_id,
+                    intermediate_l1_read_addr,
+                    NocUnicastScatterCommandHeader({intermediate_noc_address_one, intermediate_noc_address_two}));
+                tiles_read += 2;
+
+                noc_async_writes_flushed();
                 cb_pop_front(cb_output_id, tile_granularity);
-
-                // Skip the tiles going the other direction
-                tiles_remaining_to_read = tiles_to_read - tiles_read;
-                if (tiles_remaining_to_read > 0) {
-                    uint32_t tiles_to_read_in_other_direction = tile_granularity;
-
-                    for (uint32_t k = 0; k < tiles_to_read_in_other_direction; ++k) {
-                        intermediate_pages_read_in_row++;
-                        if (intermediate_pages_read_in_row == slice_Wt) {
-                            intermediate_row_offset += input_tensor_Wt;
-                            intermediate_pages_read_in_row -= slice_Wt;
-                        }
-                    }
-                    tiles_read += tiles_to_read_in_other_direction;
-                }
 
                 uint64_t out_ready_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
@@ -252,11 +209,22 @@ void kernel_main() {
                     fabric_connection,
                     seminc_route_id,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+
+                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                if (tiles_remaining_to_read > 0) {
+                    for (uint32_t k = 0; k < tile_granularity; ++k) {
+                        intermediate_pages_read_in_row++;
+                        if (intermediate_pages_read_in_row == slice_Wt) {
+                            intermediate_row_offset += input_tensor_Wt;
+                            intermediate_pages_read_in_row -= slice_Wt;
+                        }
+                    }
+                    tiles_read += tile_granularity;
+                }
             }
 
             noc_async_writes_flushed();
         } else {
-            // Otherwise, on the last slice, write it to output buffer
             uint32_t output_tile_id_start = 0;
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
@@ -264,37 +232,26 @@ void kernel_main() {
             if (!direction) {
                 tiles_read += tile_granularity;
             }
-            while (tiles_read < tiles_to_read) {
-                uint32_t tiles_to_read_in_current_direction = tile_granularity;
 
+            while (tiles_read < tiles_to_read) {
                 cb_wait_front(cb_output_id, tile_granularity);
-                size_t l1_read_addr = get_read_ptr(cb_output_id);
-                for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
+                size_t output_l1_read_addr = get_read_ptr(cb_output_id);
+                for (uint32_t j = 0; j < tile_granularity; ++j) {
                     uint32_t output_tile_id = output_tile_id_start + tiles_read;
-                    uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
-                    noc_async_write(l1_read_addr, local_noc_addr, page_size);
-                    l1_read_addr += page_size;
+                    uint64_t output_local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                    noc_async_write(output_l1_read_addr, output_local_noc_addr, page_size);
+                    output_l1_read_addr += page_size;
                     tiles_read++;
                 }
 
                 noc_async_write_barrier();
                 cb_pop_front(cb_output_id, tile_granularity);
 
-                // Skip the tiles going the other direction
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 if (tiles_remaining_to_read > 0) {
                     tiles_read += tile_granularity;
                 }
             }
-
-            // 2. mcast half batch ready semaphore
-            uint64_t batch_ready_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                fabric_connection,
-                mcastseminc_route_id,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-            noc_async_writes_flushed();
         }
 
         // Next slice idx
@@ -304,6 +261,16 @@ void kernel_main() {
             slice_idx++;
         }
     }
+
+    // mcast half batch ready semaphore
+    uint64_t batch_ready_sem_noc_addr_in_pkt =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
+    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        fabric_connection,
+        mcastseminc_route_id,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+    noc_async_writes_flushed();
+
     // Reset the global semaphore before the next batch
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);

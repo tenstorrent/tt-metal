@@ -21,11 +21,11 @@ void MAIN {
     // hardcoded constants
     constexpr uint32_t tile_granularity = 2;
 
-    // Initialize binary operations - use the same constants consistently
+    // initialize binary operations - use the same constants consistently
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
     add_tiles_init(input_cb_id, intermediate_cb, false);
 
-    // Don't reduce on the first slice
+    // don't reduce on the first slice
     for (uint32_t i = 0; i < ring_size - 1; i++) {
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;
@@ -34,16 +34,12 @@ void MAIN {
             tiles_read += tile_granularity;
         }
 
-        // Wait for input data once before beginning processing
         while (tiles_read < tiles_to_read) {
-            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-            uint32_t num_pages_to_read = tile_granularity;
-
             cb_wait_front(input_cb_id, tile_granularity);
             cb_wait_front(intermediate_cb, tile_granularity);
             cb_reserve_back(output_cb, tile_granularity);
             acquire_dst();
-            for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
+            for (uint32_t tile_id = 0; tile_id < tile_granularity; tile_id++) {
                 add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
                 pack_tile(tile_id, output_cb);
             }
@@ -51,10 +47,9 @@ void MAIN {
             cb_pop_front(input_cb_id, tile_granularity);
             cb_pop_front(intermediate_cb, tile_granularity);
             cb_push_back(output_cb, tile_granularity);
-            tiles_read += num_pages_to_read;
+            tiles_read += tile_granularity;
 
-            // Skip the tiles going the other direction
-            tiles_remaining_to_read = tiles_to_read - tiles_read;
+            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
             if (tiles_remaining_to_read > 0) {
                 tiles_read += tile_granularity;
             }
