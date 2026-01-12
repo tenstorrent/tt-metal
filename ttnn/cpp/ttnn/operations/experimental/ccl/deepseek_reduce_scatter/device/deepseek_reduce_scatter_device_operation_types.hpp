@@ -24,9 +24,6 @@ struct DeepseekReduceScatterProgramArtifacts {
     tt::tt_metal::KernelHandle writer_kernel_id;
     std::vector<tt::tt_metal::CoreCoord> all_cores;
     uint32_t num_directions_per_link;
-    uint32_t num_workers_per_direction;
-    uint32_t num_mux_cores_per_direction_per_link;
-    uint32_t num_cores_per_link;
 };
 
 struct operation_attributes_t {

@@ -42,66 +42,6 @@ using ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::Deep
 
 namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
 
-void deepseek_append_fabric_mux_connection_ct_args(
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    uint32_t num_workers_per_direction_per_link,
-    std::vector<uint32_t>& writer_ct_args) {
-    constexpr auto num_ct_args = 5;
-    const std::array<uint32_t, num_ct_args> ct_args = {
-        mux_kernel_config.get_num_buffers(channel_type),        // fabric_mux_num_buffers_per_channel
-        mux_kernel_config.get_buffer_size_bytes(channel_type),  // fabric_mux_channel_buffer_size_bytes
-        mux_kernel_config.get_status_address(),                 // fabric_mux_status_address
-        mux_kernel_config.get_termination_signal_address(),     // fabric_mux_termination_signal_address
-        num_workers_per_direction_per_link                      // num_mux_clients
-    };
-
-    writer_ct_args.reserve(writer_ct_args.capacity() + num_ct_args);
-    std::copy(ct_args.begin(), ct_args.end(), std::back_inserter(writer_ct_args));
-}
-
-void deepseek_append_fabric_mux_connection_rt_args(
-    const bool mux_connection_valid,
-    const CoreCoord& mux_virtual_core,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    const CoreCoord& worker_logical_core,
-    const uint32_t worker_per_direction_id,
-    const bool is_termination_master,
-    const CoreCoord termination_master_virtual_core,
-    tt::tt_metal::Program& program,
-    std::vector<uint32_t>& worker_rt_args) {
-    constexpr auto num_rt_args = 17;
-    const std::array<uint32_t, num_rt_args> rt_args = {
-        mux_connection_valid,   // mux_connection_valid
-        is_termination_master,  // is_termination_master
-        mux_virtual_core.x,     // fabric_mux_x
-        mux_virtual_core.y,     // fabric_mux_y
-        mux_kernel_config.get_channel_base_address(
-            channel_type, worker_per_direction_id),  // fabric_mux_channel_base_address
-        mux_kernel_config.get_connection_info_address(
-            channel_type, worker_per_direction_id),  // fabric_mux_connection_info_address
-        mux_kernel_config.get_connection_handshake_address(
-            channel_type, worker_per_direction_id),  // fabric_mux_connection_handshake_address
-        mux_kernel_config.get_flow_control_address(
-            channel_type, worker_per_direction_id),  // fabric_mux_flow_control_address
-        mux_kernel_config.get_buffer_index_address(
-            channel_type, worker_per_direction_id),  // fabric_mux_buffer_index_address
-        mux_kernel_config.get_channel_credits_stream_id(
-            channel_type, worker_per_direction_id),          // fabric_mux_channel_id
-        CreateSemaphore(program, {worker_logical_core}, 0),  // termination_sync_address
-        CreateSemaphore(program, {worker_logical_core}, 0),  // local_fabric_mux_status_address
-        CreateSemaphore(program, {worker_logical_core}, 0),  // local_flow_control_address
-        CreateSemaphore(program, {worker_logical_core}, 0),  // local_teardown_address
-        CreateSemaphore(program, {worker_logical_core}, 0),  // local_buffer_index_address
-        termination_master_virtual_core.x,                   // termination_master_noc_x
-        termination_master_virtual_core.y,                   // termination_master_noc_y
-    };
-
-    worker_rt_args.reserve(worker_rt_args.capacity() + num_rt_args);
-    std::copy(rt_args.begin(), rt_args.end(), std::back_inserter(worker_rt_args));
-}
-
 DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_artifacts(
     tt::tt_metal::Program& program,
     const ttnn::Tensor& input_tensor,
@@ -120,42 +60,20 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
 
     const uint32_t ring_size = 8;
     const uint32_t num_directions_per_link = 2;
-
-    const uint32_t num_mux_cores_per_direction_per_link = 1;
-    const uint32_t num_workers_per_direction_per_link = 1;
-    const uint32_t num_cores_per_link =
-        num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction_per_link);
+    const uint32_t num_cores_per_link = num_directions_per_link;
 
     const auto [all_core_range, all_cores] =
         ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
 
-    const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
-        return (!dir && backward_coord.has_value()) || (dir && forward_coord.has_value());
-    };
-
     std::vector<CoreRange> sender_worker_core_ranges;
-    std::vector<CoreRange> mux_core_ranges;
-    std::vector<CoreRange> termination_master_core_ranges;
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            const auto& mux_core = all_cores[core_id++];
-            if (mux_connection_valid(dir)) {
-                mux_core_ranges.emplace_back(mux_core);
-            }
-
-            for (uint32_t worker = 0; worker < num_workers_per_direction_per_link; worker++) {
-                const auto& worker_core = all_cores[core_id++];
-                sender_worker_core_ranges.emplace_back(worker_core);
-
-                if (worker == 0) {
-                    termination_master_core_ranges.emplace_back(worker_core);
-                }
-            }
+            const auto& worker_core = all_cores[core_id++];
+            sender_worker_core_ranges.emplace_back(worker_core);
         }
     }
     CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
-    CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
 
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -228,35 +146,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
 
-    // KERNEL CREATION
-    std::vector<size_t> mux_termination_signal_addresses;
-
-    // Kernel Runtime Args
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
-    const auto num_full_size_channels = num_workers_per_direction_per_link;
-    constexpr auto num_header_only_channels = 0;
-    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_full_size_channels,
-        num_header_only_channels,
-        1,
-        0,
-        buffer_size_bytes_full_size_channel,
-        mux_base_l1_address);
-
-    // Fabric mux kernel
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        mux_core_range_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-
     std::vector<uint32_t> sender_reader_compile_args = {
         ring_index,               // my_chip_id
         ring_size,                // ring_size
@@ -305,12 +194,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         slice_Ht,                       // slice_Ht
         slice_Wt,                       // slice_Wt
     };
-
-    deepseek_append_fabric_mux_connection_ct_args(
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        mux_kernel_config,
-        num_workers_per_direction_per_link,
-        sender_writer_compile_args);
 
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         tt::tt_fabric::Topology::Ring, sender_device_coord, forward_coord, backward_coord, mesh_device);
@@ -368,112 +251,67 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         program, sender_reduce_kernel_path, sender_worker_core_range_set, sender_reduce_kernel_config);
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
-    auto mux_core_iter = mux_core_range_set.ranges().cbegin();
-    auto termination_master_core_iter = termination_master_core_ranges.cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            CoreCoord mux_virtual_core = {0, 0};
-            if (mux_connection_valid(dir)) {
-                auto mux_logical_core = *((mux_core_iter++)->begin());
-                mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
+            auto core = *((worker_core_iter++)->begin());
+            CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
-                std::vector<uint32_t> mux_rt_args = {};
-                const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-                if (dir) {  // forward
-                    const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
-                } else {
-                    const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
-                }
-                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+            uint32_t worker_id = link;
+            uint32_t num_workers = num_links;
+
+            uint32_t start_tiles_read = worker_id * output_channel_num_pages / num_workers;
+            uint32_t start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
+
+            uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
+            uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
+
+            uint32_t chunks_per_sync_val = 1;
+            log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
+
+            std::vector<uint32_t> reader_rt_args = {
+                input_tensor.buffer()->address(),          // input_tensor_address
+                intermediate_tensor.buffer()->address(),   // intermediate_tensor_address
+                multidevice_semaphores.at(dir).address(),  // out_ready_semaphore
+                dir,                                       // direction
+                chunks_per_sync_val,                       // chunks_per_sync
+                start_tiles_read,                          // start_tiles_read
+                start_tiles_to_read,                       // start_tiles_to_read
+                start_pages_read_in_row,                   // start_pages_read_in_row
+                start_row_offset,                          // start_row_offset (unused by dim0 kernel)
+            };
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
+
+            // Writer RT args
+            std::vector<uint32_t> writer_rt_args = {
+                intermediate_tensor.buffer()->address(),                       // intermediate_tensor_address
+                output_tensor.buffer()->address(),                             // output_tensor_address
+                virtual_core.x,                                                // out_ready_sem_noc0_x
+                virtual_core.y,                                                // out_ready_sem_noc0_y
+                multidevice_semaphores.at(dir).address(),                      // out_ready_fwd_semaphore
+                multidevice_semaphores.at(num_directions_per_link).address(),  // batch_ready_semaphore
+                barrier_semaphore.address(),                                   // barrier_sem
+                dir,                                                           // direction
+                chunks_per_sync_val,                                           // chunks_per_sync
+                start_pages_read_in_row,  // start_pages_read_in_row (unused by dim0 kernel)
+                start_row_offset,         // start_row_offset (unused by dim0 kernel)
+                start_tiles_read,         // start_tiles_read
+                start_tiles_to_read,      // tiles_to_read
+            };
+
+            if (output_is_sharded) {
+                shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
             }
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
 
-            auto termination_master_logical_core = *((termination_master_core_iter++)->begin());
-            for (uint32_t worker = 0; worker < num_workers_per_direction_per_link; worker++) {
-                auto core = *((worker_core_iter++)->begin());
-                CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
-
-                uint32_t worker_id = (link * num_workers_per_direction_per_link) + worker;
-                uint32_t num_workers = num_links * num_workers_per_direction_per_link;
-
-                uint32_t start_tiles_read = worker_id * output_channel_num_pages / num_workers;
-                uint32_t start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
-
-                uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
-                uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
-
-                uint32_t chunks_per_sync_val = 1;
-                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
-
-                std::vector<uint32_t> reader_rt_args = {
-                    input_tensor.buffer()->address(),          // input_tensor_address
-                    intermediate_tensor.buffer()->address(),   // intermediate_tensor_address
-                    multidevice_semaphores.at(dir).address(),  // out_ready_semaphore
-                    dir,                                       // direction
-                    chunks_per_sync_val,                       // chunks_per_sync
-                    start_tiles_read,                          // start_tiles_read
-                    start_tiles_to_read,                       // start_tiles_to_read
-                    start_pages_read_in_row,                   // start_pages_read_in_row
-                    start_row_offset,                          // start_row_offset (unused by dim0 kernel)
-                };
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
-
-                CoreCoord termination_master_virtual_core =
-                    mesh_device->worker_core_from_logical_core(termination_master_logical_core);
-
-                // Writer RT args
-                std::vector<uint32_t> writer_rt_args = {
-                    intermediate_tensor.buffer()->address(),                       // intermediate_tensor_address
-                    output_tensor.buffer()->address(),                             // output_tensor_address
-                    virtual_core.x,                                                // out_ready_sem_noc0_x
-                    virtual_core.y,                                                // out_ready_sem_noc0_y
-                    multidevice_semaphores.at(dir).address(),                      // out_ready_fwd_semaphore
-                    multidevice_semaphores.at(num_directions_per_link).address(),  // batch_ready_semaphore
-                    barrier_semaphore.address(),                                   // barrier_sem
-                    dir,                                                           // direction
-                    chunks_per_sync_val,                                           // chunks_per_sync
-                    start_pages_read_in_row,  // start_pages_read_in_row (unused by dim0 kernel)
-                    start_row_offset,         // start_row_offset (unused by dim0 kernel)
-                    start_tiles_read,         // start_tiles_read
-                    start_tiles_to_read,      // tiles_to_read
-
-                };
-                deepseek_append_fabric_mux_connection_rt_args(
-                    mux_connection_valid(dir),
-                    mux_virtual_core,
-                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                    mux_kernel_config,
-                    core,
-                    worker,
-                    worker == 0,
-                    termination_master_virtual_core,
-                    program,
-                    writer_rt_args);
-                if (output_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
-                }
-                tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
-
-                std::vector<uint32_t> reduce_rt_args = {
-                    start_tiles_read,     // start_tiles_read
-                    start_tiles_to_read,  // start_tiles_to_read
-                    dir};                 // dir
-                tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, reduce_rt_args);
-            }
+            std::vector<uint32_t> reduce_rt_args = {
+                start_tiles_read,     // start_tiles_read
+                start_tiles_to_read,  // start_tiles_to_read
+                dir};                 // dir
+            tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, reduce_rt_args);
         }
     }
 
-    return {
-        reader_kernel_id,
-        writer_kernel_id,
-        all_cores,
-        num_directions_per_link,
-        num_workers_per_direction_per_link,
-        num_mux_cores_per_direction_per_link,
-        num_cores_per_link};
+    return {reader_kernel_id, writer_kernel_id, all_cores, num_directions_per_link};
 }
 
 void deepseek_reduce_scatter_helper_override_runtime_arguments(
@@ -482,9 +320,6 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     const tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction_per_link,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
     uint32_t num_links,
@@ -494,29 +329,22 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     // update senders
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            for (uint32_t worker = 0; worker < num_workers_per_direction_per_link; worker++) {
-                uint32_t mux_core_offset =
-                    (link * num_cores_per_link) +
-                    (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction_per_link));
-                CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-                std::vector<std::vector<RuntimeArgsData>> reader_runtime_args =
-                    GetRuntimeArgs(program, reader_kernel_id);
-                std::vector<std::vector<RuntimeArgsData>> writer_runtime_args =
-                    GetRuntimeArgs(program, writer_kernel_id);
+            CoreCoord core = all_cores[link * num_directions_per_link + dir];
+            std::vector<std::vector<RuntimeArgsData>> reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
+            std::vector<std::vector<RuntimeArgsData>> writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 
-                // sender reader
-                auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input_tensor.buffer()->address();
-                worker_reader_sender_runtime_args[1] = intermediate_tensor.buffer()->address();
-                worker_reader_sender_runtime_args[2] = multidevice_semaphores.at(dir).address();
-                // sender writer
-                auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = intermediate_tensor.buffer()->address();
-                worker_writer_sender_runtime_args[1] = output_tensor.buffer()->address();
-                worker_writer_sender_runtime_args[4] = multidevice_semaphores.at(dir).address();
-                worker_writer_sender_runtime_args[5] = multidevice_semaphores.at(num_directions_per_link).address();
-                worker_writer_sender_runtime_args[7] = barrier_semaphore.address();
-            }
+            // sender reader
+            auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
+            worker_reader_sender_runtime_args[0] = input_tensor.buffer()->address();
+            worker_reader_sender_runtime_args[1] = intermediate_tensor.buffer()->address();
+            worker_reader_sender_runtime_args[2] = multidevice_semaphores.at(dir).address();
+            // sender writer
+            auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
+            worker_writer_sender_runtime_args[0] = intermediate_tensor.buffer()->address();
+            worker_writer_sender_runtime_args[1] = output_tensor.buffer()->address();
+            worker_writer_sender_runtime_args[4] = multidevice_semaphores.at(dir).address();
+            worker_writer_sender_runtime_args[5] = multidevice_semaphores.at(num_directions_per_link).address();
+            worker_writer_sender_runtime_args[7] = barrier_semaphore.address();
         }
     }
 }
@@ -635,9 +463,6 @@ void DeepseekReduceScatterMeshWorkloadFactory::override_runtime_arguments(
             shared_vars.program_artifacts.writer_kernel_id,
             shared_vars.program_artifacts.all_cores,
             shared_vars.program_artifacts.num_directions_per_link,
-            shared_vars.program_artifacts.num_workers_per_direction,
-            shared_vars.program_artifacts.num_mux_cores_per_direction_per_link,
-            shared_vars.program_artifacts.num_cores_per_link,
             shared_vars.multidevice_semaphores,
             shared_vars.barrier_semaphore,
             operation_attributes.num_links,
