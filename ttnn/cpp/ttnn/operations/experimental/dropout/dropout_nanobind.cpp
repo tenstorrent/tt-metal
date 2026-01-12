@@ -70,8 +70,10 @@ void bind_experimental_dropout_operation(nb::module_& mod) {
                const float probability,
                const float scale,
                const uint32_t seed,
-               const std::optional<MemoryConfig>& /*memory_config*/,
-               const std::optional<Tensor>& /*output_tensor*/) { return self(input, probability, scale, seed); },
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) {
+                return self(input, probability, scale, seed, true, memory_config, output_tensor);
+            },
             nb::arg("input_tensor"),
             nb::arg("probability"),
             nb::arg("scale"),
