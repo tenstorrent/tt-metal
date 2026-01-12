@@ -14,8 +14,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::unary {
 
 namespace {
-void validate_supported_arch_dtype(
-    tt::ARCH arch, DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
+void validate_supported_arch_dtype(DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_NOT:
@@ -53,11 +52,11 @@ UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_fac
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return program::UnaryShardedProgramFactory{};
-    } else if(args.sub_core_grids.has_value()) {
-        return program::UnarySubCoreGridProgramFactory{};
-    } else {
-        return program::UnaryProgramFactory{};
     }
+    if (args.sub_core_grids.has_value()) {
+        return program::UnarySubCoreGridProgramFactory{};
+    }
+    return program::UnaryProgramFactory{};
 }
 
 void UnaryDeviceOperation::validate_on_program_cache_hit(
@@ -77,10 +76,9 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         output_datatype = preallocated_output_tensor->dtype();
     }
 
-    auto arch = input_tensor.device()->arch();
     auto input_datatype = input_tensor.dtype();
     for (const auto& unary_op : args.op_chain) {
-        validate_supported_arch_dtype(arch, input_datatype, output_datatype, unary_op.type());
+        validate_supported_arch_dtype(input_datatype, output_datatype, unary_op.type());
     }
 
     TT_FATAL(
@@ -116,10 +114,11 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
             computed_output_shape,
             preallocated_output_shape);
 
-        if(!input_tensor.is_sharded()){
+        if (!input_tensor.is_sharded()) {
             TT_FATAL(
                 (preallocated_output_tensor.value().layout() == input_tensor.layout()),
-                "Unary operation requires output tensor layout ({}) to match input tensor layout ({}) when working with non-sharded tensor.",
+                "Unary operation requires output tensor layout ({}) to match input tensor layout ({}) when working "
+                "with non-sharded tensor.",
                 static_cast<int>(preallocated_output_tensor.value().layout()),
                 static_cast<int>(input_tensor.layout()));
         }
@@ -135,12 +134,14 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
     const auto output_layout = tensor_args.input.layout();
 
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout::fromPaddedShape(
-        args.output_dtype,
-        PageConfig(output_layout),
-        args.output_memory_config,
+    return TensorSpec(
         output_shape,
-        tensor_args.input.padded_shape()));
+        TensorLayout::fromPaddedShape(
+            args.output_dtype,
+            PageConfig(output_layout),
+            args.output_memory_config,
+            output_shape,
+            tensor_args.input.padded_shape()));
 }
 
 tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
@@ -170,8 +171,8 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
 }
 
 bool UnaryDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }
@@ -203,4 +204,4 @@ ttnn::operations::unary::UnaryDeviceOperation::tensor_return_value_t unary(
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
-} // namespace ttnn::prim
+}  // namespace ttnn::prim

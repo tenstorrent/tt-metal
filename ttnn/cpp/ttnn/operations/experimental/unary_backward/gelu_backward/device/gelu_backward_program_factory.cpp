@@ -132,7 +132,7 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
 
 void GeluBackwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     using namespace tt::tt_metal;

@@ -27,7 +27,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/blockfloat_common.hpp>
+#include "impl/data_format/blockfloat_common.hpp"
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/soc_descriptor.hpp>
@@ -1142,10 +1142,8 @@ void DPrintServer::Impl::poll_print_data() {
                                 server_killed_due_to_hang_ = true;
                                 device_to_core_range_lock_.unlock();
                                 return;  // Stop the print loop
-                            } else {
-                                // Re-throw for instant exit
-                                throw e;
-                            }
+                            }  // Re-throw for instant exit
+                            throw e;
                         }
 
                         // If this read detected a print hang, stop processing prints.

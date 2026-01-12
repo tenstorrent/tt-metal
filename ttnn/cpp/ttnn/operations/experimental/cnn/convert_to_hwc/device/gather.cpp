@@ -152,11 +152,11 @@ std::vector<GatherTransfer> precompute_gather_transfers(
 
 std::vector<LowLevelGatherTransfer> lower_gather_transfers(
     const std::vector<GatherTransfer>& transfers,
-    uint32_t B,
+    uint32_t /*B*/,
     uint32_t C,
     uint32_t HW,
     const std::vector<CoreCoord>& input_cores,
-    uint32_t num_output_cores,
+    uint32_t /*num_output_cores*/,
     uint32_t element_size_bytes,
     uint32_t output_shard_width) {
     std::vector<LowLevelGatherTransfer> low_level_transfers;

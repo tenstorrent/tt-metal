@@ -128,8 +128,8 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
             },
             operation_attributes.program_config);
         return program::SoftmaxProgramFactoryAttentionOptimized{};
-    } else if (
-        operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == rank - 1 &&
+    }
+    if (operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == rank - 1 &&
         rank == 4) {
         return std::visit(
             [&](const auto& program_config) -> program_factory_t {
@@ -340,7 +340,7 @@ tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxDeviceOperation::tensor_return_value_t>
 SoftmaxDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, const Tensor& output_tensor) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args, const Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
     int ideal_dev_clock_cycles = data_movement::common_tm_bw_model(input_tensor, output_tensor);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(

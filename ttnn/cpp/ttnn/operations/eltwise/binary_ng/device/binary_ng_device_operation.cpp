@@ -88,9 +88,11 @@ CoreRangeSet get_worker_grid(
 
     if (input_tensor_a.is_sharded()) {
         return get_tensor_grid(input_tensor_a);
-    } else if (input_tensor_b && input_tensor_b->is_sharded()) {
+    }
+    if (input_tensor_b && input_tensor_b->is_sharded()) {
         return get_tensor_grid(*input_tensor_b);
-    } else if (output_tensor.has_value() && output_tensor->is_sharded()) {
+    }
+    if (output_tensor.has_value() && output_tensor->is_sharded()) {
         return get_tensor_grid(*output_tensor);
     }
 
@@ -425,8 +427,8 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
 }
 
 bool BinaryNgDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }
@@ -468,10 +470,12 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
 
     DataType dtype_a = input_tensor_a.dtype();
     DataType dtype_b = input_tensor_b.dtype();
-    bool is_sfpu_op =
-        (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
+    bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
+        binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
-    bool is_where_op = (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS || binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
+    bool is_where_op =
+        (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
+         binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
     auto operation_attributes = OperationType::operation_attributes_t{
         binary_op_type,
         {lhs_activations.begin(), lhs_activations.end()},
@@ -508,12 +512,12 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    std::optional<ttnn::operations::unary::ScalarVariant> scalar_value,
+    std::optional<ttnn::operations::unary::ScalarVariant> /*scalar_value*/,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;
     DataType dtype_a = input_tensor_a.dtype();
-    bool is_sfpu_op =
-        (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
+    bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
+        binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
     auto operation_attributes = OperationType::operation_attributes_t{
         binary_op_type,

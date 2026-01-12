@@ -1107,7 +1107,7 @@ std::shared_ptr<Program> create_reduce_program(
     const MeshSocket& recv_socket_0,
     const MeshSocket& recv_socket_1,
     const MeshSocket& send_socket_2,
-    const std::shared_ptr<MeshDevice>& reducer,
+    const std::shared_ptr<MeshDevice>& /*reducer*/,
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& reduce_logical_coord,
@@ -1560,12 +1560,10 @@ std::pair<MeshCoordinate, MeshCoordinate> get_random_mesh_coordinates(const Mesh
         }
         log_info(LogTest, "Random mesh coordinates: {} {}", coord0, coord1);
         return {coord0, coord1};
-    } else {
-        // 1D fabric config requires neighboring devices for now
-        auto coord0 = MeshCoordinate(0, 0);
-        auto coord1 = MeshCoordinate(1, 0);
-        return {coord0, coord1};
-    }
+    }  // 1D fabric config requires neighboring devices for now
+    auto coord0 = MeshCoordinate(0, 0);
+    auto coord1 = MeshCoordinate(1, 0);
+    return {coord0, coord1};
 }
 
 template <typename FixtureT>

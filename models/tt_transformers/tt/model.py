@@ -172,7 +172,9 @@ class Transformer(LightweightModule):
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
+    def prepare_inputs_prefill(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device if trace is disabled or on host if trace is enabled.
@@ -200,23 +202,55 @@ class Transformer(LightweightModule):
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
-        assert (
-            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
+        mat_len = self.rope_setup.cos_matrix.shape[2]
+        # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
+        seq_len = last_token_idx + 1 if last_token_idx is not None else S
+        assert mat_len >= seq_len, f"Seqence length {seq_len} exceeds max seq len {mat_len}"
 
-        # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
-        start_pos = 0 if trace_enabled else start_pos
-        end_pos = self.args.max_seq_len if trace_enabled else start_pos + S
+        # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.
+        required_end = start_pos + S
+        if required_end > mat_len:
+            pad_len = required_end - mat_len
+        else:
+            pad_len = 0
 
+        # We set slice_end to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
+        slice_start = 0 if trace_enabled else start_pos
+        slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
+        cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]
+        sin_slice = self.rope_setup.sin_matrix[:, :, slice_start:slice_end, :]
+        if pad_len > 0:
+            # padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
+            padding = [(0, 0)] * 4
+            padding[2] = (0, pad_len)
+            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
+            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :],
-            self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :],
+            cos_slice,
+            sin_slice,
         ]
 
         if hasattr(self, "rope_local_setup"):
+            local_mat_len = self.rope_local_setup.cos_matrix.shape[2]
+            local_required_end = start_pos + S
+            if local_required_end > local_mat_len:
+                local_pad_len = local_required_end - local_mat_len
+            else:
+                local_pad_len = 0
+
+            local_slice_end = self.args.max_seq_len if trace_enabled else min(local_mat_len, local_required_end)
+            local_cos_slice = self.rope_local_setup.cos_matrix[:, :, slice_start:local_slice_end, :]
+            local_sin_slice = self.rope_local_setup.sin_matrix[:, :, slice_start:local_slice_end, :]
+            if local_pad_len > 0:
+                # pad at end of 3rd dim (dim=2) by local_pad_len
+                local_padding = [(0, 0)] * 4
+                local_padding[2] = (0, local_pad_len)
+                local_cos_slice = ttnn.pad(local_cos_slice, padding=local_padding, value=0.0)
+                local_sin_slice = ttnn.pad(local_sin_slice, padding=local_padding, value=0.0)
+
             tt_rot_mats_prefill_local = [
-                self.rope_local_setup.cos_matrix[:, :, start_pos:end_pos, :],
-                self.rope_local_setup.sin_matrix[:, :, start_pos:end_pos, :],
+                local_cos_slice,
+                local_sin_slice,
             ]
         else:
             tt_rot_mats_prefill_local = None
@@ -531,4 +565,5 @@ class Transformer(LightweightModule):
         if mode == "prefill":
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         return x
