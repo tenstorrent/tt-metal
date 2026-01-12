@@ -29,7 +29,30 @@ from transformers import AutoTokenizer
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs
 
-DEFAULT_PROMPT = "Explain the concept of machine learning in detail:"
+DEFAULT_PROMPT = """
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+
+Curabitur pretium tincidunt lacus. Nulla gravida orci a odio. Nullam varius, turpis et commodo pharetra, est eros bibendum elit, nec luctus magna felis sollicitudin mauris. Integer in mauris eu nibh euismod gravida. Duis ac tellus et risus vulputate vehicula. Donec lobortis risus a elit. Etiam tempor ultrices ligula. Phasellus at dui in ligula mollis ultricies. Vestibulum blandit rhoncus risus. Quisque ligula ipsum, euismod atras vulputate scelerisque et dictum.
+
+Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. Proin pharetra nonummy pede. Mauris et orci. Aenean nec lorem. In porttitor consequat ut. Pellentesque dapibus hendrerit tortor. Praesent egestas tristique nibh. Sed a libero. Cras varius. Donec vitae orci sed dolor rutrum auctor. Fusce egestas elit eget lorem. Suspendisse nisl elit rhoncus eget elementum ac condimentum eget diam.
+
+Nam pretium turpis et arcu. Duis arcu tortor suscipit eget imperdiet nec imperdiet iaculis ipsum. Sed aliquam ultrices mauris. Integer ante arcu accumsan a consectetuer eget posuere ut mauris. Praesent adipiscing. Phasellus ullamcorper ipsum rutrum nunc. Nunc nonummy metus. Vestibulum volutpat pretium libero. Cras id dui. Aenean ut eros et nisl sagittis vestibulum. Nullam nulla eros ultricies sit amet nonummy id imperdiet feugiat pede.
+
+Sed lectus. Donec mollis hendrerit risus. Phasellus nec sem in justo pellentesque facilisis. Etiam imperdiet imperdiet orci. Nunc nec neque. Phasellus leo dolor tempus non auctor et rutrum non nonummy eget. Praesent quis nisi ut arcu dignissim mattis. Aenean auctor gravida sem. Praesent id massa id nisl venenatis lacinia. Aenean sit amet justo. Morbi ut odio. Cras mi pede malesuada in imperdiet et commodo vulputate justo.
+
+In blandit ultrices enim. Lorem ipsum dolor sit amet consectetuer adipiscing elit. Proin interdum mauris non ligula pellentesque ultrices. Phasellus id sapien in sapien iaculis congue. Vivamus metus arcu adipiscing molestie hendrerit at vulputate vitae nisl. Aenean lectus. Pellentesque eget nunc. Donec quis orci eget orci vehicula condimentum. Curabitur in libero ut massa volutpat convallis. Morbi odio odio elementum eu interdum eu tincidunt in leo.
+
+Maecenas malesuada. Praesent congue erat at massa. Sed cursus turpis vitae tortor. Donec posuere vulputate arcu. Phasellus accumsan cursus velit. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae. Sed aliquam nisi quis porttitor congue elit erat euismod orci ac placerat dolor lectus quis orci. Phasellus consectetuer vestibulum elit. Aenean tellus metus bibendum sed posuere ac mattis non nunc.
+
+Vestibulum fringilla pede sit amet augue. In turpis pellentesque purus. Quisque a lectus. Donec consectetuer ligula vulputate sem tristique cursus. Nam nulla. Donec sodales sagittis magna. Sed consequat leo eget bibendum sodales augue velit cursus nunc quis gravida ante nibh vel velit auctor aliquet. Aenean sollicitudin nec sagittis nisi semper in. Duis vel nibh at velit scelerisque suscipit. Curabitur turpis. Vestibulum suscipit nulla quis orci.
+
+Fusce ac felis sit amet ligula pharetra condimentum. Maecenas egestas arcu quis ligula mattis placerat. Duis lobortis massa imperdiet quam. Suspendisse potenti. Pellentesque commodo eros a enim. Vestibulum turpis sem aliquet eget lobortis pellentesque rutrum eu nisl. Proin nec tellus sit amet turpis lacinia placerat imperdiet nulla. Sed augue ipsum egestas nec vestibulum et molestie sit amet dui. Fusce anteam justo in pellentesque mollis pretium sit amet justo.
+
+Nulla metus metus ullamcorper vel tincidunt sed euismod in nibh. Quisque volutpat condimentum velit. Class aptent taciti sociosqu ad litora torquent per conubia nostra per inceptos himenaeos. Nam nec ante. Sed lacinia arcu eu justo posuere ullamcorper. Donec vitae ligula id urna malesuada dictum. Fusce neque. Nunc eleifend consequat lorem. Sed lacinia nulla vitae enim. Pellentesque tincidunt purus vel magna. Integer non enim. Praesent euismod nunc eu purus.
+
+Donec bibendum quam in tellus. Nullam cursus pulvinar lectus. Donec et mi. Nam vulputate metus eu enim. Vestibulum pellentesque felis eu massa. Quisque ullamcorper placerat ipsum. Cras nibh. Morbi vel justo vitae lacus tincidunt ultrices. Lorem ipsum dolor sit amet consectetuer adipiscing elit. In hac habitasse platea dictumst. Integer tempus convallis augue. Etiam facilisis ligula nec velit. Praesent quam turpis feugiat sit amet ultricies cursus.
+
+Proin sodales libero eget ante. Nulla quam. Aenean laoreet. Vestibulum nisi lectus commodo ac facilisis ac ultricies eu pede. Ut orci risus accumsan porttitor cursus quis aliquet eget justo. Sed pretium blandit orci. Ut eu diam at pede suscipit sodales. Aenean lectus elit fermentum non convallis id sagittis at neque. Nullam mauris orci aliquet et faucibus posuere in nunc. Donec blandit feugiat ligula."""
 DEFAULT_MAX_NEW_TOKENS = 50
 
 
@@ -137,13 +160,15 @@ def run_prefill_node(device, model, model_args, kv_cache, tokens, send_socket, a
     logger.info(f"Prefill complete in {prefill_time_ms:.1f}ms. Next token: {next_token.item()}")
 
     # Send KV cache layer by layer with timing
+    # Record wall-clock time (monotonic nanoseconds) for end-to-end transfer measurement
     t_transfer_start = time.perf_counter()
+    t_transfer_start_ns = time.time_ns()  # Wall-clock for cross-process measurement
     for layer_idx, (k_cache, v_cache) in enumerate(kv_cache):
         logger.info(f"Sending KV cache layer {layer_idx}")
         ttnn.experimental.send_async(k_cache, send_socket)
         ttnn.experimental.send_async(v_cache, send_socket)
 
-    # Also send the sequence length and next token as metadata
+    # Also send the sequence length, next token, and transfer start timestamp as metadata
     # (In practice, you'd use a separate control channel)
     # Use actual_seq_len for metadata (before padding)
     #
@@ -151,16 +176,21 @@ def run_prefill_node(device, model, model_args, kv_cache, tokens, send_socket, a
     # BFLOAT16 loses precision for large integers (e.g., token IDs > 32K)
     # which causes the wrong token to be decoded on the receiver side.
     #
-    # Use explicit 4D shape [1, 1, 1, 2] to match receiver's expected dimensions.
+    # Use explicit 4D shape [1, 1, 1, 4] to match receiver's expected dimensions.
     # TILE_LAYOUT will pad this to [1, 1, 32, 32] on both sides.
-    metadata = torch.tensor([[[[actual_seq_len, next_token.item()]]]], dtype=torch.int32)
+    # We split the 64-bit nanosecond timestamp into two 32-bit integers (high, low).
+    t_start_high = int(t_transfer_start_ns >> 32)
+    t_start_low = int(t_transfer_start_ns & 0xFFFFFFFF)
+    metadata = torch.tensor([[[[actual_seq_len, next_token.item(), t_start_high, t_start_low]]]], dtype=torch.int64)
     metadata_tt = ttnn.from_torch(
         metadata,
         device=device,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
     )
-    logger.info(f"Sending metadata: seq_len={actual_seq_len}, next_token={next_token.item()}")
+    logger.info(
+        f"Sending metadata: seq_len={actual_seq_len}, next_token={next_token.item()}, transfer_start_ns={t_transfer_start_ns}"
+    )
     ttnn.experimental.send_async(metadata_tt, send_socket)
 
     # CRITICAL: Synchronize after all send_async calls to ensure transfers complete.
@@ -193,8 +223,7 @@ def run_decode_node(device, model, model_args, kv_cache, recv_socket, tokenizer,
     """
     logger.info("=== DECODE NODE (Process 1) ===")
 
-    # Receive KV cache layer by layer with timing
-    t_recv_start = time.perf_counter()
+    # Receive KV cache layer by layer
     for layer_idx in range(len(kv_cache)):
         k_cache_recv = ttnn.allocate_tensor_on_device(kv_cache[layer_idx][0].spec, device)
         v_cache_recv = ttnn.allocate_tensor_on_device(kv_cache[layer_idx][1].spec, device)
@@ -207,7 +236,7 @@ def run_decode_node(device, model, model_args, kv_cache, recv_socket, tokenizer,
         logger.info(f"Received KV cache layer {layer_idx}")
 
     # Receive metadata (UINT32 to preserve integer precision for token IDs)
-    # Shape must match sender's explicit 4D shape [1, 1, 1, 2], which gets tile-padded to [1, 1, 32, 32]
+    # Shape must match sender's explicit 4D shape [1, 1, 1, 4], which gets tile-padded to [1, 1, 32, 32]
     metadata_recv = ttnn.allocate_tensor_on_device(
         ttnn.TensorSpec([1, 1, 32, 32], ttnn.DataType.UINT32, ttnn.TILE_LAYOUT), device
     )
@@ -221,29 +250,41 @@ def run_decode_node(device, model, model_args, kv_cache, recv_socket, tokenizer,
     #   2. Incorrect attention outputs leading to nonsensical token generation
     #   3. Potential hardware hangs if tensors are deallocated during active transfer
     ttnn.synchronize_device(device)
+
+    # Record wall-clock time immediately after sync completes (all data received)
+    t_recv_end_ns = time.time_ns()
+
     # Convert metadata tensor to torch
     # Since we're on a distributed mesh, use mesh composer (tensor is replicated, so take first slice)
     metadata_full = ttnn.to_torch(
         ttnn.from_device(metadata_recv), mesh_composer=ttnn.ConcatMeshToTensor(device, dim=-1)
     )
-    # Take first slice since tensor is replicated across mesh
-    metadata = metadata_full[:, :, :, : metadata_full.shape[3] // 2] if metadata_full.shape[3] > 2 else metadata_full
+    # Take first slice since tensor is replicated across mesh (4 values per replica)
+    metadata = metadata_full[:, :, :, : metadata_full.shape[3] // 2] if metadata_full.shape[3] > 4 else metadata_full
 
     # Debug: log the metadata tensor shape and first few values
     logger.info(f"Metadata tensor shape: {metadata.shape}")
     logger.info(f"Metadata tensor first values: {metadata[0, 0, 0, :8].tolist()}")
 
     # Extract metadata from the first tile (data is in the first row of the first tile)
-    # The tensor shape is [1, 1, 32, 32] but we only sent 2 values, so they're at [0, 0, 0, 0] and [0, 0, 0, 1]
+    # The tensor shape is [1, 1, 32, 32] but we only sent 4 values:
+    #   [0]: seq_len, [1]: next_token, [2]: timestamp_high, [3]: timestamp_low
     seq_len = int(metadata[0, 0, 0, 0].item())
     current_token = int(metadata[0, 0, 0, 1].item())
-    t_recv_end = time.perf_counter()
-    recv_time_ms = (t_recv_end - t_recv_start) * 1000
+    t_start_high = int(metadata[0, 0, 0, 2].item())
+    t_start_low = int(metadata[0, 0, 0, 3].item())
+
+    # Reconstruct the 64-bit nanosecond timestamp from prefill node
+    # Mask to 32 bits to handle UINT32 -> signed int32 conversion (negative values if high bit set)
+    t_transfer_start_ns = ((t_start_high & 0xFFFFFFFF) << 32) | (t_start_low & 0xFFFFFFFF)
+    e2e_transfer_time_ms = (t_recv_end_ns - t_transfer_start_ns) / 1_000_000
+
+    logger.info(f"=== END-TO-END KV CACHE TRANSFER TIME: {e2e_transfer_time_ms:.1f}ms ===")
 
     logger.info(
         f"Received metadata: seq_len={seq_len}, current_token={current_token} ({tokenizer.decode([current_token])})"
     )
-    logger.info(f"Received KV cache in {recv_time_ms:.1f}ms. Starting decode from position {seq_len}")
+    logger.info(f"Starting decode from position {seq_len}")
 
     # Decode loop
     generated_tokens = [current_token]
@@ -316,7 +357,7 @@ def run_decode_node(device, model, model_args, kv_cache, recv_socket, tokenizer,
     logger.info(f"Generated text: {generated_text}")
 
     logger.info(f"=== DECODE TIMING SUMMARY ===")
-    logger.info(f"  KV cache receive: {recv_time_ms:.1f}ms")
+    logger.info(f"  KV cache transfer (end-to-end): {e2e_transfer_time_ms:.1f}ms")
     logger.info(f"  Decode steps: {num_tokens} tokens in {total_decode_time_ms:.1f}ms")
     logger.info(f"  Avg time per token: {avg_decode_time_ms:.1f}ms")
     logger.info(f"  Throughput: {tokens_per_sec:.1f} tokens/sec")
