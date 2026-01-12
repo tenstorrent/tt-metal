@@ -241,18 +241,19 @@ protected:
 
     void SetUp() override {
         // When Fabric is enabled, it requires all devices in the system to be active.
-        // Skip the test if the system has more devices than the requested mesh size (1x4 = 4 devices).
-        // T3000 has 4 PCIe devices (4xN300 with 2 chips each = 8 chips, but counts as 4 devices).
-        // Blackhole LoudBox has 8 PCIe devices (8xP150 = 8 devices).
-        // This skip ensures tests only run on systems where all devices can be activated.
-        const auto system_mesh_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
+        // For Blackhole P150_X8 systems (8 independent chips), opening 4 devices leaves 4 inactive, causing a fatal error.
+        // For T3K (4 N300 boards = 8 chips), opening 4 MMIO devices automatically activates all 8 chips, so it works.
+        // Skip the test only on Blackhole systems with more than 4 devices.
+        const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+        const size_t num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
         const size_t requested_devices = 4;  // 1x4 mesh
-        if (system_mesh_shape.mesh_size() > requested_devices) {
+        
+        if (cluster_type == tt::tt_metal::ClusterType::P150_X8 && num_devices > requested_devices) {
             GTEST_SKIP() << fmt::format(
-                "Skipping MeshDevice1x4Fabric2DUDMFixture test: Fabric requires all devices to be active, "
-                "but system has {} devices and test only requests {} devices. "
-                "Fabric cannot be launched on a subset of available devices.",
-                system_mesh_shape.mesh_size(),
+                "Skipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: "
+                "System has {} independent Blackhole devices but test only requests {}. "
+                "Fabric requires all devices to be active.",
+                num_devices,
                 requested_devices);
         }
         MeshDeviceFixtureBase::SetUp();
