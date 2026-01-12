@@ -95,39 +95,33 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
 
-    // scatter-write currently only supports 2 distinct noc addresses
-    uint32_t max_target_noc_addresses_per_packet = 2;
-
     // L1 Scratch CB Creation
     uint32_t page_size = input_tensor.buffer()->page_size();
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    uint32_t l1_scratch_cb_page_size_bytes = page_size;
-    uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
-    uint32_t tile_granularity = 2;                 // process 2 tiles at a time
-    uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
+    uint32_t tile_granularity =
+        2;  // TODO: (GR) process 2 tiles at a time (scatter write) -> currently hardcoded in the kernels
+    uint32_t cb_num_pages = 2 * tile_granularity;  // TODO: (GR) double buffering (enough to hold all tiles for a given
+                                                   // slice), test/check if we should use more
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_cb_index = tt::CB::c_in0;
     tt::tt_metal::CircularBufferConfig cb_input_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{input_cb_index, df}})
-            .set_page_size(input_cb_index, l1_scratch_cb_page_size_bytes);
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_cb_index, df}})
+            .set_page_size(input_cb_index, page_size);
     CreateCircularBuffer(program, worker_core_range_set, cb_input_config);
     uint32_t intermediate_cb_index = tt::CB::c_in1;
     tt::tt_metal::CircularBufferConfig cb_intermediate_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_cb_index, df}})
-            .set_page_size(intermediate_cb_index, l1_scratch_cb_page_size_bytes);
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_cb_index, df}})
+            .set_page_size(intermediate_cb_index, page_size);
     CreateCircularBuffer(program, worker_core_range_set, cb_intermediate_config);
     uint32_t reader_output_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig cb_reader_output_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{reader_output_cb_index, df}})
-            .set_page_size(reader_output_cb_index, l1_scratch_cb_page_size_bytes);
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{reader_output_cb_index, df}})
+            .set_page_size(reader_output_cb_index, page_size);
     CreateCircularBuffer(program, worker_core_range_set, cb_reader_output_config);
     uint32_t compute_output_cb_index = tt::CB::c_in3;
     tt::tt_metal::CircularBufferConfig cb_compute_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            cb_num_pages * l1_scratch_cb_page_size_bytes, {{compute_output_cb_index, df}})
-            .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{compute_output_cb_index, df}})
+            .set_page_size(compute_output_cb_index, page_size);
     CreateCircularBuffer(program, worker_core_range_set, cb_compute_output_config);
 
     // handle output sharded tensors using ShardedAddrGen
@@ -144,7 +138,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         input_cb_index,          // cb_input_id
         intermediate_cb_index,   // cb_intermediate_id
         reader_output_cb_index,  // cb_reader_output_id
-        tile_granularity,        // tile_granularity
         page_size,               // page_size
         input_tensor_Wt,         // input_tensor_Wt
         slice_Wt,                // slice_Wt
@@ -161,15 +154,13 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
 
     // writer
     std::vector<uint32_t> writer_ct_args = {
-        ring_index,                     // my_chip_id
-        ring_size,                      // ring_size
-        compute_output_cb_index,        // cb_compute_output_id
-        reader_output_cb_index,         // cb_reader_output_id
-        tile_granularity,               // packet_size_in_pages
-        page_size,                      // page_size
-        num_tiles_to_write_per_packet,  // num_tiles_to_write_per_packet
-        input_tensor_Wt,                // input_tensor_Wt
-        slice_Wt,                       // slice_Wt
+        ring_index,               // my_chip_id
+        ring_size,                // ring_size
+        compute_output_cb_index,  // cb_compute_output_id
+        reader_output_cb_index,   // cb_reader_output_id
+        page_size,                // page_size
+        input_tensor_Wt,          // input_tensor_Wt
+        slice_Wt,                 // slice_Wt
     };
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(writer_ct_args);
     if (output_is_sharded) {
@@ -194,7 +185,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         input_cb_index,           // input_cb_id
         intermediate_cb_index,    // intermediate_cb
         compute_output_cb_index,  // output_cb
-        tile_granularity,         // tile_granularity
         ring_size,                // ring_size
     };
 
@@ -216,7 +206,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             uint32_t start_tiles_to_read = (link + 1) * output_tensor_num_pages / num_links;
 
             uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
-            uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
 
             // reader
             std::vector<uint32_t> reader_rt_args = {
@@ -227,7 +216,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 start_tiles_read,                          // start_tiles_read
                 start_tiles_to_read,                       // start_tiles_to_read
                 start_pages_read_in_row,                   // start_pages_read_in_row
-                start_row_offset,                          // start_row_offset (unused by dim0 kernel)
             };
 
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
@@ -243,7 +231,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 barrier_semaphore.address(),                                   // barrier_sem
                 dir,                                                           // direction
                 start_pages_read_in_row,  // start_pages_read_in_row (unused by dim0 kernel)
-                start_row_offset,         // start_row_offset (unused by dim0 kernel)
                 start_tiles_read,         // start_tiles_read
                 start_tiles_to_read,      // tiles_to_read
             };

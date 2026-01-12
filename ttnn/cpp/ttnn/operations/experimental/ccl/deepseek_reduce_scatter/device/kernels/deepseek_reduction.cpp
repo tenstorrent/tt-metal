@@ -6,17 +6,20 @@
 #include "compute_kernel_api/eltwise_binary.h"
 
 namespace NAMESPACE {
-void MAIN {
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t output_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(4);
 
+constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
+constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
+constexpr uint32_t output_cb = get_compile_time_arg_val(2);
+constexpr uint32_t ring_size = get_compile_time_arg_val(3);
+
+void MAIN {
     uint32_t arg_idx = 0;
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
+
+    // hardcoded constants
+    constexpr uint32_t tile_granularity = 2;
 
     // Initialize binary operations - use the same constants consistently
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
@@ -34,12 +37,8 @@ void MAIN {
         // Wait for input data once before beginning processing
         while (tiles_read < tiles_to_read) {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-            uint32_t num_pages_to_read = 0;
-            if (direction) {
-                num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);
-            } else {
-                num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
-            }
+            uint32_t num_pages_to_read = tile_granularity;
+
             cb_wait_front(input_cb_id, tile_granularity);
             cb_wait_front(intermediate_cb, tile_granularity);
             cb_reserve_back(output_cb, tile_granularity);
@@ -62,4 +61,5 @@ void MAIN {
         }
     }
 }
+
 }  // namespace NAMESPACE
