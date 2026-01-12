@@ -81,6 +81,7 @@ jobs:
             RUNS_ON='["'$RUNNER_LABEL'", "in-service", "cloud-virtual-machine"]'
           else
             # Fallback to viommu-stable format (output as JSON array)
+            echo "Warning: unexpected runner label '$RUNNER_LABEL'; using fallback VIOMMU label." >&2
             VIOMMU_LABEL='tt-ubuntu-2204-'$RUNNER_LABEL'-viommu-stable'
             RUNS_ON='["'$VIOMMU_LABEL'"]'
           fi
