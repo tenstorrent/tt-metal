@@ -569,7 +569,7 @@ void calculate_exponential_polynomial_init() {
     init_clamp_loadmacro<SCALE>();
 }
 
-template <bool SCALE_EN, int ITERATIONS, bool USE_SFPARECIP_INSTR, int POLY_DEGREE>
+template <bool SCALE_EN, int ITERATIONS, bool USE_SFPARECIP_INSTR, int POLY_DEGREE, bool is_fp32_dest_acc_en = false>
 void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) {
     // Clamp values < -88.5 to 0.
     run_clamp_loadmacro();
@@ -671,7 +671,12 @@ void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) 
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
 
         // Store the result.
-        TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0);
+        if constexpr (!is_fp32_dest_acc_en) {
+            // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it
+            // so convert to bfloat16 using round-to-nearest-even.
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        }
+        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_7, 0);
         sfpi::dst_reg += 2;  // Skip odd columns.
     }
 }
@@ -716,6 +721,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init(in0_cb, in1_cb);
+    exp_tile_init<EXP_APPROX_MODE, false>();
     MATH((calculate_exponential_polynomial_init<scale_fp32>()));
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
