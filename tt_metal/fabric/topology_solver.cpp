@@ -75,15 +75,6 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physi
                     // Add each neighbor multiple times based on number of ethernet connections
                     auto eth_connections = physical_system_descriptor.get_eth_connections(asic_id, neighbor);
                     for (const auto& eth_connection : eth_connections) {
-                        // NOTE: IGNORE Z channels for Blackhole galaxy in intra mesh connectivity for now since
-                        // they cause issues with uniform mesh mapping since topology mapper algorithm does not prefer
-                        // taking the full connectivity path vs downgrading through z channels for intramesh
-                        // connectivity https://github.com/tenstorrent/tt-metal/issues/31846
-                        if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
-                            (z_channels.contains(eth_connection.src_chan) ||
-                             z_channels.contains(eth_connection.dst_chan))) {
-                            continue;
-                        }
                         adjacents.push_back(neighbor);
                     }
                 }
