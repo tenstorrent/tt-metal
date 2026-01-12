@@ -138,7 +138,6 @@ void detect_broadcasts(
 void setup_reader_defines(
     std::map<std::string, std::string>& reader_defines,
     ttnn::operations::ternary::TernaryVariant variant,
-    ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
     const ttnn::Tensor& predicate_tensor,
     const std::optional<ttnn::Tensor>& value_true_tensor,
     const std::optional<ttnn::Tensor>& value_false_tensor,
@@ -799,11 +798,9 @@ void set_or_update_runtime_arguments(
         uint32_t scalar_arg = 0u;
         if (variant == TernaryVariant::TTS) {
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_b.value(), output.dtype());
-        } else if (variant == TernaryVariant::TST) {
-            scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output.dtype());
         } else if (
-            operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
-            operation_attributes.scalar_input_a.has_value()) {
+            variant == TernaryVariant::TST || (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
+                                               operation_attributes.scalar_input_a.has_value())) {
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output.dtype());
         }
         auto [freq, counter] = [&] {
@@ -1058,7 +1055,6 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     setup_reader_defines(
         reader_defines,
         variant,
-        broadcast_type,
         predicate_tensor,
         value_true_tensor,
         value_false_tensor,

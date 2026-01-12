@@ -443,7 +443,7 @@ MetalContext::MetalContext() {
             platform_arch,
             is_base_routing_fw_enabled,
             rtoptions_.get_enable_2_erisc_mode(),
-            get_profiler_dram_bank_size_per_risc_bytes(rtoptions_));
+            get_profiler_dram_bank_size_for_hal_allocation(rtoptions_));
         rtoptions_.ParseAllFeatureEnv(*hal_);
         cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
         distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
@@ -985,15 +985,12 @@ CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_in
     if (coord.x >= grid_size.x || coord.y >= grid_size.y || cluster_->arch() == ARCH::BLACKHOLE) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
-    } else {
-        // Coordinate in Physical NOC0 Space. Convert to Virtual.
-        coord = cluster_->get_virtual_coordinate_from_physical_coordinates(device_id, coord);
-        // Derive virtual coord in noc_index space.
-        CoreCoord virtual_coord = {
-            hal_->noc_coordinate(noc_index, grid_size.x, coord.x),
-            hal_->noc_coordinate(noc_index, grid_size.y, coord.y)};
-        return virtual_coord;
-    }
+    }  // Coordinate in Physical NOC0 Space. Convert to Virtual.
+    coord = cluster_->get_virtual_coordinate_from_physical_coordinates(device_id, coord);
+    // Derive virtual coord in noc_index space.
+    CoreCoord virtual_coord = {
+        hal_->noc_coordinate(noc_index, grid_size.x, coord.x), hal_->noc_coordinate(noc_index, grid_size.y, coord.y)};
+    return virtual_coord;
 }
 
 void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {

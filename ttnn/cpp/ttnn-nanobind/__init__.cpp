@@ -316,7 +316,16 @@ NB_MODULE(_ttnn, mod) {
         []() -> std::uint64_t { return ttnn::CoreIDs::instance().fetch_and_increment_python_operation_id(); },
         "Increment tensor id and return the previously held id");
 
-    mod.def("next_tensor_id", &tt::tt_metal::Tensor::next_id, "Atomically fetch and increment the tensor ID counter");
+    mod.def("get_tensor_id", &tt::tt_metal::Tensor::get_tensor_id_counter, "Get the current tensor ID counter value");
+    mod.def(
+        "set_tensor_id",
+        &tt::tt_metal::Tensor::set_tensor_id_counter,
+        nb::arg("id"),
+        "Set the tensor ID counter to a specific value");
+    mod.def(
+        "fetch_and_increment_tensor_id",
+        &tt::tt_metal::Tensor::next_tensor_id,
+        "Atomically fetch and increment the tensor ID counter");
 
     mod.def(
         "get_device_operation_id",
