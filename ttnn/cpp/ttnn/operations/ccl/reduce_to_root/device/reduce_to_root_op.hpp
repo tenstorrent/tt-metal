@@ -23,8 +23,11 @@ struct ReduceToRootOp {
 
         const std::vector<ttnn::TensorSpec> _input_tensor_spec;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "scale_fp32", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(root_coord, scale_fp32, topology); };
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("root_coord", "scale_fp32", "topology", "input_mux_cores");
+        auto attribute_values() const {
+            return std::forward_as_tuple(root_coord, scale_fp32, topology, input_mux_cores);
+        };
     };
 
     struct tensor_args_t {
