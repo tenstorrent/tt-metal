@@ -537,7 +537,7 @@ def test_untilize_multi_core_interleaved_to_sharded(
     }
 
     # Input memory config
-    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Output memory config
     input_shard_memory_layout = shard_memory_layout_map[output_memory_layout]
