@@ -296,31 +296,36 @@ def run_reference_with_attention(
     dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
     num_layers = hf_config.num_hidden_layers
     max_position_id_or_seq_len = position_ids_or_seq_lens.max().item()
+    mask = None
+
+    # For sequences longer than 8192 tokens, use chunked processing
+    CHUNK_SIZE = 8192
+    use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > CHUNK_SIZE
 
     if mode == "prefill":
         max_seq_len = position_ids_or_seq_lens.max().item()
         position_ids = torch.arange(max_seq_len).unsqueeze(0).repeat(batch_size, 1)
 
-        if max_position_id_or_seq_len > 16384:
-            device = activation.device
-            mask = torch.triu(
-                torch.full(
-                    (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
-                    float("-inf"),
-                    dtype=torch.bfloat16,
-                    device="cpu",
-                ),
-                diagonal=1,
-            )
-        else:
-            mask = torch.triu(
-                torch.full(
-                    (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
-                    float("-inf"),
-                    dtype=torch.bfloat16,
-                ),
-                diagonal=1,
-            )
+        if not use_chunked_processing:
+            if max_position_id_or_seq_len > 16384:
+                mask = torch.triu(
+                    torch.full(
+                        (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
+                        float("-inf"),
+                        dtype=torch.bfloat16,
+                        device="cpu",
+                    ),
+                    diagonal=1,
+                )
+            else:
+                mask = torch.triu(
+                    torch.full(
+                        (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
+                        float("-inf"),
+                        dtype=torch.bfloat16,
+                    ),
+                    diagonal=1,
+                )
 
         if layer_idx is not None:
             input_cache = transformers_cache_single_layer_from_torch(
@@ -356,15 +361,15 @@ def run_reference_with_attention(
     kv_arg_name = "past_key_value" if layer_idx is not None else "past_key_values"
     deepcopied_cache = deepcopy(input_cache)
 
-    # For sequences longer than 8192 tokens, use chunked processing
-    CHUNK_SIZE = 8192
-    use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > CHUNK_SIZE
-
-    # Create a mock output object for compatibility
-    class MockOutput:
-        def __init__(self, hidden_state, past_key_values):
-            self.last_hidden_state = hidden_state
-            self.past_key_values = past_key_values
+    def extract_output_and_cache(model_output) -> tuple[torch.Tensor, DynamicCache]:
+        if isinstance(model_output, tuple):
+            cache_idx = 2 if len(model_output) == 3 else 1
+            return model_output[0], model_output[cache_idx]
+        if hasattr(model_output, "logits"):
+            return model_output.logits, model_output.past_key_values
+        if hasattr(model_output, "last_hidden_state"):
+            return model_output.last_hidden_state, model_output.past_key_values
+        raise AttributeError(f"Model output has neither 'last_hidden_state' nor 'logits': {type(model_output)}")
 
     if use_chunked_processing:
         device = activation.device
@@ -380,7 +385,10 @@ def run_reference_with_attention(
                 chunk_size_actual = end_idx - start_idx
 
                 # Extract chunk from activation and position_ids
-                activation_chunk = activation[:, start_idx:end_idx, :].contiguous()
+                if activation.ndim == 2:
+                    activation_chunk = activation[:, start_idx:end_idx].contiguous()
+                else:
+                    activation_chunk = activation[:, start_idx:end_idx, :].contiguous()
                 position_ids_chunk = position_ids[:, start_idx:end_idx].contiguous()
 
                 # Determine current cache length to properly construct mask
@@ -420,16 +428,7 @@ def run_reference_with_attention(
                     **{kv_arg_name: chunk_cache},
                 )
 
-                # Extract output and update cache
-                # Handle tuple return from different module types
-                if isinstance(chunk_output, tuple):
-                    chunk_out = chunk_output[0]
-                    # DeepseekV3Attention returns 3-tuple: (output, attn_weights, cache)
-                    # DeepseekV3DecoderLayer with output_attentions=False returns 2-tuple: (output, cache)
-                    current_cache = chunk_output[2] if len(chunk_output) == 3 else chunk_output[1]
-                else:
-                    chunk_out = chunk_output.last_hidden_state
-                    current_cache = chunk_output.past_key_values
+                chunk_out, current_cache = extract_output_and_cache(chunk_output)
 
                 output_chunks.append(chunk_out)
 
@@ -442,7 +441,8 @@ def run_reference_with_attention(
             # Clean up chunk list
             del output_chunks
 
-            model_output = MockOutput(model_output_tensor, current_cache)
+            out = model_output_tensor
+            output_cache = current_cache
     else:
         # Standard processing for shorter sequences or decode mode
         if mask is not None and mask.device.type == "cpu":
@@ -460,23 +460,8 @@ def run_reference_with_attention(
                 **{kv_arg_name: deepcopied_cache},
             )
 
-            if isinstance(model_output_raw, tuple):
-                # DeepseekV3Attention returns 3-tuple: (output, attn_weights, cache)
-                # DeepseekV3DecoderLayer with output_attentions=False returns 2-tuple: (output, cache)
-                cache_idx = 2 if len(model_output_raw) == 3 else 1
-                model_output = MockOutput(model_output_raw[0], model_output_raw[cache_idx])
-            else:
-                model_output = model_output_raw
+            out, output_cache = extract_output_and_cache(model_output_raw)
 
-    # Extract output
-    # Handle both DecoderLayer (last_hidden_state) and CausalLM (logits) outputs
-    if hasattr(model_output, "last_hidden_state"):
-        out = model_output.last_hidden_state
-    elif hasattr(model_output, "logits"):
-        out = model_output.logits
-    else:
-        raise AttributeError(f"Model output has neither 'last_hidden_state' nor 'logits': {type(model_output)}")
-    output_cache = model_output.past_key_values
     return out, input_cache, output_cache
 
 
