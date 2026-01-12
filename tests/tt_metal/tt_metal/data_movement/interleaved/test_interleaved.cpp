@@ -57,8 +57,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     auto output_buffer = CreateBuffer(interleaved_buffer_config);
     uint32_t output_buffer_address = output_buffer->address();
 
-    assert(input_buffer_address != output_buffer_address);
-    assert(test_config.read_kernel || test_config.write_kernel);  // At least one kernel must run
+    ASSERT_NE(input_buffer_address, output_buffer_address);
+    ASSERT_TRUE(test_config.read_kernel || test_config.write_kernel) << "At least one kernel must run";
 
     // Input
     // vector<uint32_t> packed_input = create_arange_vector_of_bfloat16(total_size_bytes, false);
@@ -105,9 +105,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     // log_info(tt::LogTest, "l1 addr: {}, bytes: {}, input buffer addr: {}, output buffer addr: {}", l1_addr,
     // total_size_bytes, input_buffer_address, output_buffer_address);
     if (!test_config.is_dram) {
-        assert(
+        ASSERT_TRUE(
             (l1_addr + total_size_bytes < input_buffer_address) || (input_buffer_address + total_size_bytes < l1_addr));
-        assert(
+        ASSERT_TRUE(
             (l1_addr + total_size_bytes < output_buffer_address) ||
             (output_buffer_address + total_size_bytes < l1_addr));
     }
