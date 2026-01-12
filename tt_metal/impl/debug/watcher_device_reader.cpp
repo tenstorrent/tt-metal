@@ -17,7 +17,7 @@
 #include <core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
-#include <metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>

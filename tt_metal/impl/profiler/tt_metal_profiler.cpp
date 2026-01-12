@@ -43,7 +43,7 @@
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_device.hpp"
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_paths.hpp"

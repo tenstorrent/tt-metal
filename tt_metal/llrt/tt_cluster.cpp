@@ -7,7 +7,7 @@
 
 #include <core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
