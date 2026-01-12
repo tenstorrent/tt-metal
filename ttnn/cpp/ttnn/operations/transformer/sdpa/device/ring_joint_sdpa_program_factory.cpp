@@ -411,7 +411,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_struct.ring_size};
+        args.all_gather_operation_attributes.ring_size};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -454,7 +454,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_q_chunks,
         packed_identity_scalar,
         scale_union.u,
-        args.all_gather_struct.ring_size};
+        args.all_gather_operation_attributes.ring_size};
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -478,7 +478,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_struct.ring_size,
+        args.all_gather_operation_attributes.ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
