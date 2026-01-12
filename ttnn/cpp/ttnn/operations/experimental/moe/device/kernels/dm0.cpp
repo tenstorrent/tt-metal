@@ -65,7 +65,7 @@ void kernel_main() {
     const uint32_t w1_tile_id_start = core_id;
     const uint32_t w2_tile_id_start = core_id < 32 ? 4 * core_id : 4 * 32 + 3 * (core_id - 32);
 
-    // Read W0 and W1 from DRAM into CB
+    // // Read W0 and W1 from DRAM into CB
     uint32_t w0_tile_id = w0_tile_id_start;
     uint32_t w1_tile_id = w1_tile_id_start;
     for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
