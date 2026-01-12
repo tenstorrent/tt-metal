@@ -438,6 +438,7 @@ def test_device_api_debugger_non_dropping():
 
     # There is a read/write barrier after each noc_async_read/write call.
     # Verify that the noc counters are being tracked properly
+    NOC_COUNTER_BITS = 12
     prev_counters = {}  # (proc, noc, type) -> previous counter value
     read_event_count = 0
     write_event_count = 0
@@ -463,10 +464,11 @@ def test_device_api_debugger_non_dropping():
 
             if counter_key in prev_counters:
                 prev_counter = prev_counters[counter_key]
-                assert noc_status_counter == prev_counter + 1, (
+                expected_counter = (prev_counter + 1) % (2**NOC_COUNTER_BITS)
+                assert noc_status_counter == expected_counter, (
                     f"noc_status_counter should increment by 1 for consecutive {event_type} events "
-                    f"for {proc} {noc}. Previous counter: {prev_counter}, current counter: {noc_status_counter} "
-                    f"at timestamp {event.get('timestamp')}"
+                    f"for {proc} {noc}. Previous counter: {prev_counter}, current counter: {noc_status_counter}, "
+                    f"expected: {expected_counter} at timestamp {event.get('timestamp')}"
                 )
 
             prev_counters[counter_key] = noc_status_counter
