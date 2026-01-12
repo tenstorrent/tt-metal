@@ -65,6 +65,7 @@ class TTSampling(LightweightModule):
         self.max_batch_size = 32
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
+        self.sampling_cluster_axis = getattr(args, "sampling_cluster_axis", 0)
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
@@ -125,7 +126,7 @@ class TTSampling(LightweightModule):
         """Create the indices tensors needed for distributed top-k operations."""
         # Create indices tensor for device offsets
         # For multi-step reduction, we use reduce over 2 steps in a single device
-        num_devices_in_mesh = 2 if self.multi_step_reduction else max(self.cluster_shape[0], self.cluster_shape[1])
+        num_devices_in_mesh = 2 if self.multi_step_reduction else self.cluster_shape[self.sampling_cluster_axis]
         indices_device_offsets = torch.ones(
             1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
         )
@@ -272,7 +273,7 @@ class TTSampling(LightweightModule):
             topk_values_gathered = self._perform_all_gather(
                 topk_values,
                 dim=3,
-                cluster_axis=0,
+                cluster_axis=self.sampling_cluster_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 num_links=self.num_gather_links,
                 buffer_key="SAMPLING_VALUES",
@@ -298,7 +299,7 @@ class TTSampling(LightweightModule):
             topk_indices_gathered = self._perform_all_gather(
                 topk_indices,
                 dim=3,
-                cluster_axis=0,
+                cluster_axis=self.sampling_cluster_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 num_links=self.num_gather_links,
                 buffer_key="SAMPLING_INDICES",

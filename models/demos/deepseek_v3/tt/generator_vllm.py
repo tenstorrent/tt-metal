@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 
+import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
@@ -107,7 +108,17 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 continue
             user_tokens = tokens[i, :prompt_len].unsqueeze(0)
             user_tokens = _pad_tokens(user_tokens, pad_value, block_size=pad_block_size).squeeze(0)
-            user_out = self._prefill(user_tokens, user_id, page_table, local_user_id=i)
+            user_out = self._prefill(user_tokens, user_id, page_table, local_user_id=i, return_logits=True)
+            if isinstance(user_out, ttnn.Tensor):
+                composed = ttnn.to_torch(
+                    user_out,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        self.mesh_device, dims=(0, -1), mesh_shape=self.mesh_device.shape
+                    ),
+                )
+                ttnn.deallocate(user_out)
+                row_idx = user_id // USERS_PER_ROW
+                user_out = composed[row_idx : row_idx + 1]
             user_logits = user_out.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
             if user_logits.shape[0] > prompt_len:
                 user_logits = user_logits[:prompt_len]

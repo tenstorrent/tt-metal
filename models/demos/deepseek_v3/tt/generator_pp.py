@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -12,6 +12,7 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
+from models.common.sampling.generator import SamplingGenerator, format_sampling_params
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.model.row_pipelined_model import RowPipelinedModel
@@ -27,6 +28,24 @@ class SamplingParams:
     temperature: float = 0.0
     top_k: int = 0
     top_p: float = 0.0
+    presence_penalty: float = 0.0
+    frequency_penalty: float = 0.0
+    repetition_penalty: float = 1.0
+    seed: int = 0
+    enable_log_probs: bool = False
+
+
+@dataclass(frozen=True)
+class SamplingModuleArgs:
+    vocab_size: int
+    padded_vocab_size: int
+    max_top_k: int
+    cluster_shape: tuple[int, int]
+    sampling_cluster_axis: int = 0
+    sub_core_grids: ttnn.CoreRangeSet | None = None
+    sub_core_grid_topk: ttnn.CoreRangeSet | None = None
+    start_core: ttnn.CoreCoord = field(default_factory=lambda: ttnn.CoreCoord(0, 0))
+    model_config: dict = field(default_factory=dict)
 
 
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -110,6 +129,18 @@ class DeepseekGenerator:
         self.ccl = CCL(mesh_device)
         mesh_shape = list(mesh_device.shape)
         self.dp_factor = mesh_shape[1]
+        self.sampling_args = SamplingModuleArgs(
+            vocab_size=self.hf_config.vocab_size,
+            padded_vocab_size=self.hf_config.vocab_size,
+            max_top_k=32,
+            cluster_shape=tuple(mesh_shape),
+            sampling_cluster_axis=1,
+        )
+        self.sampling = SamplingGenerator(
+            args=self.sampling_args,
+            mesh_device=self.mesh_device,
+            tt_ccl=self.ccl,
+        )
         # Weight cache to avoid loading weights multiple times
         self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
         # Paged attention setup
@@ -354,8 +385,30 @@ class DeepseekGenerator:
         )
         return rope_tensors, tt_positions
 
-    def _decode_step(self, tokens_step: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
-        """Run a single decode step and return logits on host as torch tensor [1, 1, B, V]."""
+    def _reset_sampling_state(self, sampling: SamplingParams) -> SamplingParams:
+        sampling = format_sampling_params(sampling, USERS_PER_ROW)
+        self.sampling.reset_sampling_params(sampling)
+        self.sampling.reset_seed(sampling.seed)
+        return sampling
+
+    def _sample_tokens_from_logits(self, logits: ttnn.Tensor, batch_size: int) -> torch.Tensor:
+        tt_out = self.sampling.sample(logits, enable_trace=False)
+        if isinstance(tt_out, tuple):
+            tt_tokens, tt_log_probs = tt_out
+            if tt_log_probs is not None:
+                ttnn.deallocate(tt_log_probs)
+            tt_out = tt_tokens
+        tokens = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
+        if tt_out.shape[-2] == USERS_PER_ROW:
+            tokens = tokens[:, :, :, 0]
+        elif tt_out.shape[-1] == USERS_PER_ROW:
+            tokens = tokens[:, :, 0, :USERS_PER_ROW]
+        tokens = tokens.reshape(-1)
+        ttnn.deallocate(tt_out)
+        return tokens[:batch_size]
+
+    def _decode_step(self, tokens_step: torch.Tensor, positions: torch.Tensor) -> ttnn.Tensor:
+        """Run a single decode step and return logits on device as TTNN tensor [1, 1, B, V]."""
         # Prepare TT inputs
         tt_tokens = self._tt_from_tokens_step(tokens_step)
         rope_tensors, tt_positions = self._tt_from_positions(positions)
@@ -368,24 +421,17 @@ class DeepseekGenerator:
             rope_tensors,
             self.page_tables_tt,
         )
-        # Gather to host
-        logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
-
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
-        ttnn.deallocate(logits_tt)
+        return logits_tt  # [1, 1, B, V]
 
-        return logits  # [1, 1, B, V]
-
-    def _prefill(self, tokens: torch.Tensor, user_id: int) -> torch.Tensor:
-        """Run prefill for the full prompt sequence and return logits for the last position.
+    def _prefill(self, tokens: torch.Tensor, user_id: int, return_logits: bool = False) -> ttnn.Tensor | None:
+        """Run prefill for the full prompt sequence to populate caches.
 
         Args:
             tokens: [1, 1, seq_len] padded token sequences
             user_id: user id for the prefill
 
-        Returns:
-            logits: [1, 1, seq_len, V] logits for the full sequence
         """
 
         tokens = tokens.view(1, 1, -1)
@@ -420,13 +466,52 @@ class DeepseekGenerator:
             tt_tokens, user_id, self.model_run_config_prefill, rope_tensors, self.page_tables_tt
         )
 
-        # Gather to host
-        logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
-
-        # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
+        if return_logits:
+            return logits_tt
         ttnn.deallocate(logits_tt)
-        return logits  # [1, 1, seq_len, V]
+        return None
+
+    def _slice_last_token_logits(self, logits: ttnn.Tensor, prompt_len: int) -> ttnn.Tensor:
+        last_idx = max(prompt_len - 1, 0)
+        shard_len = logits.shape[2]
+        local_idx = last_idx % shard_len
+        row_idx = last_idx // shard_len
+
+        last_logits = ttnn.slice(
+            logits,
+            [0, 0, local_idx, 0],
+            [1, 1, local_idx + 1, logits.shape[-1]],
+        )
+
+        if self.mesh_device.shape[0] > 1:
+            gather_cfg = self.ccl.populate_all_gather_runtime_args(
+                {
+                    "cluster_axis": 0,
+                    "dim": 2,
+                    "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                    "topology": ttnn.Topology.Linear,
+                }
+            )
+            gathered = ttnn.experimental.all_gather_async(last_logits, **gather_cfg)
+            ttnn.deallocate(last_logits)
+            last_logits = ttnn.slice(
+                gathered,
+                [0, 0, row_idx, 0],
+                [1, 1, row_idx + 1, gathered.shape[-1]],
+            )
+            ttnn.deallocate(gathered)
+
+        return last_logits
+
+    def _expand_prefill_logits(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        if logits.shape[2] == USERS_PER_ROW:
+            return logits
+        if logits.shape[2] == 1:
+            expanded = ttnn.repeat(logits, (1, 1, USERS_PER_ROW, 1))
+            ttnn.deallocate(logits)
+            return expanded
+        return logits
 
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.argmax(logits, dim=-1)  # [B]
@@ -490,34 +575,45 @@ class DeepseekGenerator:
 
         logger.info(f"Lengths of (encoded) prompts: {lengths}")
 
+        if sampling is None:
+            sampling = SamplingParams()
+        sampling = self._reset_sampling_state(sampling)
+
         # Repeat full prefill+decode batches
         for _ in range(repeat_batches):
             # Prefill
             profiler.start("inference_prefill")
             num_of_users = tokens_batched.shape[0]
-            last_logits = []
+            last_tokens = []
             for user_id in range(num_of_users):
-                if lengths[user_id] == 0:
+                prompt_len = int(lengths[user_id])
+                if prompt_len == 0:
                     logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
-                    last_logits.append(torch.zeros(self.hf_config.vocab_size))
+                    pad_token = self.tokenizer.pad_token_id if self.tokenizer is not None else 0
+                    last_tokens.append(torch.tensor(pad_token, dtype=torch.int64))
                     continue
                 logger.info(f"Running prefill for user_id: {user_id}")
                 logger.info(
                     f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
                 )
-                user_out = self._prefill(tokens_batched[user_id], user_id)
-                user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
-                last_logits.append(user_out)
+                prefill_logits = self._prefill(tokens_batched[user_id], user_id, return_logits=True)
+                assert prefill_logits is not None
+                last_logits = self._slice_last_token_logits(prefill_logits, prompt_len)
+                last_logits = self._expand_prefill_logits(last_logits)
+                pred_token = self._sample_tokens_from_logits(last_logits, batch_size=1)[0]
+                ttnn.deallocate(last_logits)
+                ttnn.deallocate(prefill_logits)
+                last_tokens.append(pred_token)
                 self.ccl.reset_sem_counters()
-            last_logits = torch.stack(last_logits)
+            last_tokens = torch.stack(last_tokens)
             profiler.end("inference_prefill")
 
-            assert len(last_logits) == num_of_users
+            assert len(last_tokens) == num_of_users
 
             logger.info(f"Finished prefill for all users...")
 
             # First sampled token after prompt
-            next_tokens = self._sample_greedy(last_logits)
+            next_tokens = last_tokens
 
             # Decode
             positions = torch.zeros(USERS_PER_ROW, dtype=torch.int32) + lengths
@@ -537,10 +633,11 @@ class DeepseekGenerator:
             for gen_idx in range(max_new_tokens):
                 # Decode one step with previous next_tokens
                 profiler.start(f"decode_time_{gen_idx}")
-                logits = self._decode_step(next_tokens, positions).squeeze(0).squeeze(0)
+                logits = self._decode_step(next_tokens, positions)
                 profiler.end(f"decode_time_{gen_idx}")
                 self.ccl.reset_sem_counters()
-                pred_tokens = self._sample_greedy(logits)
+                pred_tokens = self._sample_tokens_from_logits(logits, USERS_PER_ROW)
+                ttnn.deallocate(logits)
                 if teacher_forcing is not None:
                     forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
                     pred_tokens[0] = int(forced)
