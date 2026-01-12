@@ -65,7 +65,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/inspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/logger.cpp
@@ -88,6 +87,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/host_api_capture_helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_parser.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas

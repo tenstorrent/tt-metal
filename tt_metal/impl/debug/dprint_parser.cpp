@@ -4,14 +4,15 @@
 
 #include "dprint_parser.hpp"
 
-#include <math.h>
+#include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <string>
+#include <string_view>
 
 #include <enchantum/enchantum.hpp>
 #include <enchantum/scoped.hpp>
-#include <tt-metalium/blockfloat_common.hpp>
+#include "impl/data_format/blockfloat_common.hpp"
 #include <tt_stl/assert.hpp>
 
 #include "fmt/base.h"
@@ -25,8 +26,7 @@ using std::to_string;
 
 namespace tt::tt_metal {
 
-DPrintParser::DPrintParser(std::string line_prefix) :
-    line_prefix_(std::move(line_prefix)), prev_type_(DPrintTypeID_Count), most_recent_setw_(0) {}
+DPrintParser::DPrintParser(std::string line_prefix) : line_prefix_(std::move(line_prefix)) {}
 
 // Helper function implementations (from dprint_server.cpp anonymous namespace)
 
@@ -55,25 +55,27 @@ bool DPrintParser::StreamEndsWithNewlineChar(const std::ostringstream* stream) {
     return !stream_str.empty() && stream_str.back() == '\n';
 }
 
-void DPrintParser::PrintTileSlice(uint8_t* ptr) {
+void DPrintParser::PrintTileSlice(const uint8_t* ptr) {
     TileSliceHostDev<0> ts_copy{};  // Make a copy since ptr might not be properly aligned
     std::memcpy(&ts_copy, ptr, sizeof(TileSliceHostDev<0>));
     TileSliceHostDev<0>* ts = &ts_copy;
     TT_ASSERT(
         offsetof(TileSliceHostDev<0>, data) % sizeof(uint32_t) == 0,
         "TileSliceHostDev<0> data field is not properly aligned");
-    uint8_t* data = ptr + offsetof(TileSliceHostDev<0>, data);
+    const uint8_t* data = ptr + offsetof(TileSliceHostDev<0>, data);
 
     // Read any error codes and handle accordingly
     tt::CBIndex cb = static_cast<tt::CBIndex>(ts->cb_id);
     switch (ts->return_code) {
         case DPrintOK: break;  // Continue to print the tile slice
         case DPrintErrorBadPointer: {
-            uint32_t ptr = ts->cb_ptr;
+            uint32_t cb_ptr_val = ts->cb_ptr;
             uint8_t count = ts->data_count;
             intermediate_stream_ << fmt::format(
                 "Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n",
-                enchantum::scoped::to_string(cb), ptr, count);
+                enchantum::scoped::to_string(cb),
+                cb_ptr_val,
+                count);
             return;
         }
         case DPrintErrorUnsupportedFormat: {
@@ -111,19 +113,19 @@ void DPrintParser::PrintTileSlice(uint8_t* ptr) {
             tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
             switch (data_format) {
                 case tt::DataFormat::Float16_b: {
-                    uint16_t* float16_b_ptr = reinterpret_cast<uint16_t*>(data);
+                    const uint16_t* float16_b_ptr = reinterpret_cast<const uint16_t*>(data);
                     intermediate_stream_ << bfloat16_to_float(float16_b_ptr[i]);
                     break;
                 }
                 case tt::DataFormat::Float32: {
-                    float* float32_ptr = reinterpret_cast<float*>(data);
+                    const float* float32_ptr = reinterpret_cast<const float*>(data);
                     intermediate_stream_ << float32_ptr[i];
                     break;
                 }
                 case tt::DataFormat::Bfp4_b:
                 case tt::DataFormat::Bfp8_b: {
                     // Saved the exponent and data together
-                    uint16_t* data_ptr = reinterpret_cast<uint16_t*>(data);
+                    const uint16_t* data_ptr = reinterpret_cast<const uint16_t*>(data);
                     uint8_t val = (data_ptr[i] >> 8) & 0xFF;
                     uint8_t exponent = data_ptr[i] & 0xFF;
                     uint32_t bit_val = convert_bfp_to_u32(data_format, val, exponent, false);
@@ -131,27 +133,27 @@ void DPrintParser::PrintTileSlice(uint8_t* ptr) {
                     break;
                 }
                 case tt::DataFormat::Int8: {
-                    int8_t* data_ptr = reinterpret_cast<int8_t*>(data);
+                    const int8_t* data_ptr = reinterpret_cast<const int8_t*>(data);
                     intermediate_stream_ << (int)data_ptr[i];
                     break;
                 }
                 case tt::DataFormat::UInt8: {
-                    uint8_t* data_ptr = reinterpret_cast<uint8_t*>(data);
+                    const uint8_t* data_ptr = reinterpret_cast<const uint8_t*>(data);
                     intermediate_stream_ << (unsigned int)data_ptr[i];
                     break;
                 }
                 case tt::DataFormat::UInt16: {
-                    uint16_t* data_ptr = reinterpret_cast<uint16_t*>(data);
+                    const uint16_t* data_ptr = reinterpret_cast<const uint16_t*>(data);
                     intermediate_stream_ << (unsigned int)data_ptr[i];
                     break;
                 }
                 case tt::DataFormat::Int32: {
-                    int32_t* data_ptr = reinterpret_cast<int32_t*>(data);
+                    const int32_t* data_ptr = reinterpret_cast<const int32_t*>(data);
                     intermediate_stream_ << (int)data_ptr[i];
                     break;
                 }
                 case tt::DataFormat::UInt32: {
-                    uint32_t* data_ptr = reinterpret_cast<uint32_t*>(data);
+                    const uint32_t* data_ptr = reinterpret_cast<const uint32_t*>(data);
                     intermediate_stream_ << (unsigned int)data_ptr[i];
                     break;
                 }
@@ -239,7 +241,7 @@ void DPrintParser::PrintTensixRegisterData(int setwidth, uint32_t datum, uint16_
 // If force_element_type is set to a valid type, it is assumed that the type is not included in the
 // data array, and the type is forced to be the given type.
 void DPrintParser::PrintTypedUint32Array(
-    int setwidth, uint32_t raw_element_count, uint32_t* data, TypedU32_ARRAY_Format force_array_type) {
+    int setwidth, uint32_t raw_element_count, const uint32_t* data, TypedU32_ARRAY_Format force_array_type) {
     uint16_t array_type = data[raw_element_count - 1] >> 16;
     uint16_t array_subtype = data[raw_element_count - 1] & 0xffff;
 
@@ -322,7 +324,7 @@ DPrintParser::ParseResult DPrintParser::parse(const uint8_t* data, size_t len) {
                 AssertSize(sz, cptr_len + 1);
                 break;
             }
-            case DPrintTILESLICE: PrintTileSlice(const_cast<uint8_t*>(ptr)); break;
+            case DPrintTILESLICE: PrintTileSlice(ptr); break;
 
             case DPrintENDL:
                 if (prev_type_ != DPrintTILESLICE || !StreamEndsWithNewlineChar(&intermediate_stream_)) {
@@ -428,14 +430,10 @@ DPrintParser::ParseResult DPrintParser::parse(const uint8_t* data, size_t len) {
                 break;
             case DPrintU32_ARRAY:
                 PrintTypedUint32Array(
-                    most_recent_setw_,
-                    sz / 4,
-                    const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(ptr)),
-                    TypedU32_ARRAY_Format_Raw);
+                    most_recent_setw_, sz / 4, reinterpret_cast<const uint32_t*>(ptr), TypedU32_ARRAY_Format_Raw);
                 break;
             case DPrintTYPED_U32_ARRAY:
-                PrintTypedUint32Array(
-                    most_recent_setw_, sz / 4, const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(ptr)));
+                PrintTypedUint32Array(most_recent_setw_, sz / 4, reinterpret_cast<const uint32_t*>(ptr));
                 break;
             default: TT_THROW("Unexpected debug print type pos {:#x} len {:#x} code {}", pos, len, (uint32_t)code);
         }

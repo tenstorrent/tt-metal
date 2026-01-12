@@ -22,7 +22,7 @@ class DPrintParser {
 public:
     struct ParseResult {
         std::vector<std::string> completed_lines;
-        size_t bytes_consumed;
+        size_t bytes_consumed{};
     };
 
     explicit DPrintParser(std::string line_prefix = "");
@@ -32,8 +32,8 @@ public:
 private:
     std::string line_prefix_;
     std::ostringstream intermediate_stream_;
-    DPrintTypeID prev_type_;
-    char most_recent_setw_;
+    DPrintTypeID prev_type_{DPrintTypeID_Count};
+    char most_recent_setw_{0};
 
     // Helper methods (from dprint_server.cpp anonymous namespace)
     static float bfloat16_to_float(uint16_t bfloat_val);
@@ -42,12 +42,12 @@ private:
     static bool StreamEndsWithNewlineChar(const std::ostringstream* stream);
     static void ResetStream(std::ostringstream* stream);
 
-    void PrintTileSlice(uint8_t* ptr);
+    void PrintTileSlice(const uint8_t* ptr);
     void PrintTensixRegisterData(int setwidth, uint32_t datum, uint16_t data_format);
     void PrintTypedUint32Array(
         int setwidth,
         uint32_t raw_element_count,
-        uint32_t* data,
+        const uint32_t* data,
         TypedU32_ARRAY_Format force_array_type = TypedU32_ARRAY_Format_INVALID);
 
     std::string get_completed_line();
