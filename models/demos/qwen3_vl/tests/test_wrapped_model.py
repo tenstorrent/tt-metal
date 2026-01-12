@@ -50,12 +50,12 @@ def test_wrapped_vision_model_inference(
     # pixel_values are produced by Qwen2_5_VLImageProcessor, these come from the above img
     # image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
     #     The temporal, height and width of feature shape of each image in LLM.
-    # for this test assume 1 image of size 98 x 146 patches as used in with their repo example img
-    image_grid_thw = torch.tensor([[1, 98, 146]])
+    # for this test assume 1 image of size 86 x 128 patches as used in with their repo example img
+    image_grid_thw = torch.tensor([[1, 86, 128]])
     ref_seq_len = image_grid_thw[0, 1] * image_grid_thw[0, 2]
     # pad seq_len to be divisible by 128 (MAX_QKV_MM_SEQ_LEN from tt_transformers model)
     seq_len = ((ref_seq_len // 128) + 1) * 128
-    pt_pixel_values = torch.randn([ref_seq_len, 1176])
+    pt_pixel_values = torch.randn([ref_seq_len, 1536])
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     if num_layers:
@@ -72,8 +72,8 @@ def test_wrapped_vision_model_inference(
     torch_model = DropInVisionTransformer(reference_model, model_args)
 
     # Run reference model
-    reference_output = reference_model(pt_pixel_values, image_grid_thw)
-    tt_output_torch = torch_model(pt_pixel_values, image_grid_thw)
+    reference_output, deepstack_visual_embeds = reference_model(pt_pixel_values, image_grid_thw)
+    tt_output_torch, tt_deepstack_visual_embeds = torch_model(pt_pixel_values, image_grid_thw)
 
     # Compare outputs
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)

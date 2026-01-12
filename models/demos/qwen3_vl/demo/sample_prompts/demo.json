@@ -1,5 +1,5 @@
 [
-    {
+    [{
         "role": "user",
         "content": [
             {
@@ -8,5 +8,5 @@
             },
             {"type": "text", "text": "Describe this image."}
         ]
-    }
+    }]
 ]

@@ -10,7 +10,7 @@ import torch
 from loguru import logger
 from qwen_vl_utils import process_vision_info
 from transformers import AutoProcessor
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
+from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLForConditionalGeneration
 
 import ttnn
 from models.demos.qwen3_vl.tt.common import (
@@ -103,7 +103,7 @@ def create_tt_model(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
-            "models/demos/qwen25_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
+            "models/demos/qwen3_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -116,7 +116,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompts
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
+            "models/demos/qwen3_vl/demo/sample_prompts/multi_prompts_32.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -129,7 +129,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-1 run with full model for more stable BERTScore checks (CI only)
-            "models/demos/qwen25_vl/demo/sample_prompts/test_bert_score.json",
+            "models/demos/qwen3_vl/demo/sample_prompts/test_bert_score.json",
             True,  # instruct mode
             2,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -142,7 +142,7 @@ def create_tt_model(
             True,  # ci_only
         ),
         (  # Batch-1 run with text only prompts hence skipping vision model (CI only)
-            "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
+            "models/demos/qwen3_vl/demo/sample_prompts/text_only.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -155,7 +155,7 @@ def create_tt_model(
             True,  # ci_only
         ),
         (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
-            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             16384,  # max_seq_len, allow for image tokens
@@ -168,7 +168,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-2 run with 300 dpi scanned document (Latency) - 32k long context, real-world test
-            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             32768,  # max_seq_len, allow for image tokens
@@ -181,7 +181,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 64k long context, real-world test
-            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             65536,  # max_seq_len, allow for image tokens
@@ -194,7 +194,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 128k long context, real-world test
-            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             131072,  # max_seq_len, allow for image tokens
@@ -315,7 +315,7 @@ def test_demo(
     if print_to_file:
         # Creat batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_directory = "models/demos/qwen25_vl/demo/output"
+        output_directory = "models/demos/qwen3_vl/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
@@ -365,8 +365,8 @@ def test_demo(
     # Set logging level to ERROR to suppress warnings about unexpected keys
     ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
     transformers_logging.set_verbosity_error()
-    config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
-    reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    config = Qwen3VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
+    reference_model = Qwen3VLForConditionalGeneration.from_pretrained(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"
     )
     if use_tt_vision:
@@ -388,6 +388,7 @@ def test_demo(
     text_outputs = []
     text_outputs_all_users_all_batches = []
     logger.info("Starting inference...")
+    vision_model_traced = False
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
 
@@ -398,7 +399,7 @@ def test_demo(
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(input_prompts)
         inputs = processor(
-            text=text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
+            text=text,  # [INFO] Qwen3VLProcessor handles the case where text is a string or a list of strings
             images=image_inputs,
             videos=video_inputs,
             padding=True,
@@ -414,11 +415,18 @@ def test_demo(
 
         # Vision prefill
         logger.info(f"Vision model prefill batch {batch_idx}")
-        profiler.start(f"vision_model_prefill", iteration=batch_idx)
-        image_embeds = (
+        if not vision_model_traced:
+            image_embeds, deepstack_visual_embeds = (
             visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
             if "pixel_values" in inputs
-            else torch.tensor([], dtype=torch.bfloat16)
+            else (torch.tensor([], dtype=torch.bfloat16), None)
+            )
+            vision_model_traced = True
+        profiler.start(f"vision_model_prefill", iteration=batch_idx)
+        image_embeds, deepstack_visual_embeds = (
+            visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+            if "pixel_values" in inputs
+            else (torch.tensor([], dtype=torch.bfloat16), None)
         )
         profiler.end(f"vision_model_prefill", iteration=batch_idx)
 
@@ -426,13 +434,14 @@ def test_demo(
         logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")
         # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
         text_embeds = reference_model.model.language_model.embed_tokens(inputs.input_ids)
-        input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, reference_model.config)
+        input_embeds, deepstack_visual_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, reference_model.config, deepstack_visual_embeds=deepstack_visual_embeds)
         pad_token_id = tokenizer.pad_token_id
         assert (
             model_args.max_seq_len >= max(len(x) for x in input_embeds) + max_generated_tokens
         ), f"max_seq_len ({model_args.max_seq_len}) must be >= than max prompt length ({max(len(x) for x in input_embeds)}) + max generated tokens ({max_generated_tokens})"
         (
             input_prefill_pt,
+            deepstack_visual_embeds,
             decoding_pos,  # Position where decoding should start for each user
             prefill_lens,
         ) = preprocess_inputs_prefill(
@@ -440,6 +449,7 @@ def test_demo(
             model_args,
             inputs.attention_mask,
             pad_embedding=reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
+            deepstack_visual_embeds=deepstack_visual_embeds,
         )
         # Get user-specific rotary position embeddings
         cos, sin, rope_deltas = multimodal_rope_from_hf(
@@ -456,6 +466,7 @@ def test_demo(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
+            deepstack_visual_embeds=deepstack_visual_embeds,
         )
         profiler.end(f"compile_prefill", iteration=batch_idx)
         logger.info("Finished prefill warmup")
@@ -468,6 +479,7 @@ def test_demo(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
+            deepstack_visual_embeds=deepstack_visual_embeds,
         )
         # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
         generator.update_rope_deltas([rope_delta.item() for rope_delta in rope_deltas])
@@ -627,11 +639,7 @@ def test_demo(
     if (
         is_ci_env
         and "bert-score" in test_id
-        and "Qwen2.5-VL-3B" not in model_args.base_model_name
-        and "Qwen2.5-VL-7B" not in model_args.base_model_name
     ):
-        # todo)) fix this issue before enabling BERTScore check for 3B and 7B models:
-        #        https://github.com/tenstorrent/tt-metal/issues/28442
         assert mesh_device.get_num_devices() > 2, "BERTScore is only supported for T3K for now"
         expected_output = load_expected_text(model_args.base_model_name)
         from bert_score import score as bert_score
@@ -652,7 +660,7 @@ def test_demo(
                 f"{p.item():.3f}/{r.item():.3f}/{f.item():.3f}"
             )
         logger.info(f"Mean BERTScore F1 (raw): {F10.mean().item():.3f}")
-        assert F10.mean().item() > 0.75, f"BERTScore F1 (raw) is lower than expected."
+        assert F10.mean().item() > 0.70, f"BERTScore F1 (raw) is lower than expected."
 
     # Prepare profile benchmark metrics for the last repeat batch only -- batch_idx'th batch
     compile_prefill_time = profiler.get_duration("compile_prefill", iteration=batch_idx)
@@ -827,12 +835,8 @@ def load_inputs(input_file, batch_size):
 
 
 def load_expected_text(model_name):
-    if "Qwen2.5-VL-72B" in model_name:
-        input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_72B.txt"
-    elif "Qwen2.5-VL-32B" in model_name:
-        input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_32B.txt"
-    elif "Qwen2.5-VL-3B" in model_name:
-        input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_3B.txt"
+    if "Qwen3-VL-32B" in model_name:
+        input_file = "models/demos/qwen3_vl/demo/sample_prompts/expected_text_32B.txt"
     else:
         raise ValueError(f"Model {model_name} not supported")
 

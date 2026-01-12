@@ -8,8 +8,8 @@ from typing import Mapping, Optional
 
 import torch
 from loguru import logger
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-    Qwen2_5_VLForConditionalGeneration as Ref_Qwen2_5_VLForConditionalGeneration,
+from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+    Qwen3VLForConditionalGeneration as Ref_Qwen3VLForConditionalGeneration,
 )
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.qwen2_5_vl import Qwen2_5_VLProcessingInfo
@@ -99,7 +99,7 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
 @MULTIMODAL_REGISTRY.register_processor(
     MultiModalProcessor, info=TT_Qwen2_5_VLProcessingInfo, dummy_inputs=DummyInputsBuilder
 )
-class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
+class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
         self.reference_model = kwargs.pop("reference_model", None)
         self.visual_model = kwargs.pop("visual_model", None)
@@ -130,9 +130,9 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         )
 
         ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
-        config = Ref_Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
+        config = Ref_Qwen3VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
         # config.vision_config.depth = 1 # [INFO] useful for debugging
-        reference_model = Ref_Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        reference_model = Ref_Qwen3VLForConditionalGeneration.from_pretrained(
             ref_model_name, config=config, torch_dtype="auto", device_map="auto"
         )
         # Create the TorchVisionTransformer wrapper using the original vision model as reference

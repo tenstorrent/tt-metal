@@ -49,7 +49,7 @@ class PatchMerger(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name),
+            cache_file_name=cache_name(f"{name}.weight"),
         )
         as_bias_tensor = lambda name, type, dim: ttnn.as_tensor(
             torch_bias(name),
@@ -58,7 +58,7 @@ class PatchMerger(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name),
+            cache_file_name=cache_name(f"{name}.bias"),
         )
 
         # First layer: hidden_size -> hidden_size

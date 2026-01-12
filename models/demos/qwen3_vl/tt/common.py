@@ -37,11 +37,12 @@ def merge_vision_tokens(
 
     input_embeds = input_embeds.masked_scatter(image_mask, image_embeds)
     if deepstack_visual_embeds is not None:
-        zeros = torch.zeros_like(input_embeds)
-        deepstack_visual_embeds = zeros.masked_scatter(image_mask, deepstack_visual_embeds)
+        for i in range(len(deepstack_visual_embeds)):
+            zeros = torch.zeros_like(input_embeds)
+            deepstack_visual_embeds[i] = zeros.masked_scatter(image_mask, deepstack_visual_embeds[i])
         return input_embeds, deepstack_visual_embeds
     else:
-        return input_embeds
+        return input_embeds, None
 
 
 def preprocess_inputs_prefill(
@@ -71,7 +72,7 @@ def preprocess_inputs_prefill(
     input_prefill = []
     decoding_pos = []
     prefill_lens = []
-    deepstack_visual_embeds_list = []
+    deepstack_visual_embeds_list = [] if deepstack_visual_embeds is not None else None
 
     # Always prefill the nearest power of 2 for each user. This means that the majority of cases we will prefill more tokens than needed.
     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
@@ -80,7 +81,6 @@ def preprocess_inputs_prefill(
         # Assumes attention_mask[i] corresponds to input_embeds[i]
         # and has 1 for actual tokens, 0 for padding.
         user_attention_mask = attention_mask[i]
-        deepstack_visual_embeds_i = deepstack_visual_embeds[i]
         actual_prompt_len = int(user_attention_mask.sum().item())
 
         # Prefill size is nearest power of 2 - FIXME: *really*? power of 2? surely we only need it to be a multiple of 1024 or whatever?
@@ -88,7 +88,7 @@ def preprocess_inputs_prefill(
 
         # Initialize prefill tensors full of pad tokens
         input_prefill_i = torch.empty((prefill_seq_len, pad_embedding.shape[-1]), dtype=pad_embedding.dtype)
-        deepstack_visual_embeds_i = torch.pad(deepstack_visual_embeds_i, (prefill_seq_len - deepstack_visual_embeds_i.shape[1], 0))
+        deepstack_visual_embeds_i = [torch.nn.functional.pad(deepstack_visual_embeds[j][i], (0, 0, 0, prefill_seq_len - deepstack_visual_embeds[j][i].shape[0])) for j in range(len(deepstack_visual_embeds))] if deepstack_visual_embeds is not None else None
         input_prefill_i[:] = pad_embedding
 
         # Copy only the *actual* tokens, not the processor padding.
@@ -98,7 +98,8 @@ def preprocess_inputs_prefill(
         # Keep the correct decoding position of each user using actual_prompt_len
         decoding_pos.append(actual_prompt_len)
         prefill_lens.append(prefill_seq_len)
-        deepstack_visual_embeds_list.append(deepstack_visual_embeds_i)
+        if deepstack_visual_embeds is not None:
+            deepstack_visual_embeds_list.append(deepstack_visual_embeds_i)
     input_prefill = torch.stack(input_prefill)  # [batch_size, prefill_seq_len, embed_dim]
 
     return (
@@ -132,22 +133,20 @@ def multimodal_rope_from_hf(
         padded_inputs, dtype=inputs.attention_mask.dtype, device=inputs.attention_mask.device
     )
 
-    # Qwen2_5_VLForConditionalGeneration.forward:
+    # Qwen3VLForConditionalGeneration.forward:
     position_ids, rope_deltas = reference_model.model.get_rope_index(
         padded_inputs,
         inputs.image_grid_thw if "image_grid_thw" in inputs else None,
         video_grid_thw=None,
-        second_per_grid_ts=None,
         attention_mask=padded_attention_mask,
     )
 
-    # Qwen2_5_VLModel.forward:
+    # Qwen3VLModel.forward:
     cos, sin = reference_model.model.language_model.rotary_emb(input_embeds, position_ids)
     # apply_multimodal_rotary_pos_emb:
-    mrope_section = reference_model.config.rope_scaling["mrope_section"] * 2
     unsqueeze_dim = 1
-    cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(unsqueeze_dim)
-    sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(unsqueeze_dim)
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
     # convert to meta-style interleaved format:
     cos, sin = convert_rope_style_hf_to_meta(cos, sin)
     # we have precomputed embeddings for the entire sequence length and converted to 1D so we no longer need to track rope_deltas

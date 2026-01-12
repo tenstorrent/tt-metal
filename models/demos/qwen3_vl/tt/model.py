@@ -224,7 +224,7 @@ class DropInVisionTransformer(torch.nn.Module):
         all_pixel_values = pixel_values
         all_grid_thw = grid_thw
         final_outputs = []
-        deepstack_visual_embeds_list = []
+        deepstack_visual_embeds_list = [None] * len(self.model_args.hf_config.vision_config.deepstack_visual_indexes)
         # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
         for grid_thw in all_grid_thw:
             # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
@@ -243,15 +243,11 @@ class DropInVisionTransformer(torch.nn.Module):
                 grid_thw=grid_thw,
                 head_dim=self.model_args.head_dim,
                 spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
-                window_size=self.model_args.hf_config.vision_config.window_size,
-                patch_size=self.model_args.hf_config.vision_config.patch_size,
-                num_grid_per_side=self.model_args.hf_config.vision_config.num_grid_per_side,
-                pos_embedding=self.reference_model.pos_embed,
             )
 
             # 3. Use reference model's patch embedding
             patch_input = self.reference_model.patch_embed(pixel_values)
-            pos_embeds = self.reference_model.fast_pos_embed_interpolation(grid_thw)
+            pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
             patch_input = patch_input + pos_embeds
 
 
@@ -313,28 +309,35 @@ class DropInVisionTransformer(torch.nn.Module):
                 tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
             )
 
-            deepstack_visual_embeds_torch = ttnn.to_torch(
-                deepstack_visual_embeds, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
-            )
+            deepstack_visual_embeds_torch_list = [ttnn.to_torch(
+                deepstack_visual_embeds[i], mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
+            ) for i in range(len(deepstack_visual_embeds))]
 
             # deallocate TT output
             ttnn.deallocate(tt_out)
-            ttnn.deallocate(deepstack_visual_embeds)
+            [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
 
             # 2. Extract the relevant output part and adjust shape (matching test logic)
             out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
             final_output = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
-            deepstack_visual_embeds_torch = deepstack_visual_embeds_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
+            deepstack_visual_embeds_torch = [
+                deepstack_visual_embeds_torch_list[i][:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0) 
+                for i in range(len(deepstack_visual_embeds_torch_list))
+            ]
 
             if self.debug:
                 logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
-                reference_output = self.reference_model.forward(pixel_values, grid_thw)
+                reference_output, deepstack_ref = self.reference_model.forward(pixel_values, grid_thw)
                 _, pcc = comp_pcc(reference_output, final_output)
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
             final_outputs.append(final_output)
-            deepstack_visual_embeds_list.append(deepstack_visual_embeds_torch)
+            for i in range(len(deepstack_visual_embeds_list)):
+                if deepstack_visual_embeds_list[i] is None:
+                    deepstack_visual_embeds_list[i] = deepstack_visual_embeds_torch[i]
+                else:
+                    deepstack_visual_embeds_list[i] = torch.cat([deepstack_visual_embeds_list[i], deepstack_visual_embeds_torch[i]], dim=0)
         # concatenate all the outputs
         return torch.cat(final_outputs, dim=0), deepstack_visual_embeds_list
 
@@ -359,7 +362,6 @@ class Transformer(TTTransformer):
             weight_cache_path=weight_cache_path,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
-            attention_class=QwenVLAttentionModule,
             rope_setup_class=RotarySetup,
         )
 
@@ -398,13 +400,16 @@ class Transformer(TTTransformer):
         )
 
         if deepstack_visual_embeds is not None:
-            deepstack_visual_embeds = ttnn.from_torch(
-                deepstack_visual_embeds.unsqueeze(1),
+            deepstack_visual_embeds = [
+                ttnn.from_torch(
+                deepstack_visual_embeds[i].unsqueeze(0).unsqueeze(0),
                 device=self.mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
+                ),
+            ) for i in range(len(deepstack_visual_embeds))]
 
         # Slice the rot mats to the prefill seqlen
         cos_matrix, sin_matrix = self._prepare_cos_sin(rot_mats=rot_mats)
