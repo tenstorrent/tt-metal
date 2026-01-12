@@ -183,7 +183,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     // KERNEL CREATION
     // Forward Direction
     // Reader
-    auto sender_reader_forward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    auto sender_reader_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_reader_forward_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
         sender_forward_cb_index,          // cb_forward_id
@@ -216,7 +216,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         sender_reader_forward_kernel_config);
 
     // Writer
-    auto sender_writer_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    auto sender_writer_forward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     sender_writer_forward_kernel_config.compile_args = {
         ring_index,                               // my_chip_id
         reserved_packet_header_forward_CB_index,  // reserved_packet_header_cb_id
@@ -249,7 +249,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 
     // Backward Direction
     // Reader
-    auto sender_reader_backward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    auto sender_reader_backward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_reader_backward_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
         sender_backward_cb_index,         // cb_backward_id
@@ -282,7 +282,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         sender_reader_backward_kernel_config);
 
     // Writer
-    auto sender_writer_backward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    auto sender_writer_backward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     sender_writer_backward_kernel_config.compile_args = {
         ring_index,                                // my_chip_id
         reserved_packet_header_backward_CB_index,  // reserved_packet_header_cb_id

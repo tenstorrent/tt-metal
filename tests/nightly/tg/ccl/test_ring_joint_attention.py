@@ -6,7 +6,62 @@ import torch
 import ttnn
 from loguru import logger
 import pytest
-from tests.nightly.t3000.ccl.test_ring_joint_attention import run_ring_joint_sdpa, create_ring_joint_sdpa_submesh
+from models.experimental.tt_dit.tests.unit.test_ring_joint_attention import (
+    run_ring_joint_sdpa,
+    run_test_ring_joint_sdpa,
+    create_ring_joint_sdpa_submesh,
+    wh_glx_unit_test_params,
+    mesh_device_map,
+)
+
+
+@wh_glx_unit_test_params
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+def test_ring_joint_sdpa_dit_wh_glx(
+    mesh_device,
+    input_shape,
+    parallel_config,
+    chunk_sizes,
+    expected_correctness,
+    num_links,
+    all_gather_topology,
+    reset_seeds,
+):
+    dtype = ttnn.bfloat16
+    n_iters = 1
+    trace_enabled = False
+    skip_check = False
+    pcc_threshold, max_mse = expected_correctness
+    q_chunk_size, k_chunk_size = chunk_sizes
+
+    run_test_ring_joint_sdpa(
+        mesh_device,
+        input_shape,
+        parallel_config,
+        q_chunk_size,
+        k_chunk_size,
+        n_iters,
+        trace_enabled,
+        num_links,
+        all_gather_topology,
+        skip_check,
+        dtype,
+        pcc_threshold=pcc_threshold,
+        max_mse=max_mse,
+    )
 
 
 @pytest.mark.parametrize(
@@ -93,10 +148,13 @@ def test_ring_joint_sdpa(
     logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
     logger.debug(f"submesh: {submesh.shape}")
 
+    skip_check = False
+
     run_ring_joint_sdpa(
         submesh,
         b,
         nh,
+        seq_len,
         seq_len,
         joint_seq_len,
         d,
@@ -109,6 +167,7 @@ def test_ring_joint_sdpa(
         rp_axis,
         up_axis,
         all_gather_topology,
+        skip_check,
         pcc_threshold,
     )
 
@@ -177,6 +236,8 @@ def test_ring_joint_sdpa_program_cache(
     logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
     logger.debug(f"submesh: {submesh.shape}")
 
+    skip_check = False
+
     dummy_tensors = []
     for i in range(3):
         dummy_tensors.append(
@@ -194,6 +255,7 @@ def test_ring_joint_sdpa_program_cache(
             b,
             nh,
             seq_len,
+            seq_len,
             joint_seq_len,
             d,
             q_chunk_size,
@@ -205,6 +267,7 @@ def test_ring_joint_sdpa_program_cache(
             rp_axis,
             up_axis,
             all_gather_topology,
+            skip_check,
             pcc_threshold,
         )
 
