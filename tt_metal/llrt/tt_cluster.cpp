@@ -875,6 +875,43 @@ void Cluster::read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr
     this->driver_->read_from_device_reg(mem_ptr, target.chip, target_coord, addr, size_in_bytes);
 }
 
+void Cluster::noc_multicast_write(
+    const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core_start, tt_cxy_pair core_end, uint64_t addr) const {
+    TT_FATAL(core_start.chip == core_end.chip, "core_start and core_end must be on the same chip");
+    noc_multicast_write(
+        mem_ptr,
+        sz_in_bytes,
+        core_start.chip,
+        tt_xy_pair(core_start.x, core_start.y),
+        tt_xy_pair(core_end.x, core_end.y),
+        addr);
+}
+
+void Cluster::noc_multicast_write(
+    const void* mem_ptr, uint32_t sz_in_bytes, ChipId chip_id, CoreCoord core_start, CoreCoord core_end, uint64_t addr)
+    const {
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+
+    if (rtoptions_.get_watcher_enabled()) {
+        tt::watcher_sanitize_host_noc_multicast_write(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            {core_start.x, core_start.y},
+            {core_end.x, core_end.y},
+            addr,
+            sz_in_bytes);
+    }
+
+    tt::umd::CoreCoord start_coord = soc_desc.get_coord_at(core_start, CoordSystem::TRANSLATED);
+    tt::umd::CoreCoord end_coord = soc_desc.get_coord_at(core_end, CoordSystem::TRANSLATED);
+
+    this->driver_->noc_multicast_write(const_cast<void*>(mem_ptr), sz_in_bytes, chip_id, start_coord, end_coord, addr);
+
+    if (this->cluster_desc_->is_chip_remote(chip_id)) {
+        this->driver_->wait_for_non_mmio_flush(chip_id);
+    }
+}
+
 void Cluster::write_sysmem(
     const void* vec, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const {
     TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(src_device_id));
