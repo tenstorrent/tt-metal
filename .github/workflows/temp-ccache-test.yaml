@@ -5,164 +5,24 @@ on:
 
 jobs:
   build-artifact:
-    name: "🛠️ Build Release ubuntu 22.04"
-    timeout-minutes: 100
-    runs-on: tt-ubuntu-2204-large-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    outputs:
-      build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
-    container:
-      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:d8ab8ee3fe4d35256b675bd6f47c0d48f7cada78
-      env:
-        CCACHE_REMOTE_ONLY: "true"
-        CCACHE_TEMPDIR: /tmp/ccache
-        TRACY_NO_INVARIANT_CHECK: 1
-        TRACY_NO_ISA_EXTENSIONS: 1
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache
-      options: >
-        --group-add 1457
-        --tmpfs /tmp
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work
-    steps:
-      - name: Check Redis credentials
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
-        run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
-            exit 1
-          fi
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
-          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 500
-          fetch-tags: true
-          path: docker-job
-
-      - name: Create ccache tmpdir
-        run: mkdir -p /tmp/ccache
-
-      - name: Prepare ccache
-        run: ccache -z
-
-      - name: 🔧 CMake configure
-        run: |
-          ./build_metal.sh --build-dir build --build-type Release --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake --build-metal-tests --build-ttnn-tests --build-programming-examples --build-tt-train --enable-ccache --configure-only
-
-      - name: 🛠️ Compile
-        run: cmake --build build --target install
-
-      - name: 📦 Package
-        run: cmake --build build --target package
-
-      - name: Publish ccache summary
-        run: |
-          echo '## Build CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: 'Tar build files'
-        run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools build/tt-train runtime data"
-          tar -I 'zstd --adapt=min=9 -T0' -cvhf ttm_any.tar.zst $ARTIFACT_PATHS
-
-      - name: Set build artifact name
-        id: set_build_artifact_name
-        run: |
-          ARTIFACT_NAME="ttm-build-any-Release-${{ github.sha }}-${{ github.run_id }}"
-          echo "build_artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
-
-      - name: ☁️ Upload build tarball
-        uses: actions/upload-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
-          path: /work/ttm_any.tar.zst
-          if-no-files-found: error
-          retention-days: 1
-
-  build-wheel:
-    name: "🐍 Build Python Wheel"
-    timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-large-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    outputs:
-      wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Check Redis credentials
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
-        run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
-            exit 1
-          fi
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
-          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
-
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 500
-          fetch-tags: true
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.12'
-
-      - name: 🐍 Build wheel
-        uses: pypa/cibuildwheel@v2.23.2
-        env:
-          CIBW_BUILD: "cp310-manylinux_x86_64*"
-          CIBW_SKIP: "*-musllinux_*"
-          CIBW_BUILD_FRONTEND: build
-          CIBW_ENVIRONMENT: >-
-            CCACHE_REMOTE_ONLY=true
-            CCACHE_TEMPDIR=/tmp/ccache
-            CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
-            CIBW_ENABLE_TRACY=ON
-            CIBW_BUILD_TYPE=Release
-          CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
-          CIBW_BEFORE_TEST: ccache -s
-          CIBW_TEST_COMMAND: 'python -c "import ttnn"'
-          CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/manylinux-amd64:4b5109cda67b90f295ef687f30d1a759d6b42075
-
-      - name: Set wheel artifact name
-        id: set_wheel_artifact_name
-        run: |
-          ARTIFACT_NAME="ttnn-dist-cp310-Release-${{ github.sha }}-${{ github.run_id }}"
-          echo "wheel_artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
-
-      - name: ☁️ Upload wheel
-        uses: actions/upload-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
-          path: wheelhouse
-          if-no-files-found: error
-          retention-days: 1
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      tracy: true
+      version: "22.04"
+      skip-tt-train: false
 
   ttnn-ccache-test:
-    needs: build-wheel
+    needs: build-artifact
     name: TTNN CCache Test (3 runs on same machine)
     runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:d8ab8ee3fe4d35256b675bd6f47c0d48f7cada78
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         TT_METAL_RUNTIME_ROOT: /work
@@ -203,18 +63,11 @@ jobs:
           submodules: recursive
           path: docker-job
 
-      - name: 🧪 Download Python Wheel
-        uses: actions/download-artifact@v4
+      - name: Setup Job
+        uses: ./.github/actions/setup-job
         with:
-          name: ${{ needs.build-wheel.outputs.wheel_artifact_name }}
-          path: docker-job
-
-      - name: 💿 Install Wheel
-        working-directory: docker-job
-        run: |
-          WHEEL_FILENAME=$(ls -1 *.whl)
-          echo "📦 Installing $WHEEL_FILENAME"
-          pip3 install "$WHEEL_FILENAME"
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: Initial ccache configuration and stats
         run: |
@@ -584,7 +437,7 @@ jobs:
     runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:d8ab8ee3fe4d35256b675bd6f47c0d48f7cada78
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         TT_METAL_RUNTIME_ROOT: /work
@@ -625,15 +478,10 @@ jobs:
           submodules: recursive
           path: docker-job
 
-      - name: 📦 Download Build Artifact
-        uses: actions/download-artifact@v4
+      - name: Setup Job
+        uses: ./.github/actions/setup-job
         with:
-          name: ${{ needs.build-artifact.outputs.build_artifact_name }}
-          path: docker-job
-
-      - name: 📂 Extract Build Files
-        working-directory: docker-job
-        run: tar --zstd -xf ttm_any.tar.zst
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
 
       - name: Initial ccache configuration and stats
         run: |
