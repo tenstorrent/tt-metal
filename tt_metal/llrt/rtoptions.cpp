@@ -854,7 +854,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             if (is_env_enabled(value)) {
                 this->profiler_enabled = true;
                 this->profiler_noc_events_enabled = true;
-                this->experimental_device_debug_dump_interval_seconds = std::stoi(value);
+                this->experimental_device_debug_dump_enabled = true;
             }
             break;
         }
