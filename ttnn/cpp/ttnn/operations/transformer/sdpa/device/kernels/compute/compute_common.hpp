@@ -569,8 +569,20 @@ void calculate_exponential_polynomial_init() {
     init_clamp_loadmacro<SCALE>();
 }
 
+/**
+ * Computes exp(x) using polynomial approximation after range reduction.
+ *
+ * Clamps input to >= -88.5, scales by configured factor, then reduces to exp(r) * 2^k
+ * where r = x - k*ln(2). Uses either SFPARECIP instruction or multi-term polynomial (degree 1-4)
+ * to compute exp(r), then reconstructs full result via exponent manipulation.
+ *
+ * @tparam USE_SFPARECIP_INSTR Use hardware SFPARECIP instruction (true) or polynomial evaluation (false)
+ * @tparam SCALE_EN Apply scaling factor from LREG11 to input values
+ * @tparam ITERATIONS Number of 32-element vectors to process per tile
+ * @tparam NUM_TERMS Polynomial degree (1-4) when USE_SFPARECIP_INSTR=false; higher improves accuracy
+ */
 template <bool SCALE_EN, int ITERATIONS, bool USE_SFPARECIP_INSTR, int POLY_DEGREE, bool is_fp32_dest_acc_en = false>
-void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) {
+void calculate_exponential_polynomial() {
     // Clamp values < -88.5 to 0.
     run_clamp_loadmacro();
 
@@ -590,7 +602,7 @@ void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) 
             POLY_DEGREE >= 1 && POLY_DEGREE <= 4,
             "Only degree 1-4 polynomials are supported in calculate_exponential_polynomial");
 
-        // f(x) = c0 + c1 * (x + c2 * (x + c3 * (...))).
+        // Evaluate polynomial f(x) = c0 + c1 * x + c2 * x^2 + ... using Horner's method.
         constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
                              : (POLY_DEGREE == 2) ? 0.999848792924395313327307061545061386175496934006f
                              : (POLY_DEGREE == 3) ? 0.99992449655091231753798502608929170703152709521188f
@@ -599,19 +611,31 @@ void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) 
                              : (POLY_DEGREE == 2) ? 1.01508760098521056684783640695492761469306929535975f
                              : (POLY_DEGREE == 3) ? 0.99993960415029750534472970577402987498389428593233f
                                                   : 0.99996228117047652035114096488703457970402030983204f;
-        constexpr float c2 = (POLY_DEGREE == 1)   ? 0
-                             : (POLY_DEGREE == 2) ? 0.50628367056745568861842335616023694454759126020461f
+        constexpr float c2 = (POLY_DEGREE == 2)   ? 0.50628367056745568861842335616023694454759126020461f
                              : (POLY_DEGREE == 3) ? 0.50502329058055065591138054839814880512001604099324f
                                                   : 0.49998365704615426417337683145647067790385638465486f;
-        constexpr float c3 = (POLY_DEGREE == 1)   ? 0
-                             : (POLY_DEGREE == 2) ? 0
-                             : (POLY_DEGREE == 3) ? 0.16817330195731531429790827442800245470170482723302f
-                                                  : 0.16792157982882225102649214918047336097544632172075f;
+        constexpr float c3 = (POLY_DEGREE == 3) ? 0.16817330195731531429790827442800245470170482723302f
+                                                : 0.16792157982882225102649214918047336097544632172075f;
+        constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
+
         switch (POLY_DEGREE) {
-            case 3: TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3)); TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
-            case 2: TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2)); TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
-            case 1: TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1)); TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
-            case 0: TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0)); TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
+            case 4:
+                TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
+                TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
+                [[fallthrough]];
+            case 3:
+                TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
+                TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
+                [[fallthrough]];
+            case 2:
+                TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
+                TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
+                [[fallthrough]];
+            case 1:
+                TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
+                TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
+                TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
+                TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
             default: break;
         }
     }
@@ -654,9 +678,6 @@ void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) 
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else {  // degree 4.
-                constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
-                TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
-                TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG2, 0);
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0);
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
@@ -700,9 +721,9 @@ void calculate_exponential_first_column(int scale_bf16) {
         }
     } else {
         if constexpr (DST_ACCUM_MODE) {
-            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 4>(scale_bf16);
+            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 4>();
         } else {
-            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 2>(scale_bf16);
+            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 2>();
         }
     }
 }
@@ -722,7 +743,9 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE, false>();
-    MATH((calculate_exponential_polynomial_init<scale_fp32>()));
+    if constexpr (!EXP_APPROX_MODE) {
+        MATH((calculate_exponential_polynomial_init<scale_fp32>()));
+    }
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
