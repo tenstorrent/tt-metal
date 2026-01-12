@@ -32,7 +32,6 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta_mllama,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
-    load_hf_state_dict,
     reverse_permute,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
@@ -1770,42 +1769,34 @@ class ModelArgs:
             return vision_config
 
         config_file = os.path.join(checkpoint_dir, "config.json")
-        if not os.path.exists(config_file):
-            from transformers import AutoConfig
+        from transformers import AutoConfig
 
-            if self.dummy_weights:
-                logger.info(
-                    f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
-                )
-                self.hf_config = AutoConfig.from_pretrained(
-                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
-                )
-            else:
-                self.hf_config = AutoConfig.from_pretrained(
-                    self.CKPT_DIR,
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=os.getenv("CI") == "true",
-                )
-
-            config = self.hf_config.to_dict()
-
-            if "text_config" in config or "vision_config" in config:
-                merged_text_config = merge_text_config(config)
-                self._set_params_from_dict(merged_text_config)
-
-                if "vision_config" in config:
-                    # Merge vision config (merge_vision_config is safe for all models - it only adds missing keys)
-                    merged_vision_config = merge_vision_config(config)
-                    self._set_vision_params({"vision_config": merged_vision_config})
-
-                # Set is_multimodal using original config that has vision_config
-                self.is_multimodal = "vision_config" in config or self.is_vision()
-            else:
-                self._set_params_from_dict(config)
+        if self.dummy_weights:
+            logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
+            self.hf_config = AutoConfig.from_pretrained(
+                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+            )
         else:
-            assert os.path.exists(config_file), f"config.json file not found at {config_file}"
-            with open(config_file, "r") as f:
-                config = json.load(f)
+            self.hf_config = AutoConfig.from_pretrained(
+                self.CKPT_DIR,
+                trust_remote_code=self.trust_remote_code_hf,
+                local_files_only=os.getenv("CI") == "true",
+            )
+
+        config = self.hf_config.to_dict()
+
+        if "text_config" in config or "vision_config" in config:
+            merged_text_config = merge_text_config(config)
+            self._set_params_from_dict(merged_text_config)
+
+            if "vision_config" in config:
+                # Merge vision config (merge_vision_config is safe for all models - it only adds missing keys)
+                merged_vision_config = merge_vision_config(config)
+                self._set_vision_params({"vision_config": merged_vision_config})
+
+            # Set is_multimodal using original config that has vision_config
+            self.is_multimodal = "vision_config" in config or self.is_vision()
+        else:
             self._set_params_from_dict(config)
 
         # compatibility with _set_params
@@ -1966,24 +1957,21 @@ class ModelArgs:
             state_dict = model.state_dict()
         else:
             # Always HuggingFace since we only support HF_MODEL now
-            if not os.path.exists(self.CKPT_DIR):
-                model_cls = self.get_hf_model_cls()
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=os.getenv("CI") == "true"
-                    # Note that the default setting is torch.dtype.float32, but model weights are
-                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                    # unnecessary cast.
-                )
-                if self.cache_hf_flag:
-                    self.cached_hf_model = model
-                state_dict = model.state_dict()
-                self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
-            else:
-                state_dict = load_hf_state_dict(self.CKPT_DIR)
-                self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
+            # if not os.path.exists(self.CKPT_DIR):
+            model_cls = self.get_hf_model_cls()
+            model = model_cls.from_pretrained(
+                self.CKPT_DIR,
+                torch_dtype="auto",
+                trust_remote_code=self.trust_remote_code_hf,
+                local_files_only=os.getenv("CI") == "true"
+                # Note that the default setting is torch.dtype.float32, but model weights are
+                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # unnecessary cast.
+            )
+            if self.cache_hf_flag:
+                self.cached_hf_model = model
+            state_dict = model.state_dict()
+            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
