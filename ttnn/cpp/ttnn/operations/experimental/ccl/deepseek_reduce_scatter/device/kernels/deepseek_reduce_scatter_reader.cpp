@@ -15,10 +15,11 @@ constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
 constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(3);
 constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
 constexpr uint32_t page_size = get_compile_time_arg_val(5);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(6);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(7);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(6);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(7);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(8);
 
-constexpr uint32_t initial_ct_idx = 8;
+constexpr uint32_t initial_ct_idx = 9;
 
 void kernel_main() {
     uint32_t arg_idx = 0;
@@ -37,9 +38,6 @@ void kernel_main() {
 
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<initial_ct_idx + input_ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
-
-    // hardcoded constants
-    constexpr uint32_t tile_granularity = 2;
 
     uint32_t semaphore_target_val = 0;
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;

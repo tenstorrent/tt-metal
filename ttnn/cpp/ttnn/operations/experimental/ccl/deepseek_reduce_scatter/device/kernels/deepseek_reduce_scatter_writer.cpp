@@ -24,10 +24,11 @@ constexpr uint32_t ring_size = get_compile_time_arg_val(1);
 constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(2);
 constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
 constexpr uint32_t page_size = get_compile_time_arg_val(4);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(5);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(6);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(6);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(7);
 
-constexpr uint32_t initial_ct_idx = 7;
+constexpr uint32_t initial_ct_idx = 8;
 
 void kernel_main() {
     uint32_t arg_idx = 0;
@@ -71,12 +72,9 @@ void kernel_main() {
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
 #endif
 
-    // hardcoded constants
-    constexpr uint32_t num_connections = 1;
-    constexpr uint32_t tile_granularity = 2;
-
     size_t arg_for_fab = arg_idx;
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
+    constexpr uint32_t num_connections = 1;
     open_connections(fabric_connection, num_connections, arg_for_fab);
 
     // pre-populate packet headers

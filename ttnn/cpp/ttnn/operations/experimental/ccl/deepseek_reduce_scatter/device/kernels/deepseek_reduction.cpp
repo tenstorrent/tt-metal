@@ -11,15 +11,13 @@ constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
 constexpr uint32_t output_cb = get_compile_time_arg_val(2);
 constexpr uint32_t ring_size = get_compile_time_arg_val(3);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
 
 void MAIN {
     uint32_t arg_idx = 0;
-    uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
-
-    // hardcoded constants
-    constexpr uint32_t tile_granularity = 2;
 
     // initialize binary operations - use the same constants consistently
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);

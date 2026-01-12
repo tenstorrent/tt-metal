@@ -96,11 +96,10 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
 
     // L1 Scratch CB Creation
-    uint32_t page_size = input_tensor.buffer()->page_size();
-    uint32_t tile_granularity =
-        2;  // TODO: (GR) process 2 tiles at a time (scatter write) -> currently hardcoded in the kernels
-    uint32_t cb_num_pages = 2 * tile_granularity;  // TODO: (GR) double buffering (enough to hold all tiles for a given
-                                                   // slice), test/check if we should use more
+    const uint32_t page_size = input_tensor.buffer()->page_size();
+    const uint32_t tile_granularity = 2;  // NOTE: writer kernel hardcoded to always use scatter_write with 2 tiles
+    const uint32_t cb_num_pages = 2 * tile_granularity;  // TODO: (GR) double buffering (enough to hold all tiles for a
+                                                         // given slice), test/check if we should use more
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_cb_index = tt::CB::c_in0;
@@ -139,6 +138,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         intermediate_cb_index,   // cb_intermediate_id
         reader_output_cb_index,  // cb_reader_output_id
         page_size,               // page_size
+        tile_granularity,        // tile_granularity
         input_tensor_Wt,         // input_tensor_Wt
         slice_Wt,                // slice_Wt
     };
@@ -159,6 +159,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         compute_output_cb_index,  // cb_compute_output_id
         reader_output_cb_index,   // cb_reader_output_id
         page_size,                // page_size
+        tile_granularity,         // tile_granularity
         input_tensor_Wt,          // input_tensor_Wt
         slice_Wt,                 // slice_Wt
     };
@@ -186,6 +187,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         intermediate_cb_index,    // intermediate_cb
         compute_output_cb_index,  // output_cb
         ring_size,                // ring_size
+        tile_granularity,         // tile_granularity
     };
 
     std::string reduce_kernel_path =
@@ -197,7 +199,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     // runtime args
     auto worker_core_iter = worker_core_range_set.ranges().cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+        for (uint32_t direction = 0; direction < num_directions_per_link; direction++) {
             auto core = *((worker_core_iter++)->begin());
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
@@ -213,7 +215,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 input_tensor.buffer()->address(),         // input_tensor_address
                 intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                 op_semaphore.address(),                   // op_semaphore
-                dir,                                      // direction
+                direction,                                // direction
                 start_tiles_read,                         // start_tiles_read
                 start_tiles_to_read,                      // start_tiles_to_read
                 start_pages_read_in_row,                  // start_pages_read_in_row
@@ -226,12 +228,12 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             std::vector<uint32_t> writer_rt_args = {
                 intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                 output_tensor.buffer()->address(),        // output_tensor_address
-                virtual_core.x,                           // out_ready_sem_noc0_x
-                virtual_core.y,                           // out_ready_sem_noc0_y
+                virtual_core.x,                           // semaphore_noc0_x
+                virtual_core.y,                           // semaphore_noc0_y
                 op_semaphore.address(),                   // op_semaphore
                 barrier_semaphores.at(0).address(),       // pre_op_barrier_semaphore
                 barrier_semaphores.at(1).address(),       // post_op_barrier_semaphore
-                dir,                                      // direction
+                direction,                                // direction
                 start_tiles_read,                         // start_tiles_read
                 start_tiles_to_read,                      // tiles_to_read
                 start_pages_read_in_row,                  // start_pages_read_in_row
@@ -245,7 +247,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             uint32_t num_connections = 1;
             dst_nodes.reserve(num_connections);
-            if (dir == 0) {
+            if (direction == 0) {
                 // backward
                 const auto backward_coord_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                 dst_nodes.push_back(backward_coord_fabric_node_id);
@@ -263,7 +265,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             std::vector<uint32_t> reduce_rt_args = {
                 start_tiles_read,     // start_tiles_read
                 start_tiles_to_read,  // start_tiles_to_read
-                dir};                 // dir
+                direction};           // direction
             tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_id, {core}, reduce_rt_args);
         }
     }
