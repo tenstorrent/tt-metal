@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include "xcustom_test.hpp"
-#include "overlay_reg.h"
+#include "meta/registers/overlay_reg.h"
 /////////////////
 // MISC
 /////////////////
@@ -620,5 +620,3 @@
     {                                                    \
         ROCC_INSTRUCTION_S(0, (trid), (64 + 49));        \
     }
-
-#endif

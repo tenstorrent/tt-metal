@@ -175,6 +175,7 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
         false /*supports_cbs*/,
+        false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         active_eth_dev_msgs::create_factory(),
         active_eth_fabric_telemetry::create_factory()};
