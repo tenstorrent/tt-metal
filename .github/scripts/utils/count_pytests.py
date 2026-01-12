@@ -11,14 +11,14 @@ def count_tests_in_directory(directory):
 
     for filepath in Path(directory).rglob("test_*.py"):
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 # Parse the Python file into an Abstract Syntax Tree (AST) which converts the code into a tree structure we can loop
                 tree = ast.parse(f.read(), filename=str(filepath))
 
             # Walk through every element in the tree (functions, classes, variables, etc.)
             for node in ast.walk(tree):
                 # Check if this element is a test function  and then check if its name starts with 'test_'
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_'):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
                     # Start with 1 test, then multiply by parameter counts
                     mult = 1
 
