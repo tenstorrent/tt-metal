@@ -198,7 +198,7 @@ Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_
 // Tensor variance(const Tensor& y,const Tensor& mean_y);
 Tensor _variance_impl(
     const Tensor& y,
-    const Tensor& mean_y,
+    const Tensor& /*mean_y*/,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
     ttnn::SmallVector<int> dims = {2, 3};
@@ -315,7 +315,7 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     std::optional<Tensor> min,
     std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& output_tensor) {
+    const std::optional<Tensor>& /*output_tensor*/) {
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {

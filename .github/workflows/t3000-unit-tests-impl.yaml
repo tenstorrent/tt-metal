@@ -60,14 +60,21 @@ jobs:
           sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
           # Convert to JSON
           json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
-          # Filter by model if specified (model filtering not yet implemented in YAML format)
-          # For now, return all tests. Model filtering can be added later if needed.
+          # Filter by model if specified
           echo "[INFO] Selected model: ${{ inputs.model }}"
-          echo "[INFO] Loading all tests from YAML (model filtering not yet implemented)"
+          if [ "${{ inputs.model }}" = "all" ]; then
+            filtered_output="$json_output"
+            echo "[INFO] Loading all tests from YAML"
+          else
+            # Filter tests by model-name field
+            # Include tests where model-name matches OR model-name doesn't exist (always-run tests)
+            filtered_output=$(echo "$json_output" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+            echo "[INFO] Filtered tests by model: ${{ inputs.model }}"
+          fi
           # Print the JSON output
           echo "Read contents of $TESTS_YAML_PATH and converted to JSON:"
-          echo "${json_output}"
-          echo "matrix=${json_output}" >> $GITHUB_OUTPUT
+          echo "$filtered_output"
+          echo "matrix=$filtered_output" >> $GITHUB_OUTPUT
 
   t3000-unit-tests:
     needs: load-test-matrix

@@ -98,6 +98,6 @@ models:
   integration:
     wh_llmbox: 420
   perf:
-    wh_llmbox: 660
+    wh_llmbox: 685
   demo:
-    wh_llmbox: 1020
+    wh_llmbox: 1070

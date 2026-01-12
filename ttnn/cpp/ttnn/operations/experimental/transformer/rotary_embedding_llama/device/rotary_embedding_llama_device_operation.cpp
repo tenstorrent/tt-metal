@@ -11,7 +11,7 @@
 namespace ttnn::operations::experimental::transformer::rotary_embedding_llama {
 
 RotaryEmbeddingLlamaDeviceOperation::program_factory_t RotaryEmbeddingLlamaDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.is_decode_mode) {
         return program::RotaryEmbeddingLlamaMultiCoreSharded{};
     }

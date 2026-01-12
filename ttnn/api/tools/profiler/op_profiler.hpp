@@ -458,7 +458,7 @@ inline std::string op_meta_data_serialized_json(
 
 template <typename device_operation_t>
 inline std::string op_meta_data_serialized_json(
-    const device_operation_t& operation,
+    const device_operation_t& /*operation*/,
     uint32_t operation_id,
     auto device_id,
     const auto& program,
