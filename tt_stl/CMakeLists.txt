@@ -59,19 +59,16 @@ target_link_libraries(metal_common_pch PRIVATE tt_stl)
 # Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
 tt_set_library_rpath(tt_stl)
 
-# On Fedora/RHEL (lib64), set LIBRARY_OUTPUT_DIRECTORY to build/lib for consistent tar artifact layout.
-# The lib64->lib symlink ensures install(TARGETS) can still find the library.
-# On Ubuntu (lib), do NOT set LIBRARY_OUTPUT_DIRECTORY - it triggers a CMake path resolution bug
-# where install(TARGETS) can't find the library. Without it, the library goes to the default
-# location and install(TARGETS) works correctly.
-if(NOT CMAKE_INSTALL_LIBDIR STREQUAL "lib")
-    set_target_properties(
-        tt_stl
-        PROPERTIES
-            LIBRARY_OUTPUT_DIRECTORY
-                "${CMAKE_BINARY_DIR}/lib"
-    )
-endif()
+# Output library directly to build/lib (not build/lib64) for CI tar artifacts
+# This prevents ODR violations in multiprocess tests where different processes
+# might load the library from different locations (original vs copied)
+# CI tar artifacts expect libraries in build/lib regardless of CMAKE_INSTALL_LIBDIR
+set_target_properties(
+    tt_stl
+    PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY
+            "${CMAKE_BINARY_DIR}/lib"
+)
 
 # Install target to Metalium export set (required because tt_metal depends on tt_stl)
 if(TT_INSTALL)
@@ -80,6 +77,7 @@ if(TT_INSTALL)
             tt_stl
         EXPORT Metalium
         LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
             COMPONENT metalium-runtime
         FILE_SET
         api
