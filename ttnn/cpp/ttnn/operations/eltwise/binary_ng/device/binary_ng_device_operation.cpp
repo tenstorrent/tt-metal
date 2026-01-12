@@ -305,8 +305,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
         if (i <= -6) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: "
-                "{}, "
+                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: {}, "
                 "dim b: {}",
                 i,
                 a_dim,
@@ -336,7 +335,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         }
     }
 
-    auto output_shape = ttnn::operations::binary_ng::compute_broadcasted_output(input_shape_a, input_shape_b);
+    auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
 
     if (output_tensor.has_value()) {
         auto shapes_equal = [=](const auto& shape_a, const auto& shape_b) {
@@ -500,39 +499,25 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
          binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
 
-    auto compute_mem_config_actual = [](const auto& input_tensor_a, const auto& shape_b) {
-        // Compute adjusted shard spec for output shape
-        const auto& padded_a_shape = input_tensor_a.padded_shape();
-        const auto& logical_out_shape =
-            operations::binary_ng::compute_broadcasted_output(input_tensor_a.logical_shape(), shape_b);
-        const auto& padded_out_shape =
-            input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(logical_out_shape);
-
-        auto adjusted_shard_spec = ttnn::operations::binary_ng::adjust_to_shape(
-            *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
-
-        return MemoryConfig(
-            input_tensor_a.memory_config().memory_layout(),
-            input_tensor_a.memory_config().buffer_type(),
-            adjusted_shard_spec);
-    };
-
     MemoryConfig mem_config_actual = input_tensor_a.memory_config();
     if (input_tensor_a.is_sharded()) {
-        mem_config_actual = compute_mem_config_actual(input_tensor_a, input_tensor_b.logical_shape());
+        mem_config_actual =
+            operations::binary_ng::compute_mem_config_actual(input_tensor_a, input_tensor_b.logical_shape());
     }
     if (!memory_config.has_value() && !output_tensor.has_value()) {
         if (input_tensor_b.memory_config().is_sharded()) {
             // if a is interleaved but in L1 (not DRAM), still use a's memory config
             if (!input_tensor_a.memory_config().is_sharded()) {
                 if (input_tensor_a.memory_config().buffer_type() == BufferType::DRAM) {
-                    mem_config_actual = compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
+                    mem_config_actual = operations::binary_ng::compute_mem_config_actual(
+                        input_tensor_b, input_tensor_a.logical_shape());
                     log_debug(
                         tt::LogOp,
                         "BinaryNgDeviceOperation: Using memory config from input tensor B since it is sharded");
                 }
             } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
-                mem_config_actual = compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
+                mem_config_actual =
+                    operations::binary_ng::compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
                 log_debug(
                     tt::LogOp,
                     "BinaryNgDeviceOperation: Using memory config from input tensor B since it has a larger shard "
@@ -544,10 +529,12 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         // If the provided memory config is sharded but doesn't have a shard spec, inherit from input
         if (mem_config_actual.is_sharded() && !mem_config_actual.shard_spec().has_value()) {
             if (input_tensor_a.is_sharded()) {
-                mem_config_actual = compute_mem_config_actual(input_tensor_a, input_tensor_b.logical_shape());
+                mem_config_actual =
+                    operations::binary_ng::compute_mem_config_actual(input_tensor_a, input_tensor_b.logical_shape());
                 log_debug(tt::LogOp, "BinaryNgDeviceOperation: Inheriting shard spec from input tensor A");
             } else if (input_tensor_b.is_sharded()) {
-                mem_config_actual = compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
+                mem_config_actual =
+                    operations::binary_ng::compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
                 log_debug(tt::LogOp, "BinaryNgDeviceOperation: Inheriting shard spec from input tensor B");
             } else {
                 TT_THROW("Output memory config is sharded but has no shard spec, and no input tensors are sharded");

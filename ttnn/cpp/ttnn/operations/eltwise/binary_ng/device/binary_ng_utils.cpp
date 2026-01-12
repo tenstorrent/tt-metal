@@ -747,4 +747,20 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
     }
     return ttnn::Shape(output_shape);
 }
+
+MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b) {
+    // Compute adjusted shard spec for output shape
+    const auto& padded_a_shape = input_tensor_a.padded_shape();
+    const auto& logical_out_shape =
+        operations::binary_ng::compute_broadcasted_output(input_tensor_a.logical_shape(), shape_b);
+    const auto& padded_out_shape = input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(logical_out_shape);
+
+    auto adjusted_shard_spec = ttnn::operations::binary_ng::adjust_to_shape(
+        *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
+
+    return MemoryConfig(
+        input_tensor_a.memory_config().memory_layout(),
+        input_tensor_a.memory_config().buffer_type(),
+        adjusted_shard_spec);
+}
 }  // namespace ttnn::operations::binary_ng
