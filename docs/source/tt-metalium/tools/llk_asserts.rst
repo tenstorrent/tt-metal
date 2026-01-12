@@ -4,7 +4,7 @@ LLK Asserts
 Overview
 --------
 
-LLK Asserts provide validation checks within the tt-llk codebase that implements core tensor operations. These asserts validate critical assumptions about tensor dimensions, data formats, and hardware configuration parameters at the lowest level of the compute stack.
+LLK Asserts provide runtime validation checks within the tt-llk codebase that implements core tensor operations. These asserts validate critical assumptions about tensor dimensions, data formats, and hardware configuration parameters at the lowest level of the compute stack.
 
 LLK asserts complement Lightweight Kernel Asserts and the Watcher tool by providing specialized validation for the low-level kernel library that handles:
 
@@ -39,10 +39,10 @@ It is recommended to enable at least one of these mechanisms for comprehensive d
 
 When an LLK assert fails, it triggers:
 
-1. an ``ebreak`` instruction (in case of Lightweight Kernel Asserts)
-2. watcher assertion (in case of Watcher)
+1. An ``ebreak`` instruction (in case of Lightweight Kernel Asserts)
+2. Watcher assertion (in case of Watcher)
 
-causing the kernel to hang.
+This causes the kernel to hang.
 If Watcher is used, the assertion message will be printed to stderr and the watcher log file.
 If Lightweight Kernel Asserts are used, use ``tt-triage`` to analyze the failure state.
 
