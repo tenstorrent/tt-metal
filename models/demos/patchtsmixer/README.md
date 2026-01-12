@@ -87,16 +87,6 @@ pytest test_patchtsmixer_end_to_end.py -v      # End-to-end model
 - Train: 12 months | Val: 4 months | Test: 4 months
 - Auto-downloads on first run
 
-```python
-from torchview import draw_graph
-from pytorch_patchtsmixer import PatchTSMixerModelForForecasting
-
-model = PatchTSMixerModelForForecasting(
-    context_length=512,
-    prediction_length=96,
-    patch_length=8,
-    patch_stride=8,
-    num_channels=7,
 ## Performance Metrics
 
 ### Stage 1: Correctness Validation ✅
