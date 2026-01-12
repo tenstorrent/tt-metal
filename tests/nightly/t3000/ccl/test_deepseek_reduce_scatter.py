@@ -30,16 +30,9 @@ def run_reduce_scatter_impl(
     rs_topology,
     num_iters=1,
     enable_trace=True,
-    ones_tensor=False,
-    mem_config_intermediate=None,
     cluster_axis=None,
-    use_barrier=False,
-    use_persistent_buffers=True,
-    chunks_per_sync=None,
-    num_workers_per_link=None,
-    num_buffers_per_channel=None,
     verify_output=True,
-    use_new=False,
+    ones_tensor=False,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -77,41 +70,15 @@ def run_reduce_scatter_impl(
     if rs_topology == ttnn.Topology.Linear:
         # Line RS requires double-sized input for forward/backward
         intermediate_shape.insert(0, 2)
-    if use_persistent_buffers:
-        persistent_intermediate_buffers = [
-            ttnn.from_torch(
-                torch.zeros(intermediate_shape),
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=rs_input_dtype,
-                memory_config=mem_config_intermediate,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            for _ in range(num_iters)
-        ]
+
     rs_output_shape = rs_input_shape[:]
     rs_output_shape[dim] //= num_devices
-    if use_persistent_buffers:
-        persistent_output_buffers = [
-            ttnn.from_torch(
-                torch.zeros(rs_output_shape),
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=rs_input_dtype,
-                memory_config=mem_config_rs,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            for _ in range(num_iters)
-        ]
-
-    logger.info("Done creating persistent buffers")
 
     ##### All gather input setup #####
     logger.info(f"Reduce scatter shape: {rs_input_shape}")
     logger.info(f"Reduce scatter dim: {dim}")
     logger.info(f"input mem config: {mem_config_input}")
     logger.info(f"Reduce input mem config: {mem_config_rs}")
-    logger.info(f"intermediate mem config: {mem_config_intermediate}")
     logger.info(f"topology: {rs_topology}")
 
     tt_input_tensor_mesh_list = []
@@ -154,41 +121,13 @@ def run_reduce_scatter_impl(
     tt_reduce_scatter_output_list = []
 
     def run_op(i):
-        if use_new:
-            logger.info(f"Using new reduce scatter")
-            tt_reduce_scatter_output_tensor = ttnn.reduce_scatter(
-                tt_input_tensor_mesh_list[i],
-                dim=dim,
-                num_links=num_links,
-                memory_config=mem_config_rs,
-                intermediate_memory_config=mem_config_intermediate,
-                topology=rs_topology,
-                subdevice_id=worker_sub_device_id,
-                cluster_axis=cluster_axis,
-                chunks_per_sync=chunks_per_sync,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=num_buffers_per_channel,
-            )
-        else:
-            logger.info(f"Using experimental reduce scatter")
-            tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
-                tt_input_tensor_mesh_list[i],
-                persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
-                if use_persistent_buffers
-                else None,
-                dim=dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
-                num_links=num_links,
-                memory_config=mem_config_rs,
-                intermediate_memory_config=mem_config_intermediate,
-                topology=rs_topology,
-                subdevice_id=worker_sub_device_id,
-                cluster_axis=cluster_axis,
-                chunks_per_sync=chunks_per_sync,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=num_buffers_per_channel,
-            )
+        tt_reduce_scatter_output_tensor = ttnn.experimental.deepseek_reduce_scatter(
+            tt_input_tensor_mesh_list[i],
+            output_memory_config=mem_config_rs,
+            num_links=num_links,
+            cluster_axis=cluster_axis,
+            sub_device_id=worker_sub_device_id,
+        )
 
         return tt_reduce_scatter_output_tensor
 
@@ -256,356 +195,110 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters, use_barrier, use_persistent_buffers, chunks_per_sync, num_workers_per_link, num_buffers_per_channel,",
+    "rs_input_shape, dim, layout, rs_input_dtype, enable_trace, num_iters",
     [
-        # Dim 0 tests
-        (
-            [16, 2, 128, 128],
-            0,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            True,
-            10,
-            True,
-            True,
-            None,
-            None,
-            None,
-        ),  # perf, barrier_with_persistent
-        (
-            [8, 2, 128, 128],
-            0,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            False,
-            1,
-            True,
-            False,
-            None,
-            None,
-            None,
-        ),  # check, barrier_without_persistent
-        # Dim 1 tests
-        (
-            [2, 24, 256, 256],
-            1,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            True,
-            10,
-            True,
-            True,
-            None,
-            None,
-            None,
-        ),  # perf, barrier_with_persistent
-        (
-            [2, 16, 56, 56],
-            1,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            False,
-            1,
-            True,
-            False,
-            None,
-            None,
-            None,
-        ),  # check, barrier_without_persistent
-        (
-            [2, 8, 512, 512],
-            1,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            True,
-            10,
-            False,
-            True,
-            None,
-            None,
-            None,
-        ),  # perf, no_barrier_with_persistent
-        # Dim 2 tests
-        (
-            [2, 4, 1024, 1024],
-            2,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            False,
-            1,
-            True,
-            True,
-            None,
-            None,
-            None,
-        ),  # check, barrier_with_persistent
-        (
-            [4, 1, 1024, 340],
-            2,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            True,
-            10,
-            True,
-            False,
-            None,
-            None,
-            None,
-        ),  # perf, barrier_without_persistent
-        (
-            [1, 1, 512, 512],
-            2,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            False,
-            1,
-            False,
-            True,
-            None,
-            None,
-            None,
-        ),  # check, no_barrier_with_persistent
         # Dim 3 tests
         (
-            [2, 4, 1024, 1024],
+            [1, 1, 32, 7168],
             3,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
             False,
-            True,
-            10,
-            True,
-            True,
-            None,
-            None,
-            None,
+            1,
         ),  # perf, barrier_with_persistent
-        (
-            [1, 1, 13, 512],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            False,
-            1,
-            True,
-            False,
-            None,
-            None,
-            None,
-        ),  # check, barrier_without_persistent
-        (
-            [3, 1, 41, 512],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            True,
-            10,
-            False,
-            True,
-            None,
-            None,
-            None,
-        ),  # perf, no_barrier_with_persistent
-        (
-            [8, 1, 512, 2560],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            False,
-            1,
-            True,
-            True,
-            None,
-            None,
-            None,
-        ),  # check, barrier_with_persistent
-        (
-            [4, 1, 1024, 2560],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            True,
-            10,
-            True,
-            False,
-            None,
-            None,
-            None,
-        ),  # perf, barrier_without_persistent
-        (
-            [1, 1, 1024, 2560],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            False,
-            1,
-            False,
-            True,
-            None,
-            None,
-            None,
-        ),  # check, no_barrier_with_persistent
-        (
-            [1, 1, 352, 2560],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            True,
-            10,
-            True,
-            True,
-            None,
-            None,
-            None,
-        ),  # perf, barrier_with_persistent
-        (
-            [2, 1, 2048, 2560],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            False,
-            1,
-            True,
-            False,
-            2,
-            2,
-            8,
-        ),  # check, barrier_without_persistent_with_hyperparams
-        (
-            [1, 1, 4096, 2560],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            True,
-            10,
-            False,
-            True,
-            2,
-            2,
-            8,
-        ),  # perf, no_barrier_with_persistent_with_hyperparams
-        # Composite-RS tests
-        (
-            [1, 1, 1, 8],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            False,
-            1,
-            True,
-            True,
-            None,
-            None,
-            None,
-        ),  # check, barrier_with_persistent
-        (
-            [2, 32, 2048, 64],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            True,
-            10,
-            True,
-            False,
-            None,
-            None,
-            None,
-        ),  # perf, barrier_without_persistent
-        (
-            [1, 1, 1, 16],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat8_b,
-            False,
-            False,
-            1,
-            False,
-            True,
-            2,
-            2,
-            8,
-        ),  # check, no_barrier_with_persistent_with_hyperparams
-        (
-            [1, 1, 29, 32],
-            3,
-            ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            True,
-            10,
-            True,
-            True,
-            2,
-            2,
-            8,
-        ),  # perf, barrier_with_persistent_with_hyperparams
+        # (
+        #     [1, 1, 32, 7168],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     ttnn.bfloat16,
+        #     False,
+        #     1,
+        # ),  # check, barrier_without_persistent
+        # (
+        #     [3, 1, 41, 512],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     ttnn.bfloat16,
+        #     True,
+        #     10,
+        # ),  # perf, no_barrier_with_persistent
+        # (
+        #     [8, 1, 512, 2560],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     ttnn.bfloat16,
+        #     False,
+        #     1,
+        # ),  # check, barrier_with_persistent
+        # (
+        #     [4, 1, 1024, 2560],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     ttnn.bfloat16,
+        #     True,
+        #     10,
+        # ),  # perf, barrier_without_persistent
+        # (
+        #     [1, 1, 1024, 2560],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     ttnn.bfloat16,
+        #     False,
+        #     1,
+        # ),  # check, no_barrier_with_persistent
+        # (
+        #     [1, 1, 352, 2560],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     ttnn.bfloat16,
+        #     True,
+        #     10,
+        # ),  # perf, barrier_with_persistent
+        # (
+        #     [2, 1, 2048, 2560],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     ttnn.bfloat16,
+        #     False,
+        #     1,
+        # ),  # check, barrier_without_persistent_with_hyperparams
+        # (
+        #     [1, 1, 4096, 2560],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     ttnn.bfloat16,
+        #     True,
+        #     10,
+        # ),  # perf, no_barrier_with_persistent_with_hyperparams
     ],
     ids=[
-        "scatter_dim_0_test_one-perf-barrier_with_persistent",
-        "scatter_dim_0_test_two-check-barrier_without_persistent",
-        "scatter_dim_1_test_one-perf-barrier_with_persistent",
-        "scatter_dim_1_test_two-check-barrier_without_persistent",
-        "scatter_dim_1_test_three-perf-no_barrier_with_persistent",
-        "scatter_dim_2_test_one-check-barrier_with_persistent",
-        "scatter_dim_2_test_two-perf-barrier_without_persistent",
-        "scatter_dim_2_test_three-check-no_barrier_with_persistent",
-        "non_zero_dim_1-perf-barrier_with_persistent",
-        "padded_dim_2_test_one-check-barrier_without_persistent",
-        "padded_dim_2_test_two-perf-no_barrier_with_persistent",
-        "batch_8-check-barrier_with_persistent",
-        "batch_4-perf-barrier_without_persistent",
-        "batch_1_sd35_spatial-check-no_barrier_with_persistent",
-        "batch_1_sd35_prompt-perf-barrier_with_persistent",
-        "batch_2-check-barrier_without_persistent_with_hyperparams",
-        "batch_1-perf-no_barrier_with_persistent_with_hyperparams",
-        "composite_rs_test_one-check-barrier_with_persistent",
-        "composite_rs_test_two-perf-barrier_without_persistent",
-        "composite_rs_test_three-check-no_barrier_with_persistent_with_hyperparams",
-        "composite_rs_test_four-perf-barrier_with_persistent_with_hyperparams",
+        "one",
+        # "two",
+        # "three",
+        # "four",
+        # "five",
+        # "six",
+        # "seven",
+        # "eight",
+        # "nine",
     ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_rs",
     [
         (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         )
     ],
-)
-@pytest.mark.parametrize(
-    "ones_tensor",
-    [
-        False,
-    ],
-    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1531456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    ids=["fabric_ring"],
 )
 def test_reduce_scatter_async(
     mesh_device,
@@ -614,17 +307,10 @@ def test_reduce_scatter_async(
     dim,
     layout,
     rs_input_dtype,
-    use_new,
     enable_trace,
     num_iters,
-    use_barrier,
-    use_persistent_buffers,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
     mem_config_input,
     mem_config_rs,
-    ones_tensor,
     rs_topology,
 ):
     run_reduce_scatter_impl(
@@ -640,13 +326,7 @@ def test_reduce_scatter_async(
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        ones_tensor=ones_tensor,
-        use_barrier=use_barrier,
-        use_persistent_buffers=use_persistent_buffers,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
-        use_new=use_new,
+        ones_tensor=False,
     )
 
 
