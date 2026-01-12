@@ -17,7 +17,7 @@ from pathlib import Path
 from loguru import logger
 
 # MPI Configuration
-MPI_HOSTS = "10.140.64.23,10.140.64.24"
+MPI_HOSTS = "10.250.36.201,10.250.36.212"
 RANKFILE = "tests/scale_out/4x_bh_quietbox/rankfile/2x4.txt"
 RANK_BINDING = "tests/scale_out/4x_bh_quietbox/rank_bindings/2x4.yaml"
 
