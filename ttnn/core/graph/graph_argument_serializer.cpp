@@ -107,6 +107,14 @@ std::string sanitize_utf8(const std::string& str) {
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
     tt::stl::reflection::operator<<(os, tensor);
+    // Append layout and storage_type information after the standard reflection output
+    os << ",layout=" << tensor.layout();
+    os << ",storage_type=";
+    switch (tensor.storage_type()) {
+        case tt::tt_metal::StorageType::HOST: os << "StorageType::HOST"; break;
+        case tt::tt_metal::StorageType::DEVICE: os << "StorageType::DEVICE"; break;
+        default: os << "StorageType::UNKNOWN"; break;
+    }
     return os;
 }
 
