@@ -80,10 +80,9 @@ void kernel_main() {
     open_connections(fabric_connection, num_connections, arg_for_fab);
 
     // pre-populate packet headers
-    auto scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto seminc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto mcastseminc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto unicast_scatter_write_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto unicast_sem_inc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto multicast_sem_inc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
 
     uint8_t unicast_num_hops[] = {static_cast<uint8_t>(1)};
     uint8_t multicast_start_distances_in_hops[] = {static_cast<uint8_t>(1)};
@@ -92,18 +91,15 @@ void kernel_main() {
     fabric_unicast_noc_scatter_write_set_state<
         UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
         fabric_connection,
-        scatter_route_id,
+        unicast_scatter_write_route_id,
         unicast_num_hops,
         NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
         page_size * 2);
 
-    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        fabric_connection, unicast_route_id, unicast_num_hops, nullptr, page_size);
-
     fabric_unicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         fabric_connection,
-        seminc_route_id,
+        unicast_sem_inc_route_id,
         unicast_num_hops,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             0,                           // ignore
@@ -112,7 +108,7 @@ void kernel_main() {
     fabric_multicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         fabric_connection,
-        mcastseminc_route_id,
+        multicast_sem_inc_route_id,
         multicast_start_distances_in_hops,
         multicast_num_hops,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
@@ -124,7 +120,7 @@ void kernel_main() {
         safe_get_noc_addr(semaphore_noc0_x, semaphore_noc0_y, pre_op_barrier_semaphore, 0);
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection,
-        mcastseminc_route_id,
+        multicast_sem_inc_route_id,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_addr_in_pkt, 0});
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), ring_size - 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
@@ -187,7 +183,7 @@ void kernel_main() {
                 // op hardcoded for each worker handling even multiple of 2 tiles, so always use scatter_write
                 fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                     fabric_connection,
-                    scatter_route_id,
+                    unicast_scatter_write_route_id,
                     intermediate_l1_read_addr,
                     NocUnicastScatterCommandHeader({intermediate_noc_address_one, intermediate_noc_address_two}));
                 tiles_read += 2;
@@ -199,7 +195,7 @@ void kernel_main() {
                     safe_get_noc_addr(semaphore_noc0_x, semaphore_noc0_y, op_semaphore, 0);
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     fabric_connection,
-                    seminc_route_id,
+                    unicast_sem_inc_route_id,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_addr_in_pkt, 0});
 
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
@@ -257,7 +253,7 @@ void kernel_main() {
         safe_get_noc_addr(semaphore_noc0_x, semaphore_noc0_y, post_op_barrier_semaphore, 0);
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection,
-        mcastseminc_route_id,
+        multicast_sem_inc_route_id,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{post_op_barrier_semaphore_noc_addr_in_pkt, 0});
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_op_barrier_semaphore), ring_size - 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_op_barrier_semaphore), 0);
