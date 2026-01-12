@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
 #include <atomic>
 
 inline int32_t amomin(int32_t volatile *ptr, int32_t const against)

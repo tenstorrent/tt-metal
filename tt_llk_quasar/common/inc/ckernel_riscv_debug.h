@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "tensix.h" //RISCV_DEBUG macros
 
 enum class rvdbg_cmd : uint32_t

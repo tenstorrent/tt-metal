@@ -4,6 +4,9 @@
 //
 // This file lists the includes that are safe to be included for both firmware and ckernels
 //
+
+#pragma once
+
 #include "ckernel_defs.h"
 #include "ckernel_gpr_map.h"
 #include "ckernel_instr_params.h"
