@@ -99,6 +99,26 @@ TEST_F(LayerNormOpTest, CompositeLayerNormOp_backward) {
     auto tensor_grad = core::to_vector(tensor->get_grad());
     auto gamma_grad = core::to_vector(gamma->get_grad());
     auto beta_grad = core::to_vector(beta->get_grad());
+
+    // // Debug: print actual gradient values
+    // std::cout << "\n=== MAIN BRANCH Gradients ===" << std::endl;
+    // std::cout << "tensor_grad: [";
+    // for (size_t i = 0; i < tensor_grad.size(); ++i) {
+    //     std::cout << tensor_grad[i] << (i < tensor_grad.size()-1 ? ", " : "");
+    // }
+    // std::cout << "]" << std::endl;
+    // std::cout << "gamma_grad:  [";
+    // for (size_t i = 0; i < gamma_grad.size(); ++i) {
+    //     std::cout << gamma_grad[i] << (i < gamma_grad.size()-1 ? ", " : "");
+    // }
+    // std::cout << "]" << std::endl;
+    // std::cout << "beta_grad:   [";
+    // for (size_t i = 0; i < beta_grad.size(); ++i) {
+    //     std::cout << beta_grad[i] << (i < beta_grad.size()-1 ? ", " : "");
+    // }
+    // std::cout << "]" << std::endl;
+    // std::cout << "==============================\n" << std::endl;
+
     std::vector<float> expected_tensor_grad{1.3333, -2.6667, 1.3333};
     std::vector<float> expected_gamma_grad{1.0000, 0.0000, 3.0000};
     std::vector<float> expected_beta_grad{-0.8165, 0.0000, 2.4495};

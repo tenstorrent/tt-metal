@@ -14,6 +14,11 @@
 
 namespace ttml::optimizers {
 
+namespace {
+// Empty span for unary activations parameter
+constexpr auto none = tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
+}  // namespace
+
 SGD::SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
@@ -51,17 +56,49 @@ void SGD::step() {
 
         if (m_config.weight_decay != 0.0F) {
             gradients = ttnn::add(
-                ttnn::multiply(tensor_ptr->get_value(autograd::PreferredPrecision::FULL), m_config.weight_decay),
+                ttnn::multiply(
+                    tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
+                    m_config.weight_decay,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    none,
+                    none,
+                    none,
+                    std::nullopt,
+                    true),
                 gradients);
         }
 
         if (m_config.momentum != 0.0F) {
             if (m_steps != 0) {
                 // apply momentum
-                theta = ttnn::multiply(theta, m_config.momentum);
+                theta = ttnn::multiply(
+                    theta,
+                    m_config.momentum,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    none,
+                    none,
+                    none,
+                    std::nullopt,
+                    true);
                 // dampening
                 if (m_config.dampening != 0.0F) {
-                    theta = ttnn::add(theta, ttnn::multiply(gradients, 1 - m_config.dampening));
+                    theta = ttnn::add(
+                        theta,
+                        ttnn::multiply(
+                            gradients,
+                            1 - m_config.dampening,
+                            std::nullopt,
+                            std::nullopt,
+                            std::nullopt,
+                            none,
+                            none,
+                            none,
+                            std::nullopt,
+                            true));
                 } else {
                     theta = ttnn::add(theta, gradients);
                 }
@@ -70,14 +107,37 @@ void SGD::step() {
             }
 
             if (m_config.nesterov) {
-                gradients = ttnn::add(gradients, ttnn::multiply(theta, m_config.momentum));
+                gradients = ttnn::add(
+                    gradients,
+                    ttnn::multiply(
+                        theta,
+                        m_config.momentum,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        none,
+                        none,
+                        none,
+                        std::nullopt,
+                        true));
             } else {
                 gradients = theta;
             }
         }
         theta_ptr->set_value(theta);
         tensor_ptr->set_value(ttnn::subtract(
-            tensor_ptr->get_value(autograd::PreferredPrecision::FULL), ttnn::multiply(gradients, m_config.lr)));
+            tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
+            ttnn::multiply(
+                gradients,
+                m_config.lr,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                none,
+                none,
+                none,
+                std::nullopt,
+                true)));
     }
     m_steps++;
 }
