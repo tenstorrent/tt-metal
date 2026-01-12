@@ -16,10 +16,6 @@ Tensor DropoutOperation::invoke(
     bool use_per_device_seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    auto output_memory_config = optional_output_tensor.has_value()
-                                    ? optional_output_tensor.value().memory_config()
-                                    : memory_config.value_or(input_tensor.memory_config());
-
     return ttnn::prim::dropout(
         input_tensor,
         prob,
@@ -27,7 +23,7 @@ Tensor DropoutOperation::invoke(
         seed,
         use_per_device_seed,
         DataType::BFLOAT16,
-        output_memory_config,
+        memory_config,
         optional_output_tensor);
 }
 
