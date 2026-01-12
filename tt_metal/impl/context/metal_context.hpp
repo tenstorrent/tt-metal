@@ -163,15 +163,19 @@ private:
     void generate_device_bank_to_noc_tables(ChipId device_id);
     void generate_worker_logical_to_virtual_map(ChipId device_id);
     void initialize_device_bank_to_noc_tables(
-        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
+        ChipId device_id,
+        const HalProgrammableCoreType& core_type,
+        CoreCoord virtual_core,
+        std::optional<CoreCoord> end_core);
     void initialize_worker_logical_to_virtual_tables(
-        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
+        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord start_core, CoreCoord end_core);
     void initialize_firmware(
         ChipId device_id,
         const HalProgrammableCoreType& core_type,
         CoreCoord virtual_core,
         dev_msgs::launch_msg_t::View launch_msg,
-        dev_msgs::go_msg_t::ConstView go_msg);
+        dev_msgs::go_msg_t::ConstView go_msg,
+        std::optional<CoreCoord> end_core = std::nullopt);
     void initialize_and_launch_firmware(ChipId device_id);
     dev_msgs::core_info_msg_t populate_core_info_msg(
         ChipId device_id, HalProgrammableCoreType programmable_core_type) const;
