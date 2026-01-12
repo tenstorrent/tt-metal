@@ -2504,6 +2504,8 @@ def main():
 
     # build the dataloader
     dataset = build_dataset(cfg.data.test)
+    if hasattr(dataset, "data_infos") and len(dataset.data_infos) > 1:
+        dataset.data_infos = dataset.data_infos[:1]
     data_loader = build_dataloader(
         dataset,
         samples_per_gpu=samples_per_gpu,
@@ -2554,9 +2556,11 @@ def main():
             assert False
             # mmcv.dump(outputs['bbox_results'], args.out)
         kwargs = {} if args.eval_options is None else args.eval_options
-        kwargs["jsonfile_prefix"] = osp.join(
-            "test", args.config.split("/")[-1].split(".")[-2], time.ctime().replace(" ", "_").replace(":", "_")
-        )
+        # Only set default jsonfile_prefix if not provided in eval_options
+        if "jsonfile_prefix" not in kwargs:
+            kwargs["jsonfile_prefix"] = osp.join(
+                "test", args.config.split("/")[-1].split(".")[-2], time.ctime().replace(" ", "_").replace(":", "_")
+            )
         if args.format_only:
             dataset.format_results(outputs, **kwargs)
 
