@@ -89,22 +89,11 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         input_tensor_shape[-1],
         tt::constants::TILE_WIDTH);
 
-    const uint32_t input_tensor_B = input_tensor_shape[-4];
-    const uint32_t input_tensor_C = input_tensor_shape[-3];
-    const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
-
-    const uint32_t slice_B = input_tensor_B;
-    const uint32_t slice_C = input_tensor_C;
-    const uint32_t slice_Ht = input_tensor_Ht;
     const uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
     const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
-    const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
-    const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
-    const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
-    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
     // scatter-write currently only supports 2 distinct noc addresses
     uint32_t max_target_noc_addresses_per_packet = 2;
@@ -150,20 +139,15 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
 
     // reader
     std::vector<uint32_t> reader_ct_args = {
-        ring_index,               // my_chip_id
-        ring_size,                // ring_size
-        input_cb_index,           // cb_input_id
-        intermediate_cb_index,    // cb_intermediate_id
-        reader_output_cb_index,   // cb_reader_output_id
-        tile_granularity,         // tile_granularity
-        page_size,                // page_size
-        input_batch_num_pages,    // input_batch_num_pages
-        input_channel_num_pages,  // input_channel_num_pages
-        input_tensor_B,           // input_tensor_B
-        input_tensor_Wt,          // input_tensor_Wt
-        slice_C,                  // slice_C
-        slice_Ht,                 // slice_Ht
-        slice_Wt,                 // slice_Wt
+        ring_index,              // my_chip_id
+        ring_size,               // ring_size
+        input_cb_index,          // cb_input_id
+        intermediate_cb_index,   // cb_intermediate_id
+        reader_output_cb_index,  // cb_reader_output_id
+        tile_granularity,        // tile_granularity
+        page_size,               // page_size
+        input_tensor_Wt,         // input_tensor_Wt
+        slice_Wt,                // slice_Wt
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(reader_ct_args);
@@ -184,13 +168,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         tile_granularity,               // packet_size_in_pages
         page_size,                      // page_size
         num_tiles_to_write_per_packet,  // num_tiles_to_write_per_packet
-        output_batch_num_pages,         // output_batch_num_pages
-        input_channel_num_pages,        // input_channel_num_pages
-        output_channel_num_pages,       // output_channel_num_pages
-        input_tensor_B,                 // input_tensor_B
         input_tensor_Wt,                // input_tensor_Wt
-        slice_C,                        // slice_C
-        slice_Ht,                       // slice_Ht
         slice_Wt,                       // slice_Wt
     };
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(writer_ct_args);
@@ -218,8 +196,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         compute_output_cb_index,  // output_cb
         tile_granularity,         // tile_granularity
         ring_size,                // ring_size
-        input_tensor_B,           // input_tensor_B
-        slice_C,                  // slice_C
     };
 
     std::string reduce_kernel_path =
@@ -235,16 +211,13 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             auto core = *((worker_core_iter++)->begin());
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
-            uint32_t worker_id = link;
-            uint32_t num_workers = num_links;
-
-            uint32_t start_tiles_read = worker_id * output_channel_num_pages / num_workers;
-            uint32_t start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
+            uint32_t start_tiles_read = link * output_tensor_num_pages / num_links;
+            uint32_t start_tiles_to_read = (link + 1) * output_tensor_num_pages / num_links;
 
             uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
             uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
 
-            uint32_t chunks_per_sync_val = 1;
+            uint32_t chunks_per_sync_val = 1;  // TODO: (GR) remove
 
             // reader
             std::vector<uint32_t> reader_rt_args = {
