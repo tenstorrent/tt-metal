@@ -139,9 +139,9 @@ public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
 
     void build(const JitBuildSettings* settings) const;
+    void link_to_processor(const JitBuildState& processor_build_state, const JitBuildSettings* settings) const;
     const std::string& get_out_path() const { return this->out_path_; }
-    const std::string& get_target_name() const { return this->target_name_; };
-    ;
+    const std::string& get_target_name() const { return this->target_name_; }
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
@@ -153,6 +153,11 @@ using JitBuildStateSubset = std::span<const JitBuildState>;
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings);
+
+void jit_link_additional_processor(
+    const JitBuildState& orig_processor_build_state,
+    const JitBuildState& additional_processor_build_state,
+    const JitBuildSettings* additional_processor_settings);
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
 void sync_build_steps(std::vector<std::shared_future<void>>& events);

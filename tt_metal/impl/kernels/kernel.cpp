@@ -767,7 +767,7 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0]);
+    int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0]);
     // std::vector<JitBuildState> build_states;
     // for (const DataMovementProcessor& processor : this->dm_cores_) {
     //     const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
@@ -775,11 +775,16 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
     //         device->build_id(), tensix_core_type, dm_class_idx, riscv_id));
     // }
     // jit_build_subset(build_states, this);
-    log_info(tt::LogMetal, "Building kernel for processor {}", riscv_id);
-    jit_build(
-        BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_id),
-        this);
+    // log_info(tt::LogMetal, "Building kernel for processor {}", riscv_id);
+    const JitBuildState& orig_processor_build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+        device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+    jit_build(orig_processor_build_state, this);
+    for (uint32_t i = 1; i < this->dm_cores_.size(); i++) {
+        riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[i]);
+        const JitBuildState& additional_processor_build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+        jit_link_additional_processor(orig_processor_build_state, additional_processor_build_state, this);
+    }
 }
 
 void QuasarDataMovementKernel::read_binaries(IDevice* device) {
@@ -788,30 +793,29 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    // for (const DataMovementProcessor& processor : this->dm_cores_) {
-    //     const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
-    //     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-    //         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
-    //     auto load_type =
-    //         MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx,
-    //         riscv_id).memory_load;
-    //     const ll_api::memory& binary_mem =
-    //         llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
-    //     binaries.push_back(&binary_mem);
-    // }
-    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0]);
-    const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
-    auto load_type =
-        MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
-    log_info(
-        tt::LogMetal,
-        "Reading binary for processor {} with path {}",
-        riscv_id,
-        build_state.get_target_out_path(this->kernel_full_name_));
-    const ll_api::memory& binary_mem =
-        llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
-    binaries.push_back(&binary_mem);
+    for (const DataMovementProcessor& processor : this->dm_cores_) {
+        const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
+        const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+        auto load_type =
+            MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
+        const ll_api::memory& binary_mem =
+            llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+        binaries.push_back(&binary_mem);
+    }
+    // const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0]);
+    // const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+    //     device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+    // auto load_type =
+    //     MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
+    // log_info(
+    //     tt::LogMetal,
+    //     "Reading binary for processor {} with path {}",
+    //     riscv_id,
+    //     build_state.get_target_out_path(this->kernel_full_name_));
+    // const ll_api::memory& binary_mem =
+    //     llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+    // binaries.push_back(&binary_mem);
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
 }
@@ -839,13 +843,13 @@ bool QuasarDataMovementKernel::configure(
             tt::LogMetal,
             "Writing binary for processor {} at offset {}. Binary size: {}",
             this->dm_cores_[i],
-            offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0])],
+            offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[i])],
             binaries[i]->get_packed_size());
         llrt::write_binary_to_address(
             *binaries[i],
             device_id,
             worker_core,
-            base_address + offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0])]);
+            base_address + offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[i])]);
     }
 
     return true;
@@ -863,7 +867,7 @@ std::string QuasarDataMovementKernel::config_hash() const {
     return fmt::format("{}", fmt::join(this->dm_cores_, "_"));
 }
 
-uint8_t QuasarDataMovementKernel::expected_num_binaries() const { /*return this->dm_cores_.size(); */ return 1; }
+uint8_t QuasarDataMovementKernel::expected_num_binaries() const { return this->dm_cores_.size(); /*return 1;*/ }
 
 }  // namespace experimental
 
