@@ -18,10 +18,15 @@ namespace tt::compute::common {
  */
 template <const int num_nops, const int is_riscv_nop>
 inline void add_nops() {
-    for (int i = 0; i < num_nops; i++) {
-        if constexpr (is_riscv_nop) {
-            asm volatile("nop");
-        } else {
+    if constexpr (is_riscv_nop) {
+        asm volatile(
+            ".rept %0\n\t"
+            "nop\n\t"
+            ".endr\n\t"
+            :
+            : "i"(num_nops));
+    } else {
+        for (int i = 0; i < num_nops; i++) {
             TTI_NOP;
         }
     }
