@@ -9,9 +9,6 @@
 #include <cstdint>
 #include <utility>
 
-using address_t = uint32_t;
-using tt::tt_metal::BufferType;
-
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
 constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
@@ -25,9 +22,9 @@ constexpr uint32_t initial_ct_idx = 8;
 
 void kernel_main() {
     uint32_t arg_idx = 0;
-    address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t input_tensor_address = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t intermediate_tensor_address = get_arg_val<uint32_t>(arg_idx++);
+    size_t op_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
@@ -44,7 +41,7 @@ void kernel_main() {
     // hardcoded constants
     constexpr uint32_t tile_granularity = 2;
 
-    uint32_t sem_target = 0;
+    uint32_t semaphore_target_val = 0;
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
         uint32_t actual_slice_idx;
@@ -54,7 +51,7 @@ void kernel_main() {
             actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
         }
 
-        const bool do_reduce = i != 0;
+        bool do_reduce = i != 0;
         uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
         uint32_t input_tile_id_start = actual_slice_idx * slice_Wt;
@@ -85,8 +82,9 @@ void kernel_main() {
 
         while (tiles_read < tiles_to_read) {
             if (do_reduce) {
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
-                sem_target++;
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(op_semaphore), semaphore_target_val + 1);
+                semaphore_target_val++;
             }
 
             cb_reserve_back(cb_in0, tile_granularity);
@@ -155,5 +153,5 @@ void kernel_main() {
     }
 
     // reset the semaphore
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(op_semaphore), 0);
 }
