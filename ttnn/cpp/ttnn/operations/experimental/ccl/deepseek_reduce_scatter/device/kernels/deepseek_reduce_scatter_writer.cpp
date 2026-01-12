@@ -85,29 +85,26 @@ void kernel_main() {
     auto seminc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     auto mcastseminc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
 
-    // TODO: (GR) cleanup
-    uint32_t unicast_num_hops = 1;
-    uint32_t multicast_start_distance_in_hops = 1;
-    uint8_t unicast_distances[] = {static_cast<uint8_t>(unicast_num_hops)};
-    uint8_t multicast_starts[] = {static_cast<uint8_t>(multicast_start_distance_in_hops)};
-    uint8_t multicast_ranges[] = {static_cast<uint8_t>(ring_size - 1)};
+    uint8_t unicast_num_hops[] = {static_cast<uint8_t>(1)};
+    uint8_t multicast_start_distances_in_hops[] = {static_cast<uint8_t>(1)};
+    uint8_t multicast_num_hops[] = {static_cast<uint8_t>(ring_size - 1)};
 
     fabric_unicast_noc_scatter_write_set_state<
         UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
         fabric_connection,
         scatter_route_id,
-        unicast_distances,
+        unicast_num_hops,
         NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
         page_size * 2);
 
     fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        fabric_connection, unicast_route_id, unicast_distances, nullptr, page_size);
+        fabric_connection, unicast_route_id, unicast_num_hops, nullptr, page_size);
 
     fabric_unicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         fabric_connection,
         seminc_route_id,
-        unicast_distances,
+        unicast_num_hops,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
@@ -116,8 +113,8 @@ void kernel_main() {
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         fabric_connection,
         mcastseminc_route_id,
-        multicast_starts,
-        multicast_ranges,
+        multicast_start_distances_in_hops,
+        multicast_num_hops,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
