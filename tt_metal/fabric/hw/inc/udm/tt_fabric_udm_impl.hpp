@@ -418,8 +418,7 @@ FORCE_INLINE tt::tt_fabric::WorkerToFabricEdmSender& get_or_open_fabric_connecti
 
     if (!sync->initialized) {
         // Build connection in L1 storage using placement new
-        auto temp_conn = build_from_reserved_l1_info();
-        new (connection) tt::tt_fabric::WorkerToFabricEdmSender(temp_conn);
+        new (connection) tt::tt_fabric::WorkerToFabricEdmSender(build_from_reserved_l1_info());
         connection->open();
         sync->initialized = 1;
     }
