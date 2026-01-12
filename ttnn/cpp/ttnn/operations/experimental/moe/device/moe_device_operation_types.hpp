@@ -9,10 +9,7 @@
 
 namespace ttnn::operations::experimental::moe {
 
-struct operation_attributes_t {
-    MathFidelity math_fidelity = MathFidelity::LoFi;
-    bool fp32_dest_acc_en = true;
-};
+struct operation_attributes_t {};
 
 struct tensor_args_t {
     const Tensor& input_tensor;
