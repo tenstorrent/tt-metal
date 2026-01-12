@@ -24,7 +24,7 @@
 #include "buffer_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
@@ -226,7 +226,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     auto mesh_device_id = mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     if (!sysmem_manager.get_bypass_mode()) {
         auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
@@ -914,7 +914,7 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     std::unordered_set<uint32_t>& chip_ids_in_workload,
     uint32_t program_runtime_id) {
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
         auto device = mesh_device_->get_device(coord);
         this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
@@ -954,7 +954,7 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
     bool stall_before_program,
     uint32_t program_runtime_id) {
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
         // Host Memory Intensive Path (when profiler is enabled): The launch messages across devices are unique, since

@@ -10,6 +10,7 @@
 #include "llrt/core_descriptor.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -57,7 +58,7 @@ inline static CoreDescriptorSet GetAllCores(ChipId device_id) {
     unsigned num_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
     const auto& dispatch_core_config =
         tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     log_debug(tt::LogAlways, "Dispatch Core Type = {}", dispatch_core_type);
     for (auto logical_core : tt::get_logical_dispatch_cores(device_id, num_cqs, dispatch_core_config)) {
         dispatch_cores.insert({logical_core, dispatch_core_type});
