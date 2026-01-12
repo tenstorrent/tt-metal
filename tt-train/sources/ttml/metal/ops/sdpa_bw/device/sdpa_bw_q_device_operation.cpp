@@ -90,18 +90,11 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
         kE,
         vE);
 
-    // Validate physical volumes are tile-aligned
+    // Validate tensors have tile layout
     TT_FATAL(
-        grad_output.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
-            query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
-            key.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
-            value.physical_volume() % tt::constants::TILE_WIDTH == 0,
-        "Physical volume of input tensors must be multiple of TILE_WIDTH. Got grad_output={}, query={}, key={}, "
-        "value={}",
-        grad_output.physical_volume(),
-        query.physical_volume(),
-        key.physical_volume(),
-        value.physical_volume());
+        grad_output.layout() == tt::tt_metal::Layout::TILE && query.layout() == tt::tt_metal::Layout::TILE &&
+            key.layout() == tt::tt_metal::Layout::TILE && value.layout() == tt::tt_metal::Layout::TILE,
+        "All input tensors must have TILE layout");
 
     // Validate mask shape if provided - must be (1, 1, S, S)
     if (tensor_args.attn_mask.has_value()) {
@@ -164,8 +157,7 @@ ttsl::hash::hash_t SDPABackwardQDeviceOperation::compute_program_hash(
         tensor_args.query.logical_shape(),
         tensor_args.key.logical_shape(),
         tensor_args.intermediates.logical_shape(),
-        tensor_args.query.dtype(),
-        tensor_args.query.memory_config());
+        tensor_args.query.dtype());
 
     return hash;
 }

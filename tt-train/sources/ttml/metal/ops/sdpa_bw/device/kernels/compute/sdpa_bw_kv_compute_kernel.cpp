@@ -31,10 +31,38 @@
 
 namespace NAMESPACE {
 
-// SDPA Backward Compute Kernel for Key and Value gradients.
-// Computes dK and dV by iterating over query rows for each K/V row.
-// For grouped query attention, accumulates gradients from multiple query heads per KV head.
-// Processing order: for each K/V row → for each query head in group → for each query row
+// ----------------------------------------------------------------------
+// SDPA Backward Compute Kernel for Key and Value Gradients (dK, dV)
+// ----------------------------------------------------------------------
+//
+// Forward pass (for reference):
+//   P = softmax(Q @ K^T / sqrt(d) + mask)    // attention weights [B, H, S, S]
+//   O = P @ V                                 // output [B, H, S, D]
+//
+// Backward pass computes dK and dV given dO (upstream gradient):
+//   dP = dO @ V^T                             // gradient w.r.t. attention weights
+//   u  = rowsum(dO ⊙ O)                       // per-row scalar for softmax backward
+//   dS = P ⊙ (dP - u)                         // softmax backward (element-wise)
+//   dV = P^T @ dO                             // gradient w.r.t. value
+//   dK = (1/sqrt(d)) * dS^T @ Q               // gradient w.r.t. key
+//
+// Note: We apply the scale factor inside dS computation for numerical stability.
+//
+// Grouped Query Attention (GQA):
+//   Multiple query heads share the same K/V head. Gradients from all query heads
+//   in a group are accumulated into their shared K/V head's gradient.
+//
+// Processing order:
+//   for each K/V row k:
+//     for each query head h in group:
+//       for each query row q:
+//         P[q,k] = softmax(Q[q] @ K[k]^T / sqrt(d) + mask[q,k])  // recomputed
+//         dV[k] += P[q,k]^T @ dO[q]                               // accumulate
+//         u_scalar = rowsum(dO[q] ⊙ O[q])
+//         dP[q,k] = dO[q] @ V[k]^T
+//         dS[q,k] = P[q,k] * (dP[q,k] - u_scalar) * scale
+//         dK[k] += dS[q,k]^T @ Q[q]                               // accumulate
+// ----------------------------------------------------------------------
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);       // size of block (used in update_grad_value)
@@ -43,7 +71,7 @@ constexpr uint32_t Ht = get_compile_time_arg_val(3);               // num_seq_le
 constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // number of heads per group
 constexpr uint32_t scaler_bits = get_compile_time_arg_val(5);      // sqrt(Et) - sdpa scaler factor
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(6);   // used to transform mask from 1/0 to 0/-1
-constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to transform mask from 0/-1 to 0/-1e9F
+constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to transform mask from 0/-1 to 0/-inf
 
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;         // Gradient w.r.t. output
 constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;         // Attention output from forward pass
@@ -116,7 +144,7 @@ void MAIN {
                 /*
                  * apply attention mask on dest_reg.
                  * function assumes that dest_reg is in acquired state via *acquire_dst* call
-                 * function transforms mask from 1/0 to 0/-1e9F and applies it on dest_reg
+                 * function transforms mask from 1/0 to 0/-inf and applies it on dest_reg
                  */
                 apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
                 tile_regs_commit();
@@ -189,9 +217,9 @@ void MAIN {
             }
         }
 
-        pack_result(alias_cb_prev_grad_value, cb_grad_value, tiles_per_row);
+        pack_tiles_to_output(alias_cb_prev_grad_value, cb_grad_value, tiles_per_row);
 
-        pack_result(alias_cb_prev_grad_key, cb_grad_key, tiles_per_row);
+        pack_tiles_to_output(alias_cb_prev_grad_key, cb_grad_key, tiles_per_row);
 
         cb_pop_front(cb_key, tiles_per_row);
         cb_pop_front(cb_value, tiles_per_row);

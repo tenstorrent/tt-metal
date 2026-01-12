@@ -295,7 +295,7 @@ void pack_intermediate_result(
         copy_tile(cb_in_idx, /* tile_idx */ tile_idx, /* register idx */ dst_idx);
 
         copy_tile_to_dst_init_short_with_dt(/* old_cb_idx */ cb_in_idx, /* new_cb_idx */ cb_mask_tile);
-        copy_tile(cb_mask_tile, /* tile_idx */ tile_idx, /* register idx */ dst_idx + 1U);
+        copy_tile(cb_mask_tile, /* tile_idx */ 0, /* register idx */ dst_idx + 1U);
 
         mask_tile_init();
         mask_tile(dst_idx, dst_idx + 1U);

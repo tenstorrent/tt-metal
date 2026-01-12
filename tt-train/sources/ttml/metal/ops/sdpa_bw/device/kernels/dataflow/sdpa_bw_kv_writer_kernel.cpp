@@ -46,24 +46,10 @@ void kernel_main() {
 
         // -------- Grad Value: same shape as Value (B, vNH, S, vEmbd) --------
         const uint32_t grad_v_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
-        cb_wait_front(cb_grad_value, kWt);
-        uint32_t l1_grad_v_read_addr = get_read_ptr(cb_grad_value);
-        for (uint32_t col = 0; col < kWt; ++col) {
-            noc_async_write_tile(grad_v_row_base_tiles + col, grad_value_addr_generator, l1_grad_v_read_addr);
-            l1_grad_v_read_addr += tile_bytes;
-        }
-        noc_async_write_barrier();
-        cb_pop_front(cb_grad_value, kWt);
+        write_tiles_by_row(cb_grad_value, grad_value_addr_generator, grad_v_row_base_tiles, kWt, tile_bytes, kWt);
 
         // -------- Grad Key: same shape as Key (B, kNH, S, kEmbd) --------
         const uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
-        cb_wait_front(cb_grad_key, kWt);
-        uint32_t l1_grad_k_read_addr = get_read_ptr(cb_grad_key);
-        for (uint32_t col = 0; col < kWt; ++col) {
-            noc_async_write_tile(grad_k_row_base_tiles + col, grad_key_addr_generator, l1_grad_k_read_addr);
-            l1_grad_k_read_addr += tile_bytes;
-        }
-        noc_async_write_barrier();
-        cb_pop_front(cb_grad_key, kWt);
+        write_tiles_by_row(cb_grad_key, grad_key_addr_generator, grad_k_row_base_tiles, kWt, tile_bytes, kWt);
     }
 }

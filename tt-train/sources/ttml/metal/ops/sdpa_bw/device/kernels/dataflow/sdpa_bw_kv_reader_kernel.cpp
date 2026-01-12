@@ -97,11 +97,7 @@ void kernel_main() {
 
                 // read one tile of attn_mask for current row of K and V
                 // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
-                cb_reserve_back(cb_attn_mask, onetile);
-                uint32_t attn_mask_l1_writer_addr = get_write_ptr(cb_attn_mask);
-                noc_async_read_tile(mask_offset + h * Ht, mask_address_generator, attn_mask_l1_writer_addr);
-                noc_async_read_barrier();
-                cb_push_back(cb_attn_mask, onetile);
+                read_one_tile(cb_attn_mask, mask_address_generator, mask_offset + h * Ht);
 
                 // Read intermediates - one tile per row (contains 1/sum_exp values from forward pass)
                 // TODO[improve](vmelnykov): Now we share two intermediates values per head row: row-wise max value and

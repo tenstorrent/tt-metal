@@ -31,16 +31,38 @@
 
 namespace NAMESPACE {
 
-// SDPA Backward Compute Kernel for Query gradient.
-// Computes dQ by iterating over K/V rows for each query row.
-// Processing order: for each query row → for each K/V row (accumulating dQ)
+// ----------------------------------------------------------------------
+// SDPA Backward Compute Kernel for Query Gradient (dQ)
+// ----------------------------------------------------------------------
+//
+// Forward pass (for reference):
+//   P = softmax(Q @ K^T / sqrt(d) + mask)    // attention weights [B, H, S, S]
+//   O = P @ V                                 // output [B, H, S, D]
+//
+// Backward pass computes dQ given dO (upstream gradient):
+//   dP = dO @ V^T                             // gradient w.r.t. attention weights
+//   u  = rowsum(dO ⊙ O)                       // per-row scalar for softmax backward
+//   dS = P ⊙ (dP - u)                         // softmax backward (element-wise)
+//   dQ = (1/sqrt(d)) * dS @ K                 // gradient w.r.t. query
+//
+// Note: We apply the scale factor inside dS computation for numerical stability.
+//
+// Processing order:
+//   for each query row q:
+//     compute u_scalar = rowsum(dO[q] ⊙ O[q])
+//     for each K/V row k:
+//       P[q,k] = softmax(Q[q] @ K[k]^T / sqrt(d) + mask[q,k])  // recomputed
+//       dP[q,k] = dO[q] @ V[k]^T
+//       dS[q,k] = P[q,k] * (dP[q,k] - u_scalar) * scale
+//       dQ[q] += dS[q,k] @ K[k]                                 // accumulate
+// ----------------------------------------------------------------------
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t qWt = get_compile_time_arg_val(1);              // num tile in inner dim (qWt == kWt == vWt)
 constexpr uint32_t Ht = get_compile_time_arg_val(2);               // num_seq_len / TILE_H
 constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);      // sqrt(Et) - sdpa scaler factor
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(4);   // used to transform mask from 1/0 to 0/-1
-constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(5);  // used to transform mask from 0/-1 to 0/-1e9F
+constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(5);  // used to transform mask from 0/-1 to 0/-inf
 
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;         // Gradient w.r.t. output
 constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;         // Attention output from forward pass
@@ -105,7 +127,7 @@ void MAIN {
             /*
              * apply attention mask on dest_reg.
              * function assumes that dest_reg is in acquired state via *acquire_dst* call
-             * function transforms mask from 1/0 to 0/-1e9F and applies it on dest_reg
+             * function transforms mask from 1/0 to 0/-inf and applies it on dest_reg
              */
             apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
             tile_regs_commit();
@@ -153,7 +175,7 @@ void MAIN {
         }
 
         // Push final grad_query to output CB
-        pack_result(alias_cb_prev_grad_query, cb_grad_query, tiles_per_row);
+        pack_tiles_to_output(alias_cb_prev_grad_query, cb_grad_query, tiles_per_row);
 
         cb_pop_front(cb_u_scalar_row, onetile);
         cb_pop_front(cb_intermediates, num_of_interm_tiles);

@@ -107,13 +107,7 @@ void kernel_main() {
 
             // read one tile of attn_mask for current row of K and V
             // row of K define the column in (QK^T) matrix, so it define the column of attn_mask to read
-            const uint32_t mask_tile_idx = mask_offset + h;
-
-            cb_reserve_back(cb_attn_mask, onetile);
-            uint32_t attn_mask_l1_write_addr = get_write_ptr(cb_attn_mask);
-            noc_async_read_tile(mask_tile_idx, mask_addr_generator, attn_mask_l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_attn_mask, onetile);
+            read_one_tile(cb_attn_mask, mask_addr_generator, mask_offset + h);
 
             read_tiles_by_row(cb_value, value_addr_generator, kv_start_idx, qWt, tile_bytes, qWt);
         }

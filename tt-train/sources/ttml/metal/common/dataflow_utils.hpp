@@ -176,6 +176,22 @@ inline float uint32_to_float(uint32_t bits) {
 // ----- Dataflow tile transfer utilities -----
 
 /**
+ * Utility: read a single tile from DRAM to CB.
+ *
+ * @param cb_idx Circular buffer index to write to
+ * @param addr_gen Address generator for DRAM access
+ * @param tile_idx Tile index in DRAM
+ */
+template <typename AddrGen>
+inline void read_one_tile(const uint32_t cb_idx, const AddrGen& addr_gen, const uint32_t tile_idx) {
+    cb_reserve_back(cb_idx, onetile);
+    const uint32_t l1_addr = get_write_ptr(cb_idx);
+    noc_async_read_page(tile_idx, addr_gen, l1_addr);
+    noc_async_read_barrier();
+    cb_push_back(cb_idx, onetile);
+}
+
+/**
  * Utility: read contiguous tiles in row-major order from DRAM to CB.
  *
  * @param cb_idx Circular buffer index to write to

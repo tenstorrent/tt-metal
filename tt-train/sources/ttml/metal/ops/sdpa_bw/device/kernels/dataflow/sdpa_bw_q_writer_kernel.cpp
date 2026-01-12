@@ -32,13 +32,6 @@ void kernel_main() {
         const uint32_t q_start_idx = r * qWt;
 
         // Write grad_query row on same position as read(same output shape)
-        cb_wait_front(cb_grad_query, qWt);
-        uint32_t l1_read_addr = get_read_ptr(cb_grad_query);
-        for (uint32_t tile_idx = 0; tile_idx < qWt; ++tile_idx) {
-            noc_async_write_tile(q_start_idx + tile_idx, grad_query_addr_generator, l1_read_addr);
-            l1_read_addr += tile_bytes;
-        }
-        noc_async_write_barrier();
-        cb_pop_front(cb_grad_query, qWt);
+        write_tiles_by_row(cb_grad_query, grad_query_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
     }
 }

@@ -9,7 +9,8 @@
 namespace ttml::metal::ops::sdpa_bw {
 
 struct SDPABackwardOperation {
-    static std::vector<ttnn::Tensor> invoke(
+    // Returns [grad_Q, grad_K, grad_V]
+    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
         const ttnn::Tensor& grad_output,               // Gradient w.r.t. output
         const ttnn::Tensor& attn_output,               // sdap forward output (needed for gradients)
         const ttnn::Tensor& query,                     // input Q (needed for gradients)

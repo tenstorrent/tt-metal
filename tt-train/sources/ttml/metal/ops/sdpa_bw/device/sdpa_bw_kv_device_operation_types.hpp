@@ -27,8 +27,8 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_grad_value;
 };
 
-using tensor_return_value_t = std::vector<ttnn::Tensor>;  // [grad_K, grad_V]
+using tensor_return_value_t = std::tuple<ttnn::Tensor, ttnn::Tensor>;  // [grad_K, grad_V]
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>;
 
 }  // namespace ttml::metal::ops::sdpa_bw::device::kv

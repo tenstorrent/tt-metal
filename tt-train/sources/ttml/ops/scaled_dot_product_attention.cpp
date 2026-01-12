@@ -265,8 +265,8 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
         dropout_probability,
         /*return_intermediates=*/true);  // Need intermediates for backward pass
 
-    auto attn_output = fw_result[0].value();
-    auto intermediates = fw_result[1].value();
+    auto attn_output = fw_result[0].value();    // (B, H, S, D)
+    auto intermediates = fw_result[1].value();  // (B, H, S, 2 tiles) - stores [max_val, 1/sum_exp] per row for softmax
 
     auto out = ttml::autograd::create_tensor(attn_output);
 
@@ -275,8 +275,11 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
         [query, key, value, mask_tensor, out, attn_output, intermediates, dropout_probability, fp32_dest_acc_en]() {
             auto grad_output = out->get_grad();
 
-            // Call sdpa_bw kernel
-            auto bw_result = ttml::metal::sdpa_bw(
+            // Call sdpa_bw kernel - returns [grad_Q, grad_K, grad_V]
+            // dL_dQ: (B, H, S, D)
+            // dL_dK: (B, G, S, D) for GQA, (B, H, S, D) for MHA
+            // dL_dV: (B, G, S, D) for GQA, (B, H, S, D) for MHA
+            auto [dL_dQ, dL_dK, dL_dV] = ttml::metal::sdpa_bw(
                 grad_output,
                 attn_output,
                 query->get_value(),
@@ -286,10 +289,6 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
                 intermediates,
                 dropout_probability,
                 fp32_dest_acc_en);
-
-            auto dL_dQ = bw_result[0];  // (B, H, S, D)
-            auto dL_dK = bw_result[1];  // (B, G, S, D) for GQA, (B, H, S, D) for MHA
-            auto dL_dV = bw_result[2];  // (B, G, S, D) for GQA, (B, H, S, D) for MHA
 
             query->add_grad(dL_dQ);
             key->add_grad(dL_dK);

@@ -7,6 +7,7 @@
 #include <bit>
 #include <cmath>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -182,7 +183,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     const float per_head_dim = static_cast<float>(qEmbd);
     const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
-    const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);
+    const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -308,8 +309,9 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
     auto* intermediates_buffer = intermediates.buffer();
 
-    auto* grad_key_buffer = output[0].buffer();
-    auto* grad_value_buffer = output[1].buffer();
+    auto& [grad_key, grad_value] = output;
+    auto* grad_key_buffer = grad_key.buffer();
+    auto* grad_value_buffer = grad_value.buffer();
 
     // Configure defines
     std::map<std::string, std::string> defines;
@@ -375,7 +377,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         heads_per_group,            // 4: heads per group
         scaler,                     // 5: scale factor
         minus_one,                  // 6: mask transform constant
-        custom_inf                  // 7: mask transform constant
+        custom_inf                  // 7: used to transform mask from 0/-1 to 0/-inf
     };
 
     kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -400,7 +402,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             heads_per_group,            // 4: heads per group
             scaler,                     // 5: scale factor
             minus_one,                  // 6: mask transform constant
-            custom_inf                  // 7: mask transform constant
+            custom_inf                  // 7: used to transform mask from 0/-1 to 0/-inf
         };
 
         kernels.compute_group_2 = tt::tt_metal::CreateKernel(
@@ -474,8 +476,9 @@ void SDPABackwardKVProgramFactory::override_runtime_arguments(
     const auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
     const auto* intermediates_buffer = tensor_args.intermediates.buffer();
 
-    auto* grad_key_buffer = tensor_return_value[0].buffer();
-    auto* grad_value_buffer = tensor_return_value[1].buffer();
+    auto& [grad_key, grad_value] = tensor_return_value;
+    auto* grad_key_buffer = grad_key.buffer();
+    auto* grad_value_buffer = grad_value.buffer();
 
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_bw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_bw_writer_kernel);

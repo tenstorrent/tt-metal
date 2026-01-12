@@ -18,6 +18,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
+#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 constexpr uint32_t onetile = 1U;
 
@@ -32,7 +33,7 @@ constexpr uint32_t dst_reg_number = 8U;
 // The input `attn_mask` contains 1.0 for valid (keep) positions and 0.0 for masked (drop) positions.
 // To convert this into a format compatible with softmax masking:
 //   - Subtract 1.0 from the mask, so values become 0.0 (keep) and -1.0 (mask).
-//   - Multiply by a large negative value (e.g., 1e9F), resulting in 0.0 for valid entries and -inf for
+//   - Multiply by infinity, resulting in 0.0 for valid entries and -inf for
 //   masked ones.
 // This way, after applying softmax, masked positions will effectively become zero,
 // and only the unmasked positions will retain meaningful attention weights
@@ -60,7 +61,7 @@ void apply_mask_on_reg(
     binop_with_scalar_tile_init();
     mul_unary_tile(register_idx, scaler_bits);       // multiply by scaler factor
     add_unary_tile(mask_register, minus_one_bits);   // subtract 1.0 from mask, so it becomes 0.0 and -1.0
-    mul_unary_tile(mask_register, custom_inf_bits);  // multiply by 1e9F to transform mask to 0.0 and -1e9F
+    mul_unary_tile(mask_register, custom_inf_bits);  // multiply by inf to transform mask to 0.0 and -inf
 
     // Add mask to scaled matmul result:
     // masked positions receive large negative values (will be 0.0 after softmax),
@@ -422,29 +423,4 @@ void update_grad_query(
     if (do_accumulate) {
         cb_pop_front(cb_prev_grad_query, tiles_per_row);
     }
-}
-
-// Copies tiles from source circular buffer to output circular buffer.
-// Used for final packing of computed gradients to output buffers with potential format conversion.
-void pack_result(const uint32_t cb_source, const uint32_t cb_output, const uint32_t num_tiles) {
-    cb_wait_front(cb_source, num_tiles);
-    cb_reserve_back(cb_output, num_tiles);
-
-    pack_reconfig_data_format(cb_output);
-    reconfig_data_format(cb_source, cb_source);
-
-    copy_tile_init(cb_source);
-    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-        tile_regs_acquire();
-        copy_tile(
-            cb_source,
-            /* tile_idx */ tile_idx,
-            /* register idx */ 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(/* register idx */ 0, cb_output);
-        tile_regs_release();
-    }
-    cb_push_back(cb_output, num_tiles);
-    cb_pop_front(cb_source, num_tiles);
 }

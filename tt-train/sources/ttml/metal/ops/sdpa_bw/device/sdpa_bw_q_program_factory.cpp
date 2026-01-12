@@ -7,6 +7,7 @@
 #include <bit>
 #include <cmath>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -182,7 +183,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const float per_head_dim = static_cast<float>(qEmbd);
     const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
-    const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);
+    const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -359,7 +360,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         St,                         // 2: num_seq_len / TILE_H
         scaler,                     // 3: sqrt(Et) - sdpa scaler factor
         minus_one,                  // 4: used to transform mask from 1/0 to 0/-1
-        custom_inf                  // 5: used to transform mask from 0/-1 to 0/-1e9F
+        custom_inf                  // 5: used to transform mask from 0/-1 to 0/-inf
     };
     kernels.compute_group_1 = tt::tt_metal::CreateKernel(
         program,
@@ -381,7 +382,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             St,                         // 2: num_seq_len / TILE_H
             scaler,                     // 3: sqrt(Et) - sdpa scaler factor
             minus_one,                  // 4: used to transform mask from 1/0 to 0/-1
-            custom_inf                  // 5: used to transform mask from 0/-1 to 0/-1e9F
+            custom_inf                  // 5: used to transform mask from 0/-1 to 0/-inf
         };
         kernels.compute_group_2 = tt::tt_metal::CreateKernel(
             program,

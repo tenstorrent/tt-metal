@@ -104,7 +104,7 @@ void kernel_main() {
 #ifdef USE_ATTN_MASK
             // read one tile of attn_mask for current row of K and V
             // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
-            read_tiles_by_row(cb_attn_mask, mask_address_generator, mask_offset + h, onetile, tile_bytes, onetile);
+            read_one_tile(cb_attn_mask, mask_address_generator, mask_offset + h);
 #endif
             read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
         }
