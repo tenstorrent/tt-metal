@@ -490,8 +490,12 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
                 else:
                     labels_3d = np.array(labels_3d)
 
-                # Get ego2global transformation for this sample
+                # Get transformations for this sample
                 info = self.data_infos[sample_id]
+                # LiDAR to Ego transformation
+                lidar2ego_translation = np.array(info["lidar2ego_translation"])
+                lidar2ego_rotation = Quaternion(info["lidar2ego_rotation"])
+                # Ego to Global transformation
                 ego2global_translation = np.array(info["ego2global_translation"])
                 ego2global_rotation = Quaternion(info["ego2global_rotation"])
 
@@ -520,16 +524,23 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
                     score = float(scores_3d[i])
                     label = int(labels_3d[i])
 
-                    # Convert rotation to quaternion (in ego frame)
+                    # Convert rotation to quaternion (in LiDAR frame)
+                    # BEVFormer outputs boxes in LiDAR coordinates
                     q1 = pyquaternion.Quaternion(axis=[0, 0, 1], radians=yaw)
                     q2 = pyquaternion.Quaternion(axis=[1, 0, 0], radians=np.pi / 2)
-                    quat_ego = q2 * q1
+                    quat_lidar = q2 * q1
 
-                    # Transform center from ego to global coordinates
-                    center_ego = np.array(center)
+                    # Transform center from LiDAR to Ego coordinates
+                    center_lidar = np.array(center)
+                    center_ego = lidar2ego_rotation.rotate(center_lidar) + lidar2ego_translation
+
+                    # Transform rotation from LiDAR to Ego coordinates
+                    quat_ego = lidar2ego_rotation * quat_lidar
+
+                    # Transform center from Ego to Global coordinates
                     center_global = ego2global_rotation.rotate(center_ego) + ego2global_translation
 
-                    # Transform rotation from ego to global coordinates
+                    # Transform rotation from Ego to Global coordinates
                     quat_global = ego2global_rotation * quat_ego
 
                     # Get class name
