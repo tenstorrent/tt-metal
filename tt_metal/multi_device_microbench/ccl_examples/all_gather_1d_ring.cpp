@@ -43,6 +43,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 constexpr const char* KERNEL_DIR = "tt_metal/multi_device_microbench/ccl_examples/kernels/";
+constexpr uint32_t TRACE_ITERS = 10;
 
 void append_fabric_mux_connection_ct_args(
     const uint32_t num_workers_per_direction,
@@ -526,8 +527,36 @@ int main() {
     }
 
     // ------------ Run Workload ------------
-    distributed::EnqueueMeshWorkload(mesh_cq, mesh_workload, /*blocking=*/false);
+    // warm up run
+    distributed::EnqueueMeshWorkload(mesh_cq, mesh_workload, /*blocking=*/true);
+
+    // trace recording start
+    auto trace_id = distributed::BeginTraceCapture(mesh_device.get(), mesh_cq.id());
+    for (uint32_t i = 0; i < TRACE_ITERS; i++) {
+        distributed::EnqueueMeshWorkload(mesh_cq, mesh_workload, /*blocking=*/false);
+    }
+    mesh_device->end_mesh_trace(mesh_cq.id(), trace_id);
+
+    auto t0 = std::chrono::steady_clock::now();
+    mesh_device->replay_mesh_trace(mesh_cq.id(), trace_id, /*blocking=*/false);
     distributed::Finish(mesh_cq);
+    auto t1 = std::chrono::steady_clock::now();
+    mesh_device->release_mesh_trace(trace_id);
+
+    const double e2e_total_sec = std::chrono::duration<double>(t1 - t0).count();
+    const double e2e_sec = (TRACE_ITERS > 0) ? (e2e_total_sec / static_cast<double>(TRACE_ITERS)) : 0.0;
+    const uint64_t bytes = static_cast<uint64_t>(output_buffer_size);
+    const double GB = static_cast<double>(bytes) / 1e9;          // gigabytes
+    const double GB_s = (e2e_sec > 0.0) ? (GB / e2e_sec) : 0.0;  // GB per second
+    const double ms = e2e_sec * 1000.0;
+
+    log_info(tt::LogTest, "=== Performance Metrics ===");
+    log_info(tt::LogTest, "  Buffer Size:         {} bytes ({:.6f} GB)", bytes, GB);
+    log_info(tt::LogTest, "  Iterations:          {}", trace_iters);
+    log_info(tt::LogTest, "  Total Time:          {:.6f} sec", e2e_total_sec);
+    log_info(tt::LogTest, "  Avg Time/Iteration:  {:.6f} sec ({:.3f} ms)", e2e_sec, ms);
+    log_info(tt::LogTest, "  Throughput:          {:.3f} GB/s", GB_s);
+    log_info(tt::LogTest, "===========================");
 
     // ------------ Verify Results ------------
     std::vector<std::vector<uint32_t>> output_data_per_device(
