@@ -36,8 +36,8 @@ from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import (
     OwlViTTTNNConfig,
     run_box_head,
     run_class_head,
-    run_text_encoder_layer,
-    run_vision_encoder_layer,
+    run_text_encoder_layer_sharded,
+    run_vision_encoder_layer_sharded,
 )
 
 # Instantiate config
@@ -555,6 +555,8 @@ def run_vision_encoder_on_device(
     """
     Run vision encoder forward pass on TTNN device.
     Uses PyTorch for patch embeddings, runs transformer on device.
+
+    The sharded version uses L1 memory and full core grid
     """
     # Get embeddings from PyTorch
     with torch.no_grad():
@@ -569,22 +571,22 @@ def run_vision_encoder_on_device(
         device=device,
     )
 
-    dram_config = ttnn.DRAM_MEMORY_CONFIG
     compute_kernel_config = ttnn_config.get_compute_kernel_config()
 
-    # Process encoder layers
+    # Use sharded version for better performance
+    # Process encoder layers with L1 sharding
     for layer_params in parameters["vision"]["encoder_layers"]:
-        hidden_states = run_vision_encoder_layer(
-            hidden_states, layer_params, ttnn_config, dram_config, compute_kernel_config
+        hidden_states = run_vision_encoder_layer_sharded(
+            hidden_states, layer_params, ttnn_config, device, compute_kernel_config
         )
 
-    # Post-layernorm
+    # Post-layernorm - use L1 for consistency
     output = ttnn.layer_norm(
         hidden_states,
         weight=parameters["vision"]["post_layernorm"]["weight"],
         bias=parameters["vision"]["post_layernorm"]["bias"],
         epsilon=1e-5,
-        memory_config=dram_config,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     return output
@@ -610,6 +612,21 @@ def run_text_encoder_on_device(
         eos_positions: Position of EOS token for each sequence (for pooling)
     """
     batch_size, seq_len = input_ids.shape
+
+    # Pad to multiple of 128 for SDPA compatibility
+    # SDPA chunk size is 128, so sequence length must be divisible by 128
+    pad_to = 128
+    if seq_len % pad_to != 0:
+        new_len = ((seq_len // pad_to) + 1) * pad_to
+        padding_len = new_len - seq_len
+
+        # Pad input_ids with 0 (or any token, padding mask will handle it)
+        input_ids = torch.nn.functional.pad(input_ids, (0, padding_len), value=0)
+
+        # Pad attention_mask with 0 (masked)
+        attention_mask = torch.nn.functional.pad(attention_mask, (0, padding_len), value=0)
+
+        seq_len = new_len
 
     # Convert input_ids to ttnn for embedding lookup
     input_ids_tt = ttnn.from_torch(
@@ -668,15 +685,16 @@ def run_text_encoder_on_device(
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     dram_config = ttnn.DRAM_MEMORY_CONFIG
     compute_kernel_config = ttnn_config.get_compute_kernel_config()
 
-    # Process encoder layers with causal attention
+    # Process encoder layers with causal attention (Optimized L1 + SDPA)
     for layer_idx, layer_params in enumerate(parameters["text"]["encoder_layers"]):
-        hidden_states = run_text_encoder_layer(
-            hidden_states, layer_params, causal_mask_tt, ttnn_config, dram_config, compute_kernel_config
+        hidden_states = run_text_encoder_layer_sharded(
+            hidden_states, layer_params, causal_mask_tt, ttnn_config, device, compute_kernel_config
         )
         if layer_idx == 0 or (layer_idx + 1) % 4 == 0:
             logger.info(f"Completed text encoder layer {layer_idx + 1}/{len(parameters['text']['encoder_layers'])}")

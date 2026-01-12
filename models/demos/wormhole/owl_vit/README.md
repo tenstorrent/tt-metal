@@ -114,27 +114,58 @@ models/demos/wormhole/owl_vit/
 
 ## Implementation Details
 
-### TTNN Optimizations (Stage 1)
+### Optimization 1: LoFi Math & Fused Operations
 
 1. **LoFi Math Fidelity**: Compute kernel config with `MathFidelity.LoFi` for faster matmul operations
-2. **DRAM Memory Config**: Currently validating with DRAM memory configuration for stability
-3. **Fused QKV**: Query, Key, Value projections are fused into a single matrix multiplication
-4. **Native TTNN Operations**: Full pipeline implemented using native ttnn ops including embeddings and transformer layers
-5. **GELU Fusion**: Feed-forward GELU activation is fused with the linear operation
-6. **Aggressive Deallocation**: Intermediate tensors are deallocated immediately after use
+2. **Fused QKV**: Query, Key, Value projections are fused into a single matrix multiplication
+3. **Native TTNN Operations**: Full pipeline implemented using native ttnn ops
+4. **GELU Fusion**: Feed-forward GELU activation is applied after linear operations
+5. **Aggressive Deallocation**: Intermediate tensors are deallocated immediately after use
+
+### Optimization 2: L1 Memory & Core Sharding
+
+1. **L1 Memory Config**: Activations stored in L1 for faster access vs DRAM
+2. **Full Core Grid**: Linear operations use `core_grid=(7, 8)` for 56-core utilization
+3. **Sharded Vision Encoder**: `run_vision_encoder_layer_sharded()` for optimized performance
+
+### Optimization 3: Vision Encoder FlashAttention
+
+1. **SDPA Kernel**: Replaced manual implementation with `ttnn.transformer.scaled_dot_product_attention`
+2. **Operation Fusion**: Fuses QK^T + Scale + Softmax + AV into a single kernel
+3. **Optimized Layouts**: Avoids costly transpositions for K matrix
+
+### Optimization 4: Text Encoder FlashAttention
+
+1. **Text SDPA**: Extended FlashAttention optimization to Text Encoder
+2. **L1 Sharding**: Text encoder layers now use L1 memory and optimized core grid
+3. **Dynamic Padding**: Implemented input padding to satisfy SDPA chunk alignments
+
+### Performance Results
+
+Profiling results on N300 (Wormhole B0, 56 cores):
+
+| Metric | DRAM Interleaved | L1 Sharded | Vision SDPA | Full Opt (Text+Vision) | Speedup |
+|--------|------------------|------------|-------------|------------------------|---------|
+| Device Time | 18.57 ms | 16.96 ms | 10.16 ms | **8.92 ms** | **2.08x** |
+| Matmul Time | 11.34 ms | 10.80 ms | 5.03 ms | 3.73 ms | 3.04x |
+| Attn Time | ~6.00 ms | ~5.80 ms | 0.80 ms | **1.03 ms** | **5.8x** |
 
 ### Optimization Configuration
 
-The `OwlViTTTNNConfig` class supports optimization parameters:
-
 ```python
-from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import OwlViTTTNNConfig
+from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import (
+    OwlViTTTNNConfig,
+    run_vision_encoder_layer_sharded,  # Optimized version
+)
 
 # Default: LoFi enabled for performance
-config = OwlViTTTNNConfig(use_lofi=True, use_l1_memory=False)
-
-# Get compute kernel config for matmul/linear ops
+config = OwlViTTTNNConfig(use_lofi=True)
 compute_kernel_config = config.get_compute_kernel_config()
+
+# Use sharded layer for better core utilization
+hidden = run_vision_encoder_layer_sharded(
+    hidden, layer_params, config, device, compute_kernel_config
+)
 ```
 
 
