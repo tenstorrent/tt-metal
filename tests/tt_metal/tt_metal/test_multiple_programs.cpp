@@ -55,7 +55,7 @@ std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
 }
 
 std::tuple<Program, KernelHandle, KernelHandle> setup_program_one(
-    IDevice* device, const CoreCoord& core, uint32_t single_tile_size) {
+    IDevice* /*device*/, const CoreCoord& core, uint32_t single_tile_size) {
     Program program = CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -105,7 +105,7 @@ std::tuple<Program, KernelHandle, KernelHandle> setup_program_one(
 }
 
 std::tuple<Program, KernelHandle, KernelHandle> setup_program_two(
-    IDevice* device, const CoreCoord& core, uint32_t single_tile_size) {
+    IDevice* /*device*/, const CoreCoord& core, uint32_t single_tile_size) {
     Program program = CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -152,7 +152,7 @@ std::tuple<Program, KernelHandle, KernelHandle> setup_program_two(
 }
 
 void write_program_runtime_args_to_device(
-    IDevice* device,
+    IDevice* /*device*/,
     Program& program,
     KernelHandle reader_kernel_id,
     KernelHandle writer_kernel_id,

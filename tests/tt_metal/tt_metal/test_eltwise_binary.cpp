@@ -33,7 +33,7 @@ const char* op_id_to_op_type_define[] = {
 const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
 
 void run_eltwise_binary_test(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshCommandQueue& cq, int eltwise_op) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshCommandQueue& cq, int eltwise_op) {
     bool multibank = true;
 
     log_info(LogTest, "====================================================================");
