@@ -45,8 +45,20 @@ void kernel_main() {
     fabric_set_unicast_route<false>(pkt_semaphore_hdr, 1);
     cur_connection.send_payload_flush_blocking_from_address((uint32_t)pkt_semaphore_hdr, sizeof(PACKET_HEADER_TYPE));
 
+    DPRINT << device_id << "0 Semaphore before = " << *global_semaphore_ptr << "\n";
     // Wait for semaphore to be incremented by the other device.
     noc_semaphore_wait_min(global_semaphore_ptr, 1);
+    DPRINT << device_id << "1 Semaphore after = " << *global_semaphore_ptr << "\n";
+
+    // Perform semaphore increment on the opposite device via fabric.
+    cur_connection.wait_for_empty_write_slot();
+    fabric_set_unicast_route<false>(pkt_semaphore_hdr, 1);
+    cur_connection.send_payload_flush_blocking_from_address((uint32_t)pkt_semaphore_hdr, sizeof(PACKET_HEADER_TYPE));
+
+    DPRINT << device_id << "2 Semaphore before = " << *global_semaphore_ptr << "\n";
+    // Wait for semaphore to be incremented by the other device.
+    noc_semaphore_wait_min(global_semaphore_ptr, 1);
+    DPRINT << device_id << "3 Semaphore after = " << *global_semaphore_ptr << "\n";
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close();

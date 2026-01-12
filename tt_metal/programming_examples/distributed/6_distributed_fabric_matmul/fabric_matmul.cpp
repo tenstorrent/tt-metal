@@ -5,6 +5,7 @@
 #include <fmt/ostream.h>
 #include <cstdint>
 
+#include <iostream>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt-metalium/base_types.hpp"
@@ -59,6 +60,11 @@ int main() {
     // Create Input Tensor
     std::vector<float> inputA_data(M * K, 1);
     std::vector<float> inputB_data(K * N, 1);
+    for (int index_k = 0; index_k < K; index_k++) {
+        for (int index_n = 0; index_n < N; index_n++) {
+            inputB_data[index_k * N + index_n] = static_cast<float>(index_n) / 512;
+        }
+    }
 
     ttnn::Shape shapeA = ttnn::Shape({M, K});
     ttnn::Shape shapeB = ttnn::Shape({K, N});
@@ -90,7 +96,7 @@ int main() {
         MeshMapperConfig{
             .placements = {
                 MeshMapperConfig::Replicate(),
-                MeshMapperConfig::Replicate(),
+                MeshMapperConfig::Shard(1),
             }});
     inputB = ttnn::distributed::distribute_tensor(inputB, *inputB_mesh_mapper, *mesh_device);
     inputB = ttnn::to_layout(inputB, tt::tt_metal::Layout::TILE);
@@ -132,22 +138,31 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
     const ttnn::Shape& inputB_shape = inputB.logical_shape();
     const ttnn::Shape& output_shape = output.logical_shape();
 
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     log_info(
         tt::LogAlways,
-        " InputA shape: {}, InputB shape: {}, Output shape: {}",
+        " InputA shape: {}, InputB shape: {}, Output shape: {} \n Fabric Max Size : {} bytes",
         inputA_shape,
         inputB_shape,
-        output_shape);
+        output_shape,
+        fabric_max_packet_size);
 
     int M = inputA_shape[0];
     int K = inputA_shape[1];
     int N = inputB_shape[1];
+    int output_N = output_shape[1];
 
     int M_tiles = M / tt::constants::TILE_HEIGHT;
     int K_tiles = K / tt::constants::TILE_HEIGHT;
     int N_tiles = N / tt::constants::TILE_WIDTH;
+    int outN_tiles = output_N / tt::constants::TILE_WIDTH;
 
     uint32_t tile_size_bytes = tt::tile_size(datatype_to_dataformat_converter(inputA.dtype()));
+    TT_FATAL(
+        tile_size_bytes <= fabric_max_packet_size,
+        "Tile size {} bytes exceeds fabric max payload size {} bytes",
+        tile_size_bytes,
+        fabric_max_packet_size);
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(inputA.dtype());
 
     auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
@@ -168,7 +183,7 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
             .set_page_size(inputB_cb_index, tile_size_bytes);
 
     tt::tt_metal::CircularBufferConfig output_cb_config =
-        tt::tt_metal::CircularBufferConfig(2 * N_tiles * tile_size_bytes, {{output_cb_index, data_format}})
+        tt::tt_metal::CircularBufferConfig(2 * outN_tiles * tile_size_bytes, {{output_cb_index, data_format}})
             .set_page_size(output_cb_index, tile_size_bytes);
     const tt::tt_metal::CoreCoord core({0, 0});
 
@@ -192,14 +207,7 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
         tt::tt_metal::CreateCircularBuffer(program, core, inputA_cb_config);
         tt::tt_metal::CreateCircularBuffer(program, core, inputB_cb_config);
         tt::tt_metal::CreateCircularBuffer(program, core, output_cb_config);
-        // auto reader_kernel = tt::tt_metal::CreateKernel(
-        //     program,
-        //     "tt_metal/programming_examples/distributed/6_distributed_fabric_matmul/kernels/fabric_matmul_kernel.cpp",
-        //     tt::tt_metal::CoreCoord({0, 0}),
-        //     tt::tt_metal::DataMovementConfig{
-        //         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        //         .noc = tt::tt_metal::NOC::RISCV_0_default,
-        //     });
+
         // Create the data movement kernels and the compute kernel
         std::vector<uint32_t> reader_compile_time_args;
         tt::tt_metal::TensorAccessorArgs(inputA.buffer()).append_to(reader_compile_time_args);
@@ -227,7 +235,7 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
                 .noc = tt::tt_metal::NOC::RISCV_1_default,
                 .compile_args = writer_compile_time_args});
 
-        std::vector<uint32_t> compute_compile_time_args = {M_tiles, K_tiles, N_tiles};
+        std::vector<uint32_t> compute_compile_time_args = {M_tiles, K_tiles, outN_tiles};
         tt::tt_metal::CreateKernel(
             program,
             "tt_metal/programming_examples/distributed/6_distributed_fabric_matmul/kernels/mm.cpp",
@@ -248,7 +256,7 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
         std::vector<uint32_t> writer_rt_args = {
             output.buffer()->address(),
             M_tiles,
-            N_tiles,
+            outN_tiles,
         };
 
         // Used by  FabricConnectionManager::build_from_args to make the connection.
