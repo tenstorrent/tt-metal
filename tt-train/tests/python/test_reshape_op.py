@@ -166,7 +166,7 @@ def test_reshape_with_linear_layer():
     )
 
     # Linear layer forward
-    linear_out = ttml.ops.linear.linear_op(input_tensor, weight_tensor, None)
+    linear_out = ttml.ops.linear.linear(input_tensor, weight_tensor, None)
     linear_shape = linear_out.shape()
 
     # Reshape output [B, 1, 1, seq_len, out_features] -> [B, 1, seq_len, out_features]

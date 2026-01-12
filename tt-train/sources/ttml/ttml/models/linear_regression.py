@@ -97,7 +97,7 @@ class LinearRegression(AbstractModuleBase):
         # Use ttml's linear operation
         # Access underlying tensor from Parameter wrapper via .tensor attribute
         bias_tensor = self.bias.tensor if self.bias is not None else None
-        return ttml.ops.linear.linear_op(x, self.weight.tensor, bias_tensor)
+        return ttml.ops.linear.linear(x, self.weight.tensor, bias_tensor)
 
     def __call__(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Call the forward method.

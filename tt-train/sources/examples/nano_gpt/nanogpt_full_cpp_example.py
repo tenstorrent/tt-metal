@@ -26,12 +26,13 @@ import pickle
 
 import numpy as np
 import ml_dtypes
-import yaml
 
 import ttnn
 import ttml
 from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
 from ttml.modules import Parameter
+from ttml.common.utils import round_up_to_tile, get_tt_metal_home
+from ttml.common.config import load_config
 
 
 @dataclass
@@ -179,11 +180,6 @@ def read_file_to_str(file_path: str) -> str:
     """Read file to string."""
     with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
-
-
-def round_up_to_tile(value: int, tile_size: int = 32) -> int:
-    """Round up value to nearest multiple of tile_size."""
-    return ((value + tile_size - 1) // tile_size) * tile_size
 
 
 def create_identity_scheduler(optimizer, total_steps: int):
@@ -797,18 +793,8 @@ def main():
     """Main training function matching C++ main."""
     parser = argparse.ArgumentParser(description="NanoGPT Full C++ Example (Python)")
 
-    # Default config path matching C++ example
-    default_config_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "configs",
-        "training_configs",
-        "training_shakespeare_nanogpt.yaml",
-    )
-    # Fallback to relative path if absolute doesn't exist
-    if not os.path.exists(default_config_path):
-        default_config_path = (
-            "configs/training_configs/training_shakespeare_nanogpt.yaml"
-        )
+    # Default config path matching C++ example (relative to configs root)
+    default_config_path = "training_shakespeare_nanogpt.yaml"
 
     parser.add_argument(
         "-c",
@@ -939,42 +925,24 @@ def main():
         print(f"Using TT_METAL_RUNTIME_ROOT={os.environ.get('TT_METAL_RUNTIME_ROOT')}")
     print()
 
-    # Load configs matching C++ structure
-    if args.config and os.path.exists(args.config):
+    # Load configs matching C++ structure using ttml.common.config utilities
+    configs_root = f"{get_tt_metal_home()}/tt-train/configs"
+    try:
         print(f"Loading training config from: {args.config}")
-        with open(args.config, "r") as f:
-            yaml_config = yaml.safe_load(f)
+        yaml_config = load_config(args.config, f"{configs_root}/training_configs")
         training_config = parse_training_config(yaml_config)
 
         # Load model config from separate file (matching C++ behavior)
         if training_config.model_config:
-            model_config_path = training_config.model_config
-            # Handle relative paths
-            if not os.path.isabs(model_config_path):
-                # Try relative to config file directory
-                config_dir = os.path.dirname(os.path.abspath(args.config))
-                model_config_path = os.path.join(config_dir, "..", model_config_path)
-                model_config_path = os.path.normpath(model_config_path)
-                # If still doesn't exist, try relative to current directory
-                if not os.path.exists(model_config_path):
-                    model_config_path = training_config.model_config
-
-            if os.path.exists(model_config_path):
-                print(f"Loading model config from: {model_config_path}")
-                with open(model_config_path, "r") as f:
-                    model_yaml = yaml.safe_load(f)
-                model_config = parse_model_config(model_yaml)
-            else:
-                print(f"Warning: Model config file not found: {model_config_path}")
-                print("Using default model config")
-                model_config = ModelConfig()
+            print(f"Loading model config from: {training_config.model_config}")
+            model_yaml = load_config(training_config.model_config, configs_root)
+            model_config = parse_model_config(model_yaml)
         else:
             print("Warning: No model_config specified in training config")
             print("Using default model config")
             model_config = ModelConfig()
-    else:
-        if args.config:
-            print(f"Warning: Config file not found: {args.config}")
+    except FileNotFoundError as e:
+        print(f"Warning: Config file not found: {e}")
         print("Using default configs")
         training_config = TrainingConfig()
         model_config = ModelConfig()

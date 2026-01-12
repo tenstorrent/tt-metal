@@ -133,7 +133,7 @@ class NanoGPT(AbstractModuleBase):
         )
 
         # Language model head (weight tying: uses same weights as token embedding)
-        logits = ttml.ops.linear.linear_op(x, self.lm_head_weight.tensor, None)
+        logits = ttml.ops.linear.linear(x, self.lm_head_weight.tensor, None)
 
         # Reshape logits from [B, 1, 1, seq_len, vocab_size] to [B, 1, seq_len, vocab_size]
         # Use ttml's reshape operation which preserves the computation graph

@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Training loop and batch preparation for pipeline parallel transformer models."""
-from time import time
 
 import numpy as np
 import ttnn
 import ttml
 from data import get_batch, build_causal_mask
+from ttml.common.utils import PerformanceMeter
 
 
 def get_batch_ttml(
@@ -50,30 +50,6 @@ def get_batch_ttml(
             y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
         )
     return tt_x, tt_y
-
-
-class PerformanceMeter:
-    def __init__(self, cfg, window_size=10):
-        self.cfg = cfg
-        self.steps = []
-        self.window_size = window_size
-
-    def step(self):
-        self.steps.append(time())
-        if len(self.steps) > self.window_size:
-            self.steps.pop(0)
-
-    def get_metrics(self):
-        time_window = self.steps[-1] - self.steps[0]
-        if time_window == 0:
-            return 0, 0
-
-        samples = (
-            len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
-        )
-        samples_per_second = samples / time_window
-        tokens_per_second = samples * self.cfg.seq_len / time_window
-        return samples_per_second, tokens_per_second
 
 
 def train(

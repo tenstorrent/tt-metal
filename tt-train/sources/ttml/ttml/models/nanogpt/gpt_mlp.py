@@ -53,11 +53,11 @@ class GPTMLP(AbstractModuleBase):
             Output tensor after MLP
         """
         # First linear + GELU
-        x = ttml.ops.linear.linear_op(x, self.fc1.tensor, None)
+        x = ttml.ops.linear.linear(x, self.fc1.tensor, None)
         x = ttml.ops.unary.gelu(x)
 
         # Second linear
-        x = ttml.ops.linear.linear_op(x, self.fc2.tensor, None)
+        x = ttml.ops.linear.linear(x, self.fc2.tensor, None)
 
         # Dropout (only in training mode, using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:

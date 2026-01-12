@@ -82,7 +82,7 @@ class MultiHeadAttention(AbstractModuleBase):
         if self._use_cpp_layers:
             qkv = self.qkv_layer(x)
         else:
-            qkv = ttml.ops.linear.linear_op(x, self.qkv.tensor, None)
+            qkv = ttml.ops.linear.linear(x, self.qkv.tensor, None)
 
         # Split into heads using ttml's heads_creation
         # Output: query, key, value each have shape (B, H, S, head_dim)
@@ -107,7 +107,7 @@ class MultiHeadAttention(AbstractModuleBase):
         if self._use_cpp_layers:
             out = self.out_layer(attention_out)
         else:
-            out = ttml.ops.linear.linear_op(attention_out, self.out_proj.tensor, None)
+            out = ttml.ops.linear.linear(attention_out, self.out_proj.tensor, None)
 
         # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:

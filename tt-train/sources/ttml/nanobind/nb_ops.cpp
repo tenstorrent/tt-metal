@@ -142,7 +142,7 @@ void py_module(nb::module_& m) {
         auto py_linear = static_cast<nb::module_>(m.attr("linear"));
         // Overload with optional bias (None support)
         py_linear.def(
-            "linear_op",
+            "linear",
             [](const autograd::TensorPtr& tensor,
                const autograd::TensorPtr& weight,
                std::optional<const autograd::TensorPtr> bias) -> autograd::TensorPtr {
