@@ -2,7 +2,7 @@
 
 PatchTSMixer is a lightweight MLP-Mixer based architecture for multivariate time series forecasting, implemented using TTNN APIs for Tenstorrent hardware (Wormhole).
 
-**Status:** ✅ Stage 1 Complete (98%) - Correctness validated, ready for Stage 2 optimization
+**Status:** ✅ Stage 1 almost Complete - Correctness validated, ready for Stage 2 optimization
 
 ## Quick Links
 - [Architecture](#architecture) | [Benchmarks](#benchmarks--validation) | [Getting Started](#getting-started) | [Performance](#performance-metrics) | [Stage Progress](#bounty-stage-progress)
@@ -31,27 +31,15 @@ PatchTSMixer is a lightweight MLP-Mixer based architecture for multivariate time
 | Correlation | 0.9009 | 0.9009 | **-0.004%** | >0.90 | ✅ |
 | TTNN-PyTorch Corr. | **0.9999** | - | - | >0.99 | ✅ |
 
-### Training Results (PyTorch on ETTh2)
-
-```
-Best: Epoch 6 | val_loss=0.3496 | test_mse=0.3270
-Checkpoint: checkpoints/etth2_512_96/best_model.pt
-```
 
 ## Getting Started
 
 ### 1. Install Dependencies
 ```bash
-pip install -r requirements.txt
 pip install git+https://github.com/IBM/tsfm.git  # Optional, for HF training
 ```
 
-### 2. Quick Validation (10 samples)
-```bash
-python quick_validation.py  # Tests TTNN vs PyTorch, ~30 seconds
-```
-
-### 3. Train PyTorch Reference
+### 2. Train PyTorch Reference
 ```bash
 python reference/main.py \
     --context_length 512 --prediction_length 96 \
@@ -59,17 +47,17 @@ python reference/main.py \
     --output_dir checkpoints/etth2_512_96
 ```
 
-### 4. Full Benchmark (100 samples)
+### 3. Full Benchmark (100 samples)
 ```bash
 python benchmark_datasets.py \
     --checkpoint checkpoints/etth2_512_96/best_model.pt \
     --num-samples 100 --d-model 16 --num-layers 4
 ```
 
-### 5. Run Tests
+### 4. Run Tests
 ```bash
 cd tests/pcc
-pytest test_modules.py -v                      # Unit tests (all components)
+pytest test_modules.py -v                      # Unit tests (all modules components)
 pytest test_patchtsmixer_end_to_end.py -v      # End-to-end model
 ```
 
@@ -266,27 +254,22 @@ pytest test_patchtsmixer_end_to_end.py -v      # End-to-end model
 
 ```
 models/demos/patchtsmixer/
-├── README.md                    # This file
-├── requirements.txt             # Dependencies
+├── README.md
 ├── tt/
-│   ├── patchtsmixer.py          # TTNN implementation (724 lines)
-│   └── model_processing.py      # Parameter conversion (198 lines)
+│   ├── patchtsmixer.py          # TTNN implementation
+│   └── model_processing.py      # Parameter conversion
 ├── reference/
-│   ├── pytorch_patchtsmixer.py  # PyTorch reference (512 lines)
-│   ├── main.py                  # Training script
-│   └── train_patchtsmixer_etth2.py  # HuggingFace training
+│   ├── pytorch_patchtsmixer.py  # PyTorch reference
+│   ├── train_patchtsmixer_pytorch.py   # Training script
+│   └── train_patchtsmixer_HF_etth2.py  # HuggingFace training
 ├── tests/pcc/
-│   ├── test_modules.py          # Unit tests (841 lines)
-│   └── test_patchtsmixer_end_to_end.py  # E2E tests (352 lines)
-├── benchmark_datasets.py        # Benchmarking tool (465 lines)
-├── quick_validation.py          # Quick 10-sample test
+│   ├── test_modules.py          # Unit tests (modules)
+│   └── test_patchtsmixer_end_to_end.py  # E2E tests
+├── benchmark_datasets.py        # Benchmarking tool
 └── checkpoints/                 # Trained models (auto-created)
 ```
 
 ## References
 
-- **Paper:** [PatchTSMixer (ICLR 2024)](https://arxiv.org/abs/2303.14304)
-- **IBM TSFM:** [github.com/IBM/tsfm](https://github.com/ibm/tsfm)
-- **HuggingFace:** [PatchTSMixer docs](https://huggingface.co/docs/transformers/model_doc/patchtsmixer)
-- **Dataset:** [ETDataset](https://github.com/zhouhaoyi/ETDataset)
-- **TTNN:** [TT-Metal TTNN API](https://github.com/tenstorrent/tt-metal/tree/main/ttnn)
+- **Paper:** [TSMixer Paper](https://arxiv.org/pdf/2306.09364)
+- **HuggingFace PatchTSMixer tuto:** [PatchTSMixer docs](https://huggingface.co/docs/transformers/model_doc/patchtsmixer)
