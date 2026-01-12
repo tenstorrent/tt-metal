@@ -254,8 +254,9 @@ jobs:
 
             # Check if model is cached (only when not regenerating cache)
             if [[ "$SKIP_IF_MISSING" == "true" ]]; then
-              MODEL_CACHE_PATH="${HF_HUB_CACHE}/models--$(echo '${{ matrix.test.hf_model }}' | tr '/' '-')"
+              MODEL_CACHE_PATH="${HF_HUB_CACHE}/models--$(echo '${{ matrix.test.hf_model }}' | tr '/' '-' | sed 's/-/--/')"
               if [[ ! -d "$MODEL_CACHE_PATH" ]]; then
+                echo "::warning::Model weights not found in cache: ${{ matrix.test.hf_model }}"
                 echo "⚠️  WARNING: Model weights not found in cache: ${{ matrix.test.hf_model }}"
                 echo "Cache path checked: $MODEL_CACHE_PATH"
                 echo "Skipping test - run with regenerate-ttnn-cache=true to download model"
@@ -320,6 +321,7 @@ jobs:
               esac
 
               if [[ "$MISSING_WEIGHTS" == "true" ]]; then
+                echo "::warning::Model weights not found in cache: $MISSING_MODEL"
                 echo "⚠️  WARNING: Model weights not found in cache: $MISSING_MODEL"
                 echo "Skipping test - run with regenerate-ttnn-cache=true to download model"
                 mkdir -p generated/test_results
