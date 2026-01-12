@@ -97,7 +97,7 @@ int main() {
     distributed::EnqueueMeshWorkload(cq, workload, true);
     std::cout << "EnqueueMeshWorkload passed" << std::endl;
     std::vector<uint32_t> outputs{0};
-    MetalContext::instance().get_cluster().dram_barrier(mesh_device->get_devices()[0]->id());
+    // MetalContext::instance().get_cluster().dram_barrier(mesh_device->get_devices()[0]->id());
     tt_metal::detail::ReadFromDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_address, 4, outputs);
     // tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], core, l1_address, 4, outputs);
     std::cout << "ReadFromDeviceDRAMChannel passed" << std::endl;

@@ -29,6 +29,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_matmul_single_tile_bfp8b.cpp
     test_matmul_single_tile_output_in_l1.cpp
     test_multi_core_kernel.cpp
+    test_multi_dm_add_two_ints.cpp
     test_multiple_programs.cpp
     test_sdpa_reduce_c.cpp
     test_single_dm_l1_write.cpp

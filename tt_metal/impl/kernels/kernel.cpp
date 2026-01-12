@@ -789,6 +789,7 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
 
 void QuasarDataMovementKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
+    log_info(tt::LogMetal, "Reading binaries for kernel {}", this->kernel_full_name_);
     std::vector<const ll_api::memory*> binaries;
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -797,6 +798,11 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
         const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+        log_info(
+            tt::LogMetal,
+            "Reading binary for processor {} at path {}",
+            processor,
+            build_state.get_target_out_path(this->kernel_full_name_));
         auto load_type =
             MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
         const ll_api::memory& binary_mem =

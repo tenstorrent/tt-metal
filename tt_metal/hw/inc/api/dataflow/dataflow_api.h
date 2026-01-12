@@ -1866,12 +1866,12 @@ FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
 
-    // DPRINT << *sem_addr << ENDL();
-    // DPRINT << val << ENDL();
+    DPRINT << "waiting for semaphore to be " << val << ENDL();
 
     WAYPOINT("NSW");
     do {
         invalidate_l1_cache();
+        DPRINT << *sem_addr << ENDL();
     } while ((*sem_addr) != val);
     WAYPOINT("NSD");
 }
