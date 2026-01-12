@@ -31,7 +31,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
             (4, 1),
             ttnn.Topology.Linear,
             1,
-        ],  # 78 s. Less than 1s to load vae. NO FSDP
+        ],  # 73 s. FSDP, only dymanic load encoder submesh
         [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # 112 s NO FSDP
         [
             (4, 8),
