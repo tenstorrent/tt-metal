@@ -405,6 +405,72 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       timeout: 11
 
+  cmake-tests:
+    needs: [build, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true'
+        }}
+    uses: ./.github/workflows/cmake-tests.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+
+  rpath-validation:
+    needs: [build, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true'
+        }}
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.build.outputs.ci-build-docker-image }}
+      env:
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+
+      - name: ✅ Validate RPATH/RUNPATH
+        timeout-minutes: 5
+        run: |
+          echo "Validating RPATH/RUNPATH in built libraries..."
+          if [ -f build/lib/libtt_metal.so ]; then
+            ./tests/scripts/validate_rpath.sh build libtt_metal.so
+          elif [ -f build/lib/libtt_stl.so ]; then
+            ./tests/scripts/validate_rpath.sh build libtt_stl.so
+          else
+            echo "No libraries found for RPATH validation"
+            exit 1
+          fi
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "rpath_validation_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -418,14 +484,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests, fabric-cpu-only-unit-tests]
+    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests, fabric-cpu-only-unit-tests, cmake-tests, rpath-validation]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests, cmake-tests, rpath-validation"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

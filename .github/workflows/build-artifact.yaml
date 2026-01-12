@@ -398,6 +398,18 @@ jobs:
           # --target install is for the tarball that should get replaced by proper packaging later
           cmake --build build --target install
 
+      - name: ✅ Validate RPATH/RUNPATH
+        timeout-minutes: 5
+        run: |
+          echo "Validating RPATH/RUNPATH in built libraries..."
+          if [ -f build/lib/libtt_metal.so ]; then
+            ./tests/scripts/validate_rpath.sh build libtt_metal.so
+          elif [ -f build/lib/libtt_stl.so ]; then
+            ./tests/scripts/validate_rpath.sh build libtt_stl.so
+          else
+            echo "No libraries found for RPATH validation (this may be expected for some build configurations)"
+          fi
+
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
         run: |
