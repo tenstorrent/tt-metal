@@ -16,6 +16,7 @@ Weights are tensor-parallelized across devices:
 """
 
 import math
+import os
 import pytest
 import torch
 import ttnn
@@ -424,7 +425,7 @@ def run_prefetcher_all_matmuls(
     )
 
     def run_op():
-        # Start prefetcher
+        # Start prefetcher op
         prefetcher.run()
 
         """Run all matmuls for all layers."""
@@ -445,7 +446,6 @@ def run_prefetcher_all_matmuls(
                 global_cb=prefetcher.global_cb,
                 sub_device_id=worker_sub_device_id,
             )
-            breakpoint()
             layer_outputs["qkv"] = ttnn.to_memory_config(qkv_out, ttnn.DRAM_MEMORY_CONFIG)
 
             # Run WO matmul (K-sharded weight)
@@ -578,17 +578,29 @@ def run_prefetcher_all_matmuls(
 # Test Cases
 # =============================================================================
 
+# Mapping from mesh shape to model dimensions
+# Each mesh shape has corresponding dimensions that work with the prefetcher
+MESH_SHAPE_TO_MODEL_DIMS = {
+    (1, 1): {"dim": 2048, "hidden_dim": 3584, "n_heads": 32, "n_kv_heads": 8},
+    (1, 2): {"dim": 4096, "hidden_dim": 7168, "n_heads": 32, "n_kv_heads": 8},
+    (1, 4): {"dim": 4096, "hidden_dim": 14336, "n_heads": 32, "n_kv_heads": 8},
+    (1, 8): {"dim": 8192, "hidden_dim": 28672, "n_heads": 64, "n_kv_heads": 8},
+}
+
 
 @pytest.mark.skipif(not is_blackhole(), reason="This test only runs on Blackhole")
 @pytest.mark.parametrize(
-    "dim, hidden_dim, n_heads, n_kv_heads",
+    "mesh_device",
     [
-        pytest.param(4096, 14336, 32, 8, id="1x4-shapes"),
-        pytest.param(4096, 7168, 32, 8, id="1x2-shapes"),
-        pytest.param(2048, 3584, 32, 8, id="1x1-shapes"),
+        {
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
+    indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x4_grid")], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
@@ -596,10 +608,6 @@ def run_prefetcher_all_matmuls(
 )
 def test_prefetcher_ring_matmul_BH(
     mesh_device,
-    dim,
-    hidden_dim,
-    n_heads,
-    n_kv_heads,
     function_level_defaults,
     silicon_arch_name,
     silicon_arch_blackhole,
@@ -607,23 +615,34 @@ def test_prefetcher_ring_matmul_BH(
     """
     Test prefetcher with tensor-parallelized weights on Blackhole.
 
+    Automatically detects the mesh shape and uses corresponding model dimensions.
+    Supported mesh shapes: 1x1 (P150), 1x2 (P300), 1x4 (P150x4 or P300x2), 1x8 (P150x8)
+
     Tensor parallelism:
     - QKV: TP on qkv_size dimension (N-sharded)
     - WO: TP on n_heads*head_dim dimension (K-sharded)
     - FF1, FF3: TP on hidden_dim dimension (N-sharded)
     - FF2: TP on hidden_dim dimension (K-sharded)
     """
-    custom_model_dims = {
-        "dim": dim,
-        "hidden_dim": hidden_dim,
-        "n_heads": n_heads,
-        "n_kv_heads": n_kv_heads,
-        "head_dim": dim // n_heads,
-    }
+    # Get mesh shape from device
+    mesh_shape = tuple(mesh_device.shape)
+
+    # Skip if mesh shape is not supported
+    if mesh_shape not in MESH_SHAPE_TO_MODEL_DIMS:
+        pytest.skip(
+            f"Mesh shape {mesh_shape} is not supported. " f"Supported shapes: {list(MESH_SHAPE_TO_MODEL_DIMS.keys())}"
+        )
+
+    # Get model dimensions for this mesh shape
+    model_dims = MESH_SHAPE_TO_MODEL_DIMS[mesh_shape].copy()
+    model_dims["head_dim"] = model_dims["dim"] // model_dims["n_heads"]
+
+    logger.info(f"Running prefetcher test with mesh shape {mesh_shape}")
+    logger.info(f"Model dimensions: {model_dims}")
 
     run_prefetcher_all_matmuls(
         mesh_device=mesh_device,
         num_layers=1,
-        model_dims=custom_model_dims,
+        model_dims=model_dims,
         enable_trace=False,
     )
