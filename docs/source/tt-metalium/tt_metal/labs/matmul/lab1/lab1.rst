@@ -334,7 +334,7 @@ and device-side memory addresses down to the kernels.
 Conversely, when a kernel finishes, any results you want on the host must be explicitly copied back.
 
 There is also a two-stage notion of compile-time vs runtime. The host program is compiled ahead of time, but kernels are
-JIT-compiled while the host runs. At kernel compile time, configuration such as tensor layout and tile sizes are treated
+JIT-compiled while the host program runs. At kernel compile time, configuration such as tensor layout and tile sizes are treated
 as constants and baked into the binary, allowing aggressive compiler optimization. At kernel launch time, other parameters such as
 DRAM base addresses and tile counts are passed as runtime arguments.
 
@@ -412,10 +412,10 @@ Note that the circular buffers typically contain only a small number of tiles at
 
 Each kernel interacts with the buffers as follows:
 
-- **Reader kernel:** Reads data (e.g. from device DRAM) into the circular buffer and signals when new data has been read and is available.
-- **Compute kernel:** Waits for data to become available in the buffer before processing it. After computation, it writes the results to
-  another circular buffer and marks data as ready in that buffer.
-- **Writer kernel:** Waits for the computed results to appear in the buffer before writing them to the output location (e.g. device DRAM).
+- **Reader kernel:** Reads data (e.g. from device DRAM) into the circular buffers and signals when new data has been read and is available.
+- **Compute kernel:** Waits for data to become available in its input circular buffers before processing it. After computation, it writes the results to
+  one or more output circular buffers and marks data as ready.
+- **Writer kernel:** Waits for the computed results to appear in the buffers before writing them to the output location (e.g. device DRAM).
 
 This mechanism ensures that each kernel only proceeds when the necessary data is ready, preventing race conditions and enabling asynchronous,
 pipelined execution across the hardware. Different kernel types are mapped to the Tensix core, whose high-level diagram is shown in Figure 5.
@@ -469,6 +469,7 @@ The number of tiles in a circular buffer can be adjusted to trade off memory for
 returns beyond a few tiles.
 
 The function creates the three types of kernels discussed earlier: reader, compute, and writer.
+Creating a kernel registers it with the program object, so that it can be executed later.
 Each kernel can take two types of arguments: compile-time and runtime kernel arguments, as mentioned earlier.
 
 .. _kernel-args-blurb:
@@ -479,7 +480,8 @@ The two types of kernel arguments differ in *when* their values are determined a
 
 * Values that are known when the kernel is built (JIT-compiled).
 
-* They are hard-coded into the kernel binary and can be used by the compiler to specialize and optimize the code, by e.g. unrolling loops, removing branches, choosing specific data paths, etc.
+* They are hard-coded into the kernel binary and can be used by the compiler to specialize and optimize
+  the code, by e.g. unrolling loops, removing branches, choosing specific data paths, etc.
 
 * Changing a compile-time argument effectively means generating a new version of the kernel binary.
 
@@ -515,12 +517,9 @@ Since the performance benefit of using compile-time arguments is not significant
 we optimize for code reuse and avoid recompilation by using runtime arguments for dataflow kernels.
 This distinction will become more apparent in subsequent labs when we start working with multiple Tensix cores.
 
-Creating kernels registers the kernels with the program object, so that they can be executed later.
-
 Finally, the function executes the kernels by adding the program to the workload and enqueuing it for execution, which triggers kernel JIT compilation
 followed by kernel execution on the device. It is useful to remind ourselves that until this point, all the code we discussed executed on the host,
-not on the device.
-We will examine kernel code next.
+not on the device. We will examine kernel code next.
 
 Reader Kernel Code
 ------------------
@@ -700,14 +699,14 @@ Exercise 3: Observing JIT Compile Errors
 
 Perform the following steps:
 
-#. Introduce a syntax error in the kernel code
+#. Introduce a syntax error in the reader kernel.
 
-#. Rebuild the programming examples by running ``./build_metal.sh --build-programming-examples`` and observe that no error is reported.
+#. Rebuild the example program by running ``./build_metal.sh`` and observe that no error is reported.
 
-#. Run the example program ``./build/programming_examples/metal_example_lab_eltwise_binary``.
-   Observe how JIT compilation errors are reported.
+#. Run the example program by running ``./build/ttnn/examples/example_lab_eltwise_binary`` and
+   observe how JIT compilation errors are reported.
 
-#. Fix the syntax error and rerun the program to confirm that the program now runs correctly with no rebuilding step required.
+#. Fix the syntax error and rerun the program to confirm that the program now runs correctly with **no rebuilding step required**.
 
 
 Debug Facilities in TT-Metalium
@@ -718,13 +717,13 @@ To debug host code, build the program with debug symbols:
 
 .. code-block:: bash
 
-   ./build_metal.sh --build-type Debug --build-programming-examples
+   ./build_metal.sh --build-type Debug
 
 Then run the program using ``gdb``:
 
 .. code-block:: bash
 
-   gdb ./build/programming_examples/metal_example_lab_eltwise_binary
+   gdb ./build/ttnn/examples/example_lab_eltwise_binary
 
 Kernels cannot be easily debugged using ``gdb``, and TT-Metalium provides a number of other methods for debugging kernels.
 These methods are useful for debugging hangs and other issues that may not be apparent from the host-side code.
@@ -770,8 +769,8 @@ The following example shows a simple print of local kernel variables, including 
        DPRINT << "done flag = " << static_cast<uint32_t>(done) << ENDL();
    }
 
-Printing a tile in a writer (dataflow) kernel
----------------------------------------------
+Printing a Tile in a Dataflow Kernel
+------------------------------------
 
 Data is passed between kernels using circular buffers (CBs), which often contain tiles of data.
 DPRINT can be combined with the ``TileSlice`` helper to print part or all of a tile from a CB.
@@ -843,7 +842,7 @@ In reader kernels, these are most commonly set to ``TSLICE_INPUT_CB`` and ``TSLI
 to access the data that has just been written (but not yet "pushed back") to the CB.
 
 
-Caveats and best practices
+Caveats and Best Practices
 --------------------------
 
 A few important caveats to keep in mind when using DPRINT:
@@ -876,8 +875,19 @@ Add DPRINT statements to the writer kernel in our example program to print:
 For testing purposes, modify the program's input data to not use random numbers
 so you can verify that the results are as expected. Keep in mind that the input data vector is in row-major order,
 but it is then stored in tiled layout in the tensor.
-Since this will involve modifying the host-side code, you will need to rebuild the program before rerunning it.
-The easiest way to rebuild the program is to rerun ``./build_metal.sh --build-programming-examples`` from the ``tt-metal`` directory.
+Also keep in mind that ``bfloat16`` has limited precision, so you may run into seemingly unexpected results if you
+perform a naive operation like ``x = x + 0.1`` inside of a loop if the result rounds to the original value ``x``.
+Note that this is a common issue with floating-point arithmetic, and is not specific to ``bfloat16``, but you are
+more likely to encounter it with ``bfloat16`` because of its limited precision.
+Similarly, many integers cannot be represented exactly as floating-point numbers, and this becomes apparent
+much sooner with lower precision types, such as ``bfloat16``.
+
+It is also worth noting that printing individual ``bfloat16`` values requires casting the value to a ``float``
+to get expected floating-point result (e.g. ``std::cout << "x: " << static_cast<float>(x);``).
+``TileSlice`` takes care of this internally, so no further casting is needed when printing tiles.
+
+Since this exercise will involve modifying the host-side code, you will need to rebuild the program before rerunning it.
+The easiest way to rebuild the program is to rerun ``./build_metal.sh`` from the ``tt-metal`` directory.
 
 Debugging Hangs using Stack Traces
 ==================================
@@ -912,7 +922,26 @@ To help pinpoint the problem, you can dump stack traces.
 #. When it becomes apparent that the program has been running for a long time without indication of progress,
    keep it running and open another terminal and run ``python tools/triage/dump_callstacks.py`` from the ``tt-metal`` directory.
 
-Observe the output in the terminal. The output will show the call stacks for all RISC-V processors on all cores, including cores
+**``tt-triage`` Dependencies**
+
+Depending on your environment, you may encounter an error running the above command, such as
+``Module 'No module named 'ttexalens'' not found. Please install tt-exalens``, or 
+``Debugger version mismatch``.
+If this occurs, you can address it by creating a Python virtual environment and installing dependencies,
+by running the following from the ``tt-metal`` directory:
+
+.. code-block:: bash
+
+   ./create_venv.sh
+   source python_env/bin/activate
+   scripts/install_debugger.sh
+   pip install -r tools/triage/requirements.txt
+
+Note that you may need to reenter the virtual environment by re-running ``source python_env/bin/activate`` 
+if you open a new terminal later.
+
+Once you have successfully run ``dump_callstacks.py``, observe the output in the terminal.
+The output will show the call stacks for all RISC-V processors on all cores, including cores
 that are running firmware responsible for dispatching kernel code. You should ignore the cores that are running firmware,
 and focus on the cores that are running kernel code. In our example, these will be in location ``(0,0)``, since that is
 the core we specified in ``init_program()`` in ``ttnn/examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
@@ -925,7 +954,7 @@ In general, stack traces alone may not be sufficient to uncover the reason for t
 you may need to add DPRINT statements to kernel code to help pinpoint the problem. For example,
 printing iterator values in all kernels may be useful to identify the iteration when the hang occurs.
 
-Note that you can terminate the hung program by pressing Ctrl+C in the terminal where it is running.
+Note that you can terminate the hung program by pressing ``Ctrl``+``C`` in the terminal where it is running.
 Once you are done debugging, uncomment the calls to ``cb_pop_front`` in the compute kernel to restore normal behavior.
 
 Device Performance Profiling
@@ -1103,12 +1132,13 @@ and rename the copied ``lab_eltwise_binary.cpp`` file to match the directory nam
 Similarly, rename ``tiles_add.cpp`` to e.g. ``tiles_matmul.cpp``.
 Then, adjust the code to perform matrix multiplication, by making the following changes:
 
-#. Update the host program to create input vectors to multiply matrix ``A`` of size ``640x320`` and matrix ``B`` of size ``320x640`` to produce matrix ``C`` of size ``640x640``.
+#. Update the host program to create input vectors to multiply matrix ``A`` of size ``640x320`` and matrix ``B``
+   of size ``320x640`` to produce matrix ``C`` of size ``640x640``.
 
 #. Copy the reference matrix multiplication code you created in Exercise 1.
    Adapt it to the ``bfloat16`` data type, so it can be used to verify TT-Metalium results.
-   When changing the inner loop, accumulate the result into an ordinary 32-bit ``float`` and only cast the result
-   into ``bfloat16`` once the full sum has been computed, to reduce precision loss.
+   To limit precision loss, accumulate the result into an ordinary 32-bit ``float`` and cast
+   to ``bfloat16`` only after the full sum is computed.
 
 #. Update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
    pass required parameters to kernels (you may need to complete some of the other steps below to determine the correct parameters).
@@ -1120,7 +1150,6 @@ Then, adjust the code to perform matrix multiplication, by making the following 
      Note that constants ``TILE_HEIGHT`` and ``TILE_WIDTH`` are defined in the ``tt_metal/api/tt-metalium/constants.hpp`` header in the ``tt::constants`` namespace,
      and height is equal to width for all existing Tenstorrent devices.
      You should add assertions (using ``TT_FATAL``) that check these assumptions.
-
 
 #. Update kernel creation code to refer to kernel ``.cpp`` files in the new directory.
 
@@ -1148,11 +1177,12 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    Remember that the JIT compiler can better optimize the kernel code if loop bounds are constant.
    Therefore, you should use compile-time arguments for the loop bounds whenever possible.
 
-#. Update ``CMakeLists.txt`` to specify the name of the new executable and the source files to compile, matching whatever file and directory names you chose.
+#. Update ``CMakeLists.txt`` in the new directory you created to specify the name of the new executable
+   and the source files to compile, matching whatever file and directory names you chose.
 
-#. Update ``CMakeLists.txt`` in the parent folder to add the new subdirectory to the list of subdirectories to build.
+#. Update ``CMakeLists.txt`` in the parent directory to add the new executable to be built.
 
-#. Build all programming examples by running ``./build_metal.sh --build-programming-examples`` from the ``tt-metal`` directory.
+#. Build your program by running ``./build_metal.sh`` from the ``tt-metal`` directory.
 
 #. Run the program and verify the results by comparing the results with the reference matrix multiplication you created in Exercise 1.
    Note that because of the limited precision of bfloat16, the results may not be exactly the same as the reference results, but they should be
