@@ -4,6 +4,7 @@
 
 #include "moreh_bmm.hpp"
 
+#include <iostream>
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 
 namespace ttnn::operations::moreh::moreh_bmm {
