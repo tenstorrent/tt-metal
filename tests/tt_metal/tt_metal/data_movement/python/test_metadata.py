@@ -26,6 +26,46 @@ class TestMetadataLoader:
         with open(self.config.test_type_attributes_path, "r") as file:
             return yaml.safe_load(file)
 
+    def get_test_metadata(self, test_id: int, arch: str) -> Dict[str, str]:
+        """
+        Get metadata for a specific test ID from test_information.yaml.
+
+        Args:
+            test_id: The test ID to get metadata for
+            arch: The architecture name (e.g., "blackhole", "wormhole_b0")
+
+        Returns:
+            Dictionary containing metadata fields: memory, operation, pattern, architecture
+
+        Raises:
+            KeyError: If test_id not found or doesn't have metadata fields
+        """
+        test_info = self.load_test_information()
+        test_data = test_info.get("tests", {}).get(test_id, {})
+
+        # Check if test has metadata fields
+        if "memory" not in test_data or "operation" not in test_data or "pattern" not in test_data:
+            raise KeyError(f"Test ID {test_id} does not have complete metadata (memory, operation, pattern)")
+
+        # Build result with metadata fields
+        result = {
+            "memory": test_data["memory"],
+            "operation": test_data["operation"],
+            "pattern": test_data["pattern"],
+        }
+
+        # Set architecture based on runtime environment
+        # Convert architecture name to match csv_reader.cpp expectations
+        arch_lower = arch.lower()
+        if arch_lower == "blackhole":
+            result["architecture"] = "blackhole"
+        elif arch_lower == "wormhole_b0" or arch_lower == "wormhole":
+            result["architecture"] = "wormhole_b0"
+        else:
+            result["architecture"] = arch_lower
+
+        return result
+
     def _get_test_id_to_name(self, test_info: Dict[str, Any]) -> Dict[str, str]:
         """Extract test_id_to_name mapping from test information."""
         return {test_id: info["name"] for test_id, info in test_info["tests"].items()}
