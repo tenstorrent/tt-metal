@@ -73,14 +73,14 @@ if echo "${RPATH_OUTPUT}" | grep -q '\$ORIGIN'; then
     FIRST_ENTRY=$(echo "${RPATH_OUTPUT}" | head -1 | grep -o '\[.*\]' | tr -d '[]')
     if echo "${FIRST_ENTRY}" | grep -q '^\$ORIGIN'; then
         ORIGIN_FIRST=true
-        echo -e "${GREEN}✓ $ORIGIN found and is first in RPATH/RUNPATH${NC}"
+        echo -e "${GREEN}✓ \$ORIGIN found and is first in RPATH/RUNPATH${NC}"
     else
-        echo -e "${RED}✗ $ORIGIN found but is NOT first in RPATH/RUNPATH${NC}"
+        echo -e "${RED}✗ \$ORIGIN found but is NOT first in RPATH/RUNPATH${NC}"
         echo "  First entry: ${FIRST_ENTRY}"
-        echo "  Fedora's brp-check-rpaths requires $ORIGIN to be first"
+        echo "  Fedora's brp-check-rpaths requires \$ORIGIN to be first"
     fi
 else
-    echo -e "${YELLOW}⚠ $ORIGIN not found in RPATH/RUNPATH${NC}"
+    echo -e "${YELLOW}⚠ \$ORIGIN not found in RPATH/RUNPATH${NC}"
     echo "  This might be OK for system libraries, but verify it's intentional"
 fi
 
