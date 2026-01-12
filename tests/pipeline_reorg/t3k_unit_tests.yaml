@@ -36,7 +36,7 @@
   sku: wh_llmbox
   owner_id: U06MJ6CVCGZ # Yu Gao
   team: ttnn
-  timeout: 10
+  timeout: 5
 
 - name: t3k_falcon7b_tests
   cmd: run_t3000_falcon7b_tests
