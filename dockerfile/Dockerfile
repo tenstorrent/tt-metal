@@ -74,12 +74,8 @@ RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
 COPY dockerfile/python-version.conf /tmp/python-version.conf
 
 # Set up virtual environment using uv with centralized Python version
-# Ubuntu 24.04 has Python 3.12 by default, so use that version for compatibility
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN . /tmp/python-version.conf && \
-    if [ "$UBUNTU_VERSION" = "24.04" ]; then \
-        PYTHON_VERSION="3.12"; \
-    fi && \
+RUN UBUNTU_VERSION=$UBUNTU_VERSION . /tmp/python-version.conf && \
     umask 000 && uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
 
 # Ensure the virtual environment is used for all Python-related commands
@@ -214,12 +210,8 @@ RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
 COPY dockerfile/python-version.conf /tmp/python-version.conf
 
 # Set up virtual environment using uv with centralized Python version
-# Ubuntu 24.04 has Python 3.12 by default, so use that version for compatibility
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN . /tmp/python-version.conf && \
-    if [ "$UBUNTU_VERSION" = "24.04" ]; then \
-        PYTHON_VERSION="3.12"; \
-    fi && \
+RUN UBUNTU_VERSION=$UBUNTU_VERSION . /tmp/python-version.conf && \
     uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
 
 # Ensure the virtual environment is used for all Python-related commands
