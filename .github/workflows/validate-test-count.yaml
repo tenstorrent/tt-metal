@@ -29,10 +29,47 @@ jobs:
             ["benchmarks"]="tests/ttnn/unit_tests/benchmarks"
           )
           
-          # Function to count test functions in Python files
+          # Function to count test functions including parametrize expansions
           count_tests() {
             local dir=$1
-            find "$dir" -name "test_*.py" -type f -exec grep -h "^\s*def test_\|^\s*async def test_" {} \; | wc -l
+            find "$dir" -name "test_*.py" -type f -print0 | xargs -0 awk '
+              BEGIN { 
+                total = 0
+                param_count = 1
+                in_decorator = 0
+              }
+              
+              # Track parametrize decorators
+              /@pytest\.mark\.parametrize/ {
+                in_decorator = 1
+                next
+              }
+              
+              # Count items in parameter lists when inside parametrize
+              in_decorator == 1 {
+                # Count items in lists/tuples by counting commas + 1
+                gsub(/\[|\]|\(|\)/, "", $0)
+                if ($0 ~ /,/) {
+                  n = split($0, arr, ",")
+                  param_count *= n
+                }
+                # Check if decorator ends
+                if ($0 ~ /\)/) {
+                  in_decorator = 0
+                }
+                next
+              }
+              
+              # When we hit a test function, add the accumulated count
+              /^[[:space:]]*(async[[:space:]]+)?def[[:space:]]+test_/ {
+                if (param_count > 0) {
+                  total += param_count
+                }
+                param_count = 1
+              }
+              
+              END { print total }
+            '
           }
           
           # Count tests in PR branch
