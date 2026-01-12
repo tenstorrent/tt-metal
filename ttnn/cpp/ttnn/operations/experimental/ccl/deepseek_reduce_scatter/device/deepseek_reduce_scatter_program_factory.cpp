@@ -104,7 +104,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
-    uint32_t tile_granularity = num_tiles_to_write_per_packet < 4 ? 4 * num_tiles_to_write_per_packet : 8;
+    uint32_t tile_granularity = 2;                 // process 2 tiles at a time
     uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -211,6 +211,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             auto core = *((worker_core_iter++)->begin());
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
+            // TODO: (GR) Will need to be updated once we move to 4 links
             uint32_t start_tiles_read = link * output_tensor_num_pages / num_links;
             uint32_t start_tiles_to_read = (link + 1) * output_tensor_num_pages / num_links;
 

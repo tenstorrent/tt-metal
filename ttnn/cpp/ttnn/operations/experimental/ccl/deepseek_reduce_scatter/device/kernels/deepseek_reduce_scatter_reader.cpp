@@ -51,17 +51,15 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<initial_ct_idx + input_ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 
-    uint32_t sem_target = 0;
-
-    int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
-    uint32_t batch_offset = 0;
-
     // Loop over the slices, starting from the furthest, and working backwards until we get to ourselves
     // Read our local slice at this slice idx into cb_input_id or cb_output_id
     // If we are not the first slice, then read intermediate into the cb_intermediate_id
     // Then reduce those two CB's, and push that to cb_output_id
     // If slices_forwarded in writer is 7, we don't forward anymore and write it to output_buffer
     // Otherwise, the writer will write cb_output_id to the next chip in the forward direction
+
+    uint32_t sem_target = 0;
+    int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
         const bool do_reduce = i != 0;
         uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
@@ -73,7 +71,7 @@ void kernel_main() {
             actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
         }
 
-        uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
+        uint32_t input_tile_id_start = actual_slice_idx * slice_Wt;
         uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
 
         uint32_t input_pages_read_in_row = start_pages_read_in_row;
@@ -86,7 +84,7 @@ void kernel_main() {
         uint32_t tiles_to_read = start_tiles_to_read;
 
         if (!direction) {
-            uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+            uint32_t backwards_offset = tile_granularity;
             for (uint32_t k = 0; k < backwards_offset; ++k) {
                 input_pages_read_in_row++;
                 if (input_pages_read_in_row == slice_Wt) {
@@ -113,13 +111,7 @@ void kernel_main() {
                 sem_target++;
             }
 
-            uint32_t tiles_to_read_in_current_direction = 0;
-            if (direction) {
-                tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
-            } else {
-                tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
-            }
-
+            uint32_t tiles_to_read_in_current_direction = tile_granularity;
             cb_reserve_back(cb_in0, tile_granularity);
             uint32_t l1_write_addr = get_write_ptr(cb_in0);
             for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
@@ -165,12 +157,7 @@ void kernel_main() {
             // Skip the tiles going the other direction
             tiles_remaining_to_read = tiles_to_read - tiles_read;
             if (tiles_remaining_to_read > 0) {
-                uint32_t tiles_to_read_in_other_direction = 0;
-                if (!direction) {
-                    tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                } else {
-                    tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read, tile_granularity);
-                }
+                uint32_t tiles_to_read_in_other_direction = tile_granularity;
 
                 for (uint32_t k = 0; k < tiles_to_read_in_other_direction; ++k) {
                     input_pages_read_in_row++;
@@ -192,11 +179,8 @@ void kernel_main() {
         } else {
             slice_idx++;
         }
-
-        if (do_reduce && (i == (ring_size - 1))) {
-            // Reset the semaphore before the next batch
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
-            sem_target = 0;
-        }
     }
+
+    // reset the semaphore
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

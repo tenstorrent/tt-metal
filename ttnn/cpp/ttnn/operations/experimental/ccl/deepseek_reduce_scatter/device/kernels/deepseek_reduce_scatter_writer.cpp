@@ -178,12 +178,7 @@ void kernel_main() {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
                 uint32_t tiles_read_in_current_direction = 0;
-                uint32_t tiles_to_read_in_current_direction = 0;
-                if (direction) {
-                    tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                } else {
-                    tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
-                }
+                uint32_t tiles_to_read_in_current_direction = tile_granularity;
 
                 cb_wait_front(cb_output_id, tile_granularity);
                 size_t l1_read_addr = get_read_ptr(cb_output_id);
@@ -246,12 +241,7 @@ void kernel_main() {
                 // Skip the tiles going the other direction
                 tiles_remaining_to_read = tiles_to_read - tiles_read;
                 if (tiles_remaining_to_read > 0) {
-                    uint32_t tiles_to_read_in_other_direction = 0;
-                    if (!direction) {
-                        tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                    } else {
-                        tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read, tile_granularity);
-                    }
+                    uint32_t tiles_to_read_in_other_direction = tile_granularity;
 
                     for (uint32_t k = 0; k < tiles_to_read_in_other_direction; ++k) {
                         intermediate_pages_read_in_row++;
@@ -279,17 +269,10 @@ void kernel_main() {
             uint32_t tiles_to_read = start_tiles_to_read;
 
             if (!direction) {
-                tiles_read += std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                tiles_read += tile_granularity;
             }
             while (tiles_read < tiles_to_read) {
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-
-                uint32_t tiles_to_read_in_current_direction = 0;
-                if (direction) {
-                    tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                } else {
-                    tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
-                }
+                uint32_t tiles_to_read_in_current_direction = tile_granularity;
 
                 cb_wait_front(cb_output_id, tile_granularity);
                 size_t l1_read_addr = get_read_ptr(cb_output_id);
@@ -305,15 +288,9 @@ void kernel_main() {
                 cb_pop_front(cb_output_id, tile_granularity);
 
                 // Skip the tiles going the other direction
-                tiles_remaining_to_read = tiles_to_read - tiles_read;
+                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 if (tiles_remaining_to_read > 0) {
-                    uint32_t tiles_to_read_in_other_direction = 0;
-                    if (!direction) {
-                        tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                    } else {
-                        tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read, tile_granularity);
-                    }
-                    tiles_read += tiles_to_read_in_other_direction;
+                    tiles_read += tile_granularity;
                 }
             }
 

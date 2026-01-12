@@ -28,8 +28,7 @@ void MAIN {
         uint32_t tiles_to_read = start_tiles_to_read;
 
         if (!direction) {
-            uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
-            tiles_read += backwards_offset;
+            tiles_read += tile_granularity;
         }
 
         // Wait for input data once before beginning processing
@@ -58,13 +57,7 @@ void MAIN {
             // Skip the tiles going the other direction
             tiles_remaining_to_read = tiles_to_read - tiles_read;
             if (tiles_remaining_to_read > 0) {
-                num_pages_to_read = 0;
-                if (!direction) {
-                    num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                } else {
-                    num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
-                }
-                tiles_read += num_pages_to_read;
+                tiles_read += tile_granularity;
             }
         }
     }
