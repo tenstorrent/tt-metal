@@ -264,7 +264,7 @@ def run_conv2d_short_sweep(
     # Set config_tensors_in_dram if requested (helps avoid L1 OOM for memory-intensive configs)
     if config_tensors_in_dram:
         conv_config.config_tensors_in_dram = True
-    
+
     # Use provided dtype or default to bfloat16
     conv_output_dtype = output_dtype if output_dtype is not None else ttnn.bfloat16
 
