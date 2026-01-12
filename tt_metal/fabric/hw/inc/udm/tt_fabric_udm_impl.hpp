@@ -402,8 +402,8 @@ FORCE_INLINE volatile tt::tt_fabric::fabric_connection_sync_t* get_fabric_connec
  *
  * This function manages a static connection instance that persists across calls.
  * The connection is initialized on first use and reused for subsequent operations.
- * On non-Wormhole, uses atomic spinlock to synchronize initialization across BRISC and NCRISC.
- * The lock is acquired on first initialization and held until release_fabric_connection() is called.
+ * On non-Wormhole, uses atomic spinlock to synchronize access across BRISC and NCRISC.
+ * The lock is acquired on EVERY call and must be released via release_fabric_connection() after each use.
  * The initialized flag is stored in L1 (shared across RISCs on multi-RISC architectures).
  *
  * @return Reference to the fabric connection
@@ -435,8 +435,8 @@ FORCE_INLINE tt::tt_fabric::WorkerToFabricEdmSender& get_or_open_fabric_connecti
 /**
  * @brief Release the fabric connection lock
  *
- * This should be called when the caller is done using the fabric connection.
- * It releases the spinlock that was acquired in get_or_open_fabric_connection().
+ * MUST be called after EVERY call to get_or_open_fabric_connection() to release the lock.
+ * Failure to call this will cause deadlocks on subsequent calls.
  * On Wormhole, this is a no-op.
  */
 FORCE_INLINE void release_fabric_connection() {
