@@ -58,9 +58,6 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physi
     }
 
     for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
-        auto z_channels = std::unordered_set<uint8_t>{8, 9};
-        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-
         auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
                                        const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
             std::vector<tt::tt_metal::AsicID> adjacents;
@@ -74,9 +71,7 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physi
                 if (mesh_asics.contains(neighbor)) {
                     // Add each neighbor multiple times based on number of ethernet connections
                     auto eth_connections = physical_system_descriptor.get_eth_connections(asic_id, neighbor);
-                    for (const auto& eth_connection : eth_connections) {
-                        adjacents.push_back(neighbor);
-                    }
+                    adjacents.insert(adjacents.end(), eth_connections.size(), neighbor);
                 }
             }
             return adjacents;
