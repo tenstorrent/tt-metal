@@ -44,5 +44,5 @@ class ScaledEmbedding(Embedding):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         e = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        s = ttnn.multiply(e, self.embed_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        s = ttnn.multiply(e, self.embed_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG, fast_and_approximate_mode=True)
         return s
