@@ -211,8 +211,8 @@ BenchmarkResult RunSingleMatmulBenchmark(
     constexpr int HiFi4_cycles_per_tile = 64;
     int num_cores_full_grid = compute_grid_size.x * compute_grid_size.y;
 
-    const double dim_per_tile = static_cast<double>(M) * K * N / 32.0 / 32.0;
-    double ideal_cycle_full_grid = dim_per_tile / 32 * HiFi4_cycles_per_tile / num_cores_full_grid;
+    const double num_tile_ops = static_cast<double>(M) * K * N / (32.0 * 32.0 * 32.0);
+    double ideal_cycle_full_grid = num_tile_ops * HiFi4_cycles_per_tile / num_cores_full_grid;
 
     const int freq_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
     double inference_cycle = inference_time_avg_s * freq_mhz * 1e6;
