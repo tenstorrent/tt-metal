@@ -15,7 +15,10 @@ inline void llk_math_matmul_init(const std::uint32_t ct_dim = 1, const std::uint
     _llk_math_matmul_init_<NUM_FIDELITY_PHASES, EN_DI, EN_X2>(ct_dim, rt_dim);
 }
 
-inline void llk_math_matmul(
-    const std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
+inline void llk_math_matmul(const std::uint32_t dst_index) {
     _llk_math_matmul_tile_(dst_index);
+}
+
+inline void llk_math_matmul(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
+    _llk_math_matmul_block_(ct_dim, rt_dim);
 }
