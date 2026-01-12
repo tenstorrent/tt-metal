@@ -32,6 +32,7 @@ void kernel_main() {
     const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr auto input_tensor_args = TensorAccessorArgs<initial_ct_idx>();
     constexpr uint32_t input_ct_offset = input_tensor_args.num_compile_time_args();
@@ -67,8 +68,10 @@ void kernel_main() {
         uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
 
         uint32_t input_pages_read_in_row = start_pages_read_in_row;
+        uint32_t input_row_offset = start_row_offset;
 
         uint32_t intermediate_pages_read_in_row = input_pages_read_in_row;
+        uint32_t intermediate_row_offset = input_row_offset;
 
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;
@@ -78,12 +81,14 @@ void kernel_main() {
             for (uint32_t k = 0; k < backwards_offset; ++k) {
                 input_pages_read_in_row++;
                 if (input_pages_read_in_row == slice_Wt) {
+                    input_row_offset += input_tensor_Wt;
                     input_pages_read_in_row -= slice_Wt;
                 }
             }
             tiles_read += backwards_offset;
 
             intermediate_pages_read_in_row = input_pages_read_in_row;
+            intermediate_row_offset = input_row_offset;
         }
 
         /**
@@ -103,13 +108,14 @@ void kernel_main() {
             cb_reserve_back(cb_in0, tile_granularity);
             uint32_t l1_write_addr = get_write_ptr(cb_in0);
             for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                uint32_t input_tile_id = input_tile_id_start + input_pages_read_in_row;
+                uint32_t input_tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
                 uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
                 noc_async_read(noc_read_addr, l1_write_addr, page_size);
                 l1_write_addr += page_size;
 
                 input_pages_read_in_row++;
                 if (input_pages_read_in_row == slice_Wt) {
+                    input_row_offset += input_tensor_Wt;
                     input_pages_read_in_row -= slice_Wt;
                 }
             }
@@ -120,7 +126,8 @@ void kernel_main() {
                 cb_reserve_back(cb_intermediate_id, tile_granularity);
                 uint32_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                    uint32_t intermediate_tile_id = intermediate_tile_id_start + intermediate_pages_read_in_row;
+                    uint32_t intermediate_tile_id =
+                        intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
                     uint64_t intermediate_noc_read_addr =
                         get_noc_addr(intermediate_tile_id, intermediate_tensor_addrgen);
                     noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
@@ -128,6 +135,7 @@ void kernel_main() {
 
                     intermediate_pages_read_in_row++;
                     if (intermediate_pages_read_in_row == slice_Wt) {
+                        intermediate_row_offset += input_tensor_Wt;
                         intermediate_pages_read_in_row -= slice_Wt;
                     }
                 }
@@ -147,12 +155,14 @@ void kernel_main() {
                 for (uint32_t k = 0; k < tiles_to_read_in_other_direction; ++k) {
                     input_pages_read_in_row++;
                     if (input_pages_read_in_row == slice_Wt) {
+                        input_row_offset += input_tensor_Wt;
                         input_pages_read_in_row -= slice_Wt;
                     }
                 }
                 tiles_read += tiles_to_read_in_other_direction;
 
                 intermediate_pages_read_in_row = input_pages_read_in_row;
+                intermediate_row_offset = input_row_offset;
             }
         }
 

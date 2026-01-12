@@ -206,6 +206,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             uint32_t start_tiles_to_read = (link + 1) * output_tensor_num_pages / num_links;
 
             uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
+            uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
 
             // reader
             std::vector<uint32_t> reader_rt_args = {
@@ -216,6 +217,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 start_tiles_read,                          // start_tiles_read
                 start_tiles_to_read,                       // start_tiles_to_read
                 start_pages_read_in_row,                   // start_pages_read_in_row
+                start_row_offset,                          // start_row_offset
             };
 
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
@@ -230,9 +232,10 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 multidevice_semaphores.at(num_directions_per_link).address(),  // batch_ready_semaphore
                 barrier_semaphore.address(),                                   // barrier_sem
                 dir,                                                           // direction
-                start_pages_read_in_row,  // start_pages_read_in_row (unused by dim0 kernel)
-                start_tiles_read,         // start_tiles_read
-                start_tiles_to_read,      // tiles_to_read
+                start_tiles_read,                                              // start_tiles_read
+                start_tiles_to_read,                                           // tiles_to_read
+                start_pages_read_in_row,                                       // start_pages_read_in_row
+                start_row_offset,                                              // start_row_offset
             };
             if (output_is_sharded) {
                 shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);

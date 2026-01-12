@@ -45,9 +45,10 @@ void kernel_main() {
     size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
-    const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<initial_ct_idx>();
     constexpr uint32_t intermediate_ct_offset = intermediate_tensor_args.num_compile_time_args();
@@ -152,6 +153,7 @@ void kernel_main() {
         if (i < (ring_size - 1)) {
             uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
             uint32_t intermediate_pages_read_in_row = start_pages_read_in_row;
+            uint32_t intermediate_row_offset = start_row_offset;
 
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
@@ -161,6 +163,7 @@ void kernel_main() {
                 for (uint32_t k = 0; k < backwards_offset; ++k) {
                     intermediate_pages_read_in_row++;
                     if (intermediate_pages_read_in_row == slice_Wt) {
+                        intermediate_row_offset += input_tensor_Wt;
                         intermediate_pages_read_in_row -= slice_Wt;
                     }
                 }
@@ -178,9 +181,11 @@ void kernel_main() {
                 while (tiles_read_in_current_direction < tiles_to_read_in_current_direction) {
                     uint32_t tiles_to_put_in_current_packet = tile_granularity;
 
-                    uint32_t intermediate_tile_one_id = intermediate_tile_id_start + intermediate_pages_read_in_row;
+                    uint32_t intermediate_tile_one_id =
+                        intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
                     intermediate_pages_read_in_row++;
                     if (intermediate_pages_read_in_row == slice_Wt) {
+                        intermediate_row_offset += input_tensor_Wt;
                         intermediate_pages_read_in_row -= slice_Wt;
                     }
                     auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
@@ -190,9 +195,10 @@ void kernel_main() {
                     switch (tiles_to_put_in_current_packet) {
                         case 2: {
                             uint32_t intermediate_tile_two_id =
-                                intermediate_tile_id_start + intermediate_pages_read_in_row;
+                                intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
                             intermediate_pages_read_in_row++;
                             if (intermediate_pages_read_in_row == slice_Wt) {
+                                intermediate_row_offset += input_tensor_Wt;
                                 intermediate_pages_read_in_row -= slice_Wt;
                             }
 
@@ -233,6 +239,7 @@ void kernel_main() {
                     for (uint32_t k = 0; k < tiles_to_read_in_other_direction; ++k) {
                         intermediate_pages_read_in_row++;
                         if (intermediate_pages_read_in_row == slice_Wt) {
+                            intermediate_row_offset += input_tensor_Wt;
                             intermediate_pages_read_in_row -= slice_Wt;
                         }
                     }
