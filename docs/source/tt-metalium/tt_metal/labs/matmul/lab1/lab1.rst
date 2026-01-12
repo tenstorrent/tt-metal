@@ -902,6 +902,25 @@ When a program hangs, **leave it running**, open another terminal and run the fo
 
 This will print the call stacks for all RISC-V processors on all cores.
 
+``tt-triage`` Dependencies
+--------------------------
+
+Depending on your environment, you may encounter an error running the above command, such as
+``Module 'No module named 'ttexalens'' not found. Please install tt-exalens``, or 
+``Debugger version mismatch``.
+If this occurs, you can address it by creating a Python virtual environment and installing dependencies,
+by running the following from the ``tt-metal`` directory:
+
+.. code-block:: bash
+
+   ./create_venv.sh
+   source python_env/bin/activate
+   scripts/install_debugger.sh
+   pip install -r tools/triage/requirements.txt
+
+Note that you may need to reenter the virtual environment by re-running ``source python_env/bin/activate`` 
+if you open a new terminal later.
+
 
 Exercise 5: Using tt-triage to Debug a Hang
 -------------------------------------------
@@ -922,25 +941,6 @@ To help pinpoint the problem, you can dump stack traces.
 #. When it becomes apparent that the program has been running for a long time without indication of progress,
    keep it running and open another terminal and run ``python tools/triage/dump_callstacks.py`` from the ``tt-metal`` directory.
 
-**``tt-triage`` Dependencies**
-
-Depending on your environment, you may encounter an error running the above command, such as
-``Module 'No module named 'ttexalens'' not found. Please install tt-exalens``, or 
-``Debugger version mismatch``.
-If this occurs, you can address it by creating a Python virtual environment and installing dependencies,
-by running the following from the ``tt-metal`` directory:
-
-.. code-block:: bash
-
-   ./create_venv.sh
-   source python_env/bin/activate
-   scripts/install_debugger.sh
-   pip install -r tools/triage/requirements.txt
-
-Note that you may need to reenter the virtual environment by re-running ``source python_env/bin/activate`` 
-if you open a new terminal later.
-
-Once you have successfully run ``dump_callstacks.py``, observe the output in the terminal.
 The output will show the call stacks for all RISC-V processors on all cores, including cores
 that are running firmware responsible for dispatching kernel code. You should ignore the cores that are running firmware,
 and focus on the cores that are running kernel code. In our example, these will be in location ``(0,0)``, since that is
@@ -954,7 +954,7 @@ In general, stack traces alone may not be sufficient to uncover the reason for t
 you may need to add DPRINT statements to kernel code to help pinpoint the problem. For example,
 printing iterator values in all kernels may be useful to identify the iteration when the hang occurs.
 
-Note that you can terminate the hung program by pressing ``Ctrl``+``C`` in the terminal where it is running.
+Note that you can terminate the hung program by pressing ``Ctrl`` + ``C`` in the terminal where it is running.
 Once you are done debugging, uncomment the calls to ``cb_pop_front`` in the compute kernel to restore normal behavior.
 
 Device Performance Profiling
