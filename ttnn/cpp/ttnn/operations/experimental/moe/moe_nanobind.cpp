@@ -34,8 +34,7 @@ void bind_moe(nb::module_& mod) {
             nb::arg("w1_tensor"),
             nb::arg("w2_tensor"),
             nb::arg("output_tensor"),
-            nb::arg("math_fidelity") = MathFidelity::LoFi,
-            nb::arg("fp32_dest_acc_en") = true});
+        });
 }
 
 }  // namespace ttnn::operations::experimental::moe::detail
