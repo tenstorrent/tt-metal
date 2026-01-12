@@ -43,7 +43,10 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
                std::optional<uint32_t> cluster_axis,
                std::optional<uint32_t> chunks_per_sync,
                std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel) -> ttnn::Tensor {
+               std::optional<uint32_t> num_buffers_per_channel,
+               std::optional<uint32_t> mm_cores_y,
+               std::optional<uint32_t> mm_block_ht,
+               std::optional<uint32_t> mm_block_wt) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     persistent_output_buffers,
@@ -58,7 +61,10 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
                     cluster_axis,
                     chunks_per_sync,
                     num_workers_per_link,
-                    num_buffers_per_channel);
+                    num_buffers_per_channel,
+                    mm_cores_y,
+                    mm_block_ht,
+                    mm_block_wt);
             },
             nb::arg("input_tensor"),
             nb::arg("persistent_output_buffers") = nb::none(),
@@ -74,7 +80,10 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("chunks_per_sync") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none()});
+            nb::arg("num_buffers_per_channel") = nb::none(),
+            nb::arg("mm_cores_y") = nb::none(),
+            nb::arg("mm_block_ht") = nb::none(),
+            nb::arg("mm_block_wt") = nb::none()});
 }
 
 }  // namespace

@@ -44,6 +44,9 @@ struct operation_attributes_t {
     std::optional<uint32_t> chunks_per_sync;
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
+    std::optional<uint32_t> mm_cores_y;
+    std::optional<uint32_t> mm_block_ht;
+    std::optional<uint32_t> mm_block_wt;
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -62,6 +65,9 @@ struct operation_attributes_t {
         attrs.emplace_back("chunks_per_sync", chunks_per_sync);
         attrs.emplace_back("num_workers_per_link", num_workers_per_link);
         attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
+        attrs.emplace_back("mm_cores_y", mm_cores_y);
+        attrs.emplace_back("mm_block_ht", mm_block_ht);
+        attrs.emplace_back("mm_block_wt", mm_block_wt);
         return attrs;
     }
 };

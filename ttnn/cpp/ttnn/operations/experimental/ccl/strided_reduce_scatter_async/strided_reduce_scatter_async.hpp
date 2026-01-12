@@ -27,7 +27,10 @@ struct ExecuteStridedReduceScatterAsync {
         std::optional<uint32_t> cluster_axis = std::nullopt,
         std::optional<uint32_t> chunks_per_sync = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
-        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+        std::optional<uint32_t> mm_cores_y = std::nullopt,
+        std::optional<uint32_t> mm_block_ht = std::nullopt,
+        std::optional<uint32_t> mm_block_wt = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl
