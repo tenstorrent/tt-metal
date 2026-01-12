@@ -11,12 +11,10 @@
 
 namespace ttnn::operations::experimental::isin::common {
 
-using namespace tt::tt_metal;
-
 constexpr int32_t FIRST_DIMENSION = 0;
 
-constexpr auto OUTPUT_TENSOR_DATA_TYPE = DataType::UINT32;
-constexpr auto OUTPUT_TENSOR_LAYOUT = Layout::ROW_MAJOR;
+constexpr auto OUTPUT_TENSOR_DATA_TYPE = tt::tt_metal::DataType::UINT32;
+constexpr auto OUTPUT_TENSOR_LAYOUT = tt::tt_metal::Layout::ROW_MAJOR;
 constexpr uint32_t OUTPUT_TENSOR_RANK = 1;
 
 }  // namespace ttnn::operations::experimental::isin::common

@@ -5,44 +5,24 @@
 #pragma once
 
 #include "isin_device_operation_types.hpp"
-#include "../isin_cbs.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <ttnn/device_operation.hpp>
 
 namespace ttnn::operations::experimental::isin {
-
-using namespace tt;
-using ttnn::device_operation::CachedProgram;
-using namespace tt::tt_metal;
-
 struct IsInProgramFactory {
     struct shared_variables_t {
-        KernelHandle reader_kernel_id{};
-        KernelHandle writer_kernel_id{};
+        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle writer_kernel_id{};
         std::vector<CoreCoord> cores;
     };
 
-    using cached_program_t = CachedProgram<shared_variables_t>;
+    using cached_program_t = device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     static void override_runtime_arguments(
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
-
-    static CBHandle create_cb(
-        Program& program,
-        const DataType& dtype,
-        const IsInCB& is_in_cb,
-        const CoreRangeSet& core_range_set,
-        const uint32_t& page_size_bytes);
-
-    static KernelHandle create_kernel(
-        Program& program,
-        const char* kernel_path,
-        const CoreRangeSet& core_range_set,
-        const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
-        const std::vector<uint32_t>& runtime_args = {});
 };
 
 }  // namespace ttnn::operations::experimental::isin

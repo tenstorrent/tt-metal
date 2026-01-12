@@ -52,7 +52,7 @@ uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_ele
            static_cast<uint32_t>(~(63U));
 }
 
-IsInPreprocessingResult isin_preprocessing(const Tensor& elements, const Tensor& test_elements) {
+IsInPreprocessingResult preprocess_isin_inputs(const Tensor& elements, const Tensor& test_elements) {
     IsInPreprocessingResult is_in_preprocessing_result;
     // Initialize with input tensors
     is_in_preprocessing_result.preprocessed_elements_tensor = elements;
@@ -97,7 +97,7 @@ IsInPreprocessingResult isin_preprocessing(const Tensor& elements, const Tensor&
     return is_in_preprocessing_result;
 }
 
-Tensor isin_postprocessing(Tensor& output_tensor, const IsInPreprocessingResult& is_in_preprocessing_result) {
+Tensor process_isin_output(Tensor& output_tensor, const IsInPreprocessingResult& is_in_preprocessing_result) {
     // Restore original shape if it was flattened during preprocessing
     if (is_in_preprocessing_result.original_elements_shape.rank() != isin::common::OUTPUT_TENSOR_RANK) {
         output_tensor = ttnn::reshape(output_tensor, is_in_preprocessing_result.original_elements_shape);
@@ -125,7 +125,7 @@ Tensor IsInOperation::invoke(
     validate_inputs(elements, test_elements);
 
     // Prepare tensors: convert to row-major layout, flatten to 1D, and calculate batch size
-    const auto is_in_preprocessing_result = isin_preprocessing(elements, test_elements);
+    const auto is_in_preprocessing_result = preprocess_isin_inputs(elements, test_elements);
 
     // Execute the device operation to check which elements are in test_elements
     Tensor output_tensor = ttnn::prim::isin(
@@ -137,7 +137,7 @@ Tensor IsInOperation::invoke(
         opt_out);
 
     // Restore output tensor to original shape and layout
-    return isin_postprocessing(output_tensor, is_in_preprocessing_result);
+    return process_isin_output(output_tensor, is_in_preprocessing_result);
 }
 
 }  // namespace ttnn::operations::experimental

@@ -4,6 +4,8 @@ add_library(TTNN::Ops::Experimental::IsIn ALIAS ttnn_op_experimental_isin)
 target_precompile_headers(ttnn_op_experimental_isin REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_isin)
 
+file(GLOB_RECURSE kernels device/kernels/*)
+
 target_sources(
     ttnn_op_experimental_isin
     PRIVATE

@@ -10,8 +10,6 @@
 #include <nanobind/stl/optional.h>
 #include "ttnn-nanobind/decorators.hpp"
 
-#include <optional>
-
 namespace ttnn::operations::experimental::isin::detail {
 void bind_isin_operation(nb::module_& mod) {
     const auto* doc =
@@ -35,20 +33,11 @@ void bind_isin_operation(nb::module_& mod) {
                 >>> # output is [[False, True, True], [False, True, False], [True, False, False]], use the `invert=True` flag to invert this effect
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::isin);
     bind_registered_operation(
         mod,
         ttnn::experimental::isin,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& elements,
-               const Tensor& test_elements,
-               bool assume_unique,
-               bool invert,
-               const std::optional<Tensor>& optional_out) -> Tensor {
-                return self(elements, test_elements, assume_unique, invert, optional_out);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("elements").noconvert(),
             nb::arg("test_elements").noconvert(),
             nb::kw_only(),

@@ -12,6 +12,42 @@
 
 namespace ttnn::operations::experimental::isin {
 
+using namespace tt::tt_metal;
+
+enum class IsInCB : std::underlying_type_t<tt::CBIndex> {
+    ELEMENTS = tt::CBIndex::c_0,
+    TEST_ELEMENTS = tt::CBIndex::c_1,
+    OUTPUT = tt::CBIndex::c_2
+};
+
+static CBHandle create_cb(
+    Program& program,
+    const DataType& dtype,
+    const IsInCB& is_in_cb,
+    const CoreRangeSet& core_range_set,
+    const uint32_t& page_size_bytes) {
+    const uint32_t cb_id{static_cast<uint32_t>(is_in_cb)};
+    const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
+    const auto cb_config{
+        CircularBufferConfig{page_size_bytes, {{cb_id, cb_data_format}}}.set_page_size(cb_id, page_size_bytes)};
+    return CreateCircularBuffer(program, core_range_set, cb_config);
+}
+
+static KernelHandle create_kernel(
+    Program& program,
+    const char* kernel_path,
+    const CoreRangeSet& core_range_set,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::vector<uint32_t>& runtime_args = {}) {
+    auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
+
+    if (!runtime_args.empty()) {
+        SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
+    }
+
+    return kernel_id;
+}
+
 IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     Program program{};
@@ -24,7 +60,6 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
 
     const bool& invert = args.invert;
     const uint32_t& single_fetch_subchunk_size = args.single_fetch_subchunk_size;
-    const auto memory_config = elements_tensor.memory_config();
 
     const auto& elements_buffer = elements_tensor.buffer();
     const auto& test_elements_buffer = test_elements_tensor.buffer();
@@ -59,9 +94,9 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
         single_fetch_subchunk_size,
         static_cast<uint32_t>(invert),
         elements_tensor.element_size()};
-    TensorAccessorArgs(*elements_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*test_elements_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*elements_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*test_elements_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
     // The final tensor to be dealt with by the isin device operation is flattened to 1D and the number of subchunks
     // (each of elements, test_elements and output) that they have to be split into depends on the L1 available size per
@@ -143,33 +178,5 @@ void IsInProgramFactory::override_runtime_arguments(
         reader_runtime_args[1] = test_elements_buffer_address;
         writer_runtime_args[0] = output_buffer_address;
     }
-}
-
-CBHandle IsInProgramFactory::create_cb(
-    Program& program,
-    const DataType& dtype,
-    const IsInCB& is_in_cb,
-    const CoreRangeSet& core_range_set,
-    const uint32_t& page_size_bytes) {
-    const uint32_t cb_id{static_cast<uint32_t>(is_in_cb)};
-    const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
-    const auto cb_config{
-        CircularBufferConfig{page_size_bytes, {{cb_id, cb_data_format}}}.set_page_size(cb_id, page_size_bytes)};
-    return CreateCircularBuffer(program, core_range_set, cb_config);
-}
-
-KernelHandle IsInProgramFactory::create_kernel(
-    Program& program,
-    const char* kernel_path,
-    const CoreRangeSet& core_range_set,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
-    const std::vector<uint32_t>& runtime_args) {
-    auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
-
-    if (!runtime_args.empty()) {
-        SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
-    }
-
-    return kernel_id;
 }
 }  // namespace ttnn::operations::experimental::isin

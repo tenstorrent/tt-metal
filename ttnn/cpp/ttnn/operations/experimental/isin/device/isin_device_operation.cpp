@@ -62,6 +62,25 @@ IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_te
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.elements_tensor.device());
 }
 
+tt::stl::hash::hash_t IsInDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_memory_layout = tensor_args.elements_tensor.layout();
+    const auto& input_dtype = tensor_args.elements_tensor.dtype();
+    const auto& input_logical_volume = tensor_args.elements_tensor.logical_volume();
+    const auto& test_elements_memory_layout = tensor_args.test_elements_tensor.layout();
+    const auto& test_elements_dtype = tensor_args.test_elements_tensor.dtype();
+    const auto& test_elements_logical_volume = tensor_args.test_elements_tensor.logical_volume();
+
+    return tt::tt_metal::operation::hash_operation<IsInDeviceOperation>(
+        args.invert,
+        args.single_fetch_subchunk_size,
+        input_dtype,
+        input_memory_layout,
+        input_logical_volume,
+        test_elements_dtype,
+        test_elements_memory_layout,
+        test_elements_logical_volume);
+}
 }  // namespace ttnn::operations::experimental::isin
 
 namespace ttnn::prim {
