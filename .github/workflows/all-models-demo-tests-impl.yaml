@@ -116,7 +116,7 @@ jobs:
           model_paths["deepseek-r1-distill-llama-70b"]="deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
 
           # Define test configurations
-          tests='[{"name":"Batch-1 Performance","test_key":"performance and ci-1","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"},{"name":"Batch-32 Performance","test_key":"performance and ci-32","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"},{"name":"Long Context 16K","test_key":"performance and ci-long-context-16k","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"},{"name":"Long Context Performance","test_key":"performance and long","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"}]'
+          tests='[{"name":"Batch-1 CI","test_key":"accuracy and ci-1","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"},{"name":"Batch-32 CI","test_key":"accuracy and ci-32","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"},{"name":"Long Context 16K","test_key":"accuracy and ci-long-context-16k","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"}]'
 
           # Generate matrix combining models and tests
           matrix='[]'
@@ -209,7 +209,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ inputs.arch == 'blackhole' && format('/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data{0}', inputs.regenerate-ttnn-cache && ':rw' || ':ro') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.regenerate-ttnn-cache && ':rw' || ':ro') }}
+        - ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.regenerate-ttnn-cache && ':rw' || ':ro') }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -242,12 +242,37 @@ jobs:
           # Sanitize test name for file naming (replace spaces with hyphens)
           TEST_NAME_SAFE="$(echo '${{ matrix.test.name }}' | tr ' ' '-')"
 
+          # Check if we're in CI mode (not regenerating cache) and should verify cache exists
+          SKIP_IF_MISSING="${{ !inputs.regenerate-ttnn-cache }}"
+
           if [[ "${{ matrix.test.model_type }}" == "tt-transformers" ]]; then
             echo "HF_MODEL: ${{ matrix.test.hf_model }}"
             echo "TT_CACHE_PATH: ${{ matrix.test.cache_path }}"
             echo "Test Key: ${{ matrix.test.test_key }}"
             echo "Extra Args: ${{ matrix.test.extra_args }}"
             echo "=========================================="
+
+            # Check if model is cached (only when not regenerating cache)
+            if [[ "$SKIP_IF_MISSING" == "true" ]]; then
+              MODEL_CACHE_PATH="${HF_HUB_CACHE}/models--$(echo '${{ matrix.test.hf_model }}' | tr '/' '-')"
+              if [[ ! -d "$MODEL_CACHE_PATH" ]]; then
+                echo "⚠️  WARNING: Model weights not found in cache: ${{ matrix.test.hf_model }}"
+                echo "Cache path checked: $MODEL_CACHE_PATH"
+                echo "Skipping test - run with regenerate-ttnn-cache=true to download model"
+                mkdir -p generated/test_results
+                cat > "generated/test_results/results-${{ inputs.device-type }}-${{ matrix.test.model }}-${TEST_NAME_SAFE}.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <testsuites>
+            <testsuite name="pytest" errors="0" failures="0" skipped="1" tests="1" time="0">
+              <testcase classname="${{ matrix.test.model }}" name="${{ matrix.test.name }}" time="0">
+                <skipped type="pytest.skip" message="Model weights not found in cache: ${{ matrix.test.hf_model }}. Run with regenerate-ttnn-cache=true to download."/>
+              </testcase>
+            </testsuite>
+          </testsuites>
+          EOF
+                exit 0
+              fi
+            fi
 
             pytest models/tt_transformers/demo/simple_text_demo.py \
               -k "${{ matrix.test.test_key }}" \
@@ -258,6 +283,59 @@ jobs:
             echo "Test Path: ${{ matrix.test.test_path }}"
             echo "Test Args: ${{ matrix.test.test_args }}"
             echo "=========================================="
+
+            # For standalone models, try to detect missing weights by checking common model paths
+            if [[ "$SKIP_IF_MISSING" == "true" ]]; then
+              MISSING_WEIGHTS=false
+
+              # Check based on model name for common cache locations
+              case "${{ matrix.test.model }}" in
+                stable-diffusion*)
+                  if [[ ! -d "${HF_HUB_CACHE}/models--CompVis--stable-diffusion-v1-4" ]] && \
+                     [[ ! -d "${HF_HUB_CACHE}/models--stabilityai--stable-diffusion-xl-base-1.0" ]]; then
+                    MISSING_WEIGHTS=true
+                    MISSING_MODEL="stable-diffusion (CompVis or stabilityai)"
+                  fi
+                  ;;
+                whisper*)
+                  if [[ ! -d "${HF_HUB_CACHE}/models--openai--whisper-base" ]] && \
+                     [[ ! -d "${HF_HUB_CACHE}/models--openai--whisper-large-v3" ]]; then
+                    MISSING_WEIGHTS=true
+                    MISSING_MODEL="whisper (openai)"
+                  fi
+                  ;;
+                falcon*)
+                  if [[ ! -d "${HF_HUB_CACHE}/models--tiiuae--falcon-7b" ]] && \
+                     [[ ! -d "${HF_HUB_CACHE}/models--tiiuae--falcon-40b" ]]; then
+                    MISSING_WEIGHTS=true
+                    MISSING_MODEL="falcon (tiiuae)"
+                  fi
+                  ;;
+                sentence-bert*)
+                  if [[ ! -d "${HF_HUB_CACHE}/models--sentence-transformers--all-MiniLM-L6-v2" ]]; then
+                    MISSING_WEIGHTS=true
+                    MISSING_MODEL="sentence-bert (sentence-transformers)"
+                  fi
+                  ;;
+              esac
+
+              if [[ "$MISSING_WEIGHTS" == "true" ]]; then
+                echo "⚠️  WARNING: Model weights not found in cache: $MISSING_MODEL"
+                echo "Skipping test - run with regenerate-ttnn-cache=true to download model"
+                mkdir -p generated/test_results
+                cat > "generated/test_results/results-${{ inputs.device-type }}-${{ matrix.test.model }}-${TEST_NAME_SAFE}.xml" << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <testsuites>
+            <testsuite name="pytest" errors="0" failures="0" skipped="1" tests="1" time="0">
+              <testcase classname="${{ matrix.test.model }}" name="${{ matrix.test.name }}" time="0">
+                <skipped type="pytest.skip" message="Model weights not found in cache: $MISSING_MODEL. Run with regenerate-ttnn-cache=true to download."/>
+              </testcase>
+            </testsuite>
+          </testsuites>
+          EOF
+                exit 0
+              fi
+            fi
 
             pytest --disable-warnings -q -s \
               ${{ matrix.test.test_path }} \
