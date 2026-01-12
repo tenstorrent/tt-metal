@@ -36,5 +36,9 @@ RUN pip3 install $(ls -1 *.whl)
 
 RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites" --gtest_list_tests
 RUN TRACY_NO_INVARIANT_CHECK=1 python3 -c 'import ttnn'
+
+# Give other full access to the user directory (for cross-user MPI runs)
+RUN sudo chmod -R 777 /home/user
+
 ENTRYPOINT ["$TEST_COMMAND"]
 CMD ["$HW_TOPOLOGY"]
