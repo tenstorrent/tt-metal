@@ -92,21 +92,12 @@ public:
 
     CoreCoord compute_with_storage_grid_size() const override;
 
-    CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
-    uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
-
     const std::unique_ptr<Allocator>& allocator() const override;
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
-    const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;
-    const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const override;
 
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
     uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
-
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
 
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
@@ -154,25 +145,9 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
 
-    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
     uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
 
-    SubDeviceManagerId get_active_sub_device_manager_id() const override;
-    SubDeviceManagerId get_default_sub_device_manager_id() const override;
-    SubDeviceManagerId create_sub_device_manager(
-        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
-    SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
-    void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
-    void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
-    void clear_loaded_sub_device_manager() override;
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
-    const std::vector<SubDeviceId>& get_sub_device_ids() const override;
-    const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
-    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
-    void reset_sub_device_stall_group() override;
-    uint32_t num_sub_devices() const override;
 
     bool is_mmio_capable() const override;
     // TODO #20966: Remove these APIs
@@ -182,6 +157,31 @@ public:
     };
 
 private:
+    // Depracated ovverrides for sub_device_manager_tracker
+    CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
+    uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const override;
+    uint32_t num_sub_devices() const override;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
+        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
+    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
+    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
+    SubDeviceManagerId get_active_sub_device_manager_id() const override;
+    SubDeviceManagerId get_default_sub_device_manager_id() const override;
+    SubDeviceManagerId create_sub_device_manager(
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
+    void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
+    void clear_loaded_sub_device_manager() override;
+    const std::vector<SubDeviceId>& get_sub_device_ids() const override;
+    const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
+    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
+    void reset_sub_device_stall_group() override;
+
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
     std::unique_ptr<AllocatorImpl> initialize_allocator(
@@ -189,12 +189,6 @@ private:
         size_t trace_region_size,
         size_t worker_l1_unreserved_start,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
-
-    void initialize_default_sub_device_state(
-        size_t l1_small_size,
-        size_t trace_region_size,
-        size_t worker_l1_unreserved_start,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
     void configure_command_queue_programs();
 
@@ -209,8 +203,6 @@ private:
 
     ChipId id_;
     std::vector<std::vector<ChipId>> tunnels_from_mmio_;
-
-    std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 
     bool initialized_ = false;
 
@@ -243,6 +235,8 @@ private:
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
+
+    std::unique_ptr<AllocatorImpl> default_allocator_;
 
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
