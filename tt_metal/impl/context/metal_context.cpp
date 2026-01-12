@@ -896,7 +896,7 @@ void MetalContext::reset_cores(ChipId device_id) {
     }
     // Early exiting dispatch cores should show RUN_MSG_DONE when they exit.
     for (auto& id_and_cores : device_to_early_exit_cores) {
-        const int timeout_ms = 25000;  // 10 seconds for now
+        const int timeout_ms = 10000;  // 10 seconds for now
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
@@ -1650,7 +1650,7 @@ void MetalContext::initialize_and_launch_firmware(ChipId device_id) {
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init
     log_debug(LogDevice, "Waiting for firmware init complete");
-    const int timeout_ms = 25000;  // 10 seconds for now
+    const int timeout_ms = 10000;  // 10 seconds for now
     try {
         llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error& e) {
