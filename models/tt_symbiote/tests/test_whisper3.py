@@ -58,6 +58,7 @@ class WhisperEncoderLayer(TTNNModule):
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         layer_output = encoder_layer(config, hidden_states, parameters=self.ttnn_parameters)
         layer_output = ttnn.to_memory_config(layer_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        layer_output = ttnn.squeeze(layer_output, 1)
         return (layer_output,)
 
 
