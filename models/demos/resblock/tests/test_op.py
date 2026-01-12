@@ -32,11 +32,12 @@ def test_resblock(device, B, K):
     logger.info(f"Testing fused ResBlock with shape [{B}, {K}] x [{K}, {K}]")
 
     torch.manual_seed(0)
+
     torch_a = torch.randn((B, K), dtype=torch.bfloat16)
     weight0 = torch.randn((K, K), dtype=torch.bfloat16)
     weight1 = torch.randn((K, K), dtype=torch.bfloat16)
 
-    expected = FusedResblock.golden(torch_a, weight0, weight1)
+    expected = FusedResblock.golden(torch_a.float(), weight0.float(), weight1.float()).bfloat16()
     print(expected)
 
     # TODO: Remove this once we support multiple cores
@@ -113,10 +114,11 @@ def test_resblock(device, B, K):
 
     logger.info("Converting TTNN output to torch")
     torch_output = ttnn.to_torch(ttnn_output)
-
+    print(torch_output)
     assert torch_output.shape == (B, K), f"Expected shape ({B}, {K}), got {torch_output.shape}"
 
-    passing, pcc_message = comp_pcc(expected, torch_output, 0.99)
+    passing, pcc_message = comp_pcc(expected, torch_output, 0.999)
     logger.info(pcc_message)
 
-    pytest.xfail("Fused ResBlock test is not implemented yet")
+    assert passing, pcc_message
+    logger.info("Fused ResBlock test passed!")
