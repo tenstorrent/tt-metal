@@ -340,6 +340,16 @@ install(
         COMPONENT tar
 )
 
+install(
+    TARGETS
+        tt_stl
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT tar
+)
+
 if(NOT TT_USE_SYSTEM_SFPI)
     # FIXME(17578): figure out what bits we actually need to ship and omit the rest
     install(
