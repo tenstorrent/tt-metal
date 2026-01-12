@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #ifndef TENSIX_FIRMWARE
-#include <fmt/core.h>
+#include <boost/format.hpp>
 #endif
 
 //
@@ -21,25 +21,30 @@
 /////////////
 // Global enums and defines
 ////////////
-enum xmov_direction_t {
+typedef enum {
     XMOV_L0_TO_L1 = 0,
     XMOV_L1_TO_L0 = 1,
     XMOV_L0_TO_L0 = 2,
     XMOV_L1_TO_L1 = 3,
-};
+} xmov_direction_t;
 
-enum tdma_mover_id_t { TDMA_MOVER0 = 0, TDMA_MOVER1 = 1 };
+typedef enum { TDMA_MOVER0 = 0, TDMA_MOVER1 = 1 } tdma_mover_id_t;
 
-enum math_fidelity_t { MATH_HF = 1, MATH_AUTO = 2, MATH_LF = 4 };
+typedef enum { MATH_HF = 1, MATH_AUTO = 2, MATH_LF = 4 } math_fidelity_t;
 
-enum relu_mode_t { RELU_NONE = 0, RELU_PLAIN = 1, RELU_THRESH = 2, RELU_MAX = 3 };
+typedef enum { RELU_NONE = 0, RELU_PLAIN = 1, RELU_THRESH = 2, RELU_MAX = 3 } relu_mode_t;
 
-enum stochastic_round_settings_t { STOCH_RND_NONE = 0, STOCH_RND_FPU = 1, STOCH_RND_GASKET = 2, STOCH_RND_PACKER = 4 };
+typedef enum {
+    STOCH_RND_NONE = 0,
+    STOCH_RND_FPU = 1,
+    STOCH_RND_GASKET = 2,
+    STOCH_RND_PACKER = 4
+} stochastic_round_settings_t;
 
 /////////////
 // TDMA Registers
 ////////////
-struct packer_config_t {
+typedef struct {
     uint32_t row_section_size : 16;
     uint32_t exp_section_size : 16;
     uint32_t tile_dst_addr : 32;
@@ -50,62 +55,81 @@ struct packer_config_t {
     uint32_t in_data_format : 2;
     uint32_t reserved_2 : 22;
     uint32_t reserved_3 : 32;
-};  // 16B
+} packer_config_t;  // 16B
 
-struct fifo_ctl_t {
+typedef struct {
     uint32_t rd_ptr;
     uint32_t wr_ptr;
     uint32_t rsvd0;
     uint32_t rsvd1;
 #ifndef TENSIX_FIRMWARE
     operator std::string() const {
-        return fmt::format("Fifo Control: rd_ptr(0x{:08x}) wr_ptr(0x{:08x})", rd_ptr, wr_ptr);
+        return (boost::format("Fifo Control: rd_ptr(0x%08x) wr_ptr(0x%08x)") % rd_ptr % wr_ptr).str();
     }
 #endif
-};
+} fifo_ctl_t;
 
-struct packer_config_u {
+typedef struct {
     uint32_t val[4];
     packer_config_t f;
-};
+} packer_config_u;
 
-struct mover_config_t {
+typedef struct {
     uint32_t src_addr : 32;
     uint32_t dst_addr : 32;
     uint32_t xfer_size : 32;
     uint32_t xfer_dir : 2;
     uint32_t reserved_0 : 30;
-};  // 16B
+} mover_config_t;  // 16B
 
-struct mover_config_u {
+typedef struct {
     uint32_t val[4];
     mover_config_t f;
-};
+} mover_config_u;
 
 /////////////
 // Data section structures
 /////////////
 
-// Tile descriptor
-struct tile_descriptor_t {
-    uint32_t data_format : 4;
-    uint32_t uncompressed : 1;
-    uint32_t reserved_0 : 3;
-    uint32_t blobs_per_xy_plane : 4;
-    uint32_t reserved_1 : 4;
-    uint32_t x_dim : 16;
-    uint32_t y_dim : 16;
-    uint32_t z_dim : 16;
-    uint32_t w_dim : 16;
-    uint32_t blobs_y_start : 32;
-    uint32_t digest_type : 8;  // Not used
-    uint32_t digest_size : 8;  // Not used
-};  // Unpack configuration
+/* Paste lines between <LUA> and </LUA> into a lua interpreter
 
-union tile_descriptor_u {
+-- <LUA>
+txt = [[
+*/
+// Tile descriptor
+typedef struct {
+    unsigned x_dim : 16;
+    unsigned y_dim : 8;
+    unsigned z_dim : 8;
+    unsigned w_dim : 8;
+    unsigned in_fmt : 5;   // We should REALLY consider making this 8 bits
+    unsigned out_fmt : 5;  // We should REALLY consider making this 8 bits
+    unsigned header_absent : 1;
+    unsigned : 13;  // Padding
+    unsigned l1_base_addr : 32;
+    unsigned l1_addr_off : 16;
+    unsigned buftab_inc : 4;
+    unsigned : 12;    // Padding
+} tile_descriptor_t;  // Unpack configuration
+
+/*
+]]
+sum = 0
+for n in txt:gmatch":%s*(%d+);" do
+    sum = sum + tonumber(n)
+end
+if sum ~= 128 then print "You goofed up your bitfield" end
+
+-- </LUA>
+
+*/
+
+static_assert(sizeof(tile_descriptor_t) == 16, "tile_desc must be 128b!");  // Descriptor must be 128 bits
+
+typedef union {
     uint32_t val[4];
     tile_descriptor_t f;
-};
+} tile_descriptor_u;
 
 struct TileHeader {
     // occupied part of the 16B line
@@ -126,16 +150,20 @@ struct TileHeader {
 
 #ifndef TENSIX_FIRMWARE
     operator std::string() const {
-        return fmt::format("TileHeader:tile_id(0x{:04x}) size16B(0x{:04x})", tile_id, tile_size_16B);
+        return (boost::format("TileHeader:tile_id(0x%04x) size16B(0x%04x) zero_mask(0x%08x)") % tile_id %
+                tile_size_16B % zero_mask)
+            .str();
     }
 
     std::size_t size() const { return 16; }
+
     const void* data() const { return this; }
-    using value_type = std::uint8_t;
+
+    typedef std::uint8_t value_type;
 
     bool operator!=(const TileHeader& rhs) const {
-        bool result =
-            tile_size_16B != rhs.tile_size_16B || tile_id != rhs.tile_id || metadata_size_16B != rhs.metadata_size_16B;
+        bool result = tile_size_16B != rhs.tile_size_16B || tile_id != rhs.tile_id ||
+                      metadata_size_16B != rhs.metadata_size_16B || zero_mask != rhs.zero_mask;
         return result;
     }
 
@@ -143,9 +171,10 @@ struct TileHeader {
 };
 
 union TileHeader_u {
-    uint32_t val[4]{};
+    uint32_t val[4];
     TileHeader header;
-    TileHeader_u() {};
+
+    TileHeader_u() {}
 };
 
 static_assert(sizeof(TileHeader) == 16, "TileHeader must be 16B");
@@ -161,8 +190,9 @@ struct SectionHeader {
 
 #ifndef TENSIX_FIRMWARE
     operator std::string() const {
-        return fmt::format(
-            "SectionHeader: id(0x{:04x}) size(0x{:04x}) tile_count(0x{:04x})", section_id, section_size, tile_count);
+        return (boost::format("SectionHeader: id(0x%04x) size(0x%04x) tile_count(0x%04x)") % section_id % section_size %
+                tile_count)
+            .str();
     }
 #endif
 };
@@ -178,6 +208,10 @@ static constexpr std::uint32_t TEST_MSG_SET_RELU_PARAMS = 4;
 static constexpr std::uint32_t TEST_MSG_SET_PRNG_SEED = 5;
 static constexpr std::uint32_t TEST_MSG_RISC_PREFETCHER_CTRL = 6;
 static constexpr std::uint32_t TEST_MSG_SYNTH_CKERNEL = 10;
+static constexpr std::uint32_t TEST_MSG_ONE_KERNEL = 11;
+static constexpr std::uint32_t TEST_MSG_WAIT_KERNELS = 12;
+static constexpr std::uint32_t TEST_MSG_WAIT_ONE_KERNEL = 13;
+static constexpr std::uint32_t TEST_MSG_SYNTH_TAG_SRCH = 14;
 
 static constexpr std::uint32_t COMMAND_QUEUE_SIZE_BYTES_LOG2 = 16;
 static constexpr std::uint32_t COMMAND_QUEUE_SIZE_BYTES = 1 << COMMAND_QUEUE_SIZE_BYTES_LOG2;
@@ -185,22 +219,18 @@ static constexpr std::uint32_t COMMAND_SIZE_BYTES_LOG2 = 5;
 static constexpr std::uint32_t COMMAND_SIZE_BYTES = 1 << COMMAND_SIZE_BYTES_LOG2;
 
 static constexpr std::uint32_t DEST_FACE_WIDTH = 16;
-static constexpr std::uint32_t DEST_FACE_WIDTH_LOG2 = 4;
 static constexpr std::uint32_t DEST_FACE_HEIGHT = 16;
-static constexpr std::uint32_t DEST_FACE_HEIGHT_LOG2 = 4;
 static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * DEST_FACE_HEIGHT;
-static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE_LOG2 = 12;
 static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE / 2;
-static constexpr std::uint32_t BIT32_DEST_REGISTER_HALF_SIZE = DEST_REGISTER_HALF_SIZE / 2;
 
-static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE_BYTES = DEST_REGISTER_FULL_SIZE * 2 * 16;
-static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE_BYTES = DEST_REGISTER_FULL_SIZE_BYTES / 2;
-
-static constexpr std::uint32_t SIM_L1_SIZE = 0x180000;  // 1.5MB
+// static constexpr std::uint32_t SIM_L1_SIZE = 0x16E000;   // 1.5MB - 72KB
+static constexpr std::uint32_t SIM_L1_SIZE = 0x180000;  // bh is now 180000 per marco
 #ifdef TENSIX_FIRMWARE
-static constexpr std::uint32_t L1_SIZE = 0x180000;  // 1.5MB
+// static constexpr std::uint32_t L1_SIZE = 0x16E000;   // 1.5MB - 72KB
+static constexpr std::uint32_t L1_SIZE = 0x180000;  // bh is now 180000 per marco
 #else
-static constexpr std::uint32_t L1_SIZE = 0x180000;  // 1.5MB
+// static constexpr std::uint32_t L1_SIZE = 0x16E000; // 1.5MB - 72KB
+static constexpr std::uint32_t L1_SIZE = 0x180000;  // bh is now 180000 per marco
 #endif
 
 // Voluntary FIFO alignment so that we can pack fifo address down to 16 bits in the command.
@@ -211,117 +241,75 @@ static constexpr std::uint32_t FIFO_BASE_ADDRESS_ALIGN_BITS = 9;
 static constexpr std::uint32_t FIFO_BASE_ADDRESS_ALIGN = 1 << FIFO_BASE_ADDRESS_ALIGN_BITS;
 
 enum class DataFormat : std::uint8_t {
-    Float32 = 0,
-    Float16 = 1,
+    Float32 = 0,    // E8M23
+    Tf32 = 4,       // E8M10                 Stored in L1 in 32b container as : {1b sign, 8b exp, 10b man, 13'b0}
+    Float16 = 1,    // E5M10
+    Float16_b = 5,  // E8M7
+    Fp8R = 10,      // E5M2
+    Fp8P = 16,      // E4M3
+    MxFp8R = 18,    // E5M2 with block exp
+    MxFp8P = 20,    // E4M3 with block exp
+    MxFp6R = 19,    // E3M2 with block exp;  Element stored in L1 in 8b container as : {1b sign, 3b exp, 2b man, 2'b0}
+    MxFp6P = 21,    // E2M3 with block exp;  Element stored in L1 in 8b container as : {1b sign, 2b exp, 3b man, 2'b0}
+    MxFp4 = 22,     // E2M1 with block exp
+    MxInt8 = 2,     // E0M7 with block exp
+    MxInt4 = 3,     // E0M3 with block exp
+    MxInt2 = 11,    // E0M1 with block exp
+    Int32 = 8,
+    Int8 = 14,
+    Int16 = 9,
+    Uint8 = 17,    // Unsigned INT with 8-bit magnitude
+    Uint16 = 130,  // Unsigned INT with 16-bit magnitude
+    // Special-case encodings used only for MXFP4 2x-packed Src Reg Storage :
+    MxFp4_2x_A = 27,  // store MXFP4 in Src Regs as 2x-packed format with 5-bit exp
+    MxFp4_2x_B = 24,  // store MXFP4 in Src Regs as 2x-packed format with 8-bit exp
+    Int4 = 23,
+    Uint4 = 25,
+    // Special-case encodings used only for int 2x-packed Src Reg Storage :
+    Int8_2x = 26,
+    Uint8_2x = 28,
+
     Bfp8 = 2,
     Bfp4 = 3,
     Bfp2 = 11,
-    Float16_b = 5,
     Bfp8_b = 6,
     Bfp4_b = 7,
     Bfp2_b = 15,
     Lf8 = 10,
-    Int8 = 14,
     UInt8 = 30,
     UInt16 = 9,
-    Int32 = 8,
     UInt32 = 24,
-    Tf32 = 4,
-    Fp8_e4m3 = 26,    // Not a valid HW encoding, it is Lf8 encoding + extra 5th bit set to specify Lf8 with E4M3
-    Uint8 = 129,      // Not a valid HW enum value, but useful to have it here for SW
     testMan7 = 0x82,  // intermediate format for testing: 7bit mantissa (6+hidden)
     testMan2 = 0x8A,  // intermediate format for testing: 2bit mantissa (2+hidden)
-    Invalid = 0xff
+
+    automatic = 0xfe,  // Not a valid HW enum value, but useful to have it here for SW
+    Invalid = 0xff     // Not a valid HW enum value, but useful to have it here for SW
 };
 
-struct io_queue_pointers_t {
-    static constexpr std::uint32_t INVALID_IO_QUEUE_POINTER = 0xfeedface;
-    static constexpr std::uint32_t WRAP_MASK = 0x80000000;
-    static constexpr std::uint32_t MAX_IO_QUEUES = 256;
-    static constexpr std::uint32_t INPUT_IO_QUEUES = 64;
+typedef struct {
+    unsigned l1_addr_16B : 20 __attribute__((packed));
+    unsigned format : 8 __attribute__((packed));
+    unsigned /* Padding to 32b */ : 4 __attribute__((packed));
+    unsigned lmt_addr_16B : 20 __attribute__((packed));
+    unsigned x_dim : 8 __attribute__((packed));
+    unsigned /* Padding to 32b */ : 4 __attribute__((packed));
+    unsigned y_dim : 8 __attribute__((packed));
+    unsigned z_dim : 8 __attribute__((packed));
+    unsigned /* Padding to 32b */ : 16 __attribute__((packed));
+    unsigned /* Padding to 32b */ : 32 __attribute__((packed));
+} buffer_descriptor_t;
 
-    std::uint32_t rdptr;
-    std::uint32_t wrptr;
-    std::uint32_t base_addr;
-    std::uint32_t data_size_16B;
-    std::uint32_t buffer_size_16B;
+static_assert(sizeof(buffer_descriptor_t) == 16, "buffer_desc must be 128b!");
 
-    void init_input_queue(std::uint32_t buffer_start, std::uint32_t buffer_end, std::uint32_t data_size) volatile {
-        base_addr = buffer_start;
-        rdptr = buffer_start;
-        data_size_16B = data_size >> 4;
-        buffer_size_16B = (buffer_end - buffer_start) >> 4;
-    }
+typedef union {
+    uint32_t words[4];
+    buffer_descriptor_t f;
+} buffer_descriptor_u;
 
-    void init_output_queue(std::uint32_t buffer_start, std::uint32_t buffer_end, std::uint32_t data_size) volatile {
-        base_addr = buffer_start;
-        wrptr = buffer_start;
-        data_size_16B = data_size >> 4;
-        buffer_size_16B = (buffer_end - buffer_start) >> 4;
-    }
-
-    void reset() volatile {
-        rdptr = INVALID_IO_QUEUE_POINTER;
-        wrptr = INVALID_IO_QUEUE_POINTER;
-    }
-
-    bool valid() volatile { return (rdptr != INVALID_IO_QUEUE_POINTER); }
-
-    std::uint32_t get_buffer_end() const volatile { return base_addr + (buffer_size_16B << 4); }
-
-    void increment_rd_pointer() volatile {
-        if (!valid()) {
-            return;
-        }
-        std::uint32_t new_rdptr = rdptr + (data_size_16B << 4);
-        if ((new_rdptr & ~WRAP_MASK) >= get_buffer_end()) {
-            if (wrap_bit(new_rdptr)) {
-                new_rdptr = base_addr;
-            } else {
-                new_rdptr = WRAP_MASK | base_addr;
-            }
-        }
-        rdptr = new_rdptr;
-    }
-
-    bool wrap_bit(std::uint32_t ptr) volatile { return (ptr & WRAP_MASK) != 0; }
-
-    void increment_wr_pointer() volatile {
-        if (wrptr == INVALID_IO_QUEUE_POINTER) {
-            return;
-        }
-        std::uint32_t new_wrptr = wrptr + (data_size_16B << 4);
-        if ((new_wrptr & ~WRAP_MASK) >= get_buffer_end()) {
-            if (wrap_bit(new_wrptr)) {
-                new_wrptr = base_addr;
-            } else {
-                new_wrptr = WRAP_MASK | base_addr;
-            }
-        }
-        wrptr = new_wrptr;
-    }
-
-    void set_wr_pointer(std::uint32_t value) volatile { wrptr = value; }
-
-    void set_rd_pointer(std::uint32_t value) volatile { rdptr = value; }
-
-    bool empty() volatile { return rdptr == wrptr; }
-
-    bool full() volatile {
-        auto wrapped_rdptr = rdptr ^ WRAP_MASK;
-        return wrapped_rdptr == wrptr;
-    }
-
-    bool has_data() volatile {
-        return (rdptr != INVALID_IO_QUEUE_POINTER) and (wrptr != INVALID_IO_QUEUE_POINTER) and (not empty());
-    }
-
-    std::uint32_t unwrap_ptr(std::uint32_t value) const volatile {
-        if (value == INVALID_IO_QUEUE_POINTER) {
-            return value;
-        }
-        return value & ~WRAP_MASK;
-    }
-};
+typedef struct {
+    buffer_descriptor_u buf_desc;
+    uint32_t buf_desc_id;
+    unsigned reg_data_format;
+} tdma_descriptor_t;
 
 #endif
