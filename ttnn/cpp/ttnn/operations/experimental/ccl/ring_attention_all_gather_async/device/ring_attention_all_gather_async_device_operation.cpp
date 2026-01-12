@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
 
 RingAttentionAllGatherAsyncDeviceOperation::program_factory_t
 RingAttentionAllGatherAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // Only one program factory available
     return RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory{};
 }
