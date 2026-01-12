@@ -1284,19 +1284,29 @@ void run_routing_without_noc_sync_coordinated_as_master(
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(3);
         // Wait for erisc1 to ack
         while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 4) {
+            if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                return;
+            }
         }
         // Resume normal operation
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(0);
     }
 }
-FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master() {
+FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (!IS_RETRAIN_SYNC_MASTER()) {
         if (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() == 1) {
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(2);
             while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 3) {
+                if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                    return;
+                }
             }
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(4);
             while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 0) {
+                if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                    return;
+                }
             }
         }
     }
@@ -2100,7 +2110,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 }
             }
         } else {
-            run_routing_without_noc_sync_coordinated_as_non_master();
+            run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
         }
 
         if constexpr (is_sender_channel_serviced[0]) {
