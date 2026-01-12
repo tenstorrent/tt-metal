@@ -56,9 +56,6 @@ uint32_t _start() {
     extern uint32_t __kernel_data_lma[];
     do_crt1((uint32_t tt_l1_ptr*)((uint32_t)&__kernel_data_lma[0] + offset));
 
-    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        noc_local_state_init(NOC_INDEX);
-    }
 #ifdef UDM_MODE
     tt::tt_fabric::udm::fabric_local_state_init();
 #endif

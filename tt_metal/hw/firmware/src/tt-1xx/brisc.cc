@@ -438,6 +438,7 @@ int main() {
                 RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
             run_triscs(enables);
+            uint32_t prev_noc_index = noc_index;
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
             noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
@@ -450,10 +451,9 @@ int main() {
                 if (prev_noc_mode != noc_mode) {
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 }
-#ifdef ARCH_BLACKHOLE
-                // Need to add this to allow adding barrier after setup_remote_cb_interfaces
-                noc_local_state_init(noc_index);
-#endif
+                if (prev_noc_index != noc_index || prev_noc_mode != noc_mode) {
+                    noc_local_state_init(noc_index);
+                }
                 cmd_buf = BRISC_AT_CMD_BUF;
             } else {
                 if (prev_noc_mode != noc_mode) {

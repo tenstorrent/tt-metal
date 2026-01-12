@@ -115,6 +115,9 @@ int main(int argc, char* argv[]) {
 
     signal_ncrisc_completion();
 
+    uint32_t prev_noc_index = 0;
+    uint32_t prev_noc_mode = DM_DEDICATED_NOC;
+
     DeviceProfilerInit();
     while (1) {
         WAYPOINT("W");
@@ -135,6 +138,15 @@ int main(int argc, char* argv[]) {
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
         uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
+        uint32_t noc_index = 1 - launch_msg->kernel_config.brisc_noc_id;
+        uint32_t noc_mode = launch_msg->kernel_config.brisc_noc_mode;
+        if (noc_mode == DM_DEDICATED_NOC) {
+            if (prev_noc_index != noc_index || prev_noc_mode != noc_mode) {
+                noc_local_state_init(noc_index);
+            }
+        }
+        prev_noc_index = noc_index;
+        prev_noc_mode = noc_mode;
         setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
 
 #if defined(ARCH_WORMHOLE)
