@@ -86,7 +86,7 @@ jobs:
           fi
 
           # Determine architecture name based on runner type
-          if [[ "$RUNNER_LABEL" =~ ^(N150|N300|P150|config-t3000)$ ]] || [[ "$RUNNER_LABEL" == *"wormhole_b0"* ]]; then
+          if [[ "$RUNNER_LABEL" =~ ^(N150|N300|config-t3000)$ ]] || [[ "$RUNNER_LABEL" == *"wormhole_b0"* ]]; then
             ARCH_NAME="wormhole_b0"
           else
             ARCH_NAME="blackhole"
