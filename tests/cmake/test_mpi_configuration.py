@@ -240,6 +240,7 @@ endif()
             self.fail("CMake test timed out after 30 seconds")
         except FileNotFoundError:
             self.skipTest("CMake not found in PATH")
+            raise  # Explicitly exit - skipTest raises SkipTest, but linter needs explicit control flow
 
 
 class TestMPIRPATHHandling(unittest.TestCase):
