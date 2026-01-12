@@ -32,46 +32,27 @@ jobs:
           # Function to count test functions including parametrize expansions
           count_tests() {
             local dir=$1
-            find "$dir" -name "test_*.py" -type f -print0 | xargs -0 awk '
-              BEGIN { 
-                total = 0
-                param_count = 1
-                in_decorator = 0
-              }
-              
-              # Track parametrize decorators
-              /@pytest\.mark\.parametrize/ {
-                in_decorator = 1
-                next
-              }
-              
-              # Count items in parameter lists when inside parametrize
-              in_decorator == 1 {
-                # Count items in lists/tuples by counting commas + 1
-                gsub(/\[|\]|\(|\)/, "", $0)
-                if ($0 ~ /,/) {
-                  n = split($0, arr, ",")
-                  param_count *= n
-                }
-                # Check if decorator ends
-                if ($0 ~ /\)/) {
-                  in_decorator = 0
-                }
-                next
-              }
-              
-              # When we hit a test function, add the accumulated count
-              /^[[:space:]]*(async[[:space:]]+)?def[[:space:]]+test_/ {
-                if (param_count > 0) {
-                  total += param_count
-                }
-                param_count = 1
-              }
-              
-              END { print total }
-            '
+            find "$dir" -name "test_*.py" -type f -print0 | xargs -0 python3 << 'EOF'
+import ast, sys
+total = 0
+for filepath in sys.argv[1:]:
+    try:
+        with open(filepath) as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_'):
+                mult = 1
+                for dec in node.decorator_list:
+                    if isinstance(dec, ast.Call) and hasattr(dec.func, 'attr') and dec.func.attr == 'parametrize' and len(dec.args) >= 2:
+                        val = dec.args[1]
+                        if isinstance(val, (ast.List, ast.Tuple)):
+                            mult *= len(val.elts)
+                total += mult
+    except: pass
+print(total)
+EOF
           }
-          
+
           # Count tests in PR branch
           echo "=== PR branch test counts ==="
           declare -A pr_counts
