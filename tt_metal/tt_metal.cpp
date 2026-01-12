@@ -1556,7 +1556,6 @@ std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
                     for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
                         const auto kernel = program.impl().get_kernel(kernel_id);
                         if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
-                            TT_ASSERT(kernel->expected_num_binaries() == 1);
                             const QuasarDataMovementConfig config =
                                 std::get<QuasarDataMovementConfig>(kernel->config());
                             const uint32_t num_processors_in_use = config.num_processors_per_cluster;
@@ -1593,6 +1592,11 @@ KernelHandle CreateQuasarDataMovementKernel(
     const experimental::QuasarDataMovementConfig& config) {
     const std::set<DataMovementProcessor> dm_cores =
         GetDataMovementProcessorsPerClusterQuasar(program, core_ranges, config.num_processors_per_cluster);
+    // log the dm_cores
+    log_info(tt::LogMetal, "DM cores: {}", dm_cores.size());
+    for (const auto& dm_core : dm_cores) {
+        log_info(tt::LogMetal, "DM core: {}", dm_core);
+    }
     std::shared_ptr<Kernel> kernel =
         std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_cores);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);

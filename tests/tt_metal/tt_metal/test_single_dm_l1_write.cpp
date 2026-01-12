@@ -56,7 +56,6 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmL1Write) {
     Program program = CreateProgram();
 
     // Configure and create Data Movement kernel
-    // Quasar currently supports only one Data Movement core.
     KernelHandle data_movement_kernel_0 = experimental::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
