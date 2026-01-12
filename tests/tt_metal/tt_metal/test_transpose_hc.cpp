@@ -21,6 +21,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -42,7 +43,7 @@ using namespace tt;
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: tests transpose kernel for HC dimensions
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
     constexpr bool multibank = true;
 

@@ -40,21 +40,18 @@ struct TypecastDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        DataType output_dtype,
-        const MemoryConfig& output_memory_config,
-        bool fp32_dest_acc_en,
-        bool preserve_fp32_precision,
-        bool bfp8_pack_precise,
-        const std::optional<Tensor>& preallocated_output,
-        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::copy
 
 namespace ttnn::prim {
-constexpr auto typecast =
-    ttnn::register_operation<"ttnn::prim::typecast", ttnn::operations::copy::TypecastDeviceOperation>();
+ttnn::operations::copy::TypecastDeviceOperation::tensor_return_value_t typecast(
+    const Tensor& input,
+    DataType output_dtype,
+    const MemoryConfig& output_memory_config,
+    bool fp32_dest_acc_en,
+    bool preserve_fp32_precision,
+    bool bfp8_pack_precise,
+    const std::optional<Tensor>& preallocated_output,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim

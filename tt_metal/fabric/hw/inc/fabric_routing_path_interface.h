@@ -16,16 +16,16 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
     if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
         // invalid chip
         out_route_buffer[0] = 0;
-        ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
+        ASSERT(false);  // caught only when watcher enabled. Otherwise make behavior consistent as returning false.
         return false;
     }
 
-    // Get compressed route data
+    // Get compressed route data (2 bytes: ns_hops, ew_hops, directions, turn_point)
     const auto& compressed_route = paths[dst_chip_id];
     uint8_t ns_hops = compressed_route.get_ns_hops();
     uint8_t ew_hops = compressed_route.get_ew_hops();
-    uint8_t ns_direction = compressed_route.get_ns_direction();
-    uint8_t ew_direction = compressed_route.get_ew_direction();
+    uint8_t ns_dir = compressed_route.get_ns_direction();
+    uint8_t ew_dir = compressed_route.get_ew_direction();
 
     if (ns_hops == 0 && ew_hops == 0) {
         // Noop to self
@@ -34,48 +34,25 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
         return false;
     }
 
-    // Reconstruct 2D routing commands (1 command per byte)
-    uint8_t byte_index = 0;
-    // Construct route to match fabric_set_unicast_route encoding:
-    // - Final hop uses the opposite-direction bit (no forward) to indicate write
-    // - If both NS and EW exist: emit (ns_hops - 1) NS forwards, then ew_hops EW forwards, then 1 EW write (opposite)
-    // - If only NS: emit (ns_hops - 1) NS forwards, then 1 NS write (opposite)
-    // - If only EW: emit (ew_hops - 1) EW forwards, then 1 EW write (opposite)
+    // Use canonical 2D encoder to generate route buffer
+    // Note: Buffer size is determined by packet header template
+    constexpr uint32_t max_buffer_size = FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE;
+    uint8_t temp_buffer[max_buffer_size];
 
-    // Determine forward and write(opposite) commands per dimension
-    const uint8_t ns_forward_cmd = (ns_direction == 1) ? FORWARD_SOUTH : FORWARD_NORTH;
-    const uint8_t ns_write_cmd_opposite = (ns_direction == 1) ? FORWARD_NORTH : FORWARD_SOUTH;  // opposite
+    routing_encoding::encode_2d_unicast(
+        ns_hops,
+        ew_hops,
+        ns_dir,
+        ew_dir,
+        temp_buffer,
+        max_buffer_size,
+        prepend_one_hop  // CRITICAL: Pass through prepend_one_hop for router usage
+    );
 
-    const uint8_t ew_forward_cmd = (ew_direction == 1) ? FORWARD_EAST : FORWARD_WEST;
-    const uint8_t ew_write_cmd_opposite = (ew_direction == 1) ? FORWARD_WEST : FORWARD_EAST;  // opposite
-
-    if (ns_hops > 0 && ew_hops > 0) {
-        // NS forwards for ns_hops - 1
-        for (uint8_t i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
-            out_route_buffer[byte_index++] = ns_forward_cmd;
-        }
-        // EW forwards for ew_hops
-        for (uint8_t i = 0; i < ew_hops; ++i) {
-            out_route_buffer[byte_index++] = ew_forward_cmd;
-        }
-        // Final write in EW with opposite direction bit
-        out_route_buffer[byte_index++] = ew_write_cmd_opposite;
-    } else if (ns_hops > 0) {
-        // Only NS path: (ns_hops - 1) forwards + 1 write(opposite)
-        for (uint8_t i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
-            out_route_buffer[byte_index++] = ns_forward_cmd;
-        }
-        out_route_buffer[byte_index++] = ns_write_cmd_opposite;
-    } else if (ew_hops > 0) {
-        // Only EW path: (ew_hops - 1) forwards + 1 write(opposite)
-        for (uint8_t i = 0; i < ew_hops - 1 + prepend_one_hop; ++i) {
-            out_route_buffer[byte_index++] = ew_forward_cmd;
-        }
-        out_route_buffer[byte_index++] = ew_write_cmd_opposite;
+    // Copy to volatile output
+    for (uint32_t i = 0; i < max_buffer_size; i++) {
+        out_route_buffer[i] = temp_buffer[i];
     }
-
-    out_route_buffer[byte_index] = NOOP;
-    ASSERT(byte_index < HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE);
 
     return true;
 }
@@ -84,20 +61,31 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
 template <>
 inline bool intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
     uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
+    // Determine number of words based on compile-time define
+    constexpr uint32_t words_per_entry = FabricHeaderConfig::LOW_LATENCY_NUM_WORDS;
+
+    // Bounds check
     if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
-        // Out of bounds - fill buffer with NOOPs/zeros
-        for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
-            out_route_buffer[i] = 0;
+        // Out of bounds - zero output
+        volatile uint32_t* out = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
+        for (uint32_t i = 0; i < words_per_entry; i++) {
+            out[i] = 0;
         }
-        ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
+        ASSERT(false && "dst_chip_id out of bounds");
         return false;
     }
 
-    const uint8_t* packed_route = &this->paths[dst_chip_id * SINGLE_ROUTE_SIZE];
-    // Copy packed data directly to output buffer
-    for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
-        out_route_buffer[i] = packed_route[i];
+    // Read from table with correct stride
+    // Host populated this with the same stride (see compressed_routing_path.cpp)
+    const uint32_t* table = reinterpret_cast<const uint32_t*>(&this->paths);
+    volatile uint32_t* out = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
+
+    // Copy entry (words_per_entry words)
+    const uint32_t* entry = &table[dst_chip_id * words_per_entry];
+    for (uint32_t i = 0; i < words_per_entry; i++) {
+        out[i] = entry[i];
     }
+
     return true;
 }
 
@@ -108,23 +96,36 @@ inline bool intra_mesh_routing_path_t<1, true>::decode_route_to_buffer(
     return true;
 }
 
+/**
+ * Device-side on-the-fly generator for 1D routing (compressed=true path - DEFAULT)
+ * Generates routing pattern directly without reading from a table.
+ */
 inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_route_buffer) {
-    auto route_ptr = reinterpret_cast<volatile uint64_t*>(out_route_buffer);
-    if (hops >= intra_mesh_routing_path_t<1, true>::MAX_CHIPS_LOWLAT || hops == 0) {
-        // invalid chip or Noop to self
-        *route_ptr = 0;
-        ASSERT(false);  // caught only when watcher enabled. Otherwise behave consistently by returning false.
+    // Determine number of words based on compile-time define
+    constexpr uint32_t num_words = FabricHeaderConfig::LOW_LATENCY_NUM_WORDS;
+    constexpr uint32_t max_hops = num_words * RoutingFieldsConstants::LowLatency::BASE_HOPS;
+
+    // Bounds check
+    if (hops >= max_hops) {
+        // Zero output
+        volatile uint32_t* out = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
+        for (uint32_t i = 0; i < num_words; i++) {
+            out[i] = 0;
+        }
+        ASSERT(false && "Hops exceeds max supported");
         return false;
     }
 
-    // Forward for (hops - 1) steps, then write on the final hop
-    const uint64_t shift_amount =
-        static_cast<uint64_t>(hops - 1) * static_cast<uint64_t>(intra_mesh_routing_path_t<1, true>::FIELD_WIDTH);
-    const uint64_t routing_field_value =
-        (intra_mesh_routing_path_t<1, true>::FWD_ONLY_FIELD & ((1ULL << shift_amount) - 1ULL)) |
-        (static_cast<uint64_t>(intra_mesh_routing_path_t<1, true>::WRITE_ONLY) << shift_amount);
+    // Generate routing pattern on-the-fly using canonical encoder
+    uint32_t temp_buffer[num_words];
+    routing_encoding::encode_1d_unicast(hops, temp_buffer, num_words);
 
-    *route_ptr = routing_field_value;
+    // Copy to volatile output
+    volatile uint32_t* out = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
+    for (uint32_t i = 0; i < num_words; i++) {
+        out[i] = temp_buffer[i];
+    }
+
     return true;
 }
 

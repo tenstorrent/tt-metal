@@ -131,6 +131,9 @@ public:
     // Utilities
     bool is_coord_in_range(CoreCoord coord, CoreType core_type);
 
+    // Hang detection
+    void on_dispatch_timeout_detected();
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
@@ -160,15 +163,19 @@ private:
     void generate_device_bank_to_noc_tables(ChipId device_id);
     void generate_worker_logical_to_virtual_map(ChipId device_id);
     void initialize_device_bank_to_noc_tables(
-        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
+        ChipId device_id,
+        const HalProgrammableCoreType& core_type,
+        CoreCoord virtual_core,
+        std::optional<CoreCoord> end_core);
     void initialize_worker_logical_to_virtual_tables(
-        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
+        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord start_core, CoreCoord end_core);
     void initialize_firmware(
         ChipId device_id,
         const HalProgrammableCoreType& core_type,
         CoreCoord virtual_core,
         dev_msgs::launch_msg_t::View launch_msg,
-        dev_msgs::go_msg_t::ConstView go_msg);
+        dev_msgs::go_msg_t::ConstView go_msg,
+        std::optional<CoreCoord> end_core = std::nullopt);
     void initialize_and_launch_firmware(ChipId device_id);
     dev_msgs::core_info_msg_t populate_core_info_msg(
         ChipId device_id, HalProgrammableCoreType programmable_core_type) const;
@@ -190,6 +197,10 @@ private:
 
     // Mutex to protect control_plane_ for thread-safe access
     std::mutex control_plane_mutex_;
+
+    // Mutex to protect timeout detection for thread-safe access
+    std::mutex dispatch_timeout_detection_mutex_;
+    bool dispatch_timeout_detection_processed_ = false;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;

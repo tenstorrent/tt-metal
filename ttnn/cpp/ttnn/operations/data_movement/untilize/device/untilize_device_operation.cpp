@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -13,6 +14,9 @@
 #include "factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
 #include "factories/untilize_multi_core_parallelize_column_program_factory.hpp"
 #include "factories/untilize_multi_core_program_factory.hpp"
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/common/constants.hpp"
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
@@ -43,9 +47,8 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
         // as the current default multi core implementation processes an entire row of tiles at once.
         if (!output_is_sharded && num_tiles_per_col == 1) {
             return 0;
-        } else {
-            return 1;
         }
+        return 1;
     }
     return 2;
 }
@@ -241,37 +244,49 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         return program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
     }
 
+    uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
+    uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
+
+    const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+
+    uint32_t num_tiles_per_row = tensor_width / tile_width;
+    uint32_t num_tiles_per_col = tensor_height / tile_height;
+
+    auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+
+    size_t grid_area = grid_size.x * grid_size.y;
+    auto [num_compute_cores, nblocks_per_core] = compute_ncores(grid_area, num_tiles_per_col);
+
+    constexpr uint32_t threshold_row_block = 32;
+    if (!input_is_sharded and !output_is_sharded) {
+        if (num_tiles_per_row > threshold_row_block and
+            (num_tiles_per_col > threshold_row_block or num_tiles_per_row > num_tiles_per_col)) {
+            uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
+                                        (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+            auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+            if (num_compute_cores < ncores_wh.ncores) {
+                return program::UntilizeMultiCoreBlockProgramFactory{};
+            }
+        }
+    }
+    // TODO : currently multi_core parallelization on column only works for single tile height tensors.
+    // Need to debug this to work on wide tensors that are higher than a single tile
+    auto pf_option = get_pf_type(output_is_sharded, input_tensor_a);
+    if (pf_option == 0) {
+        return program::UntilizeMultiCoreParallelizeColumnProgramFactory{};
+    }
+    if (pf_option == 1) {
+        return program::UntilizeSingleCoreProgramFactory{};
+    }
     // Default multi core implementation
     return program::UntilizeMultiCoreProgramFactory{};
 }
 
-std::tuple<UntilizeDeviceOperation::operation_attributes_t, UntilizeDeviceOperation::tensor_args_t>
-UntilizeDeviceOperation::invoke(
-    const Tensor& input,
-    tt::tt_metal::MemoryConfig output_mem_config,
-    bool use_multicore,
-    bool use_pack_untilize,
-    bool fp32_dest_acc_en,
-    std::optional<CoreRangeSet> sub_core_grids,
-    bool enough_space_width,
-    bool enough_space_height,
-    uint32_t pf_type) {
-    return {
-        UntilizeDeviceOperation::operation_attributes_t{
-            .output_mem_config = std::move(output_mem_config),
-            .use_multicore = use_multicore,
-            .use_pack_untilize = use_pack_untilize,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .sub_core_grids = std::move(sub_core_grids),
-            .enough_space_width = enough_space_width,
-            .enough_space_height = enough_space_height,
-            .pf_type = pf_type},
-        UntilizeDeviceOperation::tensor_args_t{.input = input}};
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
 UntilizeDeviceOperation::create_op_performance_model(
-    const UntilizeDeviceOperation::operation_attributes_t& op_attr,
+    const UntilizeDeviceOperation::operation_attributes_t& /*op_attr*/,
     const UntilizeDeviceOperation::tensor_args_t& inputs,
     tensor_return_value_t& output) {
     const auto& input_tensor = inputs.input;
@@ -299,3 +314,29 @@ UntilizeDeviceOperation::create_op_performance_model(
 }
 
 }  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t untilize(
+    const Tensor& input,
+    tt::tt_metal::MemoryConfig output_mem_config,
+    bool use_multicore,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    std::optional<CoreRangeSet> sub_core_grids,
+    bool enough_space_width,
+    bool enough_space_height,
+    uint32_t pf_type) {
+    using OperationType = ttnn::operations::data_movement::UntilizeDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .output_mem_config = std::move(output_mem_config),
+            .use_multicore = use_multicore,
+            .use_pack_untilize = use_pack_untilize,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .sub_core_grids = std::move(sub_core_grids),
+            .enough_space_width = enough_space_width,
+            .enough_space_height = enough_space_height,
+            .pf_type = pf_type},
+        OperationType::tensor_args_t{.input = input});
+}
+}  // namespace ttnn::prim

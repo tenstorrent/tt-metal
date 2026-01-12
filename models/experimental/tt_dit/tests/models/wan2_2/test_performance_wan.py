@@ -24,7 +24,7 @@ from ....utils.test import line_params, ring_params
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "1x4sp0tp1",
@@ -244,9 +244,9 @@ def test_pipeline_performance(
         if is_blackhole():
             expected_metrics = {
                 "encoder": 15.0,
-                "denoising": 260.0,
+                "denoising": 185.0,
                 "vae": 8.0,
-                "total": 283.0,
+                "total": 208.0,
             }
         else:
             expected_metrics = {
@@ -258,7 +258,7 @@ def test_pipeline_performance(
     elif tuple(mesh_device.shape) == (1, 4) and height == 480:
         assert is_blackhole(), "1x4 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 17.0,
+            "encoder": 27.0,
             "denoising": 680.0,
             "vae": 60.0,
             "total": 760.0,
@@ -266,7 +266,7 @@ def test_pipeline_performance(
     elif tuple(mesh_device.shape) == (1, 4) and height == 720:
         assert is_blackhole(), "1x4 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 15.0,
+            "encoder": 27.0,
             "denoising": 3200.0,
             "vae": 200.0,
             "total": 3415.0,

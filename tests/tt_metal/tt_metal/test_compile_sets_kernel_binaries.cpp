@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -126,7 +126,7 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

@@ -21,7 +21,7 @@ SKIPPED_OPS = [
     "ttnn.allocate_tensor_on_host",  # Missing docs for OP causing docs build crash, need to create documentation and add to docs page, GH issue: #34681
     "ttnn.composite_example",  # Example operation.
     "ttnn.composite_example_multiple_return",  # Example operation.
-    "ttnn.fused_rms_1_1_32_8192",  # Internal operation only.
+    "ttnn.fused_rms_minimal",  # Internal operation only.
     "ttnn.matmul_batched_weights",  # Internal operation only.
     "ttnn.moreh_abs_pow",  # Moreh operation.
     "ttnn.moreh_adam",  # Moreh operation.
@@ -65,9 +65,7 @@ SKIPPED_OPS = [
     "ttnn.padded_slice",  # Experimental operation, but wrongly registered without ttnn.experimental.
     "ttnn.pearson_correlation_coefficient",  # Internal operation only.
     "ttnn.plus_one",  # Experimental operation, but wrongly registered without ttnn.experimental.
-    "ttnn.prim.example",  # Example operation.
-    "ttnn.prim.example_multiple_return",  # Example operation.
-    "ttnn.prim.test_hang_device_operation",  # Internal operation only.
+    "ttnn.hang_device_operation",  # Internal operation only.
     "ttnn.slice_write",  # Experimental operation, but wrongly registered without ttnn.experimental.
     "ttnn.tosa_gather",  # TOSA operation omitted for docs.
     "ttnn.tosa_scatter",  # TOSA operation omitted for docs.

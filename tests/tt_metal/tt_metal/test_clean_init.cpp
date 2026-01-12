@@ -4,8 +4,8 @@
 
 #include <chrono>
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <array>
@@ -42,7 +42,7 @@ class CommandQueue;
 using std::vector;
 using namespace tt::tt_metal;
 
-int main(int argc, char** argv) {
+int main(int argc, char** /*argv*/) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }

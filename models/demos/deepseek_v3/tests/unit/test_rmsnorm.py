@@ -37,6 +37,7 @@ def reference_rmsnorm(x: torch.Tensor, gamma: torch.Tensor, epsilon: float) -> t
 # =============================================================================
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 def test_rmsnorm_pre_all_gather_single_device(device):
     """
     Test rms_norm_pre_all_gather operation.
@@ -119,6 +120,7 @@ def test_rmsnorm_pre_all_gather_single_device(device):
     assert_with_pcc(expected_sum_x2, tt_sum_x2, pcc=0.99)
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
@@ -358,7 +360,7 @@ def test_rmsnorm_post_all_gather(device):
     assert_with_pcc(ref_out_local, tt_out_cpu, pcc=0.99)
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
@@ -543,6 +545,7 @@ def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_param
     ],
     ids=["32x1536", "32x512"],
 )
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 def test_rmsnorm_single_device(device, inp_shape, weight_shape):
     """
     Test non-distributed RMSNorm operation (ttnn.rms_norm).
@@ -601,7 +604,6 @@ def test_rmsnorm_single_device(device, inp_shape, weight_shape):
     assert_with_pcc(ref_out, tt_out_cpu, pcc=0.99)
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "inp_shape, weight_shape",
     [
@@ -614,6 +616,7 @@ def test_rmsnorm_single_device(device, inp_shape, weight_shape):
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
+@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 def test_rmsnorm_mesh_device(mesh_device, inp_shape, weight_shape, enable_trace, device_params):
     """
     Mesh device test for non-distributed RMSNorm operation (ttnn.rms_norm).

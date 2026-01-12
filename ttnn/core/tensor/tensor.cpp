@@ -84,7 +84,8 @@ Tensor::Tensor(
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) : tensor_id(Tensor::next_tensor_id()) {
+Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    tensor_id(Tensor::next_tensor_id()) {
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
 }
 
@@ -255,19 +256,6 @@ std::vector<T> Tensor::to_vector(std::optional<tt::tt_metal::QueueId> cq_id) con
     return tensor_impl::decode_tensor_data(data, cpu_tensor.tensor_spec());
 }
 
-template <typename T>
-T Tensor::item(std::optional<tt::tt_metal::QueueId> cq_id) const {
-    TT_FATAL(
-        this->logical_shape().volume() == 1,
-        "tensor.item() requires tensor to have exactly one element, but got {} elements",
-        this->logical_shape().volume());
-
-    // Use existing infrastructure: to_vector() already handles multi-device and host tensors correctly
-    // by calling cpu() internally when needed
-    auto vector_data = this->to_vector<T>(cq_id);
-    return vector_data[0];
-}
-
 // Instantiate explicitly for the supported types.
 template Tensor Tensor::from_span<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,
@@ -378,13 +366,6 @@ template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<tt::tt_me
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 
-template float Tensor::item<float>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template bfloat16 Tensor::item<bfloat16>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template int32_t Tensor::item<int32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template uint8_t Tensor::item<uint8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template uint16_t Tensor::item<uint16_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template uint32_t Tensor::item<uint32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-
 Tensor Tensor::to_device(
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config,
@@ -479,6 +460,24 @@ bool Tensor::is_scalar() const {
     return logical_shape.rank() == 0 || logical_shape.volume() == 1;
 }
 
+static Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
+        coords.push_back(coord);
+    }
+    DeviceStorage device_storage(std::move(mesh_buffer), coords);
+    // TODO (#25340): Implement correct logic and add test for this
+    ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
+    for (size_t i = 0; i < device->shape().dims(); i++) {
+        placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+    }
+
+    auto tensor_topology = TensorTopology{device->shape(), placements, coords};
+    return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
+}
+
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
@@ -496,17 +495,6 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     GraphTracker::instance().track_function_end(output);
 
     return output;
-}
-
-Tensor create_device_tensor(
-    const tt::tt_metal::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
-    return create_device_tensor(
-        TensorSpec(shape, TensorLayout(data_type, PageConfig(layout, tile), memory_config)), device);
 }
 
 void memcpy(
@@ -584,24 +572,6 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
     }
 }
 
-Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
-    auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
-    std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
-        coords.push_back(coord);
-    }
-    DeviceStorage device_storage(std::move(mesh_buffer), coords);
-    // TODO (#25340): Implement correct logic and add test for this
-    ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
-    for (size_t i = 0; i < device->shape().dims(); i++) {
-        placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-    }
-
-    auto tensor_topology = TensorTopology{device->shape(), placements, coords};
-    return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
-}
-
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
@@ -618,39 +588,6 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
 
     // TODO (#25340): Implement correct logic and add test for this
     return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, TensorTopology{});
-}
-
-void write_tensor(const Tensor& src, Tensor& dst, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
-    ZoneScoped;
-    TT_FATAL(
-        (is_device_tensor(src) && is_cpu_tensor(dst)) ||    // device to host
-            (is_cpu_tensor(src) && is_device_tensor(dst)),  // host to device
-        "Unsupported data transfer direction; source storage type: {}, destination storage type: {}",
-        src.storage_type(),
-        dst.storage_type());
-
-    if (is_device_tensor(src)) {
-        tensor_impl::copy_to_host(src, dst, blocking, cq_id);
-        return;
-    }
-
-    TT_FATAL(
-        src.logical_shape() == dst.logical_shape(),
-        "Source and destination tensors must have the same logical shape. Source: {}, Destination: {}",
-        src.logical_shape(),
-        dst.logical_shape());
-    TT_FATAL(
-        src.dtype() == dst.dtype(),
-        "Source and destination tensors must have the same data type. Source: {}, Destination: {}",
-        src.dtype(),
-        dst.dtype());
-    TT_FATAL(
-        src.tensor_spec().page_config() == dst.tensor_spec().page_config(),
-        "Source and destination tensors must have the same page configuration");
-
-    auto mesh_buffer = dst.device_storage().mesh_buffer;
-    TT_FATAL(!blocking, "Blocking is not supported for host to device copy");
-    tensor_impl::copy_to_device(src, dst, cq_id);
 }
 
 // TODO #32045: Remove this function since IDs are assigned in the constructor.
@@ -712,6 +649,10 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
+    tt::stl::reflection::operator<<(os, tensor);
+    return os;
+}
 namespace ops {
 Tensor view(const Tensor& input_tensor, const Shape& new_shape, const Shape& new_padded_shape) {
     return tensor_ops::tensor_view(input_tensor, new_shape, new_padded_shape);
@@ -722,5 +663,4 @@ Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
 Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
 
 }  // namespace ops
-
 }  // namespace tt::tt_metal

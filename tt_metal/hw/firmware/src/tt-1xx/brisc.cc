@@ -44,6 +44,7 @@ constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
 constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 c_tensix_core core;
 
@@ -257,7 +258,7 @@ void device_setup() {
 
 inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->all = RUN_SYNC_MSG_ALL_INIT;
 
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
@@ -265,14 +266,14 @@ inline void deassert_ncrisc_trisc() {
 
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    while (mailboxes->subordinate_sync.trisc0 != RUN_SYNC_MSG_DONE) {
+    while (subordinate_sync->trisc0 != RUN_SYNC_MSG_DONE) {
         invalidate_l1_cache();
     }
 
     if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0))) {
-        mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_GO;
-        mailboxes->subordinate_sync.trisc1 = RUN_SYNC_MSG_GO;
-        mailboxes->subordinate_sync.trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->trisc2 = RUN_SYNC_MSG_GO;
     }
 }
 
@@ -282,7 +283,7 @@ inline void start_ncrisc_kernel_run_early(uint32_t enables) {
     // CBs before we wait on it.
 #if !defined(ARCH_WORMHOLE)
     if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
-        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->dm1 = RUN_SYNC_MSG_GO;
     }
 #endif
 }
@@ -292,8 +293,8 @@ inline void start_ncrisc_kernel_run(uint32_t enables) {
     if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
         // The NCRISC behaves badly if it jumps from L1 to IRAM, so instead halt it and then reset it to the IRAM
         // address it provides.
-        while (mailboxes->subordinate_sync.dm1 != RUN_SYNC_MSG_WAITING_FOR_RESET);
-        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+        while (subordinate_sync->dm1 != RUN_SYNC_MSG_WAITING_FOR_RESET);
+        subordinate_sync->dm1 = RUN_SYNC_MSG_GO;
         volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
         cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
         assert_just_ncrisc_reset();
@@ -308,7 +309,7 @@ inline void start_ncrisc_kernel_run(uint32_t enables) {
 
 inline void wait_ncrisc_trisc() {
     WAYPOINT("NTW");
-    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+    while (subordinate_sync->all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
 #if defined(ARCH_WORMHOLE)
         // Avoid hammering L1 while other cores are trying to work. Seems not to
         // be needed on Blackhole, probably because invalidate_l1_cache takes
@@ -320,7 +321,7 @@ inline void wait_ncrisc_trisc() {
     WAYPOINT("NTD");
 }
 
-inline void trigger_sync_register_init() { mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
+inline void trigger_sync_register_init() { subordinate_sync->trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
 inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb_index) {
 #if defined(ARCH_BLACKHOLE)
@@ -418,7 +419,7 @@ int main() {
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
             if (enables &
                 (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
-                mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
+                subordinate_sync->dm1 = RUN_SYNC_MSG_LOAD;
             }
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
             uint32_t kernel_config_base =

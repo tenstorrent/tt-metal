@@ -1,109 +1,98 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "index_fill_device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include "index_fill_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/tensor/types.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-
-using namespace tt;
-using namespace tt::tt_metal;
-using namespace tt::constants;
-using namespace tt::tt_metal::detail;
-
-union datatype {
-    uint32_t u32;
-    float f32;
-} u_fill_value;
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::index_fill {
+
 IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    const Tensor& index = tensor_args.index;
-    const Tensor& input = tensor_args.input;
+    ////////////////////////////////////////////////////////////////////////////
+    //                         Parameters Setup
+    ////////////////////////////////////////////////////////////////////////////
+    const tt::tt_metal::Tensor& index = tensor_args.index;
+    const tt::tt_metal::Tensor& input = tensor_args.input;
     uint32_t dim = operation_attributes.dim;
 
-    auto dtype = input.dtype();
-
-    const auto input_shape = input.logical_shape();
+    const auto input_shape = input.padded_shape();
     const auto n = input_shape.rank();
-
-    uint32_t num_rows_to_fill_per_index = 1;
-    for (int i = n - 2; i > dim; i--) {
-        num_rows_to_fill_per_index *= input_shape[i];
+    uint32_t num_rows_in_dim = 1;
+    for (int i = n - 2; i > static_cast<int>(dim); --i) {
+        num_rows_in_dim *= input_shape[i];
     }
 
-    auto fill_value = operation_attributes.value;
-    if (std::holds_alternative<int>(fill_value)) {
-        u_fill_value.u32 = std::get<int>(fill_value);
-    } else if (std::holds_alternative<float>(fill_value)) {
-        u_fill_value.f32 = std::get<float>(fill_value);
-    }
-
-    auto num_rows = input.physical_volume() / input.logical_shape()[-1];
-    Program program{};
-    IDevice* device = input.device();
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
-
-    auto input_data_format = datatype_to_dataformat_converter(dtype);
-    auto index_data_format = datatype_to_dataformat_converter(index.dtype());
-    auto output_data_format = datatype_to_dataformat_converter(output.dtype());
-
-    uint32_t input_unit_size = input.logical_shape()[-1] * input.element_size();
-    uint32_t rounded_input_unit_size = round_up_to_mul32(input_unit_size);
-
-    uint32_t index_unit_size = index.physical_volume() * index.element_size();
-    uint32_t rounded_index_unit_size = round_up_to_mul32(index_unit_size);
-
-    uint32_t output_unit_size = output.logical_shape()[-1] * output.element_size();
-    uint32_t rounded_output_unit_size = round_up_to_mul32(output_unit_size);
-
-    auto src_cb_index = CBIndex::c_0;
-    CircularBufferConfig cb_src_config =
-        CircularBufferConfig(rounded_input_unit_size, {{src_cb_index, input_data_format}})
-            .set_page_size(src_cb_index, rounded_input_unit_size);
-    CreateCircularBuffer(program, all_cores, cb_src_config);
-    std::map<std::string, std::string> reader_defines;
-
-    switch (dtype) {
-        case DataType::BFLOAT16: reader_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
-        case DataType::INT32: reader_defines["OUTPUT_DTYPE_INT32"] = "1"; break;
-        case DataType::FLOAT32: reader_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;
+    // Prepare fill_value to send as a uint32_t kernel arg
+    auto fill_value_ = operation_attributes.value;
+    uint32_t fill_value{};
+    switch (input.dtype()) {
+        case DataType::BFLOAT16:
+            fill_value = pack_two_bfloat16_into_uint32({bfloat16(std::get<float>(fill_value_)), bfloat16(0.0f)});
+            break;
+        case DataType::FLOAT32: fill_value = std::bit_cast<uint32_t>(std::get<float>(fill_value_)); break;
+        case DataType::INT32: fill_value = static_cast<uint32_t>(std::get<int>(fill_value_)); break;
         default: TT_FATAL(false, "Unsupported datatype"); break;
     }
 
-    auto index_cb_index = CBIndex::c_1;
-    CircularBufferConfig cb_index_config =
-        CircularBufferConfig(rounded_index_unit_size, {{index_cb_index, index_data_format}})
-            .set_page_size(index_cb_index, rounded_index_unit_size);
-    CreateCircularBuffer(program, all_cores, cb_index_config);
+    ////////////////////////////////////////////////////////////////////////////
+    //                            Program Setup
+    ////////////////////////////////////////////////////////////////////////////
+    Program program{};
 
-    auto dst_cb_index = CBIndex::c_16;
-    CircularBufferConfig dst_cb_config =
-        CircularBufferConfig(rounded_output_unit_size, {{dst_cb_index, output_data_format}})
-            .set_page_size(dst_cb_index, rounded_output_unit_size);
-    CreateCircularBuffer(program, all_cores, dst_cb_config);
+    // Distribute work across core grid
+    auto num_rows = input.physical_volume() / input.padded_shape()[-1];
+    auto compute_with_storage_grid_size = input.device()->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
 
-    // Create Kernels
-    // reader
+    // Create circular buffers
+    auto input_dataformat = datatype_to_dataformat_converter(input.dtype());
+    auto index_dataformat = datatype_to_dataformat_converter(index.dtype());
+
+    uint32_t input_page_size = input.buffer()->aligned_page_size();
+    uint32_t index_total_size = index.buffer()->aligned_size();
+    uint32_t output_page_size = output.buffer()->aligned_page_size();
+
+    uint32_t input_cb_depth = 2;
+
+    // CB to store pages from input tensor
+    auto cb_index = tt::CBIndex::c_0;
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        tt::tt_metal::CircularBufferConfig(input_cb_depth * input_page_size, {{cb_index, input_dataformat}})
+            .set_page_size(cb_index, input_page_size));
+
+    // CB to store entire index tensor
+    cb_index = tt::CBIndex::c_1;
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        tt::tt_metal::CircularBufferConfig(index_total_size, {{cb_index, index_dataformat}})
+            .set_page_size(cb_index, index_total_size));
+
+    // CB to store an input page filled with fill_value
+    cb_index = tt::CBIndex::c_2;
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        tt::tt_metal::CircularBufferConfig(input_page_size, {{cb_index, input_dataformat}})
+            .set_page_size(cb_index, input_page_size));
+
+    // Create reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src_cb_index,
-        (std::uint32_t)index_cb_index,
-        (std::uint32_t)(dim == n - 1),
-        (std::uint32_t)index.physical_volume(),
-        (std::uint32_t)rounded_input_unit_size,
-        (std::uint32_t)rounded_index_unit_size};
+        (std::uint32_t)input_page_size,          // input tensor page size
+        (std::uint32_t)index_total_size,         // index tensor total size
+        (std::uint32_t)index.physical_volume(),  // num elements in index array
+        (std::uint32_t)(dim == n - 1)            // is last dim
+    };
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(index.buffer()).append_to(reader_compile_time_args);
 
@@ -111,23 +100,28 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         program,
         "ttnn/cpp/ttnn/operations/index_fill/device/kernels/reader_index_fill.cpp",
         all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)rounded_output_unit_size};
+    // Create writer kernel
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t)output_page_size,         // output tensor page size
+        (std::uint32_t)index.physical_volume(),  // num elements in index array
+        (std::uint32_t)input.element_size(),     // element size in bytes
+        (std::uint32_t)(dim == n - 1)            // is last dim
+    };
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/index_fill/device/kernels/writer_index_fill.cpp",
         all_cores,
-        WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    uint32_t unit_offset = 0;
-    uint32_t num_cores_group_1 = core_group_1.num_cores();
-    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        const auto& core = cores[i];
-        uint32_t num_rows_per_core = i < num_cores_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
+    // Set runtime args for each core
+    uint32_t start_row_id = 0;
+    auto cores = corerange_to_cores(all_cores);
+    for (const auto& core : cores) {
+        uint32_t num_rows_per_core{};
         if (core_group_1.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -135,42 +129,54 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         } else {
             TT_FATAL(false, "Core not in specified core ranges");
         }
+
         SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
-             index.buffer()->address(),
-             u_fill_value.u32,
-             unit_offset,
-             num_rows_per_core,
-             num_rows_to_fill_per_index,
-             input_shape[dim]});
-        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), num_rows_per_core, unit_offset});
+            {
+                input.buffer()->address(),         // input tensor address
+                index.buffer()->address(),         // index tensor address
+                start_row_id,                      // start row
+                start_row_id + num_rows_per_core,  // end row
+                num_rows_in_dim,                   // num rows in dim
+                input_shape[dim]                   // dim size
+            });
 
-        unit_offset += num_rows_per_core;
+        SetRuntimeArgs(
+            program,
+            writer_kernel_id,
+            core,
+            {
+                output.buffer()->address(),        // output tensor address
+                start_row_id,                      // start row
+                start_row_id + num_rows_per_core,  // end row
+                num_rows_in_dim,                   // num rows in dim
+                input_shape[dim],                  // dim size
+                fill_value                         // fill value
+            });
+
+        start_row_id += num_rows_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores}};
 }
 
 void IndexFillOperation::MultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
+    auto& cores = cached_program.shared_variables.cores;
 
     auto src_buffer = tensor_args.input.buffer()->address();
     auto index_buffer = tensor_args.index.buffer()->address();
     auto output_buffer = output.buffer()->address();
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (const auto& core : cores) {
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer;

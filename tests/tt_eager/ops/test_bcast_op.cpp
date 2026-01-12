@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
@@ -35,7 +35,7 @@ using namespace constants;
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

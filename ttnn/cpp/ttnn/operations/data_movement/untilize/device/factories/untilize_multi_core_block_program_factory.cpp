@@ -299,7 +299,7 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
 
 void UntilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& /*operation_attributes*/,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;

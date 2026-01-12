@@ -22,7 +22,7 @@ using namespace tt;
 PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& /*tensor_return_value*/) {
     Program program{};
 
     const auto& cache_tensor = tensor_args.cache_tensor;
@@ -200,7 +200,7 @@ void PagedFillCacheProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& /*tensor_return_value*/) {
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
@@ -269,7 +269,7 @@ PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWork
 
         for (const auto& mesh_coord : mesh_coords_set) {
             TT_FATAL(
-                tensor_coords_set.find(mesh_coord) != tensor_coords_set.end(),
+                tensor_coords_set.contains(mesh_coord),
                 "Mesh coordinate ({}, {}) is in mesh_coords but not found in tensor_coords. "
                 "mesh_coords size: {}, tensor_coords size: {}",
                 mesh_coord[0],
@@ -288,7 +288,7 @@ PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWork
         // Create dummy programs for excluded coordinates
         std::vector<ttnn::MeshCoordinate> dummy_coords;
         for (const auto& coord : tensor_coords_set) {
-            if (mesh_coords_set.find(coord) == mesh_coords_set.end()) {
+            if (!mesh_coords_set.contains(coord)) {
                 dummy_coords.push_back(coord);
             }
         }
@@ -342,8 +342,7 @@ void PagedFillCacheMeshWorkloadFactory::override_runtime_arguments(
 
         // Determine if this coordinate should be a noop (dummy program)
         // If mesh_coords is provided and this coord is not in it, it's a dummy program
-        bool is_dummy =
-            operation_attributes.mesh_coords.has_value() && mesh_coords_set.find(coord) == mesh_coords_set.end();
+        bool is_dummy = operation_attributes.mesh_coords.has_value() && !mesh_coords_set.contains(coord);
 
         // Create modified operation_attributes with correct noop value for this coordinate
         operation_attributes_t coord_attrs{
