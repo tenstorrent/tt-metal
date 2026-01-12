@@ -49,7 +49,7 @@ public:
 
     void register_dm_kernel_on_gcore(uint32_t gcore_id) { dm_kernels_on_gcores_.insert(gcore_id); }
 
-    bool has_dm_kernel_on_gcore(uint32_t gcore_id) const { return dm_kernels_on_gcores_.count(gcore_id) > 0; }
+    bool has_dm_kernel_on_gcore(uint32_t gcore_id) const { return dm_kernels_on_gcores_.contains(gcore_id); }
 
 private:
     std::unordered_map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::Program> programs_;
