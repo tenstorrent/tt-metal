@@ -27,6 +27,12 @@ void kernel_main() {
     // add within the kernel: writing the same data to intermediate tensors
     DPRINT << "Start of writer 2 kernel\n";
 
+    // Reset handoff semaphore at very start of kernel for cached program reuse
+    // This must happen BEFORE any work to avoid race with Reader2
+    // Handoff semaphore is at runtime arg index 8
+    const uint32_t reader2_to_writer2_handoff_sem_early = get_semaphore(get_arg_val<uint32_t>(8));
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader2_to_writer2_handoff_sem_early), 0);
+
     constexpr uint32_t fabric_ct_idx = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_l = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_s = get_compile_time_arg_val(2);
@@ -59,6 +65,13 @@ void kernel_main() {
     uint32_t device_semaphore = get_arg_val<uint32_t>(arg_idx++);
     // Handoff semaphore to wait for Reader2 to disconnect from mux
     const uint32_t reader2_to_writer2_handoff_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+
+    // Data core coordinates for writing round1 intermediate tensor
+    const uint32_t data_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t data_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
+    // Handoff semaphore already reset at kernel start - no need to reset again
+
     const uint8_t dst_num_hops = 1;
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
@@ -109,6 +122,13 @@ void kernel_main() {
 
     DPRINT << "after preparing packet data\n";
 
+    // Write Round 1 results to the data core's L1 (where the sharded tensor lives)
+    // data_core_noc_x/y are the coordinates of the data core for this shard
+    uint64_t round1_interm_noc_addr = get_noc_addr(data_core_noc_x, data_core_noc_y, round1_interm_tensor_addr);
+    noc_async_write(packet_base_addr, round1_interm_noc_addr, new_payload_size_bytes);
+    noc_async_write_barrier();
+    DPRINT << "wrote round1 data to data core at (" << data_core_noc_x << ", " << data_core_noc_y << ")\n";
+
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
 
@@ -149,8 +169,6 @@ void kernel_main() {
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
-    // add a single noc write to second intermediate tensor
-    noc_async_write(packet_base_addr, round1_interm_tensor_addr, new_payload_size_bytes);
     // set the device semaphore at reader 1
     DPRINT << "setting device semaphore at address: " << (uint32_t)device_semaphore << "\n";
     uint64_t receiver_core_semaphore_noc_addr = safe_get_noc_addr(core_noc_x, core_noc_y, device_semaphore, 0);
@@ -182,22 +200,19 @@ void kernel_main() {
     mux_connection.send_payload_without_header_non_blocking_from_address(packet_base_addr, new_payload_size_bytes);
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
 
-    // Disconnect from mux and terminate
+    // Disconnect from mux to allow Reader1 to use the same channel
     DPRINT << "after sending data to receiver\n";
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     DPRINT << "after fabric client disconnect\n";
 
-    if (is_termination_master) {
-        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        noc_semaphore_wait(termination_sync_ptr, 3);
-        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
-        DPRINT << "terminated mux\n";
-    } else {
+    // Writer2 uses backward mux - signal the backward mux termination master (Reader1)
+    // Writer2 never is the termination master for backward mux, so just signal
+    {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
-        DPRINT << "signaled termination master\n";
+        DPRINT << "signaled backward mux termination master\n";
     }
 
     DPRINT << "End of writer 2 kernel\n";

@@ -338,6 +338,26 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     rtol = 0.01
     atol = 0.06
 
+    # print expected vs actual output
+    print("L tensor output vs reference:")
+    print("Output :")
+    print(out_l_root)
+    print("Reference:")
+    print(l_ref)
+
+    # same for s and m
+    print("S tensor output vs reference:")
+    print("Output:")
+    print(out_s_root)
+    print("Reference:")
+    print(s_ref)
+
+    print("M tensor output vs reference:")
+    print("Output :")
+    print(out_m_root)
+    print("Reference:")
+    print(m_ref)
+
     # Check L tensor
     l_match = torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol)
     assert l_match, "L tensor output does not match reference after trace execution"

@@ -134,6 +134,7 @@ void MAIN {
     constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
+    DPRINT << "start of compute 2\n";
     mm_init(cb_out_accumulate_im, cb_out_accumulate_im, cb_out_accumulate_im);
 
     OutputCBs output_cbs = reduce_fct<scale_fp32>(
@@ -172,6 +173,7 @@ void MAIN {
     cb_pop_front(cb_prev_max, Sq_chunk_t);
     cb_pop_front(cb_prev_sum, Sq_chunk_t);
     cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
+    DPRINT << "end of compute 2\n";
 }
 
 }  // namespace NAMESPACE
