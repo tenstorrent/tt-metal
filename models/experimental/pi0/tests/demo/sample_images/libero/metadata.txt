@@ -1,0 +1,6 @@
+LIBERO Sample Images
+========================================
+
+Dataset: HuggingFaceVLA/libero
+Extracted samples: 5
+Episodes: [0, 1, 2, 3, 4]
