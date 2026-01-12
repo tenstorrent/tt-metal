@@ -23,7 +23,7 @@ on:
       mlperf-read-only:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Set to false to allow write access to MLPerf mount"
 
 jobs:
