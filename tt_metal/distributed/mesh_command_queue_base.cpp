@@ -176,7 +176,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
         // Currently not supported when doing TT-Mesh Native sharding, since we
         // rely on TTNN to perform sharding and call enqueue_write_shards
         auto dispatch_lambda = [this, &buffer, host_data, &region](const MeshCoordinate& coord) {
-            this->write_shard_to_device(buffer, coord, host_data, region);
+            this->write_shard_to_device(buffer, coord, host_data, region, {}, nullptr);
         };
         for (const auto& coord : device_range) {
             if (mesh_device_->is_local(coord)) {
@@ -227,10 +227,17 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
         const auto& shard_data_transfer = shard_data_transfers[shard_idx];
         this->write_shard_to_device(
-            *buffer, shard_data_transfer.shard_coord(), shard_data_transfer.host_data(), shard_data_transfer.region());
+            *buffer,
+            shard_data_transfer.shard_coord(),
+            shard_data_transfer.host_data(),
+            shard_data_transfer.region(),
+            {},
+            experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer));
     };
 
+    bool has_pinned_memory = false;
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
+        has_pinned_memory = has_pinned_memory || experimental::ShardDataTransferGetPinnedMemory(shard_data_transfers[shard_idx]);
         auto shard_coord = shard_data_transfers[shard_idx].shard_coord();
         if (mesh_device_->is_local(shard_coord)) {
             dispatch_thread_pool_->enqueue(
@@ -242,6 +249,13 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
 
     if (blocking) {
         this->finish_nolock();
+    } else if (has_pinned_memory) {
+        auto event = this->enqueue_record_event_to_host_nolock();
+        for (const auto& shard_data_transfer : shard_data_transfers) {
+            if (mesh_device_->is_local(shard_data_transfer.shard_coord())) {
+                experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer)->add_barrier_event(event);
+            }
+        }
     }
 }
 
