@@ -601,6 +601,8 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         true,   // is_injector_core_backward
         false,  // is_injector_core_forward
+        ring_size,
+        ring_index,
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
@@ -641,6 +643,8 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core_backward
         true,   // is_injector_core_forward
+        ring_size,
+        ring_index,
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
@@ -681,6 +685,8 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         false,  // is_injector_core
+        ring_size,
+        ring_index,
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, mm_output_tensor, bias_tensor);
 
@@ -711,6 +717,8 @@ all_gather_minimal_matmul_async_factory_helper(
         in1_valid_semaphore_id,
         in1_is_output_writer,
         true,  // is_injector_core
+        ring_size,
+        ring_index,
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, mm_output_tensor, bias_tensor);
     auto in1_sender_kernels_id = CreateKernel(
@@ -741,6 +749,8 @@ all_gather_minimal_matmul_async_factory_helper(
         in1_valid_semaphore_id,
         in1_is_output_writer,
         false,  // is_injector_core
+        ring_size,
+        ring_index,
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, mm_output_tensor, bias_tensor);
     auto in1_receiver_kernels_id = CreateKernel(

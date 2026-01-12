@@ -32,16 +32,18 @@ void kernel_main() {
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(19);
     constexpr uint32_t is_injector_core_backward = get_compile_time_arg_val(20);
     constexpr uint32_t is_injector_core_forward = get_compile_time_arg_val(21);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(22);
+    constexpr uint32_t my_rank = get_compile_time_arg_val(23);
 
 #ifdef USE_MUX
-    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
-    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(24);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(25);
-    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(26);
-    constexpr uint32_t ct_arg_count = 27;
+    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(24);
+    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(25);
+    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(26);
+    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(27);
+    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(28);
+    constexpr uint32_t ct_arg_count = 29;
 #else
-    constexpr uint32_t ct_arg_count = 22;
+    constexpr uint32_t ct_arg_count = 24;
 #endif
 
     // Load input/output addresses and range parameters
@@ -215,17 +217,15 @@ void kernel_main() {
                     reuse_block = false;
                     continue;
                 }
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
-                bool use_backward_injector_core = is_backward_k_block_iter(k_block_iter);
+                bool use_backward_injector_core = is_backward_k_block_iter(k_block_iter, K_num_blocks / num_devices);
                 bool is_injector_core =
                     is_injector(use_backward_injector_core, is_injector_core_backward, is_injector_core_forward);
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                 if (is_injector_core) {
-                    if (is_injector_core) {
-                        k_block = compute_actual_k_block(k_block);
-                    }
+                    uint32_t k_block = compute_actual_k_block(
+                        k_block_iter, K_num_blocks, my_rank, K_num_blocks / num_devices, num_devices, k_forward);
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
