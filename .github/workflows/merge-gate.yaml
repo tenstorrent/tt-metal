@@ -450,7 +450,7 @@ jobs:
           build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
 
       - name: ✅ Validate RPATH/RUNPATH
-        timeout-minutes: 5
+        timeout-minutes: 1
         run: |
           echo "Validating RPATH/RUNPATH in built libraries..."
           if [ -f build/lib/libtt_metal.so ]; then
