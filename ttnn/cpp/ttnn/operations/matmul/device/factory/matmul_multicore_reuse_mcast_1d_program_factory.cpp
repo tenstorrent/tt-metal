@@ -1788,14 +1788,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     bool math_approx_mode,
     bool packer_l1_acc,
     bool dst_full_sync_en,
-    CoreCoord compute_with_storage_grid_size,
+    CoreCoord /*compute_with_storage_grid_size*/,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t base_cb_index,
-    uint32_t B,
-    uint32_t M,
-    uint32_t N,
+    uint32_t /*B*/,
+    uint32_t /*M*/,
+    uint32_t /*N*/,
     uint32_t K,
-    bool bcast_batch,
+    bool /*bcast_batch*/,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -2404,7 +2404,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         shared_cbs,
         false,
         CoreCoord{0, 0},
-        all_cores_vec,
+        worker_cores_vec,
         0,
         Matmul1DType::GATHER_IN0};
 }
@@ -2590,6 +2590,10 @@ inline void override_gather_in0_program_parameters(
             UpdateDynamicCircularBufferAddress(program, cb_output, *out_buffer);
         }
     }
+
+    // Update in1 tensor address for all worker cores.
+    // Note: override_variables.cores only contains worker cores (not hop/idle cores),
+    // so it's safe to unconditionally update index [1] which holds in1_tensor_addr.
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
     for (const auto& core : override_variables.cores) {
         auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];

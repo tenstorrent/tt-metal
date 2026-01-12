@@ -372,7 +372,7 @@ void test_bert() {
     run_loop();
 }
 
-int main(int argc, char** argv) {
+int main() {
     test_bert();
     return 0;
 }

@@ -56,7 +56,7 @@ ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
 }
 
 ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.use_multicore) {
         return program::ArgMaxMultiCoreProgramFactory{};
     }

@@ -331,7 +331,7 @@ struct ReceiverMemoryMap {
     ReceiverMemoryMap(
         uint32_t l1_unreserved_base,
         uint32_t l1_unreserved_size,
-        uint32_t l1_alignment,
+        uint32_t /*l1_alignment*/,
         uint32_t payload_chunk_size,
         uint32_t num_configs) :
         common(

@@ -16,7 +16,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 Matmul_RS::program_factory_t Matmul_RS::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return Matmul_RS_PF{};
 }
 
@@ -132,7 +132,7 @@ ttnn::operations::experimental::ccl::Matmul_RS::tensor_return_value_t llama_rs_m
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
-    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<Tensor>& /*optional_output_tensor*/,
     tt::tt_fabric::Topology topology,
     bool use_noc1_only,
     const std::optional<const ttnn::Tensor>& second_weight_tensor) {
