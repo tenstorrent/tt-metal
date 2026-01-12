@@ -1183,10 +1183,15 @@ void sdpa_inner_loop(
     const uint32_t mask_chunk_1,
     const uint32_t ring_iter,
     const uint32_t ring_id,
-    const uint32_t N_mask_ring_id,
-    const uint32_t L_mask_ring_id,
-    const uint32_t global_logical_NK_chunks,
-    const uint32_t global_padded_NK_chunks,
+    const uint32_t num_local_k_chunks,
+    const uint32_t local_padded_Nt,
+    const uint32_t logical_nt,
+    const bool ring_iter_needs_global_n_mask,
+    const bool ring_iter_needs_joint_n_mask,
+    const bool local_n_needs_masking,
+    const uint32_t global_n_mask_chunk_id,
+    const uint32_t local_n_mask_chunk_id,
+    const uint32_t joint_n_mask_chunk_id,
     const uint32_t cb_q_in,
     const uint32_t cb_k_in,
     const uint32_t cb_v_in,
@@ -1203,6 +1208,8 @@ void sdpa_inner_loop(
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
     const uint32_t cb_out) {
+    uint32_t KV_chunks_processed_in_iter = 0;
+
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_low_idx;
         uint32_t q_high_idx;
@@ -1247,14 +1254,20 @@ void sdpa_inner_loop(
             k_chunk_end = iter_k_chunk_end;
         }
 
+        uint32_t processed_k_chunks = 0;
+
         for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             if constexpr (sdpa_type == RING) {
-                if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
-                    // This is a KV chunk on spatial input beyond the chunk-padded length of the spatial input.
-                    // If k_chunk >= global_padded_NK_chunks, then this is a joint KV chunk.
+                const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
+                // Global index into the padded KV tensor
+                const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                if (!kv_chunk_is_joint && (kv_global_start_tile >= logical_nt)) {
+                    // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
                 }
             }
+
+            KV_chunks_processed_in_iter++;
 
             /**
              * QK = Q_CHUNK @ K_CHUNK
@@ -1285,7 +1298,11 @@ void sdpa_inner_loop(
              */
 
             bool apply_mask = false;
-            if constexpr (is_causal || sliding_window_size > 0) {
+            if constexpr (sdpa_type == RING) {
+                apply_mask = (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
+                             (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
+                             (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);
+            } else if constexpr (is_causal || sliding_window_size > 0) {
                 // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
                 // Q-range = [q_low, q_high)
                 // K-range = [k_low, k_high)
@@ -1295,16 +1312,14 @@ void sdpa_inner_loop(
                 const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
                 // Apply mask if causal overlap or sliding window is active
                 apply_mask = (q_low_idx < k_high_idx) || (sliding_window_size > 0);
-
             } else if constexpr (use_provided_mask) {
                 apply_mask = true;
             } else if constexpr (use_padded_mask) {
                 // Apply mask only on the last K chunk
                 apply_mask = (k_chunk == iter_k_chunk_end - 1);
             } else if constexpr (use_joint_mask) {
-                // Apply mask for specific ring and chunk combinations
-                apply_mask = (ring_id == N_mask_ring_id && k_chunk == mask_chunk_0) ||
-                             (ring_id == L_mask_ring_id && k_chunk == mask_chunk_1);
+                // Apply mask for specific chunk combinations
+                apply_mask = (k_chunk == mask_chunk_0) || (k_chunk == mask_chunk_1);
             }
 
             if (apply_mask) {
@@ -1322,7 +1337,8 @@ void sdpa_inner_loop(
              */
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, Sk_chunk_t, k_chunk > iter_k_chunk_start);
+                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+
             /**
              * sub_exp fuses a few operations.
              * In-place it performs `QK = exp((QK - cur_max) * scale)`
@@ -1356,7 +1372,7 @@ void sdpa_inner_loop(
             reconfig_data_format(alias_prev_max, alias_cur_max);
 
             /* OUT_ACC += OUT_IM */
-            if (k_chunk > iter_k_chunk_start) {
+            if (processed_k_chunks > 0) {
                 /**
                  * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
@@ -1385,7 +1401,10 @@ void sdpa_inner_loop(
             std::swap(alias_prev_sum, alias_cur_sum);
             std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
             std::swap(alias_prev_max, alias_cur_max);
+
+            processed_k_chunks++;
         }
+
         /**
          * Performs final row-reduction on the partial sum.
          */
@@ -1449,6 +1468,7 @@ void sdpa_inner_loop(
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
             /* cb_out_accumulate_im *= cb_cur_sum */
             mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum);
+
             if (ring_iter > 0) {
                 // Update output according to previous and current LSE
                 /**
@@ -1511,6 +1531,15 @@ void sdpa_inner_loop(
         }
 
         cb_pop_front(cb_q_in, q_chunk_tiles);
+
+        if constexpr (sdpa_type == RING) {
+            if (KV_chunks_processed_in_iter % 2 == 0) {
+                cb_wait_front(cb_k_in, k_chunk_tiles);
+                cb_wait_front(cb_v_in, k_chunk_tiles);
+                cb_pop_front(cb_k_in, k_chunk_tiles);
+                cb_pop_front(cb_v_in, k_chunk_tiles);
+            }
+        }
     }
 
     if constexpr (use_attention_sink) {
@@ -1619,14 +1648,19 @@ void sdpa_standard(
         k_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
-        0,  // mask_chunk_0 (not used)
-        0,  // mask_chunk_1 (not used)
-        0,  // ring_iter (not used)
-        0,  // ring_id (not used)
-        0,  // N_mask_ring_id (not used)
-        0,  // L_mask_ring_id (not used)
-        0,  // global_logical_NK_chunks (not used)
-        0,  // global_padded_NK_chunks (not used)
+        0,      // mask_chunk_0 (not used)
+        0,      // mask_chunk_1 (not used)
+        0,      // ring_iter (not used)
+        0,      // ring_id (not used)
+        0,      // num_local_k_chunks (not used)
+        0,      // local_padded_Nt (not used)
+        0,      // logical_nt (not used)
+        false,  // ring_iter_needs_global_n_mask (not used)
+        false,  // ring_iter_needs_joint_n_mask (not used)
+        false   // local_n_needs_masking (not used)
+        0,      // global_n_mask_chunk_id (not used)
+        0,      // local_n_mask_chunk_id (not used)
+        0,      // joint_n_mask_chunk_id (not used)
         cb_q_in,
         cb_k_in,
         cb_v_in,
@@ -1736,12 +1770,17 @@ void sdpa_joint(
         out_chunk_tiles,
         mask_chunk_0,
         mask_chunk_1,
-        0,  // ring_iter (not used)
-        0,  // ring_id (not used)
-        0,  // N_mask_ring_id (not used)
-        0,  // L_mask_ring_id (not used)
-        0,  // global_logical_NK_chunks (not used)
-        0,  // global_padded_NK_chunks (not used)
+        0,      // ring_iter (not used)
+        0,      // ring_id (not used)
+        0,      // num_local_k_chunks (not used)
+        0,      // local_padded_Nt (not used)
+        0,      // logical_nt (not used)
+        false,  // ring_iter_needs_global_n_mask (not used)
+        false,  // ring_iter_needs_joint_n_mask (not used)
+        false   // local_n_needs_masking (not used)
+        0,      // global_n_mask_chunk_id (not used)
+        0,      // local_n_mask_chunk_id (not used)
+        0,      // joint_n_mask_chunk_id (not used)
         cb_q_in,
         cb_k_in,
         cb_v_in,
@@ -1770,7 +1809,6 @@ template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
     uint32_t DHt,
-    bool use_joint_mask,
     uint32_t scale_fp32>
 void sdpa_ring(
     const uint32_t Skt,
@@ -1799,10 +1837,15 @@ void sdpa_ring(
     const uint32_t mask_chunk_1,
     const uint32_t ring_iter,
     const uint32_t ring_id,
-    const uint32_t N_mask_ring_id,
-    const uint32_t L_mask_ring_id,
-    const uint32_t global_logical_NK_chunks,
-    const uint32_t global_padded_NK_chunks,
+    const uint32_t num_local_k_chunks,
+    const uint32_t local_padded_Nt,
+    const uint32_t logical_nt,
+    const bool ring_iter_needs_global_n_mask,
+    const bool ring_iter_needs_joint_n_mask,
+    const bool local_n_needs_masking,
+    const uint32_t global_n_mask_chunk_id,
+    const uint32_t local_n_mask_chunk_id,
+    const uint32_t joint_n_mask_chunk_id,
     const uint32_t cb_q_in,
     const uint32_t cb_k_in,
     const uint32_t cb_v_in,
@@ -1833,7 +1876,7 @@ void sdpa_ring(
         false,  // is_causal (not used)
         false,  // use_provided_mask (not used)
         false,  // use_padded_mask (not used)
-        use_joint_mask,
+        false,  // use_joint_mask (not used)
         false,  // is_chunked (not used)
         scale_fp32,
         0>(  // sliding_window_size (not used)
@@ -1865,10 +1908,15 @@ void sdpa_ring(
         mask_chunk_1,
         ring_iter,
         ring_id,
-        N_mask_ring_id,
-        L_mask_ring_id,
-        global_logical_NK_chunks,
-        global_padded_NK_chunks,
+        num_local_k_chunks,
+        local_padded_Nt,
+        logical_nt,
+        ring_iter_needs_global_n_mask,
+        ring_iter_needs_joint_n_mask,
+        local_n_needs_masking,
+        global_n_mask_chunk_id,
+        local_n_mask_chunk_id,
+        joint_n_mask_chunk_id,
         cb_q_in,
         cb_k_in,
         cb_v_in,
@@ -1972,14 +2020,19 @@ void sdpa_windowed(
         k_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
-        0,  // mask_chunk_0 (not used)
-        0,  // mask_chunk_1 (not used)
-        0,  // ring_iter (not used)
-        0,  // ring_id (not used)
-        0,  // N_mask_ring_id (not used)
-        0,  // L_mask_ring_id (not used)
-        0,  // global_logical_NK_chunks (not used)
-        0,  // global_padded_NK_chunks (not used)
+        0,      // mask_chunk_0 (not used)
+        0,      // mask_chunk_1 (not used)
+        0,      // ring_iter (not used)
+        0,      // ring_id (not used)
+        0,      // num_local_k_chunks (not used)
+        0,      // local_padded_Nt (not used)
+        0,      // logical_nt (not used)
+        false,  // ring_iter_needs_global_n_mask (not used)
+        false,  // ring_iter_needs_joint_n_mask (not used)
+        false   // local_n_needs_masking (not used)
+        0,      // global_n_mask_chunk_id (not used)
+        0,      // local_n_mask_chunk_id (not used)
+        0,      // joint_n_mask_chunk_id (not used)
         cb_q_in,
         cb_k_in,
         cb_v_in,

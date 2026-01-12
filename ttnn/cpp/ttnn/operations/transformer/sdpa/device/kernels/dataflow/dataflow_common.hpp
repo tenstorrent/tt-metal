@@ -672,7 +672,8 @@ struct CatAddrGenerator {
         first_seq_padded(first_seq_padded),
         second_seq_padded(second_seq_padded) {}
 
-    uint32_t maybe_read_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t dst_addr) const {
+    uint32_t maybe_read_tile(
+        uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t end_seq_tile, uint32_t dst_addr) const {
         if (d2 < first_shape.shape[2]) {
             uint32_t tile_id = first_shape.id_of(d0, d1, d2, d3);
             noc_async_read_tile(tile_id, first_reader, dst_addr);
@@ -689,7 +690,8 @@ struct CatAddrGenerator {
         }
     }
 
-    uint32_t maybe_write_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t src_addr) const {
+    uint32_t maybe_write_tile(
+        uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t end_seq_tile, uint32_t src_addr) const {
         if (d2 < first_shape.shape[2]) {
             uint32_t tile_id = first_shape.id_of(d0, d1, d2, d3);
             noc_async_write_page(tile_id, first_reader, src_addr);
@@ -704,13 +706,48 @@ struct CatAddrGenerator {
     }
 };
 
+template <typename ReaderType>
+struct PaddedAddrGenerator {
+    ReaderType reader;
+    TensorTileShape tensor_shape;
+
+    PaddedAddrGenerator(const ReaderType& reader, TensorTileShape tensor_shape) :
+        reader(reader), tensor_shape(tensor_shape) {}
+
+    uint32_t maybe_read_tile(
+        uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t end_seq_tile, uint32_t dst_addr) const {
+        if (d2 < tensor_shape.shape[2] && d2 < end_seq_tile) {
+            uint32_t tile_id = tensor_shape.id_of(d0, d1, d2, d3);
+            noc_async_read_tile(tile_id, reader, dst_addr);
+            return 1;
+        } else {
+            // fill with zeros
+            fill_zeros_async(dst_addr, reader.page_size);
+            return 1;
+        }
+    }
+
+    uint32_t maybe_write_tile(
+        uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t end_seq_tile, uint32_t src_addr) const {
+        if (d2 < tensor_shape.shape[2] && d2 < end_seq_tile) {
+            uint32_t tile_id = tensor_shape.id_of(d0, d1, d2, d3);
+            noc_async_write_tile(tile_id, reader, src_addr);
+            return 1;
+        }
+        return 0;
+    }
+};
+
 struct Slice {
     uint32_t d0;        // batch dimension
     uint32_t d1;        // head dimension
+
     uint32_t d2_start;  // sequence start
     uint32_t d2_end;    // sequence end
     uint32_t d3_start;  // feature start
     uint32_t d3_end;    // feature end
+
+    Slice() = default;
 
     Slice(uint32_t d0, uint32_t d1, uint32_t d2_start, uint32_t d2_end, uint32_t d3_start, uint32_t d3_end) :
         d0(d0), d1(d1), d2_start(d2_start), d2_end(d2_end), d3_start(d3_start), d3_end(d3_end) {}
@@ -723,9 +760,9 @@ template <typename CatAddrGeneratorType>
 void read_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
+    const uint32_t end_seq_tile,
     const uint32_t cb_id,
     const uint32_t tile_bytes,
-    const uint32_t barrier_threshold,
     const bool transpose) {
     const uint32_t src_rows = src_slice.get_d2_size();
     const uint32_t src_cols = src_slice.get_d3_size();
@@ -740,14 +777,14 @@ void read_block(
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
             uint32_t did_read = cat_addr_generator.maybe_read_tile(
-                src_slice.d0, src_slice.d1, src_slice.d2_start + row, src_slice.d3_start + col, write_ptr);
+                src_slice.d0,
+                src_slice.d1,
+                src_slice.d2_start + row,
+                src_slice.d3_start + col,
+                end_seq_tile,
+                write_ptr);
 
             write_ptr += inner_ptr_stride;
-            barrier_count += did_read;
-            if (barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
-                barrier_count = 0;
-            }
         }
     }
     noc_async_read_barrier();
@@ -758,9 +795,9 @@ template <typename CatAddrGeneratorType>
 void write_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& dst_slice,
+    const uint32_t end_seq_tile,
     const uint32_t cb_id,
-    const uint32_t tile_bytes,
-    const uint32_t barrier_threshold) {
+    const uint32_t tile_bytes) {
     const uint32_t dst_rows = dst_slice.get_d2_size();
     const uint32_t dst_cols = dst_slice.get_d3_size();
     const uint32_t num_tiles = dst_rows * dst_cols;
@@ -775,14 +812,8 @@ void write_block(
         uint32_t read_ptr = base_read_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < dst_cols; ++col) {
             uint32_t did_write = cat_addr_generator.maybe_write_tile(
-                dst_slice.d0, dst_slice.d1, dst_slice.d2_start + row, dst_slice.d3_start + col, read_ptr);
+                dst_slice.d0, dst_slice.d1, dst_slice.d2_start + row, dst_slice.d3_start + col, end_seq_tile, read_ptr);
             read_ptr += inner_ptr_stride;
-
-            barrier_count += did_write;
-            if (barrier_count == barrier_threshold) {
-                noc_async_writes_flushed();
-                barrier_count = 0;
-            }
         }
     }
     noc_async_write_barrier();
@@ -869,13 +900,7 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
     }
 }
 
-template <
-    bool use_padded_mask,
-    bool is_causal,
-    bool use_joint_mask,
-    bool is_chunked,
-    uint32_t sliding_window_size,
-    uint32_t cb_mask_in>
+template <bool is_causal, bool is_chunked, uint32_t sliding_window_size, uint32_t cb_mask_in>
 void generate_mask(
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
@@ -883,9 +908,10 @@ void generate_mask(
     uint32_t chunk_start_t_in_q_chunks,
     bool generate_mask_0,
     bool generate_mask_1,
-    uint32_t unpadded_Sk,
-    uint32_t unpadded_N,
-    uint32_t unpadded_L) {
+    bool generate_mask_2,
+    uint32_t unpadded_Sk_mask_0,
+    uint32_t unpadded_Sk_mask_1,
+    uint32_t unpadded_Sk_mask_2) {
     if constexpr (is_causal || sliding_window_size > 0) {
         uint32_t offset_q_chunk = q_chunk;
         if constexpr (is_chunked) {
@@ -911,22 +937,15 @@ void generate_mask(
                     Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
             }
         }
-    } else if constexpr (use_padded_mask) {
-        // Generate non-causal padded mask only once per q chunk since it is only non-zero on the last K
-        // chunk if it exists at all.
-        generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk);
-    } else if constexpr (use_joint_mask) {
-        /*
-          If `use_joint_mask`, then one or both of input tensors are padded.
-          We already know that input tensors are padded up to Sk_chunk_t.
-          Therefore, for the last K chunk of the first tensor and the last K chunk of the joint tensor,
-          we should generate the vertical mask.
-        */
+    } else {
         if (generate_mask_0) {
-            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_N);
+            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_0);
         }
         if (generate_mask_1) {
-            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_L);
+            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_1);
+        }
+        if (generate_mask_2) {
+            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_2);
         }
     }
 }
@@ -935,70 +954,53 @@ template <typename WriterType, typename TensorAccessorType>
 void read_prev_output_and_lse(
     const CatAddrGenerator<WriterType, WriterType>& cat_out_generator,
     const TensorAccessorType& lse_writer,
-    uint32_t nb,
-    uint32_t nq,
-    uint32_t NH,
-    uint32_t q_chunk,
-    uint32_t Sq_chunk_t,
-    uint32_t DHt,
-    uint32_t local_Nt,
-    uint32_t logical_Lt,
-    uint32_t cb_prev_out,
-    uint32_t cb_lse_in,
-    uint32_t tile_bytes,
-    uint32_t lse_tile_bytes,
-    uint32_t barrier_threshold) {
-    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
-    const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t Sq_chunk_t,
+    const Slice out_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t lse_seq_start_tile,
+    const uint32_t lse_seq_end_tile,
+    const uint32_t cb_prev_out,
+    const uint32_t cb_lse_in,
+    const uint32_t tile_bytes,
+    const uint32_t lse_tile_bytes) {
+    // Read previous output for this Q chunk
+    read_block(cat_out_generator, out_slice, end_seq_tile, cb_prev_out, tile_bytes, false);
 
-    read_block(cat_out_generator, dst_slice, cb_prev_out, tile_bytes, barrier_threshold, false);
-
+    // Read previous LSE for this Q chunk
     cb_reserve_back(cb_lse_in, Sq_chunk_t);
-    uint32_t lse_addr_ptr = get_write_ptr(cb_lse_in);
-
-    uint32_t base_lse_tile_id = nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) + q_chunk * Sq_chunk_t;
-    // Don't write beyond the end of the LSE in sequence length
-    uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
-    uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;
-    lse_seq_start = std::min(lse_seq_start, (local_Nt + logical_Lt));
-    lse_seq_end = std::min(lse_seq_end, (local_Nt + logical_Lt));
-
-    uint32_t lse_tile_id = base_lse_tile_id;
-    for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
-        noc_async_read_tile(lse_tile_id, lse_writer, lse_addr_ptr);
-        lse_tile_id++;
-        lse_addr_ptr += lse_tile_bytes;
+    uint32_t lse_addr = get_write_ptr(cb_lse_in);
+    for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
+        noc_async_read_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, lse_addr);
+        lse_addr += lse_tile_bytes;
     }
     noc_async_read_barrier();
     cb_push_back(cb_lse_in, Sq_chunk_t);
 }
 
 template <typename TensorAccessorType>
-void write_lse_output(
+void write_output_and_lse(
+    const CatAddrGenerator<WriterType, WriterType>& cat_out_generator,
     const TensorAccessorType& lse_writer,
-    uint32_t nb,
-    uint32_t nq,
-    uint32_t NH,
-    uint32_t q_chunk,
-    uint32_t Sq_chunk_t,
-    uint32_t local_Nt,
-    uint32_t logical_Lt,
-    uint32_t cb_lse_out,
-    uint32_t lse_tile_bytes) {
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t Sq_chunk_t,
+    const Slice out_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t lse_seq_start_tile,
+    const uint32_t lse_seq_end_tile,
+    const uint32_t cb_out,
+    const uint32_t cb_lse_out,
+    const uint32_t tile_bytes,
+    const uint32_t lse_tile_bytes) {
+    write_block(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
+
     cb_wait_front(cb_lse_out, Sq_chunk_t);
-    uint32_t lse_addr_ptr = get_read_ptr(cb_lse_out);
-
-    uint32_t base_lse_tile_id = nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) + q_chunk * Sq_chunk_t;
-    uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
-    uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;
-    lse_seq_start = std::min(lse_seq_start, (local_Nt + logical_Lt));
-    lse_seq_end = std::min(lse_seq_end, (local_Nt + logical_Lt));
-
-    uint32_t lse_tile_id = base_lse_tile_id;
-    for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
-        noc_async_write_page(lse_tile_id, lse_writer, lse_addr_ptr);
-        lse_tile_id++;
-        lse_addr_ptr += lse_tile_bytes;
+    uint32_t lse_addr = get_read_ptr(cb_lse_out);
+    for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
+        noc_async_write_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, lse_addr);
+        lse_addr += lse_tile_bytes;
     }
     noc_async_writes_flushed();
     cb_pop_front(cb_lse_out, Sq_chunk_t);

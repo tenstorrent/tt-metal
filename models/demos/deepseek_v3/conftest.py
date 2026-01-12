@@ -11,7 +11,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.utils.test_utils import load_state_dict, system_name_to_mesh_shape
+from models.demos.deepseek_v3.utils.test_utils import get_valid_system_names, load_state_dict, system_name_to_mesh_shape
 from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
@@ -26,6 +26,60 @@ def pytest_addoption(parser):
         RESET_WEIGHT_CACHE_OPTION,
         action="store_true",
         help="Reset weight configs for tests",
+    )
+
+
+def automatically_detect_current_device_type() -> str:
+    """
+    Automatically detect device type based on cluster type and device count.
+
+    Returns:
+        str: One of "N150", "N300", "T3K", "TG", "DUAL", "QUAD"
+
+    Raises:
+        ValueError: If the device type cannot be determined from the current configuration
+    """
+    cluster_type = ttnn.cluster.get_cluster_type()
+    num_devices = ttnn.get_num_devices()
+
+    # Check cluster type first
+    if cluster_type == ttnn.cluster.ClusterType.T3K:
+        if num_devices == 8:
+            return "T3K"
+        else:
+            raise ValueError(f"T3K cluster type detected but unexpected device count: {num_devices} (expected 8)")
+    elif cluster_type == ttnn.cluster.ClusterType.TG:
+        if num_devices == 32:
+            return "TG"
+        else:
+            raise ValueError(f"TG cluster type detected but unexpected device count: {num_devices} (expected 32)")
+    elif cluster_type == ttnn.cluster.ClusterType.GALAXY:
+        # Galaxy can be TG (32 devices), DUAL (64 devices), or QUAD (128 devices)
+        if num_devices == 32:
+            return "TG"
+        elif num_devices == 64:
+            return "DUAL"
+        elif num_devices == 128:
+            return "QUAD"
+        else:
+            raise ValueError(
+                f"GALAXY cluster type detected but unexpected device count: {num_devices} "
+                f"(expected 32 for TG, 64 for DUAL, or 128 for QUAD)"
+            )
+    elif cluster_type == ttnn.cluster.ClusterType.N150:
+        if num_devices == 1:
+            return "N150"
+        else:
+            raise ValueError(f"N150 cluster type detected but unexpected device count: {num_devices} (expected 1)")
+    elif cluster_type == ttnn.cluster.ClusterType.N300:
+        if num_devices == 1 or num_devices == 2:
+            return "N300"
+        else:
+            raise ValueError(f"N300 cluster type detected but unexpected device count: {num_devices} (expected 1 or 2)")
+
+    raise ValueError(
+        f"Unable to determine device type: cluster_type={cluster_type}, "
+        f"num_devices={num_devices}, arch_name={ttnn.get_arch_name()}"
     )
 
 
@@ -53,9 +107,20 @@ def mesh_device(request, device_params):
     if requested_system_name is None:
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to T3K, DUAL, QUAD, or TG.")
 
-    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
-    logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
+    def get_mesh_shape(system_name: str) -> ttnn.MeshShape:
+        if system_name.upper() == "AUTO":
+            detected_name = get_current_device_type()
+            logger.info(
+                f"Selected MESH_DEVICE: 'AUTO' - detected device type: '{detected_name}' - mesh shape will be set to: {system_name_to_mesh_shape(detected_name)}"
+            )
+            return system_name_to_mesh_shape(detected_name)
+        else:
+            logger.info(
+                f"Selected MESH_DEVICE: '{system_name}' - mesh shape will be set to: {system_name_to_mesh_shape(system_name)}"
+            )
+            return system_name_to_mesh_shape(system_name.upper())
 
+    mesh_shape = get_mesh_shape(requested_system_name)
     updated_device_params = get_updated_device_params(device_params)
 
     fabric_config = updated_device_params.pop("fabric_config", None)
@@ -96,11 +161,17 @@ def state_dict(model_path):
 
 
 @pytest.fixture(scope="function", autouse=True)
-def clear_state_dict_cache(state_dict):
+def clear_state_dict_cache(request):
     """
     Clear the LazyStateDict cache after each test to prevent memory accumulation.
     This preserves file handles (mmap benefits) while freeing tensor memory.
     """
+    # Check if state_dict is requested by this test
+    if "state_dict" not in request.fixturenames:
+        yield
+        return
+
+    state_dict = request.getfixturevalue("state_dict")
     yield
     state_dict.clear_cache()
 
@@ -109,7 +180,7 @@ def clear_state_dict_cache(state_dict):
 def hf_config_short(request, hf_config):
     hf_config_out = deepcopy(hf_config)
     hf_config_out.num_hidden_layers = getattr(request, "param", 1)
-    hf_config_out.max_seq_len = 3 * 1024
+    hf_config_out.max_seq_len = 4096
     return hf_config_out
 
 
@@ -162,3 +233,76 @@ def cache_path():
     except OSError:
         default_cache = "/proj_sw/user_dev/deepseek-v3-cache"
     return Path(os.getenv("DEEPSEEK_V3_CACHE", default_cache))
+
+
+def get_current_device_type() -> str:
+    """
+    Determine the current device type based on cluster type and device count.
+    Honors MESH_DEVICE environment variable when set, falling back to hardware detection otherwise.
+
+    Returns:
+        str: One of "N150", "N300", "T3K", "TG", "DUAL", "QUAD"
+
+    Raises:
+        ValueError: If the device type cannot be determined from the current configuration
+    """
+
+    valid_system_names = get_valid_system_names()
+    requested_system_name = os.getenv("MESH_DEVICE")
+    if requested_system_name is None:
+        raise ValueError(
+            f"Invalid system name: {requested_system_name}. Must be one of {', '.join(valid_system_names)} or AUTO"
+        )
+
+    upper_name = requested_system_name.upper()
+    if upper_name == "AUTO":
+        system_name = automatically_detect_current_device_type()
+        logger.warning(f"MESH_DEVICE was set to 'AUTO' - detected device type: '{system_name}'")
+    else:
+        system_name = upper_name
+
+    if system_name not in valid_system_names:
+        raise ValueError(f"Invalid system name: {system_name}. Must be one of {', '.join(valid_system_names)}")
+
+    return system_name
+
+
+def pytest_configure(config):
+    # Register the requires_device marker
+    config.addinivalue_line(
+        "markers",
+        "requires_device(device_types): mark test to run only on specified device types. "
+        "device_types can be a single string or list of strings from: N150, N300, T3K, TG, DUAL, QUAD. "
+        "Example: @pytest.mark.requires_device(['T3K', 'TG'])",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """
+    Check if tests have requires_device marker and skip them during collection if current device doesn't match.
+    """
+    try:
+        current_device = get_current_device_type()
+        logger.debug(f"Current detected device type: {current_device}")
+    except Exception as e:
+        pytest.exit(f"Could not determine device type during collection: {e}", returncode=1)
+
+    for item in items:
+        marker = item.get_closest_marker("requires_device")
+        if marker:
+            # Get device_types from marker - can be single value or list
+            device_types = marker.args[0] if marker.args else marker.kwargs.get("device_types", [])
+
+            # Normalize to list
+            if isinstance(device_types, str):
+                device_types = [device_types]
+            elif not isinstance(device_types, (list, tuple)):
+                device_types = [device_types]
+
+            # Check if current device is in the allowed list
+            if current_device not in device_types:
+                # Add skip marker during collection - this will make skips collapse like @pytest.mark.skip()
+                skip_reason = (
+                    f"Test case requires device type(s) {device_types}, but current device is {current_device}"
+                )
+                item.add_marker(pytest.mark.skip(reason=skip_reason))
