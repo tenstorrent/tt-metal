@@ -132,7 +132,7 @@ def test_qwenimage_pipeline_performance(
     # performance measurement runs
     # =========================================================================
     logger.info("Running performance measurement iterations...")
-    num_perf_runs = 1
+    num_perf_runs = 2  # len(prompts)
 
     # optional tracy profiling (if available)
     profiler = None

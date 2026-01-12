@@ -185,7 +185,8 @@ class QwenImagePipeline:
         self._padding_config = padding_config
         self._pos_embed = torch_transformer.pos_embed
 
-        # Initialize the transformers. Loading logic comes after
+        # Initialize the transformers. Loading logic comes after.
+        # Loading logic is initialized in the constructor. After that modules, will be loaded/offloaded as needed.
         self.transformers = []
         for i, submesh_device in enumerate(self._submesh_devices):
             self.transformers.append(
@@ -216,7 +217,7 @@ class QwenImagePipeline:
                 ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
                 parallel_config=self._encoder_parallel_config,
                 use_torch=use_torch_text_encoder,
-                is_fsdp=is_fsdp,
+                is_fsdp=True,  # Best configuration for wh t3k and galaxy
             )
 
         # load tranformer weights based on configuration
@@ -405,7 +406,8 @@ class QwenImagePipeline:
         dynamic_load_vae: bool | None = None,
     ) -> QwenImagePipeline:
         default_config = {
-            # 8-chip configurations
+            # The default cofigurations are the best found from sweeping the following: is_fsdp, dynamic_load_encoder, and dynamic_load_vae.
+            # The encoder is currently configured to always be FSDP as it is the most memory efficient configuration with little to no performance penalty.
             (1, 8): {
                 "cfg_config": (1, 0),  # no CFG parallel
                 "sp": (1, 0),
@@ -424,16 +426,15 @@ class QwenImagePipeline:
                 "encoder_tp": (4, 1),
                 "vae_tp": (4, 1),
                 "num_links": 1,
-                "is_fsdp": True,
+                "is_fsdp": False,
                 "dynamic_load_encoder": True,
                 "dynamic_load_vae": False,
             },
-            # 6U (32-chip Galaxy) configuration - matching Stable Diffusion
             (4, 8): {
                 "cfg_config": (2, 1),
                 "sp": (4, 0),
                 "tp": (4, 1),
-                "encoder_tp": (16, 1),
+                "encoder_tp": (4, 1),
                 "vae_tp": (4, 1),
                 "num_links": 4,
                 "is_fsdp": False,
