@@ -299,7 +299,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
         wq_kv_a_r_config = {
             "dims": [1],
@@ -318,7 +318,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
 
         wkv_b2_ag_config = AllGatherAsyncConfig(
@@ -326,7 +326,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
 
         return {
@@ -572,7 +572,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
         wq_kv_a_r_config = {
             "dims": [1],
@@ -592,7 +592,7 @@ class MLA1D(AbstractModule):
             in_dim=2,
             out_dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
 
         wq_a2a_reshard_out_mem_config = ttnn.create_sharded_memory_config(
@@ -627,7 +627,7 @@ class MLA1D(AbstractModule):
             in_dim=1,
             out_dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
 
         # WO
@@ -636,7 +636,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
         )
 
         return {
