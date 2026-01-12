@@ -23,7 +23,7 @@ sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
  *
  * The constraint on `val` is: 0 <= val < 128.0f
  * Note: Unlike _float_to_int32_ and _float_to_int32_positive, this function assumes that
- * value has been been divide by 2^23
+ * value has been been divided by 2^23
  * If that was not the case, we would have had to shift by `exp - 23` instead of `exp`
  * This saves 1 SFPADDI instruction.
  */
@@ -49,7 +49,7 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp21f_(sfpi::vFloat val) {
  */
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
-    // This function computes exp(x) by leverage mathematic properties of exp(x):
+    // This function computes exp(x) by leveraging mathematic properties of exp(x):
     // That is, exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
     // - z_i = trunc(x / ln2) (integer part)
     // - z_f = x/ln2 - trunc(x/ln2) (fractional part)
@@ -66,7 +66,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     constexpr float ONE_LN2 = 1.4426950216293334961f;
     sfpi::vFloat xlog2 = (val * ONE_LN2 + 127.f);
 
-    // Intermedirary values can overflow in xlog2 is outside of [0, 256[ which leads to invalid resutls instead of 0
+    // Intermediary values can overflow in xlog2 is outside of [0, 256[ which leads to invalid results instead of 0
     // (when input < -88.5) and +inf (when input > 88.5)
     // To avoid this, we clamp xlog2 to [0, 255]
     // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
@@ -116,7 +116,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
 sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
-    // This function computes exp(x) by leverage mathematic properties of exp(x):
+    // This function computes exp(x) by leveraging mathematic properties of exp(x):
     // That is, exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
     // - z_i = trunc(x / ln2) (integer part)
     // - z_f = x/ln2 - trunc(x/ln2) (fractional part)
@@ -133,7 +133,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
     constexpr float ONE_LN2 = 1.4426950216293334961f;
     sfpi::vFloat xlog2 = val * ONE_LN2 + 127.f;
 
-    // Intermedirary values can overflow in xlog2 is outside of [0, 256[ which leads to invalid resutls instead of 0
+    // Intermediary values can overflow in xlog2 is outside of [0, 256[ which leads to invalid results instead of 0
     // (when input < -88.5) and +inf (when input > 88.5)
     // To avoid this, we clamp xlog2 to [0, 255]
     // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
