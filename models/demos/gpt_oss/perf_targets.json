@@ -59,8 +59,8 @@
                 },
                 "GLX_gpt-oss-120b": {
                     "TTFT": [650, 1.2],
-                    "decode_tok_s_u": 2.5,
-                    "decode_tok_s": 350
+                    "decode_tok_s_u": 3.0,
+                    "decode_tok_s": 400
                 }
             }
         }
