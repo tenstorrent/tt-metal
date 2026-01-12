@@ -113,10 +113,12 @@ int main(int argc, char* argv[]) {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
+    uint32_t prev_noc_index = 1;
+    uint32_t prev_noc_mode = DM_DEDICATED_NOC;
+    noc_local_state_init(prev_noc_index);
+
     signal_ncrisc_completion();
 
-    uint32_t prev_noc_index = 0;
-    uint32_t prev_noc_mode = DM_DEDICATED_NOC;
 
     DeviceProfilerInit();
     while (1) {
