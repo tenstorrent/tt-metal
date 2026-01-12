@@ -1131,19 +1131,16 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(
 void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device, uint8_t active_dram_buffer_index) {
     ZoneScoped;
     const DeviceAddr profiler_addr = getProfilerDramBufferAddress(active_dram_buffer_index);
+    const uint32_t bank_size_bytes = getProfileBufferBankSizeBytes();
+    const uint32_t bank_size_words = bank_size_bytes / sizeof(uint32_t);
     uint32_t profile_buffer_idx = 0;
 
     const int num_dram_channels = device->num_dram_channels();
+    const auto& cluster = MetalContext::instance().get_cluster();
     for (int dram_channel = 0; dram_channel < num_dram_channels; ++dram_channel) {
-        std::vector<uint32_t> profile_buffer_bank_data(getProfileBufferBankSizeBytes() / sizeof(uint32_t), 0);
-        MetalContext::instance().get_cluster().read_dram_vec(
-            profile_buffer_bank_data.data(), getProfileBufferBankSizeBytes(), device_id, dram_channel, profiler_addr);
-
-        std::copy(
-            profile_buffer_bank_data.begin(),
-            profile_buffer_bank_data.end(),
-            profile_buffer.begin() + profile_buffer_idx);
-        profile_buffer_idx += getProfileBufferBankSizeBytes() / sizeof(uint32_t);
+        cluster.read_dram_vec(
+            &(profile_buffer[profile_buffer_idx]), bank_size_bytes, device_id, dram_channel, profiler_addr);
+        profile_buffer_idx += bank_size_words;
     }
 }
 
@@ -2046,6 +2043,11 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
     this->initializeMissingTracyContexts(/*blocking=*/is_mid_run_dump);
 
+    if (getDeviceDebugDumpEnabled()) {
+        // This was not called before so call it now for the final dump
+        hash_to_zone_src_locations = generateZoneSourceLocationsHashes();
+    }
+
     if (!is_mid_run_dump) {
         for (auto& [core, _] : this->device_markers_per_core_risc_map) {
             this->thread_pool->enqueue([this, core]() {
@@ -2438,8 +2440,6 @@ void DeviceProfiler::pollDebugDumpResults(
     }
 
     TT_ASSERT(device_id == device->id());
-
-    hash_to_zone_src_locations = generateZoneSourceLocationsHashes();
 
     // Handle worker cores: use ping-pong DRAM buffer logic
     if (virtual_cores.empty()) {
