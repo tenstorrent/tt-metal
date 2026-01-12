@@ -72,8 +72,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
     sfpi::vFloat threshold_low = 0.f;
     sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
-    vec_min_max(threshold_low, xlog2);
-    vec_min_max(xlog2, threshold_high);
+    sfpi::vec_min_max(threshold_low, xlog2);
+    sfpi::vec_min_max(xlog2, threshold_high);
 
     sfpi::vInt z = _float_to_int32_for_exp21f_(xlog2);
 
@@ -139,8 +139,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
     // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
     sfpi::vFloat threshold_low = 0.f;
     sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
-    vec_min_max(threshold_low, xlog2);
-    vec_min_max(xlog2, threshold_high);
+    sfpi::vec_min_max(threshold_low, xlog2);
+    sfpi::vec_min_max(xlog2, threshold_high);
 
     sfpi::vInt z = _float_to_int32_for_exp21f_(xlog2);
 
