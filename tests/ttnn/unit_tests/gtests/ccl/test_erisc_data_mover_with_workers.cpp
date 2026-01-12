@@ -468,7 +468,6 @@ bool RunWriteBWTest(
     const uint32_t pages_per_send = num_bytes_per_send / page_size;
     TT_FATAL(num_bytes_per_send > 0, "num_bytes_per_send must be greater than 0");
     TT_FATAL(num_bytes_per_send >= page_size, "num_bytes_per_send must be at least page_size");
-    TT_FATAL(num_bytes_per_send >= page_size, "num_bytes_per_send must be at least page_size");
     const uint32_t num_messages_to_send = (((num_pages_total * page_size) - 1) / num_bytes_per_send) + 1;
     log_info(tt::LogTest, "num_bytes_per_send={}", num_bytes_per_send);
     log_info(tt::LogTest, "page_size={}", page_size);
