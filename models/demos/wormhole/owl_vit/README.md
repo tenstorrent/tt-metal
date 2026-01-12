@@ -114,12 +114,28 @@ models/demos/wormhole/owl_vit/
 
 ## Implementation Details
 
-### TTNN Optimizations
+### TTNN Optimizations (Stage 1)
 
-1. **DRAM Memory Config**: Currently validating with DRAM memory configuration for stability
-2. **Fused QKV**: Query, Key, Value projections are fused into a single matrix multiplication
-3. **Native TTNN Operations**: Full pipeline implemented using native ttnn ops including embeddings and transformer layers
-4. **GELU Fusion**: Feed-forward GELU activation is fused with the linear operation
+1. **LoFi Math Fidelity**: Compute kernel config with `MathFidelity.LoFi` for faster matmul operations
+2. **DRAM Memory Config**: Currently validating with DRAM memory configuration for stability
+3. **Fused QKV**: Query, Key, Value projections are fused into a single matrix multiplication
+4. **Native TTNN Operations**: Full pipeline implemented using native ttnn ops including embeddings and transformer layers
+5. **GELU Fusion**: Feed-forward GELU activation is fused with the linear operation
+6. **Aggressive Deallocation**: Intermediate tensors are deallocated immediately after use
+
+### Optimization Configuration
+
+The `OwlViTTTNNConfig` class supports optimization parameters:
+
+```python
+from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import OwlViTTTNNConfig
+
+# Default: LoFi enabled for performance
+config = OwlViTTTNNConfig(use_lofi=True, use_l1_memory=False)
+
+# Get compute kernel config for matmul/linear ops
+compute_kernel_config = config.get_compute_kernel_config()
+```
 
 
 

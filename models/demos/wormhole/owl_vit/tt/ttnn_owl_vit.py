@@ -31,8 +31,13 @@ class OwlViTTTNNConfig:
     # General
     layer_norm_eps: float = 1e-5
 
+    # Stage 1 Optimization parameters
+    use_lofi: bool = True  # Use LoFi math fidelity for faster matmuls
+    use_l1_memory: bool = False  # Use L1 for activations (faster but limited size)
+    weights_dtype: str = "bfloat16"  # "bfloat16" or "bfloat8_b" for weights
+
     @classmethod
-    def from_huggingface(cls, hf_config):
+    def from_huggingface(cls, hf_config, use_lofi: bool = True, use_l1_memory: bool = False):
         return cls(
             vision_hidden_size=hf_config.vision_config.hidden_size,
             vision_num_heads=hf_config.vision_config.num_attention_heads,
@@ -46,7 +51,31 @@ class OwlViTTTNNConfig:
             text_layers=hf_config.text_config.num_hidden_layers,
             vocab_size=hf_config.text_config.vocab_size,
             layer_norm_eps=hf_config.vision_config.layer_norm_eps,
+            use_lofi=use_lofi,
+            use_l1_memory=use_l1_memory,
         )
+
+    def get_compute_kernel_config(self):
+        """Get compute kernel config with appropriate math fidelity."""
+        if self.use_lofi:
+            return ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+            )
+        else:
+            return ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+            )
+
+    def get_memory_config(self):
+        """Get memory config based on optimization settings."""
+        if self.use_l1_memory:
+            return ttnn.L1_MEMORY_CONFIG
+        else:
+            return ttnn.DRAM_MEMORY_CONFIG
 
 
 def run_vision_encoder_layer(
@@ -54,8 +83,9 @@ def run_vision_encoder_layer(
     layer_params: Dict[str, Any],
     config: OwlViTTTNNConfig,
     memory_config: ttnn.MemoryConfig,
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig = None,
 ) -> ttnn.Tensor:
-    """Run a single vision encoder layer."""
+    """Run a single vision encoder layer with optional compute kernel config for optimization."""
     # Layer norm 1
     residual = hidden_states
     hidden_states = ttnn.layer_norm(
@@ -73,6 +103,7 @@ def run_vision_encoder_layer(
         bias=layer_params["self_attn"]["qkv"]["bias"],
         memory_config=memory_config,
         dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
     )
     ttnn.deallocate(hidden_states)
 
@@ -83,7 +114,7 @@ def run_vision_encoder_layer(
     )
     ttnn.deallocate(qkv)
 
-    attention_scores = ttnn.matmul(query, key, memory_config=memory_config)
+    attention_scores = ttnn.matmul(query, key, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
@@ -91,7 +122,9 @@ def run_vision_encoder_layer(
     attention_probs = ttnn.softmax(attention_scores, dim=-1)
     ttnn.deallocate(attention_scores)
 
-    context = ttnn.matmul(attention_probs, value, memory_config=memory_config)
+    context = ttnn.matmul(
+        attention_probs, value, memory_config=memory_config, compute_kernel_config=compute_kernel_config
+    )
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
 
@@ -103,6 +136,7 @@ def run_vision_encoder_layer(
         bias=layer_params["self_attn"]["out_proj"]["bias"],
         memory_config=memory_config,
         dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
     )
     ttnn.deallocate(context)
 
@@ -127,6 +161,7 @@ def run_vision_encoder_layer(
         bias=layer_params["mlp"]["fc1"]["bias"],
         memory_config=memory_config,
         dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
     )
     ttnn.deallocate(hidden_states)
     mlp_hidden = ttnn.gelu(mlp_hidden)
@@ -137,6 +172,7 @@ def run_vision_encoder_layer(
         bias=layer_params["mlp"]["fc2"]["bias"],
         memory_config=memory_config,
         dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
     )
     ttnn.deallocate(mlp_hidden)
 
@@ -153,8 +189,9 @@ def run_text_encoder_layer(
     causal_mask: ttnn.Tensor,
     config: OwlViTTTNNConfig,
     memory_config: ttnn.MemoryConfig,
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig = None,
 ) -> ttnn.Tensor:
-    """Run a single text encoder layer with causal attention."""
+    """Run a single text encoder layer with causal attention and optional compute kernel config."""
     # Note: Text encoder uses Pre-Layernorm
     residual = hidden_states
     hidden_states = ttnn.layer_norm(
@@ -173,6 +210,7 @@ def run_text_encoder_layer(
         bias=layer_params["self_attn"]["qkv"]["bias"],
         memory_config=memory_config,
         dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
     )
     ttnn.deallocate(hidden_states)
 
@@ -184,7 +222,7 @@ def run_text_encoder_layer(
     ttnn.deallocate(qkv)
 
     # 2. Compute scores
-    attention_scores = ttnn.matmul(query, key, memory_config=memory_config)
+    attention_scores = ttnn.matmul(query, key, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
@@ -200,7 +238,9 @@ def run_text_encoder_layer(
     ttnn.deallocate(attention_scores)
 
     # 6. Context
-    context = ttnn.matmul(attention_probs, value, memory_config=memory_config)
+    context = ttnn.matmul(
+        attention_probs, value, memory_config=memory_config, compute_kernel_config=compute_kernel_config
+    )
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
 
@@ -214,6 +254,7 @@ def run_text_encoder_layer(
         bias=layer_params["self_attn"]["out_proj"]["bias"],
         memory_config=memory_config,
         dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
     )
     ttnn.deallocate(context)
 
@@ -239,6 +280,7 @@ def run_text_encoder_layer(
         bias=layer_params["mlp"]["fc1"]["bias"],
         memory_config=memory_config,
         dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
     )
     ttnn.deallocate(hidden_states)
     # QuickGELU
@@ -250,6 +292,7 @@ def run_text_encoder_layer(
         bias=layer_params["mlp"]["fc2"]["bias"],
         memory_config=memory_config,
         dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
     )
     ttnn.deallocate(mlp_hidden)
 

@@ -570,10 +570,13 @@ def run_vision_encoder_on_device(
     )
 
     dram_config = ttnn.DRAM_MEMORY_CONFIG
+    compute_kernel_config = ttnn_config.get_compute_kernel_config()
 
     # Process encoder layers
     for layer_params in parameters["vision"]["encoder_layers"]:
-        hidden_states = run_vision_encoder_layer(hidden_states, layer_params, ttnn_config, dram_config)
+        hidden_states = run_vision_encoder_layer(
+            hidden_states, layer_params, ttnn_config, dram_config, compute_kernel_config
+        )
 
     # Post-layernorm
     output = ttnn.layer_norm(
@@ -668,10 +671,13 @@ def run_text_encoder_on_device(
     )
 
     dram_config = ttnn.DRAM_MEMORY_CONFIG
+    compute_kernel_config = ttnn_config.get_compute_kernel_config()
 
     # Process encoder layers with causal attention
     for layer_idx, layer_params in enumerate(parameters["text"]["encoder_layers"]):
-        hidden_states = run_text_encoder_layer(hidden_states, layer_params, causal_mask_tt, ttnn_config, dram_config)
+        hidden_states = run_text_encoder_layer(
+            hidden_states, layer_params, causal_mask_tt, ttnn_config, dram_config, compute_kernel_config
+        )
         if layer_idx == 0 or (layer_idx + 1) % 4 == 0:
             logger.info(f"Completed text encoder layer {layer_idx + 1}/{len(parameters['text']['encoder_layers'])}")
 
