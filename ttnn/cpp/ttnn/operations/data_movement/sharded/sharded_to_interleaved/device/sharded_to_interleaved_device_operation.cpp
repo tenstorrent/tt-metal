@@ -87,7 +87,7 @@ ShardedToInterleavedDeviceOperation::tensor_return_value_t ShardedToInterleavedD
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ShardedToInterleavedDeviceOperation::tensor_return_value_t>
 ShardedToInterleavedDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) const {
     int ideal_dev_clock_cycles = common_tm_bw_model(tensor_args.input_tensor, output_tensor);

@@ -761,7 +761,7 @@ def silu(x, *args, **kwargs):
     return torch.nn.functional.silu(x)
 
 
-def div(x, y, *args, accurate_mode, round_mode=None, **kwargs):
+def div(x, y, *args, fast_and_approximate_mode, round_mode=None, **kwargs):
     return torch.div(x, y, rounding_mode=round_mode)
 
 
@@ -801,7 +801,7 @@ def div_unary(x, *args, scalar, **kwargs):
     return result
 
 
-def unary_div(x, *args, scalar, accurate_mode, round_mode=None, **kwargs):
+def unary_div(x, *args, scalar, fast_and_approximate_mode, round_mode=None, **kwargs):
     return torch.div(x, scalar, rounding_mode=round_mode)
 
 

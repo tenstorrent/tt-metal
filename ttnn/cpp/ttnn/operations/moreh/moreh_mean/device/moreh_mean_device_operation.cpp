@@ -38,7 +38,8 @@ MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory
 
     if (operation_attributes.dim + 1 == rank) {
         return MorehMeanWFactory{};
-    } else if (operation_attributes.dim + 2 == rank) {
+    }
+    if (operation_attributes.dim + 2 == rank) {
         return MorehMeanHFactory{};
     }
     return MorehMeanNCFactory{};

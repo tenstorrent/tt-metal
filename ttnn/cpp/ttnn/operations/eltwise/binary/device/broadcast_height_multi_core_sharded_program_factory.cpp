@@ -213,7 +213,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
 
 void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
@@ -242,10 +242,8 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
     uint32_t N = ashape[0], C = ashape[1];
     uint32_t bN = input_tensor_b->padded_shape()[0];
     uint32_t NC = N * C;
-    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        Wt = shard_spec.shape[1] / TILE_WIDTH;
-        Ht = shard_spec.shape[0] / TILE_HEIGHT;
-    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
     } else {

@@ -16,6 +16,10 @@ from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
 
+# Shared test parametrization constants
+# Prefill sequence lengths: powers of 2 from 128 to 128K
+PREFILL_SEQ_LENS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+
 
 def pytest_addoption(parser):
     parser.addoption(
@@ -105,7 +109,7 @@ def clear_state_dict_cache(state_dict):
 def hf_config_short(request, hf_config):
     hf_config_out = deepcopy(hf_config)
     hf_config_out.num_hidden_layers = getattr(request, "param", 1)
-    hf_config_out.max_seq_len = 3 * 1024
+    hf_config_out.max_seq_len = 4096
     return hf_config_out
 
 

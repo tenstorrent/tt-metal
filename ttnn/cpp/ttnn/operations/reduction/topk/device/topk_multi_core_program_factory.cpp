@@ -45,11 +45,10 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
             config.final_input_size,
             config.selected_x,
             config.selected_y};
-    } else {
-        const auto max_cores = (core_range.end_coord.y - core_range.start_coord.y - 1) *
-                               (core_range.end_coord.x - core_range.start_coord.x);
-        return {max_cores + 1, width, 0, width * k, 0, 0};
     }
+    const auto max_cores =
+        (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
+    return {max_cores + 1, width, 0, width * k, 0, 0};
 }
 
 /**
@@ -367,7 +366,7 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
 
 void TopKMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& args,
+    const operation_attributes_t& /*args*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
     auto& program = cached_program.program;
