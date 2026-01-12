@@ -24,11 +24,12 @@ using models::gpt2::WeightTyingType;
 class DistributedTransformer : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
-    std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
-    std::shared_ptr<ttml::modules::ModuleBase> pos_emb;
-    std::vector<std::shared_ptr<ttml::modules::ModuleBase>> blocks;
-    std::shared_ptr<ttml::modules::ModuleBase> ln_fc;
-    std::shared_ptr<ttml::modules::ModuleBase> fc;
+    // Use ModuleBasePtr to allow replacement with LoRA layers
+    ttml::modules::ModuleBasePtr tok_emb;
+    ttml::modules::ModuleBasePtr pos_emb;
+    std::vector<ttml::modules::ModuleBasePtr> blocks;
+    ttml::modules::ModuleBasePtr ln_fc;
+    ttml::modules::ModuleBasePtr fc;
 
 public:
     explicit DistributedTransformer(const TransformerConfig& config);

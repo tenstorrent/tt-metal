@@ -19,10 +19,11 @@ public:
     autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 
 private:
-    std::shared_ptr<ModuleBase> m_w1;
-    std::shared_ptr<ModuleBase> m_w3;
-    std::shared_ptr<ModuleBase> m_w2;
-    std::shared_ptr<ModuleBase> m_dropout;
+    // Use ModuleBasePtr to allow replacement with LoRA layers
+    ModuleBasePtr m_w1;
+    ModuleBasePtr m_w3;
+    ModuleBasePtr m_w2;
+    ModuleBasePtr m_dropout;
 };
 
 class DistributedLlamaBlock : public ModuleBase {
@@ -38,10 +39,11 @@ public:
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
 
 private:
-    std::shared_ptr<ModuleBase> m_mlp;
-    std::shared_ptr<ModuleBase> m_attention_norm;
-    std::shared_ptr<ModuleBase> m_mlp_norm;
-    std::shared_ptr<ModuleBase> m_attention;
+    // Use ModuleBasePtr to allow replacement with LoRA layers
+    ModuleBasePtr m_mlp;
+    ModuleBasePtr m_attention_norm;
+    ModuleBasePtr m_mlp_norm;
+    ModuleBasePtr m_attention;
 };
 
 }  // namespace ttml::modules::distributed

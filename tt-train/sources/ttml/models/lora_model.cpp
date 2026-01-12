@@ -59,13 +59,14 @@ void LoraModel::replace_linear_modules_recursive(ttml::modules::ModuleBase* modu
     }
 
     // Get all named modules from current module
-    auto& named_modules = module->named_modules();
+    const auto& named_modules = module->named_modules();
 
     // We need to collect replacements first to avoid modifying while iterating
     std::vector<std::pair<std::string, std::shared_ptr<ttml::modules::ModuleBase>>> replacements;
 
-    for (const auto& [module_name, submodule_ptr] : named_modules) {
+    for (const auto& [module_name, submodule_ptr_ptr] : named_modules) {
         std::string full_name = prefix + "/" + module_name;
+        const auto& submodule_ptr = *submodule_ptr_ptr;
 
         // Check if this is a LinearLayer
         auto* linear_layer = dynamic_cast<ttml::modules::LinearLayer*>(submodule_ptr.get());

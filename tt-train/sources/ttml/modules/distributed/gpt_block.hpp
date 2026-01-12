@@ -22,9 +22,10 @@ public:
     autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 
 private:
-    std::shared_ptr<distributed::ColumnParallelLinear> m_fc1;
-    std::shared_ptr<distributed::RowParallelLinear> m_fc2;
-    std::shared_ptr<DropoutLayer> m_dropout;
+    // Use ModuleBasePtr to allow replacement with LoRA layers
+    ModuleBasePtr m_fc1;
+    ModuleBasePtr m_fc2;
+    ModuleBasePtr m_dropout;
 };
 
 class DistributedGPTBlock : public modules::ModuleBase {
@@ -35,10 +36,11 @@ public:
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
 
 private:
-    std::shared_ptr<DistributedGPTMLP> m_mlp;
-    std::shared_ptr<LayerNormLayer> m_ln1;
-    std::shared_ptr<LayerNormLayer> m_ln2;
-    std::shared_ptr<DistributedMultiHeadAttention> m_attention;
+    // Use ModuleBasePtr to allow replacement with LoRA layers
+    ModuleBasePtr m_mlp;
+    ModuleBasePtr m_ln1;
+    ModuleBasePtr m_ln2;
+    ModuleBasePtr m_attention;
 };
 
 }  // namespace ttml::modules::distributed

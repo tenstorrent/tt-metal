@@ -36,7 +36,7 @@ private:
     autograd::TensorPtr m_lora_a;
     autograd::TensorPtr m_lora_b;
 
-    std::shared_ptr<ModuleBase> m_dropout;
+    ModuleBasePtr m_dropout;
 
     float m_scale = 1.0F;
 

@@ -27,12 +27,13 @@ private:
     // for model save and load we need to make sure that stored/loaded name is the same between different runs
     // unordered_map does not guarantee the order of iteration
     std::map<std::string, autograd::TensorPtr> m_named_tensors;
-    std::map<std::string, ModuleBasePtr> m_named_modules;
+    // Store pointers to the actual ModuleBasePtr fields, so that override_module can update the field directly
+    std::map<std::string, ModuleBasePtr*> m_named_modules;
 
 protected:
     void create_name(const std::string& name);
     void register_tensor(const autograd::TensorPtr& tensor_ptr, const std::string& name);
-    void register_module(const ModuleBasePtr& module_ptr, const std::string& name);
+    void register_module(ModuleBasePtr& module_field, const std::string& name);
     void override_tensor(const autograd::TensorPtr& tensor_ptr, const std::string& name);
 
 public:
@@ -45,11 +46,10 @@ public:
 
     [[nodiscard]] const std::string& get_name() const;
     [[nodiscard]] serialization::NamedParameters parameters() const;
-    [[nodiscard]] const std::map<std::string, ModuleBasePtr>& named_modules() const;
-    [[nodiscard]] std::map<std::string, ModuleBasePtr>& named_modules();
+    [[nodiscard]] const std::map<std::string, ModuleBasePtr*>& named_modules() const;
+    [[nodiscard]] std::map<std::string, ModuleBasePtr*>& named_modules();
     [[nodiscard]] const std::map<std::string, autograd::TensorPtr>& named_tensors() const;
     [[nodiscard]] std::map<std::string, autograd::TensorPtr>& named_tensors();
-    [[nodiscard]] std::shared_ptr<ModuleBase> get_module(const std::string& name) const;
 
     void override_module(const std::string& name, const ModuleBasePtr& module_ptr);
 

@@ -17,8 +17,8 @@
 #include "optimizers/sgd.hpp"
 
 class Model : public ttml::modules::ModuleBase {
-    std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
-    std::shared_ptr<ttml::modules::LinearLayer> m_fc2;
+    ttml::modules::ModuleBasePtr m_fc1;
+    ttml::modules::ModuleBasePtr m_fc2;
 
 public:
     Model() {
@@ -40,9 +40,9 @@ public:
 };
 
 class ModelUnusedLayer : public ttml::modules::ModuleBase {
-    std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
-    std::shared_ptr<ttml::modules::LinearLayer> m_fc2;
-    std::shared_ptr<ttml::modules::LinearLayer> m_fc3;
+    ttml::modules::ModuleBasePtr m_fc1;
+    ttml::modules::ModuleBasePtr m_fc2;
+    ttml::modules::ModuleBasePtr m_fc3;
 
 public:
     ModelUnusedLayer() {

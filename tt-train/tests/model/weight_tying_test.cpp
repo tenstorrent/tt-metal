@@ -16,13 +16,14 @@
 #include "optimizers/adamw.hpp"
 
 class ModelFC : public ttml::modules::ModuleBase {
-    std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
-    std::shared_ptr<ttml::modules::LinearLayer> m_fc2;
+    ttml::modules::ModuleBasePtr m_fc1;
+    ttml::modules::ModuleBasePtr m_fc2;
 
 public:
     ModelFC() {
-        m_fc2 = std::make_shared<ttml::modules::LinearLayer>(64, 64);
-        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(m_fc2->get_weight(), /* has_bias*/ true);
+        auto fc2 = std::make_shared<ttml::modules::LinearLayer>(64, 64);
+        m_fc2 = fc2;
+        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(fc2->get_weight(), /* has_bias*/ true);
         create_name("ModelFC");
 
         register_module(m_fc1, "fc1");
@@ -37,22 +38,23 @@ public:
     }
 
     ttml::autograd::TensorPtr get_fc1_weight() {
-        return m_fc1->get_weight();
+        return dynamic_cast<ttml::modules::LinearLayer*>(m_fc1.get())->get_weight();
     }
 
     ttml::autograd::TensorPtr get_fc2_weight() {
-        return m_fc2->get_weight();
+        return dynamic_cast<ttml::modules::LinearLayer*>(m_fc2.get())->get_weight();
     }
 };
 
 class LanguageModel : public ttml::modules::ModuleBase {
-    std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
-    std::shared_ptr<ttml::modules::Embedding> m_emb;
+    ttml::modules::ModuleBasePtr m_fc1;
+    ttml::modules::ModuleBasePtr m_emb;
 
 public:
     LanguageModel() {
-        m_emb = std::make_shared<ttml::modules::Embedding>(64, 128);
-        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(m_emb->get_weight(), /* has_bias*/ true);
+        auto emb = std::make_shared<ttml::modules::Embedding>(64, 128);
+        m_emb = emb;
+        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(emb->get_weight(), /* has_bias*/ true);
 
         create_name("LanguageModel");
 

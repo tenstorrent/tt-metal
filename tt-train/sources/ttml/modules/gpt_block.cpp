@@ -22,10 +22,10 @@ GPTMLP::GPTMLP(uint32_t embedding_size, float dropout_prob) {
 }
 
 autograd::TensorPtr GPTMLP::operator()(const autograd::TensorPtr& input) {
-    auto x = (*get_module("fc1"))(input);
+    auto x = (*fc1)(input);
     x = ops::gelu(x);
-    x = (*get_module("fc2"))(x);
-    x = (*get_module("dropout"))(x);
+    x = (*fc2)(x);
+    x = (*dropout)(x);
     return x;
 }
 

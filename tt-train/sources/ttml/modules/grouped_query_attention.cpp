@@ -11,6 +11,7 @@
 #include "linear_module.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "rotary_embedding.hpp"
 
 namespace ttml::modules {
 
@@ -36,8 +37,8 @@ GroupedQueryAttention::GroupedQueryAttention(const GQAConfig& config) :
 ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
     // Standard attention without KV cache
-    auto q = (*get_module("q_linear"))(x);
-    auto kv = (*get_module("kv_linear"))(x);
+    auto q = (*m_q_linear)(x);
+    auto kv = (*m_kv_linear)(x);
 
     auto [query_with_heads, key_with_heads, value_with_heads] =
         ops::grouped_heads_creation(q, kv, m_num_heads, m_num_groups);
@@ -76,8 +77,10 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const uint32_t token_position = kv_cache->get_cache_position();
 
     if (m_embedding) {
-        query_with_heads = (*m_embedding)(query_with_heads, token_position);
-        key_with_heads = (*m_embedding)(key_with_heads, token_position);
+        // Cast to RotaryEmbedding for the token_position overload
+        auto* rope = dynamic_cast<RotaryEmbedding*>(m_embedding.get());
+        query_with_heads = (*rope)(query_with_heads, token_position);
+        key_with_heads = (*rope)(key_with_heads, token_position);
     }
 
     kv_cache->update(layer_idx, key_with_heads->get_value(), value_with_heads->get_value(), new_tokens);
@@ -104,8 +107,8 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
         ttml::ops::scaled_dot_product_attention(query_with_heads, k_cache_to_process, v_cache_to_process, mask);
     attention = ops::heads_fusion(attention);
 
-    auto out = (*get_module("out_linear"))(attention);
-    out = (*get_module("dropout"))(out);
+    auto out = (*m_out_linear)(attention);
+    out = (*m_dropout)(out);
 
     return out;
 }

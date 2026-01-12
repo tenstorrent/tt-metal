@@ -25,7 +25,7 @@ struct LoRAConfig {
 
 class LoraModel : public BaseTransformer {
 private:
-    std::shared_ptr<BaseTransformer> m_base_model;
+    ttml::modules::ModuleBasePtr m_base_model;
     LoRAConfig m_config;
 
     void replace_linear_modules_recursive(ttml::modules::ModuleBase* module, const std::string& prefix);
@@ -46,7 +46,7 @@ public:
     void load_from_safetensors(const std::filesystem::path& model_path) override;
 
     [[nodiscard]] std::shared_ptr<BaseTransformer> get_base_model() const {
-        return m_base_model;
+        return std::dynamic_pointer_cast<BaseTransformer>(m_base_model);
     }
 };
 

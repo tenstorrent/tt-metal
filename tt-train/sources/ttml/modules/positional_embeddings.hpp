@@ -22,7 +22,7 @@ struct PositionalEmbeddingConfig {
 class PositionalEmbedding : public ModuleBase {
 private:
     uint32_t m_sequence_length{};
-    std::shared_ptr<DropoutLayer> m_dropout;
+    ModuleBasePtr m_dropout;
     autograd::AutocastTensor m_positional_embedding;
 
 public:
@@ -33,7 +33,7 @@ public:
 class TrainablePositionalEmbedding : public ModuleBase {
     uint32_t m_sequence_length{};
     autograd::TensorPtr m_weight;
-    std::shared_ptr<DropoutLayer> m_dropout;
+    ModuleBasePtr m_dropout;
     void initialize_tensors(uint32_t sequence_length, uint32_t embedding_dim);
 
 public:

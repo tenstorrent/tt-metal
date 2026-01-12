@@ -15,9 +15,10 @@
 namespace ttml::modules {
 
 class GPTMLP : public modules::ModuleBase {
-    std::shared_ptr<LinearLayer> fc1;
-    std::shared_ptr<LinearLayer> fc2;
-    std::shared_ptr<DropoutLayer> dropout;
+    // Use ModuleBasePtr to allow replacement with LoRA layers
+    ModuleBasePtr fc1;
+    ModuleBasePtr fc2;
+    ModuleBasePtr dropout;
 
 public:
     GPTMLP(uint32_t embedding_size, float dropout_prob);
@@ -26,10 +27,11 @@ public:
 };
 
 class GPTBlock : public modules::ModuleBase {
-    std::shared_ptr<GPTMLP> mlp;
-    std::shared_ptr<LayerNormLayer> ln1;
-    std::shared_ptr<LayerNormLayer> ln2;
-    std::shared_ptr<MultiHeadAttention> attention;
+    // Use ModuleBasePtr to allow replacement with LoRA layers
+    ModuleBasePtr mlp;
+    ModuleBasePtr ln1;
+    ModuleBasePtr ln2;
+    ModuleBasePtr attention;
 
 public:
     explicit GPTBlock(

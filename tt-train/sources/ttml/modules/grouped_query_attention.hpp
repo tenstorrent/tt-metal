@@ -30,11 +30,12 @@ private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};
     uint32_t m_num_groups{};
-    std::shared_ptr<ModuleBase> m_q_linear;
-    std::shared_ptr<ModuleBase> m_kv_linear;
-    std::shared_ptr<ModuleBase> m_out_linear;
-    std::shared_ptr<ModuleBase> m_dropout;
-    std::shared_ptr<RotaryEmbedding> m_embedding;
+    // Use ModuleBasePtr to allow replacement with LoRA layers
+    ModuleBasePtr m_q_linear;
+    ModuleBasePtr m_kv_linear;
+    ModuleBasePtr m_out_linear;
+    ModuleBasePtr m_dropout;
+    ModuleBasePtr m_embedding;
 
 public:
     explicit GroupedQueryAttention(const GQAConfig& config);

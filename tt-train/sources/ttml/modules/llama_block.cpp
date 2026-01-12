@@ -33,11 +33,11 @@ LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate
 }
 
 autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
-    auto swished = ops::silu((*get_module("w1"))(input));
-    auto gate = (*get_module("w3"))(input);
+    auto swished = ops::silu((*m_w1)(input));
+    auto gate = (*m_w3)(input);
     auto gated = ops::mul(swished, gate);
-    auto x = (*get_module("w2"))(gated);
-    x = (*get_module("dropout"))(x);
+    auto x = (*m_w2)(gated);
+    x = (*m_dropout)(x);
     return x;
 }
 
@@ -89,7 +89,9 @@ autograd::TensorPtr LlamaBlock::operator()(
     const uint32_t new_tokens) {
     auto residual = input;
     auto h = (*m_attention_norm)(input);
-    h = (*m_attention)(h, mask, kv_cache, layer_idx, new_tokens);
+    // Cast to GroupedQueryAttention for the KV cache forward method
+    auto* attention = dynamic_cast<GroupedQueryAttention*>(m_attention.get());
+    h = (*attention)(h, mask, kv_cache, layer_idx, new_tokens);
     h = ops::add(h, residual);
 
     residual = h;
