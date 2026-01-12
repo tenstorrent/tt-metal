@@ -49,6 +49,16 @@ bool test_load_write_read_risc_binary(
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx);
+
+bool test_load_multicast_write_risc_binary(
+    const ll_api::memory& mem,
+    tt::ChipId chip_id,
+    const CoreCoord& start_core,
+    const CoreCoord& end_core,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx);
+
 void write_binary_to_address(const ll_api::memory& mem, ChipId chip_id, const CoreCoord& core, uint32_t address);
 
 namespace internal_ {
