@@ -61,7 +61,7 @@ class TTNNLinear(TTNNModule):
         input_tensor_shape = list(input_tensor.shape)
         input_shape = list(input_tensor_shape)
         while len(input_shape) < 4:
-            input_shape.insert(0, 1)  # Add batch dimensions if needed
+            input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
         tt_output = ttnn.linear(input_tensor, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [self.out_features])
