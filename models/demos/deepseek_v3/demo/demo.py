@@ -242,7 +242,7 @@ def run_demo(
     enable_trace: bool = False,
     repeat_batches: int = 1,
     signpost: bool = False,
-    prefill_max_tokens: int = None,
+    prefill_max_tokens: int = 1024,
     profile: str = "both",
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.

@@ -357,7 +357,7 @@ class DeepseekGenerator:
 
     def _tt_from_tokens_step(self, tokens_step: torch.Tensor) -> ttnn.Tensor:
         """Tokens step: [B] -> TTNN tensor [1, 1, B] uint32, replicated to mesh."""
-        assert tokens_step.dim() == 1
+        assert tokens_step.dim() == 1, f"Expected 1D tensor, got shape {tokens_step.shape}"
         x = tokens_step.view(1, 1, -1).to(torch.int32)
         return ttnn.from_torch(
             x,
@@ -460,16 +460,18 @@ class DeepseekGenerator:
             rope_tensors,
             page_tables=page_tables_to_use,
         )
-        # Gather to host
+        # Gather to host - with argmax on device, output is [1, 1, B, 1] token indices
         logits = ttnn.to_torch(
             logits_tt,
             mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
         )
+        # Squeeze to [B] for token indices with argmax on device
+        logits = logits[0, 0, :, 0]  # [1, 1, B, 1] -> [B]
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
         ttnn.deallocate(logits_tt)
 
-        return logits  # [1, 1, B, V]
+        return logits  # [B] token indices
 
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.argmax(logits, dim=-1)  # [B]
@@ -553,7 +555,7 @@ class DeepseekGenerator:
             for user_id in range(num_of_users):
                 if lengths[user_id] == 0:
                     logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
-                    last_logits.append(torch.zeros(self.hf_config.vocab_size))
+                    last_logits.append(torch.zeros(1))
                     continue
                 logger.info(f"Running prefill for user_id: {user_id}")
                 logger.info(
@@ -563,7 +565,7 @@ class DeepseekGenerator:
                 user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
                 last_logits.append(user_out)
                 self.ccl.reset_sem_counters()
-            last_logits = torch.stack(last_logits)
+            last_logits = torch.stack(last_logits).squeeze(-1)  # [B, 1] -> [B] for argmax on device
             profiler.end("inference_prefill")
             signpost(header="prefill")
 
@@ -571,13 +573,8 @@ class DeepseekGenerator:
 
             logger.info(f"Finished prefill for all users...")
 
-            # First sampled token after prompt
-            next_tokens = self._sample_greedy(last_logits)
-            profiler.end("inference_prefill")
-
-            # First sampled token after prompt (original code keeps this second pass)
-            last_logits = last_logits.squeeze(0).squeeze(0)
-            next_tokens = self._sample_greedy(last_logits)
+            # With argmax on device, last_logits already contains token indices [B]
+            next_tokens = last_logits
             token_value = int(next_tokens[0].item())
             logger.info(f"First sampled token: {self.tokenizer.decode(token_value, skip_special_tokens=True)}")
 
@@ -608,7 +605,8 @@ class DeepseekGenerator:
                 )
                 profiler.end(f"decode_time_{gen_idx}")
                 self.ccl.reset_sem_counters()
-                pred_tokens = self._sample_greedy(logits)
+                pred_tokens = logits
+                # pred_tokens = self._sample_greedy(logits)
                 if teacher_forcing is not None:
                     forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
                     pred_tokens[0] = int(forced)
@@ -753,7 +751,7 @@ class DeepseekGenerator:
             page_tables_to_use = self._get_page_tables()
 
         # RowBatchedModel forward prefill
-        logits_tt = RowBatchedModel.forward_prefill(
+        out_tt = RowBatchedModel.forward_prefill(
             x=tt_tokens,
             user_id=user_id,
             cfg=self.model_run_config_prefill,
@@ -762,15 +760,19 @@ class DeepseekGenerator:
         )
 
         # Gather to host
-        logits = ttnn.to_torch(
-            logits_tt,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
-        )
+        argmax_idx = ttnn.to_torch(
+            out_tt,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-3, -1), mesh_shape=self.mesh_device.shape),
+        )[
+            :, :1, :, :1
+        ]  # TODO: only for perf debug!!
+
+        ttnn.deallocate(out_tt)
 
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
-        ttnn.deallocate(logits_tt)
-        return logits  # [1, 1, seq_len, V]
+        # ttnn.deallocate(logits_tt)
+        return argmax_idx  # [1, 1, seq_len, V]  # [1, 1, seq_len, 8]
 
     def _capture_decode_trace(
         self, init_tokens: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int
@@ -826,7 +828,8 @@ class DeepseekGenerator:
         enable_trace: bool = False,
     ) -> torch.Tensor:
         if not enable_trace:
-            return self._decode_step(tokens, positions, batch_size_per_row).squeeze(0).squeeze(0)
+            # _decode_step now returns [B] directly with argmax on device
+            return self._decode_step(tokens, positions, batch_size_per_row)
         else:
             # Capture trace and return trace output
             if self._trace_id is None:
@@ -839,7 +842,8 @@ class DeepseekGenerator:
                         self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
                     ),
                 )
-                return logits.squeeze(0).squeeze(0)
+                # With argmax on device, shape is [1, 1, B, 1] -> [B]
+                return logits[0, 0, :, 0]
 
             # Update persistent inputs and execute
             assert (
@@ -893,7 +897,9 @@ class DeepseekGenerator:
                     self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
                 ),
             )
-            signpost(header="decode_execute_trace")
+            if self.signpost:
+                signpost(header="decode_execute_trace")
+            # With argmax on device, shape is [1, 1, B, 1] -> [B]
             return logits.squeeze(0).squeeze(0)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
