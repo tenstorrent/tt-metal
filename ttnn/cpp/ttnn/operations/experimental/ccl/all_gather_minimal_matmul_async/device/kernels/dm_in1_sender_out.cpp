@@ -27,6 +27,8 @@ void kernel_main() {
     uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(19);
+    constexpr uint32_t my_rank = get_compile_time_arg_val(20);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -45,7 +47,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<19>();
+    constexpr auto in1_args = TensorAccessorArgs<21>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -126,14 +128,12 @@ void kernel_main() {
                     reuse_block = false;
                     continue;
                 }
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
-                    if (is_injector_core) {
-                        k_block = compute_actual_k_block(k_block);
-                    }
+                    uint32_t k_block = compute_actual_k_block(
+                        k_block_iter, K_num_blocks, my_rank, K_num_blocks / num_devices, num_devices, k_forward);
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
