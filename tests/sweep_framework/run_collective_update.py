@@ -315,11 +315,11 @@ def extract_common_metadata(files: List[pathlib.Path], run_type: str = "nightly"
 
     # Set run_contents based on run type
     if run_type == "comprehensive":
-        common_metadata["run_contents"] = "all sweeps (comprehensive)"
+        common_metadata["run_contents"] = "comprehensive"
     elif run_type == "model_traced":
-        common_metadata["run_contents"] = "all sweeps (model traced)"
+        common_metadata["run_contents"] = "model traced"
     else:
-        common_metadata["run_contents"] = "all sweeps (nightly)"
+        common_metadata["run_contents"] = "nightly"
 
     return common_metadata
 
