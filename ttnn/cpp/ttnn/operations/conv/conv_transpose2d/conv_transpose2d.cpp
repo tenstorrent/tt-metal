@@ -330,7 +330,8 @@ Result conv_transpose2d_L1(
             false,  // full_inner_dim
             false,  // enable_activation_reuse
             conv_config.config_tensors_in_dram,
-            conv_config.force_split_reader);
+            conv_config.force_split_reader,
+            std::nullopt);  // force_act_mcast_split
     }
 
     if (memory_config.has_value() && memory_config.value() != output.memory_config()) {

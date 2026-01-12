@@ -224,6 +224,7 @@ void kernel_main() {
     uint32_t l1_write_addr_act = split_reader_cb_write_addr;
     uint32_t prev_addr = 0;
     uint64_t act_write_offset_current = act_mcast_write_offset;
+    constexpr uint32_t burst_size = NOC_MAX_BURST_SIZE;
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
             if constexpr (split_reader_enabled) {
@@ -342,9 +343,9 @@ void kernel_main() {
                         if (weight_tile_h_outer_i == act_mcast_sender_id) {
                             // Wait for reserve done from main reader
                             wait_reserve_done(act_mcast_reserve_done_semaphore_addr_ptr);
-
-                            // Calculate offsets for the second reader's portion
-                            // Second reader waits for first reader's tiles (act_block_num_tiles_split)
+                            // cb_wait_front(act_tilized_cb, act_block_num_tiles_split_last +
+                            // act_block_num_tiles_split); Calculate offsets for the second reader's portion Second
+                            // reader waits for first reader's tiles (act_block_num_tiles_split)
                             uint32_t tile_wait_offset = act_block_num_tiles_split;
                             uint32_t src_cb_read_offset = act_mcast_write_offset;
                             uint32_t dst_cb_write_offset = act_write_offset_current;
@@ -353,7 +354,7 @@ void kernel_main() {
                             // mcast_block_chunked will wait for the tiles internally using tile_wait_offset
                             mcast_block_chunked<
                                 act_mcast_num_cores,
-                                NOC_MAX_BURST_SIZE,
+                                burst_size,
                                 act_block_num_tiles_split_last,
                                 act_mcast_tile_size>(
                                 is_receiver_core,

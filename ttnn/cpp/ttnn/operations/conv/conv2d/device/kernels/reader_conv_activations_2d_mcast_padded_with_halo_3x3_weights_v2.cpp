@@ -144,8 +144,9 @@ void kernel_main() {
     // Always pop the full amount since main reader does full reserve/push even when split
     constexpr uint32_t tilize_pop_tiles = act_block_num_tiles;
     // When split is enabled, main reader only multicasts the first portion
-    constexpr uint32_t tiles_to_multicast = act_mcast_split ? act_block_num_tiles_read : act_block_num_tiles;
-
+    // constexpr uint32_t tiles_to_multicast = act_mcast_split ? act_block_num_tiles_read : act_block_num_tiles;
+    constexpr uint32_t tiles_to_multicast = act_block_num_tiles;
+    constexpr uint32_t burst_size = NOC_MAX_BURST_SIZE;
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
     uint32_t start_reader_idx = 0;
@@ -204,11 +205,7 @@ void kernel_main() {
                     }
 
                     // Main reader always multicasts from the beginning of the tilized CB (no offsets)
-                    mcast_block_chunked<
-                        act_mcast_num_cores,
-                        NOC_MAX_BURST_SIZE,
-                        tiles_to_multicast,
-                        act_mcast_tile_size_bytes>(
+                    mcast_block_chunked<act_mcast_num_cores, burst_size, tiles_to_multicast, act_mcast_tile_size_bytes>(
                         is_receiver_core, tilized_in0_cb_id, cb_id_act, act_multicast_noc_addr);
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
