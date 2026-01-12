@@ -260,7 +260,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     // KERNEL CREATION
     // Forward Direction
     // Reader
-    auto sender_reader_forward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    auto sender_reader_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_reader_forward_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
         sender_forward_cb_index,          // cb_forward_id
@@ -293,7 +293,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sender_reader_forward_kernel_config);
 
     // Writer
-    auto sender_writer_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    auto sender_writer_forward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     sender_writer_forward_kernel_config.compile_args = {
         ring_index,                               // my_chip_id
         reserved_packet_header_forward_CB_index,  // reserved_packet_header_cb_id
@@ -326,7 +326,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     // Backward Direction
     // Reader
-    auto sender_reader_backward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    auto sender_reader_backward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_reader_backward_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
         sender_backward_cb_index,         // cb_backward_id
@@ -359,7 +359,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sender_reader_backward_kernel_config);
 
     // Writer
-    auto sender_writer_backward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    auto sender_writer_backward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     sender_writer_backward_kernel_config.compile_args = {
         ring_index,                                // my_chip_id
         reserved_packet_header_backward_CB_index,  // reserved_packet_header_cb_id

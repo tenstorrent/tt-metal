@@ -180,7 +180,9 @@ ALWI void asin_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(asin, true)); }
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void atan_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL(atan, RC, true, idst)); }
+ALWI void atan_tile(uint32_t idst) {
+    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_atan, APPROX, DST_ACCUM_MODE, 8, idst, (int)VectorMode::RC));
+}
 
 /**
  * Please refer to documentation for any_init.
