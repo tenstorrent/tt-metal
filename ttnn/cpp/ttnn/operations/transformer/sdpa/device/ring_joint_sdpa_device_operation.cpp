@@ -211,15 +211,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH);
 
     TT_FATAL(
-        N_local % q_chunk_size == 0,
-        "Local sequence length must be divisible by q_chunk_size. Got N_local: {}, q_chunk_size: {}",
+        N_local % tt::constants::TILE_HEIGHT == 0,
+        "Local sequence length must be divisible by TILE_HEIGHT. Got N_local: {}, TILE_HEIGHT: {}",
         N_local,
-        q_chunk_size);
-    TT_FATAL(
-        N_local % k_chunk_size == 0,
-        "Local sequence length must be divisible by k_chunk_size. Got N_local: {}, k_chunk_size: {}",
-        N_local,
-        k_chunk_size);
+        tt::constants::TILE_HEIGHT);
 
     // Validate padding: Only the sequence dimension may be padded
     auto validate_padding = [](const Tensor& tensor) {
