@@ -212,10 +212,11 @@ class TTNNFusedQKVSelfAttention(TTNNModule):
 
     def forward(self, hidden_states):
         """Forward pass through fused QKV linear layer."""
-        hidden_states = ttnn.unsqueeze(hidden_states, 0)
+        if len(hidden_states.shape) == 3:
+            hidden_states = ttnn.unsqueeze(hidden_states, 1)
         query_key_value = self.linear(hidden_states).ttnn_tensor
         query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
-        query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+        queries, keys, values = ttnn.experimental.nlp_create_qkv_heads(
             query_key_value,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             num_heads=self.num_attention_heads,
@@ -223,7 +224,7 @@ class TTNNFusedQKVSelfAttention(TTNNModule):
             transpose_k_heads=False,
         )
         ttnn.deallocate(query_key_value)
-        return query, key, value
+        return queries, keys, values
 
 
 class TTNNSelfAttention(TTNNModule):
@@ -301,7 +302,7 @@ class TTNNSelfAttention(TTNNModule):
         context_layer = ttnn.experimental.nlp_concat_heads(context_layer.to_ttnn)
         # context_layer = ttnn.typecast(context_layer, original_dtype)
         context_layer = ttnn.typecast(context_layer, original_dtype)
-        context_layer = ttnn.squeeze(context_layer, 0)
+        context_layer = ttnn.squeeze(context_layer, 1)
         return (context_layer,)
 
 
