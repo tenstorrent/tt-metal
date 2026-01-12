@@ -330,14 +330,13 @@ endif()
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
+# Using install(FILES) workaround for CMake bug with LIBRARY_OUTPUT_DIRECTORY
 install(
-    TARGETS
-        tt_metal
-    ARCHIVE
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT tar
+    FILES
+        $<TARGET_FILE:tt_metal>
+        $<TARGET_FILE:tt_stl>
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT tar
 )
 
 if(NOT TT_USE_SYSTEM_SFPI)

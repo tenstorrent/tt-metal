@@ -56,13 +56,9 @@ target_precompile_headers(
 
 target_link_libraries(metal_common_pch PRIVATE tt_stl)
 
-# Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
-tt_set_library_rpath(tt_stl)
-
 # Output library directly to build/lib (not build/lib64) for CI tar artifacts
 # This prevents ODR violations in multiprocess tests where different processes
 # might load the library from different locations (original vs copied)
-# CI tar artifacts expect libraries in build/lib regardless of CMAKE_INSTALL_LIBDIR
 set_target_properties(
     tt_stl
     PROPERTIES
@@ -70,20 +66,38 @@ set_target_properties(
             "${CMAKE_BINARY_DIR}/lib"
 )
 
+# Use BUILD_WITH_INSTALL_RPATH=TRUE so the library has correct RPATH at build time.
+# This works for tt_stl because it has no runtime dependencies (all INTERFACE).
+# install(FILES) copies the library as-is, so we need RPATH correct before install.
+set_target_properties(
+    tt_stl
+    PROPERTIES
+        BUILD_WITH_INSTALL_RPATH
+            TRUE
+        INSTALL_RPATH_USE_LINK_PATH
+            FALSE
+        INSTALL_RPATH
+            "$ORIGIN"
+)
+
 # Install target to Metalium export set (required because tt_metal depends on tt_stl)
+# Using install(FILES) workaround because install(TARGETS ... LIBRARY) has a CMake bug
+# where it can't find the library when LIBRARY_OUTPUT_DIRECTORY is set (on Ubuntu).
 if(TT_INSTALL)
+    # Export target and headers (NOT library - see below)
     install(
         TARGETS
             tt_stl
         EXPORT Metalium
-        LIBRARY
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            COMPONENT metalium-runtime
         FILE_SET
         api
             DESTINATION COMPONENT
             metalium-dev
     )
+
+    # Install library using generator expression (workaround for CMake bug)
+    # Since BUILD_WITH_INSTALL_RPATH=TRUE, library already has correct $ORIGIN RPATH
+    install(FILES $<TARGET_FILE:tt_stl> DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
 endif()
 
 if(TT_METAL_BUILD_TESTS)
