@@ -264,6 +264,9 @@ pytest tests/test_speech_t5.py     # SpeechT5 speech synthesis
 pytest tests/test_whisper3.py      # Whisper-large-v3 automatic speech recognition
 pytest tests/test_resnet50.py      # ResNet50 with Conv and Bottleneck
 pytest tests/test_conv.py          # Standalone Conv2d, Conv+BN, Conv+BN+Activation
+pytest tests/test_attention.py     # Self-attention module tests
+pytest tests/test_yunet.py         # YUNet face detection
+pytest tests/test_hunyuan_video.py # HunyuanVideo 1.5 text-to-video generation
 pytest tests/test_glm.py           # GLM-4.5-Air with mesh device support
 pytest tests/test_gptoss.py        # GPT-OSS-20B model
 pytest tests/test_openvla.py       # OpenVLA-7B vision-language-action model
@@ -305,26 +308,37 @@ utils/
 - `TTNNLinear` - Standard linear layer (bfloat16)
 - `TTNNLinearLLama` - Optimized for LLaMA (bfloat8_b, auto-deallocates weights)
 - `TTNNLinearLLamaBFloat16` - LLaMA variant with bfloat16
+- `TTNNLinearGelu` - Linear layer with fused GELU activation
 
 **Activation Functions:**
 - `TTNNSilu` - SiLU/Swish activation
 - `TTNNReLU` - ReLU activation
+- `TTNNGelu` - GELU activation
 
 **Normalization:**
 - `TTNNLayerNorm` - Layer normalization
 
 **Attention:**
-- `TTNNViTSelfAttention` - Vision Transformer self-attention
+- `TTNNViTSelfAttention` - Vision Transformer self-attention (deprecated, use TTNNSelfAttention)
+- `TTNNSDPAAttention` - Scaled Dot-Product Attention
+- `TTNNFusedQKVSelfAttention` - Self-attention with fused QKV projections
+- `TTNNSelfAttention` - General self-attention module
+- `TTNNWhisperAttention` - Whisper-specific attention implementation
 
 **Convolution:**
 - `TTNNConv2dNHWC` - 2D convolution with NHWC layout
 - `TTNNConv2dBNNHWC` - Conv2d fused with BatchNorm
 - `TTNNConv2dBNActivationNHWC` - Conv2d + BatchNorm + Activation
 - `TTNNBottleneck` - ResNet bottleneck block
+- `TTNNMaxPool2dNHWC` - 2D max pooling with NHWC layout
+- `TTNNUpsampleNHWC` - Upsampling with NHWC layout
+- `TTNNPatchEmbedding` - Vision Transformer patch embedding
+- `TTNNViTEmbeddings` - Complete ViT embedding layer (patch + position)
 
 **Tensor Operations:**
 - `TTNNPermute` - Tensor permutation
 - `TTNNReshape` - Tensor reshaping
+- `TTNNAdd` - Element-wise addition
 
 ## Examples
 
@@ -336,6 +350,9 @@ See [tests/](tests/) directory:
 - [test_whisper3.py](tests/test_whisper3.py) - Whisper-large-v3 automatic speech recognition
 - [test_resnet50.py](tests/test_resnet50.py) - ResNet50 with Conv and Bottleneck blocks
 - [test_conv.py](tests/test_conv.py) - Standalone Conv2d, Conv+BN, and Conv+BN+Activation tests
+- [test_attention.py](tests/test_attention.py) - Self-attention module tests
+- [test_yunet.py](tests/test_yunet.py) - YUNet face detection model
+- [test_hunyuan_video.py](tests/test_hunyuan_video.py) - HunyuanVideo 1.5 text-to-video generation
 - [test_glm.py](tests/test_glm.py) - GLM-4.5-Air with mesh device support
 - [test_gptoss.py](tests/test_gptoss.py) - GPT-OSS-20B model
 - [test_openvla.py](tests/test_openvla.py) - OpenVLA-7B vision-language-action model
