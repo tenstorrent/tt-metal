@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "metal_soc_descriptor.h"
+#include "metal_soc_descriptor_data.h"
 
 #include <tt_stl/assert.hpp>
-#include <yaml-cpp/yaml.h>
 #include <string>
 
 #include <umd/device/types/arch.hpp>
@@ -108,25 +108,46 @@ CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(
 CoreCoord metal_SocDescriptor::get_dram_grid_size() const { return CoreCoord(this->get_num_dram_views(), 1); }
 
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
-    YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
-    this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
-    this->dram_core_size = device_descriptor_yaml["dram_views"].size() * this->dram_view_size;
+    // Get architecture from device descriptor file path
+    tt::ARCH arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(this->device_descriptor_file_path);
+
+    // Get static dram metadata based on architecture
+    const tt::metal_soc_descriptor_data::DramMetadata* dram_metadata = nullptr;
+    switch (arch) {
+        case tt::ARCH::GRAYSKULL:
+            dram_metadata = &tt::metal_soc_descriptor_data::GRAYSKULL_DRAM_METADATA;
+            break;
+        case tt::ARCH::WORMHOLE_B0:
+            dram_metadata = &tt::metal_soc_descriptor_data::WORMHOLE_B0_DRAM_METADATA;
+            break;
+        case tt::ARCH::BLACKHOLE:
+            dram_metadata = &tt::metal_soc_descriptor_data::BLACKHOLE_DRAM_METADATA;
+            break;
+        case tt::ARCH::QUASAR:
+            dram_metadata = &tt::metal_soc_descriptor_data::QUASAR_DRAM_METADATA;
+            break;
+        default:
+            TT_THROW("Unsupported architecture for DRAM metadata");
+    }
+
+    this->dram_view_size = dram_metadata->dram_view_size;
+    this->dram_core_size = dram_metadata->dram_views.size() * this->dram_view_size;
     this->dram_view_channels.clear();
     this->dram_view_eth_cores.clear();
     this->dram_view_worker_cores.clear();
     this->dram_view_address_offsets.clear();
 
-    for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
-        size_t channel = dram_view["channel"].as<size_t>();
+    for (const auto& dram_view : dram_metadata->dram_views) {
+        size_t channel = dram_view.channel;
         if (channel >= get_grid_size(tt::CoreType::DRAM).x) {
             // DRAM can be harvested and we don't create unique soc desc for diff harvesting
             break;
         }
-        size_t address_offset = dram_view["address_offset"].as<size_t>();
+        size_t address_offset = dram_view.address_offset;
 
         std::vector<CoreCoord> eth_dram_cores;
         std::vector<size_t> eth_endpoints;
-        for (int eth_endpoint : dram_view["eth_endpoint"].as<std::vector<int>>()) {
+        for (int eth_endpoint : dram_view.eth_endpoint) {
             if (eth_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
                 TT_THROW(
                     "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
@@ -141,7 +162,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
 
         std::vector<CoreCoord> worker_dram_cores;
         std::vector<size_t> worker_endpoints;
-        for (int worker_endpoint : dram_view["worker_endpoint"].as<std::vector<int>>()) {
+        for (int worker_endpoint : dram_view.worker_endpoint) {
             if (worker_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
                 TT_THROW(
                     "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
