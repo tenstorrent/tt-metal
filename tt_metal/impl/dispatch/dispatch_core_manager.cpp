@@ -12,7 +12,7 @@
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
-#include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
@@ -189,7 +189,9 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
     return assignment.dispatcher_s.value();
 }
 
-CoreType dispatch_core_manager::get_dispatch_core_type() { return this->dispatch_core_config_.get_core_type(); }
+CoreType dispatch_core_manager::get_dispatch_core_type() {
+    return get_core_type_from_config(this->dispatch_core_config_);
+}
 
 DispatchCoreConfig dispatch_core_manager::get_dispatch_core_config() { return this->dispatch_core_config_; }
 
@@ -234,7 +236,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         // When running Multiple CQs using Ethernet Dispatch, we may need more dispatch cores than those allocated in
         // the core descriptor (ex: 2 CQs on N300 need 10 dispatch cores and the core descriptor only allocates 6).
         // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
-        if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+        if (get_core_type_from_config(dispatch_core_config) == CoreType::ETH) {
             for (const auto& idle_eth_core :
                  tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
                 add_dispatch_core_to_device_locked(device_id, idle_eth_core);

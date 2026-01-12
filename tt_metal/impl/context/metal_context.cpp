@@ -28,6 +28,7 @@
 #include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
 #include "dispatch/topology.hpp"
+#include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
@@ -540,7 +541,7 @@ DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map() const {
-    return dispatch_mem_map(dispatch_core_config_.get_core_type());
+    return dispatch_mem_map(get_core_type_from_config(dispatch_core_config_));
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
