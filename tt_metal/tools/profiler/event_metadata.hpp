@@ -75,10 +75,13 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         NocType noc_type : 4;
         NocVirtualChannel noc_vc : 4;
         uint8_t payload_chunks;
+        uint8_t posted : 1;
+        uint8_t reserved : 7;
 
-        void setNumBytes(uint32_t num_bytes) {
+        void setAttributes(uint32_t num_bytes, bool p) {
             uint32_t bytes_rounded_up = (num_bytes + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE;
             payload_chunks = std::min(uint32_t(std::numeric_limits<uint8_t>::max()), bytes_rounded_up);
+            posted = p;
         }
         uint32_t getNumBytes() const { return payload_chunks * PAYLOAD_CHUNK_SIZE; }
     };
@@ -86,7 +89,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     // Expected to come after a LocalNocEvent when NoC Debug Mode is enabled.
     struct LocalNocEventDstTrailer {
         uint32_t dst_addr;
-        uint32_t padding;
+        uint32_t counter_value;
     } __attribute__((packed));
 
     // represents a fabric NOC event

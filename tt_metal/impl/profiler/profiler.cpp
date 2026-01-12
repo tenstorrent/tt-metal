@@ -750,6 +750,7 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     // Additional metadata from trailer data
                     if (device_marker.meta_data.contains("dst_addr")) {
                         data["dst_addr"] = device_marker.meta_data["dst_addr"];
+                        data["noc_status_counter"] = device_marker.meta_data["noc_status_counter"];
                     }
 
                     json_events_by_op[program_execution_uid].push_back(data);
@@ -1738,6 +1739,7 @@ void DeviceProfiler::readTsData16BMarkerData(
 
         EMD trailer_metadata(trailer_data[0]);
         meta_data["dst_addr"] = trailer_metadata.getLocalNocEventDstTrailer().dst_addr;
+        meta_data["noc_status_counter"] = trailer_metadata.getLocalNocEventDstTrailer().counter_value;
     } else {
         TT_THROW("TS_DATA_16B marker contains unexpected event contents {:#X}", event_metadata.asU64());
     }
