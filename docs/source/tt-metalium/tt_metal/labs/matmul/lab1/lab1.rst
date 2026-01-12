@@ -71,9 +71,9 @@ In the standard matrix multiplication algorithm ``C = A * B``, where ``C[i][j] =
 and assuming ``i``, ``j``, ``k`` loop order:
 
 * Accessing matrix ``A`` is cache-friendly because consecutive elements in memory are accessed
-one after another for two consecutive values of the inner loop iterator ``k``.
+  one after another for two consecutive values of the inner loop iterator ``k``.
 * Accessing matrix ``B`` may degrade performance because memory accesses skip an entire matrix row
-for two consecutive values of ``k``.
+  for two consecutive values of ``k``.
 
 This asymmetry significantly impacts performance and motivates various optimization techniques such as loop reordering or tiling.
 
@@ -778,8 +778,8 @@ DPRINT can be combined with the ``TileSlice`` helper to print part or all of a t
 
 You can only safely sample a tile from a CB **between** the appropriate CB API calls:
 
-  - When reading from CBs (e.g. in writer kernels): between ``cb_wait_front()`` and ``cb_pop_front()``.
-  - When writing to CBs (e.g. in reader kernels): between ``cb_reserve_back()`` and ``cb_push_back()``.
+- When reading from CBs (e.g. in writer kernels): between ``cb_wait_front()`` and ``cb_pop_front()``.
+- When writing to CBs (e.g. in reader kernels): between ``cb_reserve_back()`` and ``cb_push_back()``.
 
 A simplified example of printing a full tile from an output CB in a writer kernel is shown below.
 
@@ -815,25 +815,32 @@ A simplified example of printing a full tile from an output CB in a writer kerne
                    .ws = 1                              // Stride is 1
                };
 
-               // TileSlice(cb_id, tile_idx, slice_range, endl_rows, print_untilized)
+               // TileSlice(cb_id, tile_idx, slice_range, cb_type, ptr_type)
                DPRINT << row << ": "
                       << TileSlice(
                          static_cast<uint8_t>(cb_out),
                          /* tile_idx = */ 0,
                          slice_range,
-                         /* endl_rows = */ true,
-                         /* print_untilized = */ true)
+                        /* cb_type = */ TSLICE_OUTPUT_CB,
+                        /* ptr_type = */ TSLICE_RD_PTR)
                       << ENDL();
            }
 
-           // Perform the actual work of this writer kernel
+           uint32_t cb_out_addr = get_read_ptr(cb_out);
+
+           // Perform the actual work of this writer kernel...
 
            // Mark this tile as consumed in the CB.
            cb_pop_front(cb_out, 1);
        }
    }
 
-Note that setting the ``print_untilized`` flag to ``true`` is important to print the tile in human readable row-major format.
+The ``cb_type`` parameter  to ``TileSlice`` specifies whether the CB is the input or output of the compute engine.
+The ``ptr_type`` parameter specifies whether we wish to get data from the read-side (front), or the write-side (back) of the CB.
+In writer kernels, these are most commonly set to ``TSLICE_OUTPUT_CB`` and ``TSLICE_RD_PTR``, respectively,
+to access the data that is about to be read from the CB.
+In reader kernels, these are most commonly set to ``TSLICE_INPUT_CB`` and ``TSLICE_WR_PTR``, respectively,
+to access the data that has just been written (but not yet "pushed back") to the CB.
 
 
 Caveats and best practices
