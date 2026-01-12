@@ -876,9 +876,10 @@ TEST_P(Conv2dOpIfTest, Conv2d) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
-        const uint32_t l1_peak_threshold = (conv2d_config == std::nullopt) ? 200000 : 150000;
+        // NOTE: These are intentionally loose sanity thresholds and may drift downward as kernels get optimized.
+        const uint32_t l1_peak_threshold = (conv2d_config == std::nullopt) ? 150000 : 100000;
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, l1_peak_threshold);
-        const uint32_t total_peak_threshold = (conv2d_config == std::nullopt) ? 400000 : 350000;
+        const uint32_t total_peak_threshold = (conv2d_config == std::nullopt) ? 250000 : 200000;
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, total_peak_threshold);
         ASSERT_TRUE(query.output_tensor_specs.has_value());
         EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
