@@ -11,7 +11,7 @@ namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segf
 
 NlpCreateHeadsSegformerDeviceOperation::program_factory_t
 NlpCreateHeadsSegformerDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::NlpCreateQkvHeadsSegformerProgramFactory{};
 }
 

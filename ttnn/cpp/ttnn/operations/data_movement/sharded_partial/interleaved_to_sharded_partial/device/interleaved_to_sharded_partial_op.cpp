@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement {
 
 InterleavedToShardedPartialDeviceOperation::program_factory_t
 InterleavedToShardedPartialDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return detail::InterleavedToShardedPartialProgramFactory{};
 }
 

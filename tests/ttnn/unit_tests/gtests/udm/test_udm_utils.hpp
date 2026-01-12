@@ -595,7 +595,7 @@ inline tt::tt_metal::experimental::udm::MeshTensorBuilder create_tensor_builder(
  * @brief Run a mesh program on all mesh coordinates
  */
 inline void run_program(
-    const ttnn::Tensor& sharded_tensor,
+    const ttnn::Tensor& /*sharded_tensor*/,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     tt::tt_metal::experimental::udm::MeshProgram& mesh_program) {
     const auto& mesh_shape = mesh_device->shape();

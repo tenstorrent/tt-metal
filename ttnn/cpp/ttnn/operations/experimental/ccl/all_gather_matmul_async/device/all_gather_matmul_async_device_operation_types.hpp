@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 /* All Gather Matmul fusion includes */
-#include "ttnn/operations/matmul/device/matmul_op.hpp"  //TODO: migrate this code to use new matmul API. This code relies on the old matmul struct
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 
 #include <optional>
@@ -25,8 +25,7 @@ struct operation_attributes_t {
     all_gather_async::AllGatherAsyncDeviceOperation::tensor_args_t all_gather_async_tensor_args;
 
     /* Matmul Params */
-    operations::matmul::Matmul
-        matmul{};  // TODO: migrate this code to use new matmul API. This code relies on the old matmul struct
+    operations::matmul::operation_attributes_t matmul{};
     /* Fusion params */
     CoreCoord all_gather_core_grid_offset;
 

@@ -634,7 +634,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
 
 namespace program {
 ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
-    const reshard::operation_attributes_t& operation_attributes,
+    const reshard::operation_attributes_t& /*operation_attributes*/,
     const reshard::tensor_args_t& tensor_args,
     reshard::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;
@@ -763,7 +763,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
 
 void ReshardGenericFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshard::operation_attributes_t& operation_attributes,
+    const reshard::operation_attributes_t& /*operation_attributes*/,
     const reshard::tensor_args_t& tensor_args,
     reshard::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;
