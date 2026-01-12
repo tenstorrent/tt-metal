@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::indexed_fill::program {
 
 IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& batch_ids = tensor_args.batch_id;
@@ -111,7 +111,7 @@ IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
 
 void IndexedFillProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& batch_ids = tensor_args.batch_id;

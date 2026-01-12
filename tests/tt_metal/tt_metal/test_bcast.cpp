@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <math.h>
-#include <stdlib.h>
+#include <cmath>
+#include <cstdlib>
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -39,6 +39,7 @@
 #include "test_gold_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -58,7 +59,8 @@ const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
     if (bcast_dim == BcastDim::H) {
         return multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_h_8bank.cpp"
                          : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_h.cpp";
-    } else if (bcast_dim == BcastDim::W) {
+    }
+    if (bcast_dim == BcastDim::W) {
         return multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_w_8bank.cpp"
                          : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_w.cpp";
     }
@@ -85,7 +87,7 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
 //////////////////////////////////////////////////////////////////////////////////////////
 // Tests reduce_h kernel in H dimension (NCHW->NC1W)
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
+int main() {
     auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 

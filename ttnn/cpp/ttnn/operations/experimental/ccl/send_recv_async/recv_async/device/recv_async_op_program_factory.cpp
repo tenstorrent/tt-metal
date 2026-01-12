@@ -46,7 +46,7 @@ RecvAsyncMeshWorkloadFactory::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& /*tensor_return_value*/) {
     auto mesh_socket = operation_attributes.mesh_socket;
     const auto& output_tensor = tensor_args.output_tensor;
     auto* mesh_device = output_tensor.device();
@@ -356,16 +356,14 @@ void RecvAsyncMeshWorkloadFactory::override_runtime_arguments(
         const auto& output_tensor = tensor_args.output_tensor;
 
         if (!socket_storage_in_dram) {
-            for (uint32_t core_idx = 0; core_idx < receiver_core_coords.size(); ++core_idx) {
-                const auto& receiver_core_coord = receiver_core_coords[core_idx];
+            for (const auto& receiver_core_coord : receiver_core_coords) {
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, receiver_core_coord);
 
                 writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
                 writer_runtime_args[1] = output_tensor.buffer()->address();
             }
         } else {
-            for (uint32_t core_idx = 0; core_idx < receiver_core_coords.size(); ++core_idx) {
-                const auto& receiver_core_coord = receiver_core_coords[core_idx];
+            for (const auto& receiver_core_coord : receiver_core_coords) {
                 auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, receiver_core_coord);
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, receiver_core_coord);
 

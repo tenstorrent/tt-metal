@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -45,7 +45,7 @@
 using std::vector;
 using namespace tt;
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");

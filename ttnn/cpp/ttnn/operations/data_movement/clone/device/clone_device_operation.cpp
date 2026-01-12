@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "clone_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement::clone {
@@ -42,7 +43,7 @@ void CloneOperation::validate_inputs(
 }
 
 CloneOperation::program_factory_t CloneOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 
@@ -77,7 +78,7 @@ CloneOperation::tensor_return_value_t CloneOperation::create_output_tensors(
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<CloneOperation::tensor_return_value_t>
 CloneOperation::create_op_performance_model(
-    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+    const operation_attributes_t& /*op_attr*/, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input_tensor = inputs.input;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
@@ -85,18 +86,21 @@ CloneOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<CloneOperation::operation_attributes_t, CloneOperation::tensor_args_t> CloneOperation::invoke(
+}  // namespace ttnn::operations::data_movement::clone
+
+namespace ttnn::prim {
+ttnn::Tensor clone(
     const Tensor& input,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::clone::CloneOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             dtype.value_or(input.dtype()),
             memory_config.value_or(input.memory_config()),
             init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
         },
-        tensor_args_t{input},
-    };
+        OperationType::tensor_args_t{input});
 }
-}  // namespace ttnn::operations::data_movement::clone
+}  // namespace ttnn::prim

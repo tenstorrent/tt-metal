@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <boost/move/utility_core.hpp>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -221,7 +221,7 @@ void test_tensor_deallocate_and_close_device(distributed::MeshDevice* device) {
     dev_a.deallocate();
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

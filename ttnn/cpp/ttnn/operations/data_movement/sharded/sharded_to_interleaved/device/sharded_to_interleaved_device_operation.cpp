@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -86,7 +87,7 @@ ShardedToInterleavedDeviceOperation::tensor_return_value_t ShardedToInterleavedD
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ShardedToInterleavedDeviceOperation::tensor_return_value_t>
 ShardedToInterleavedDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) const {
     int ideal_dev_clock_cycles = common_tm_bw_model(tensor_args.input_tensor, output_tensor);
@@ -94,26 +95,18 @@ ShardedToInterleavedDeviceOperation::create_op_performance_model(
         {tensor_args.input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
     return result;
 }
+}  // namespace ttnn::operations::data_movement
 
-std::tuple<
-    ShardedToInterleavedDeviceOperation::operation_attributes_t,
-    ShardedToInterleavedDeviceOperation::tensor_args_t>
-ShardedToInterleavedDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation::tensor_return_value_t sharded_to_interleaved(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
-            .output_mem_config = output_mem_config,
-            .output_dtype = output_dtype,
-            .num_slices = 1,
-            .slice_index = 0,
-        },
-        tensor_args_t{
-            .input_tensor = input_tensor,
-            .preallocated_output = preallocated_output,
-        }};
+    using OperationType = ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .output_mem_config = output_mem_config, .output_dtype = output_dtype, .num_slices = 1, .slice_index = 0},
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = preallocated_output});
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

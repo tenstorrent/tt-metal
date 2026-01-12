@@ -4,7 +4,7 @@
 
 #include "untilize_with_unpadding_single_core_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -210,7 +210,7 @@ UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpa
 
 void UntilizeWithUnpaddingSingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;

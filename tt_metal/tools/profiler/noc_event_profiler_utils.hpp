@@ -148,7 +148,7 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
 
 // determines the implied unicast/multicast start distance and range in tt_fabric::LowLatencyRoutingFields
 inline std::tuple<int, int> get_low_latency_routing_start_distance_and_range(uint32_t llrf_value) {
-    using LLRF = tt::tt_fabric::LowLatencyRoutingFields;
+    using LLRF = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
 
     uint32_t value = llrf_value;
     int start_distance = 1;
