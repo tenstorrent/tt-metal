@@ -181,7 +181,7 @@ def run_conv2d_short_sweep(
     device,
     config_tensors_in_dram=False,
     output_dtype=None,  # ttnn dtype object (e.g., ttnn.bfloat8_b)
-    compute_kernel_config=None,  # ttnn compute config object
+    compute_config=None,  # ttnn compute config object
 ) -> list:
     # for tt-forge suite, extra arguments are tensor configs
     is_forge_suite = False
@@ -264,12 +264,9 @@ def run_conv2d_short_sweep(
     # Set config_tensors_in_dram if requested (helps avoid L1 OOM for memory-intensive configs)
     if config_tensors_in_dram:
         conv_config.config_tensors_in_dram = True
-
+    
     # Use provided dtype or default to bfloat16
     conv_output_dtype = output_dtype if output_dtype is not None else ttnn.bfloat16
-
-    # Use provided compute_config or None (will use default)
-    compute_config = compute_kernel_config
 
     if is_forge_suite:
         input_layout = ttnn.Layout(input_layout)
@@ -295,34 +292,27 @@ def run_conv2d_short_sweep(
 
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
     start_time = start_measuring_time()
-
-    # Build conv2d call arguments
-    conv2d_args = {
-        "input_tensor": tt_input_tensor,
-        "weight_tensor": tt_weight_tensor,
-        "in_channels": input_channels,
-        "out_channels": output_channels,
-        "device": device,
-        "bias_tensor": tt_bias_tensor,
-        "kernel_size": (kernel_height, kernel_width),
-        "stride": (stride_h, stride_w),
-        "padding": (pad_h, pad_w),
-        "dilation": (dilation_h, dilation_w),
-        "batch_size": batch_size,
-        "input_height": input_height,
-        "input_width": input_width,
-        "groups": groups,
-        "conv_config": conv_config,
-        "return_output_dim": True,
-        "return_weights_and_bias": True,
-        "dtype": conv_output_dtype,
-    }
-
-    # Add compute_config if provided
-    if compute_config is not None:
-        conv2d_args["compute_config"] = compute_config
-
-    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(**conv2d_args)
+    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor,
+        kernel_size=(kernel_height, kernel_width),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        dilation=(dilation_h, dilation_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        groups=groups,
+        conv_config=conv_config,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+        dtype=conv_output_dtype,
+        compute_config=compute_config,
+    )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
