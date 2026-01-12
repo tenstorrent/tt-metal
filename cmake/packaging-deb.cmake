@@ -1,4 +1,10 @@
 # DEB packaging configuration for Debian-based distros (Ubuntu, Debian, etc.)
+#
+# CMake Requirements
+# ------------------
+# This module requires CMake 3.15+ for:
+# - CPack DEB generator improvements
+# - Component-based packaging features
 
 set(CPACK_GENERATOR DEB)
 

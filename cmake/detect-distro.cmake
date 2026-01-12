@@ -1,5 +1,11 @@
 # CMake helper for detecting Linux distribution information
 #
+# CMake Requirements
+# ------------------
+# This module requires CMake 3.5+ for:
+# - file(STRINGS) command improvements
+# - execute_process() enhancements
+#
 # This file provides a function to detect distribution ID, ID_LIKE, and version
 # from /etc/os-release, with fallback to lsb_release for version detection.
 #

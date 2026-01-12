@@ -2,6 +2,12 @@
 # MPI Configuration for TT-Metalium
 # =============================================================================
 #
+# CMake Requirements
+# ------------------
+# This module requires CMake 3.15+ for:
+# - GLOBAL IMPORTED targets (CMake 3.11+)
+# - Improved find_package() behavior (CMake 3.15+)
+#
 # Overview
 # --------
 # This module configures MPI support for distributed computing. It handles:
@@ -158,24 +164,51 @@ function(tt_configure_mpi enable_distributed use_mpi_out_var)
     #
     if(MPI_C_LIBRARIES)
         list(GET MPI_C_LIBRARIES 0 _first_mpi_lib)
-        # Skip if it's a flag (starts with -) rather than a path
-        if(_first_mpi_lib AND NOT _first_mpi_lib MATCHES "^-")
+        # Skip if it's empty, a flag (starts with -), or not a valid path
+        if(_first_mpi_lib AND NOT _first_mpi_lib STREQUAL "" AND NOT _first_mpi_lib MATCHES "^-")
             get_filename_component(_mpi_lib_dir "${_first_mpi_lib}" DIRECTORY)
-            set(TT_METAL_MPI_LIB_DIR "${_mpi_lib_dir}" PARENT_SCOPE)
-            message(STATUS "MPI library directory: ${_mpi_lib_dir}")
+            if(_mpi_lib_dir AND NOT _mpi_lib_dir STREQUAL "")
+                set(TT_METAL_MPI_LIB_DIR "${_mpi_lib_dir}" PARENT_SCOPE)
+                message(STATUS "MPI library directory: ${_mpi_lib_dir}")
+            endif()
         endif()
     endif()
 
     # Check for OpenMPI version and warn if < 5 (missing ULFM)
-    if(MPI_C_LIBRARY_VERSION_STRING MATCHES "Open MPI")
+    # Handle cases where MPI_C_LIBRARY_VERSION_STRING might be empty or malformed
+    if(
+        MPI_C_LIBRARY_VERSION_STRING
+        AND NOT MPI_C_LIBRARY_VERSION_STRING
+            STREQUAL
+            ""
+        AND MPI_C_LIBRARY_VERSION_STRING
+            MATCHES
+            "Open MPI"
+    )
         string(REGEX MATCH "Open MPI v([0-9]+)" _ompi_match "${MPI_C_LIBRARY_VERSION_STRING}")
-        if(_ompi_match AND CMAKE_MATCH_1 GREATER_EQUAL 5)
-            message(STATUS "Using system OpenMPI ${CMAKE_MATCH_1}.x (likely supports ULFM)")
-        elseif(_ompi_match)
-            message(WARNING "System OpenMPI ${CMAKE_MATCH_1}.x found but ULFM support requires version 5+")
+        if(_ompi_match AND CMAKE_MATCH_1 AND NOT CMAKE_MATCH_1 STREQUAL "")
+            # CMAKE_MATCH_1 contains the major version number as a string
+            # CMake's numeric comparison works with numeric strings, but we validate it's a number
+            if(CMAKE_MATCH_1 MATCHES "^[0-9]+$")
+                # Compare as numeric (CMake handles string-to-number conversion)
+                if(CMAKE_MATCH_1 GREATER_EQUAL 5)
+                    message(STATUS "Using system OpenMPI ${CMAKE_MATCH_1}.x (likely supports ULFM)")
+                else()
+                    message(WARNING "System OpenMPI ${CMAKE_MATCH_1}.x found but ULFM support requires version 5+")
+                endif()
+            else()
+                message(DEBUG "Could not parse numeric version from: ${CMAKE_MATCH_1}")
+            endif()
+        else()
+            message(DEBUG "Could not parse OpenMPI version from: ${MPI_C_LIBRARY_VERSION_STRING}")
         endif()
+    elseif(MPI_C_LIBRARY_VERSION_STRING AND NOT MPI_C_LIBRARY_VERSION_STRING STREQUAL "")
+        message(
+            WARNING
+            "Non-OpenMPI implementation found (${MPI_C_LIBRARY_VERSION_STRING}). ULFM fault tolerance requires OpenMPI 5+"
+        )
     else()
-        message(WARNING "Non-OpenMPI implementation found. ULFM fault tolerance requires OpenMPI 5+")
+        message(DEBUG "MPI version string not available, skipping version check")
     endif()
 
     # =========================================================================

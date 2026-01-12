@@ -1,4 +1,10 @@
 # RPM packaging configuration for RPM-based distros (Fedora, RHEL, openSUSE, etc.)
+#
+# CMake Requirements
+# ------------------
+# This module requires CMake 3.15+ for:
+# - CPack RPM generator improvements
+# - String APPEND command (CMake 3.4+, but 3.15+ recommended for stability)
 
 set(CPACK_GENERATOR RPM)
 
@@ -54,7 +60,8 @@ string(APPEND _RPM_SPEC_MACROS "\n%define debug_package %{nil}")
 # When using system OpenMPI (Fedora/RHEL with OpenMPI 5+), RPATH checking should pass
 # because there are no custom paths like /opt/openmpi-v5.0.7-ulfm/lib
 #
-# TT_METAL_USING_ULFM is set by tt_metal/distributed/CMakeLists.txt:
+# TT_METAL_USING_ULFM is set by cmake/mpi-config.cmake::tt_configure_mpi():
+#   - Called from tt_metal/CMakeLists.txt before add_subdirectory(distributed)
 #   - TRUE when custom ULFM MPI is found at ULFM_PREFIX (typically Ubuntu builds)
 #   - FALSE when using system MPI (typically Fedora builds with OpenMPI 5+)
 #

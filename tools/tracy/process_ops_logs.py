@@ -346,7 +346,14 @@ def import_tracy_op_logs(
         tt_df = df[tt_mask]
         for op in tt_df.to_dict(orient="records"):
             opID = int(op["zone_text"].split(":")[-1])
-            assert opID in ops, f"Op time for op {opID} must present. OpID: {opID}, Name: {op['name']}"
+            if opID not in ops:
+                available_ids = sorted(ops.keys())[:10]
+                available_str = ", ".join(map(str, available_ids))
+                raise KeyError(
+                    f"Op time for op {opID} (name: {op['name']}) not found in ops dict. "
+                    f"Available opIDs (first 10): {available_str}. "
+                    f"Total ops in dict: {len(ops)}"
+                )
             ops[opID]["host_time"] = op
 
     # Convert special_parent_text to string type to ensure .str accessor works

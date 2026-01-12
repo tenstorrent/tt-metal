@@ -142,6 +142,7 @@ function(detect_packaging_type)
     endif()
 
     # Fallback: check for package manager executables
+    # This handles cases where /etc/os-release might not exist or be incomplete
     if(TT_PACKAGING_TYPE STREQUAL "")
         find_program(DPKG_EXECUTABLE dpkg)
         find_program(RPM_EXECUTABLE rpm)
@@ -152,9 +153,17 @@ function(detect_packaging_type)
         endif()
     endif()
 
-    # Default to DEB if detection failed
+    # Final fallback: Default to DEB if all detection methods failed
+    # Rationale: DEB packaging is more commonly used in CI environments and has
+    # broader compatibility. Users can override via -DTT_PACKAGING_TYPE=RPM if needed.
+    # This ensures the build doesn't fail on unknown distributions.
     if(TT_PACKAGING_TYPE STREQUAL "")
-        message(WARNING "Could not detect distro package type, defaulting to DEB")
+        message(
+            WARNING
+            "Could not detect distro package type from /etc/os-release or package managers. "
+            "Defaulting to DEB packaging. "
+            "To override, use: -DTT_PACKAGING_TYPE=DEB or -DTT_PACKAGING_TYPE=RPM"
+        )
         set(TT_PACKAGING_TYPE "DEB")
     endif()
 
