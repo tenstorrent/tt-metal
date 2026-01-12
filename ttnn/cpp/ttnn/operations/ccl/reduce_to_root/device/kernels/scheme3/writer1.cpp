@@ -95,7 +95,8 @@ void kernel_main() {
     uint32_t final_dst_addr_s = get_arg_val<uint32_t>(arg_idx++);
     uint32_t final_dst_addr_m = get_arg_val<uint32_t>(arg_idx++);
     // Handoff semaphore for Writer1→Reader1 mux channel coordination
-    uint32_t writer_to_reader_handoff_sem = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t writer_to_reader_handoff_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    DPRINT << "writer1 handoff_sem addr: " << writer_to_reader_handoff_sem << "\n";
 
     const uint8_t dst_num_hops = 1;
 
@@ -194,19 +195,16 @@ void kernel_main() {
     noc_semaphore_set(handoff_sem_ptr, 1);
     DPRINT << "signaled handoff semaphore for reader1\n";
 
-    /*
-    if (is_termination_master) {
-        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
-        noc_semaphore_wait(termination_sync_ptr, 3);
-        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
-    } else {
+    // Writer1 uses forward mux - signal the forward mux termination master (Reader2)
+    // Writer1 never is the termination master for forward mux, so just signal
+    {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
+        DPRINT << "signaled forward mux termination master\n";
     }
-    */
+
     DPRINT << "end of round 1\n";
 
     DPRINT << "round2\n";

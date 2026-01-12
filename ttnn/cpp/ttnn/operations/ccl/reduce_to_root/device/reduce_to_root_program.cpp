@@ -101,6 +101,7 @@ inline void fabric_mux_rt_args(
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::Program& program,
     CoreCoord termination_master_virtual_core,
+    uint32_t shared_termination_sync_sem,  // Shared semaphore on master's core for all mux workers
     std::vector<uint32_t>& worker_rt_args) {
     worker_rt_args.push_back(is_termination_master);  // is_termination_master
     worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x
@@ -117,7 +118,7 @@ inline void fabric_mux_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // termination_sync_address
+    worker_rt_args.push_back(shared_termination_sync_sem);  // termination_sync_address (shared on master's core)
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_fabric_mux_status_address
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_flow_control_address
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_teardown_address
@@ -665,6 +666,12 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     std::vector<CoreCoord> termination_masters = {cores_link_1[0], cores_link_2[0]};
     CoreCoord termination_master = termination_masters[0];
 
+    // Create shared termination sync semaphores for each link's termination master
+    std::vector<uint32_t> shared_term_sync_sems_old;
+    for (size_t i = 0; i < termination_masters.size(); i++) {
+        shared_term_sync_sems_old.push_back(CreateSemaphore(program, {termination_masters[i]}, 0));
+    }
+
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
         uint32_t start_idx = link_idx == 0 ? 0 : 2;
         termination_master = termination_masters[link_idx];
@@ -728,6 +735,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     mux_kernel_config,
                     program,
                     mesh_device->worker_core_from_logical_core(termination_master),
+                    shared_term_sync_sems_old[link_idx],
                     writer_runtime_args);
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
 
@@ -756,6 +764,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     mux_kernel_config,
                     program,
                     mesh_device->worker_core_from_logical_core(termination_master),
+                    shared_term_sync_sems_old[link_idx],
                     reader_runtime_args);
 
                 reader_runtime_args[0] = reader_runtime_args.size();
@@ -770,6 +779,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     mux_kernel_config,
                     program,
                     mesh_device->worker_core_from_logical_core(termination_master),
+                    shared_term_sync_sems_old[link_idx],
                     reader_runtime_args);
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
@@ -802,6 +812,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     mux_kernel_config,
                     program,
                     mesh_device->worker_core_from_logical_core(termination_master),
+                    shared_term_sync_sems_old[link_idx],
                     reader_runtime_args);
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
@@ -816,6 +827,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     mux_kernel_config,
                     program,
                     mesh_device->worker_core_from_logical_core(termination_master),
+                    shared_term_sync_sems_old[link_idx],
                     writer_runtime_args);
 
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
@@ -1468,6 +1480,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             non_shard_grid,
             tt::tt_metal::WriterDataMovementConfig(writer_ct_args2));
 
+        // compute_kernel2 handles Round 2 compute, runs with reader1/writer1 on shard_grid
         tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/scheme3/compute_kernel2.cpp",
@@ -1479,6 +1492,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 .compile_args = compute_ct_args,
             });
 
+        // compute_kernel1 handles Round 1 compute, runs with reader2/writer2 on non_shard_grid
         tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/scheme3/compute_kernel1.cpp",
@@ -1544,6 +1558,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     constexpr auto num_links = 2;
     std::vector<CoreCoord> cores1;
     std::vector<CoreCoord> cores2;
+    std::vector<uint32_t> cores1_handoff_sem_addrs;  // Store handoff sem addrs for cores1
+    std::vector<uint32_t> cores2_handoff_sem_addrs;  // Store handoff sem addrs for cores2
     std::vector<CoreRangeSet> cores_per_link;
     std::vector<CoreRangeSet> worker_cores_per_link;
 
@@ -1575,13 +1591,31 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     worker_cores_per_link.push_back(CoreRangeSet(worker_cores_link_2));
 
     // Set termination master to the first core of each link
+    // With the mux split (Reader1/Writer2 use backward, Writer1/Reader2 use forward),
+    // we need separate termination masters for each mux direction:
+    // - backward_mux_term_master[link] = first 4 cores' termination master (Reader1 will terminate)
+    // - forward_mux_term_master[link] = second 4 cores' termination master (Reader2 will terminate)
     uint32_t num_worker_cores_per_link_per_dir = 4;
     std::vector<CoreCoord> termination_masters = {
         worker_cores_link_1[0],
         worker_cores_link_2[0],
         worker_cores_link_1[num_worker_cores_per_link_per_dir],
         worker_cores_link_2[num_worker_cores_per_link_per_dir]};
+    // Backward mux termination masters (index 0 for link 0, 1 for link 1)
+    // Forward mux termination masters (index 2 for link 0, 3 for link 1)
+    auto get_bwd_mux_term_master = [&](uint32_t link_idx) { return termination_masters[link_idx]; };
+    auto get_fwd_mux_term_master = [&](uint32_t link_idx) { return termination_masters[link_idx + 2]; };
     CoreCoord termination_master = termination_masters[0];
+
+    // Create shared termination sync semaphores for each mux direction
+    // These semaphores are created on the termination master's core and shared by all workers using that mux
+    // Index 0,1: backward mux for link 0,1; Index 2,3: forward mux for link 0,1
+    std::vector<uint32_t> shared_term_sync_sems;
+    for (size_t i = 0; i < termination_masters.size(); i++) {
+        shared_term_sync_sems.push_back(CreateSemaphore(program, {termination_masters[i]}, 0));
+    }
+    auto get_bwd_mux_term_sem = [&](uint32_t link_idx) { return shared_term_sync_sems[link_idx]; };
+    auto get_fwd_mux_term_sem = [&](uint32_t link_idx) { return shared_term_sync_sems[link_idx + 2]; };
 
     uint32_t mux_core_offset = 0;
 
@@ -1625,25 +1659,31 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
             termination_master = termination_masters[link_idx + 2 * (core_idx / num_worker_cores_per_link_per_dir)];
 
+            // Get termination masters for each mux direction
+            // Backward mux: terminated by Reader1 (first 4 cores), master = termination_masters[link_idx]
+            // Forward mux: terminated by Reader2 (second 4 cores), master = termination_masters[link_idx + 2]
+            CoreCoord bwd_mux_term_master = get_bwd_mux_term_master(link_idx);
+            CoreCoord fwd_mux_term_master = get_fwd_mux_term_master(link_idx);
+
             if ((is_sender_device && is_leftmost) || is_root2_device) {
                 if (core_idx < num_worker_cores_per_link_per_dir) {
                     // first 4 cores: reader/writer 1
-                    // Writer1: sends data to fwd neighbor (D0->D1, D2->D3)
-                    // Reader1: sends barrier/receives in Round2 to/from fwd neighbor
-                    // Use forward mux (routes to forward neighbor)
-                    // CoreCoord mux_virtual_core_bwd =
-                    //    mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
+                    // Writer1: sends data in Round1 to fwd neighbor (D0->D1, D2->D3) - uses FORWARD mux
+                    // Reader1: receives data in Round2 from bwd neighbor (D3->D0, D1->D2) - uses BACKWARD mux
+                    CoreCoord mux_virtual_core_bwd =
+                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
 
                     printf(
-                        "Device %u Link %u Core %zu %zu Reader 1 Mux core %zu %zu Writer 1 Mux core %zu %zu \n",
+                        "Device %u Link %u Core %zu %zu Reader 1 Mux core (bwd) %zu %zu Writer 1 Mux core (fwd) %zu "
+                        "%zu \n",
                         device_idx,
                         link_idx,
                         c.x,
                         c.y,
-                        mux_virtual_core_fwd.x,
-                        mux_virtual_core_fwd.y,
+                        mux_virtual_core_bwd.x,
+                        mux_virtual_core_bwd.y,
                         mux_virtual_core_fwd.x,
                         mux_virtual_core_fwd.y);
 
@@ -1666,15 +1706,18 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         coord_semaphore.address(),
                         writer_to_reader_handoff_sem};  // Add handoff semaphore for Reader1
 
+                    // Reader1 uses BACKWARD mux (Round2: receives from D3->D0, D1->D2)
+                    // Use bwd_mux_term_master for backward mux termination coordination
                     fabric_mux_rt_args(
-                        c == termination_master,
+                        c == bwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        mux_virtual_core_fwd,
+                        mux_virtual_core_bwd,
                         worker_id,
                         c,
                         mux_kernel_config,
                         program,
-                        mesh_device->worker_core_from_logical_core(termination_master),
+                        mesh_device->worker_core_from_logical_core(bwd_mux_term_master),
+                        get_bwd_mux_term_sem(link_idx),
                         reader_runtime_args);
                     writer_runtime_args = {
                         fw_intermediate_tensor.buffer()->address(),
@@ -1688,38 +1731,42 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         output_tensor_m.buffer()->address(),
                         writer_to_reader_handoff_sem,  // Add handoff semaphore for Writer1
                     };
+                    // Writer1 uses FORWARD mux (Round1: sends D0->D1, D2->D3)
+                    // Use fwd_mux_term_master for forward mux termination coordination
                     fabric_mux_rt_args(
-                        c == termination_master,
+                        c == fwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                         mux_virtual_core_fwd,
                         worker_id,
                         c,
                         mux_kernel_config,
                         program,
-                        mesh_device->worker_core_from_logical_core(termination_master),
+                        mesh_device->worker_core_from_logical_core(fwd_mux_term_master),
+                        get_fwd_mux_term_sem(link_idx),
                         writer_runtime_args);
 
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel1, c, reader_runtime_args);
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel1, c, writer_runtime_args);
                     cores1.push_back(c);
+                    cores1_handoff_sem_addrs.push_back(writer_to_reader_handoff_sem);
                 } else {
                     // second 4 cores: reader/writer 2
-                    // Reader2: receives barrier in Round1 from bwd neighbor (D3->D0, D1->D2)
-                    // Writer2: sends data in Round2 to bwd neighbor
-                    // Use backward mux (routes to backward neighbor)
+                    // Reader2: receives barrier in Round1 from fwd neighbor (D1->D0, D3->D2) - uses FORWARD mux
+                    // Writer2: sends data in Round2 to bwd neighbor (D0->D3, D2->D1) - uses BACKWARD mux
                     CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
-                    // CoreCoord mux_virtual_core_fwd =
-                    //     mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+                    CoreCoord mux_virtual_core_fwd =
+                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
 
                     printf(
-                        "Device %u Link %u Core %zu %zu Reader 2 Mux core %zu %zu Writer 2 Mux core %zu %zu \n",
+                        "Device %u Link %u Core %zu %zu Reader 2 Mux core (fwd) %zu %zu Writer 2 Mux core (bwd) %zu "
+                        "%zu \n",
                         device_idx,
                         link_idx,
                         c.x,
                         c.y,
-                        mux_virtual_core_bwd.x,
-                        mux_virtual_core_bwd.y,
+                        mux_virtual_core_fwd.x,
+                        mux_virtual_core_fwd.y,
                         mux_virtual_core_bwd.x,
                         mux_virtual_core_bwd.y);
 
@@ -1746,15 +1793,18 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         current_core_x,
                         current_core_y,
                         reader2_to_writer2_handoff_sem};
+                    // Reader2 uses FORWARD mux (Round1: receives from D1->D0, D3->D2)
+                    // Use fwd_mux_term_master for forward mux termination coordination
                     fabric_mux_rt_args(
-                        c == termination_master,
+                        c == fwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        mux_virtual_core_bwd,
+                        mux_virtual_core_fwd,
                         worker_id,
                         c,
                         mux_kernel_config,
                         program,
-                        mesh_device->worker_core_from_logical_core(termination_master),
+                        mesh_device->worker_core_from_logical_core(fwd_mux_term_master),
+                        get_fwd_mux_term_sem(link_idx),
                         reader_runtime_args);
                     // Use paired_reader1_noc for device_semaphore target instead of data core
                     writer_runtime_args = {
@@ -1767,44 +1817,50 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         round1_intermediate_tensor.buffer()->address(),
                         coord_semaphore.address(),
                         reader2_to_writer2_handoff_sem,
+                        core_noc_x,  // Data core for round1 intermediate tensor write
+                        core_noc_y,
                     };
+                    // Writer2 uses BACKWARD mux (Round2: sends D0->D3, D2->D1)
+                    // Use bwd_mux_term_master for backward mux termination coordination
                     fabric_mux_rt_args(
-                        c == termination_master,
+                        c == bwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                         mux_virtual_core_bwd,
                         worker_id,
                         c,
                         mux_kernel_config,
                         program,
-                        mesh_device->worker_core_from_logical_core(termination_master),
+                        mesh_device->worker_core_from_logical_core(bwd_mux_term_master),
+                        get_bwd_mux_term_sem(link_idx),
                         writer_runtime_args);
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel2, c, reader_runtime_args);
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel2, c, writer_runtime_args);
                     cores2.push_back(c);
+                    cores2_handoff_sem_addrs.push_back(reader2_to_writer2_handoff_sem);
                 }
 
             } else {
                 // devices 1 and 3:
                 if (core_idx < num_worker_cores_per_link_per_dir) {
                     // first 4 cores: reader/writer 2
-                    // Reader2: receives barrier in Round1 from bwd neighbor (D0->D1, D2->D3)
-                    // Writer2: sends data in Round2 to bwd neighbor
-                    // D0/D2 uses forward mux to send, so D1/D3 must use backward mux to match the link
+                    // Reader2: receives barrier in Round1 from fwd neighbor (D0->D1, D2->D3) - uses BACKWARD mux
+                    // Writer2: sends data in Round2 to fwd neighbor (D1->D2, D3->D0) - uses FORWARD mux
                     CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
-                    // CoreCoord mux_virtual_core_fwd =
-                    //     mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+                    CoreCoord mux_virtual_core_fwd =
+                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
 
                     printf(
-                        "Device %u Link %u Core %zu %zu Reader 2 Mux core %zu %zu Writer 2 Mux core %zu %zu \n",
+                        "Device %u Link %u Core %zu %zu Reader 2 Mux core (bwd) %zu %zu Writer 2 Mux core (fwd) %zu "
+                        "%zu \n",
                         device_idx,
                         link_idx,
                         c.x,
                         c.y,
                         mux_virtual_core_bwd.x,
                         mux_virtual_core_bwd.y,
-                        mux_virtual_core_bwd.x,
-                        mux_virtual_core_bwd.y);
+                        mux_virtual_core_fwd.x,
+                        mux_virtual_core_fwd.y);
 
                     // Create handoff semaphore for Reader2 -> Writer2 coordination
                     auto reader2_to_writer2_handoff_sem = CreateSemaphore(program, {c}, 0);
@@ -1829,15 +1885,18 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         current_core_x,
                         current_core_y,
                         reader2_to_writer2_handoff_sem};
+                    // Reader2 uses BACKWARD mux (Round1: receives from D0->D1, D2->D3)
+                    // Use bwd_mux_term_master for backward mux termination coordination
                     fabric_mux_rt_args(
-                        c == termination_master,
+                        c == bwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                         mux_virtual_core_bwd,
                         worker_id,
                         c,
                         mux_kernel_config,
                         program,
-                        mesh_device->worker_core_from_logical_core(termination_master),
+                        mesh_device->worker_core_from_logical_core(bwd_mux_term_master),
+                        get_bwd_mux_term_sem(link_idx),
                         reader_runtime_args);
                     // Use paired_reader1_noc for device_semaphore target instead of data core
                     writer_runtime_args = {
@@ -1850,41 +1909,47 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         round1_intermediate_tensor.buffer()->address(),
                         coord_semaphore.address(),
                         reader2_to_writer2_handoff_sem,
+                        core_noc_x,  // Data core for round1 intermediate tensor write
+                        core_noc_y,
                     };
+                    // Writer2 uses FORWARD mux (Round2: sends D1->D2, D3->D0)
+                    // Use fwd_mux_term_master for forward mux termination coordination
                     fabric_mux_rt_args(
-                        c == termination_master,
+                        c == fwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        mux_virtual_core_bwd,
+                        mux_virtual_core_fwd,
                         worker_id,
                         c,
                         mux_kernel_config,
                         program,
-                        mesh_device->worker_core_from_logical_core(termination_master),
+                        mesh_device->worker_core_from_logical_core(fwd_mux_term_master),
+                        get_fwd_mux_term_sem(link_idx),
                         writer_runtime_args);
 
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel2, c, reader_runtime_args);
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel2, c, writer_runtime_args);
                     cores2.push_back(c);
+                    cores2_handoff_sem_addrs.push_back(reader2_to_writer2_handoff_sem);
                 } else {
                     // second 4 cores: reader/writer 1
-                    // Writer1: sends data to fwd neighbor (D1->D2, D3->D0)
-                    // Reader1: sends barrier/receives in Round2 to/from fwd neighbor
-                    // Use forward mux (routes to forward neighbor)
-                    // CoreCoord mux_virtual_core_bwd =
-                    //    mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
+                    // Writer1: sends data in Round1 to bwd neighbor (D1->D0, D3->D2) - uses BACKWARD mux
+                    // Reader1: receives data in Round2 from fwd neighbor (D2->D1, D0->D3) - uses FORWARD mux
+                    CoreCoord mux_virtual_core_bwd =
+                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
 
                     printf(
-                        "Device %u Link %u Core %zu %zu Reader 1 Mux core %zu %zu Writer 1 Mux core %zu %zu \n",
+                        "Device %u Link %u Core %zu %zu Reader 1 Mux core (fwd) %zu %zu Writer 1 Mux core (bwd) %zu "
+                        "%zu \n",
                         device_idx,
                         link_idx,
                         c.x,
                         c.y,
                         mux_virtual_core_fwd.x,
                         mux_virtual_core_fwd.y,
-                        mux_virtual_core_fwd.x,
-                        mux_virtual_core_fwd.y);
+                        mux_virtual_core_bwd.x,
+                        mux_virtual_core_bwd.y);
 
                     // Create handoff semaphore for Writer1→Reader1 mux channel handoff
                     // Writer1 will signal this after disconnecting from mux, Reader1 waits before connecting
@@ -1905,15 +1970,18 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         coord_semaphore.address(),
                         writer_to_reader_handoff_sem};  // Add handoff semaphore for Reader1
 
+                    // Reader1 uses FORWARD mux (Round2: receives from D2->D1, D0->D3)
+                    // Use fwd_mux_term_master for forward mux termination coordination
                     fabric_mux_rt_args(
-                        c == termination_master,
+                        c == fwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                         mux_virtual_core_fwd,
                         worker_id,
                         c,
                         mux_kernel_config,
                         program,
-                        mesh_device->worker_core_from_logical_core(termination_master),
+                        mesh_device->worker_core_from_logical_core(fwd_mux_term_master),
+                        get_fwd_mux_term_sem(link_idx),
                         reader_runtime_args);
                     writer_runtime_args = {
                         bw_intermediate_tensor.buffer()->address(),
@@ -1927,20 +1995,24 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                         output_tensor_m.buffer()->address(),
                         writer_to_reader_handoff_sem,  // Add handoff semaphore for Writer1
                     };
+                    // Writer1 uses BACKWARD mux (Round1: sends D1->D0, D3->D2)
+                    // Use bwd_mux_term_master for backward mux termination coordination
                     fabric_mux_rt_args(
-                        c == termination_master,
+                        c == bwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        mux_virtual_core_fwd,
+                        mux_virtual_core_bwd,
                         worker_id,
                         c,
                         mux_kernel_config,
                         program,
-                        mesh_device->worker_core_from_logical_core(termination_master),
+                        mesh_device->worker_core_from_logical_core(bwd_mux_term_master),
+                        get_bwd_mux_term_sem(link_idx),
                         writer_runtime_args);
 
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel1, c, reader_runtime_args);
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel1, c, writer_runtime_args);
                     cores1.push_back(c);
+                    cores1_handoff_sem_addrs.push_back(writer_to_reader_handoff_sem);
                 }
             }
             core_idx++;
@@ -1958,7 +2030,9 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .writer_kernel1 = writer_kernel1,
             .writer_kernel2 = writer_kernel2,
             .semaphores = semaphores,
-            .is_device_0_2 = ((is_sender_device && is_leftmost) || is_root2_device)}};
+            .is_device_0_2 = is_sender_device,  // D0 and D3 are senders
+            .cores1_handoff_sem_addrs = cores1_handoff_sem_addrs,
+            .cores2_handoff_sem_addrs = cores2_handoff_sem_addrs}};
 }
 
 void ReduceToRootOp::ReduceToRoot::override_runtime_arguments(

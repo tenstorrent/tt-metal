@@ -54,6 +54,12 @@ struct ReduceToRootOp {
 
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
             bool is_device_0_2;
+
+            // Handoff semaphore addresses for resetting between iterations
+            // cores1 handoff sems: Writer1->Reader1 (D0/D2 first 4 cores, D1/D3 second 4 cores)
+            // cores2 handoff sems: Reader2->Writer2 (D0/D2 second 4 cores, D1/D3 first 4 cores)
+            std::vector<uint32_t> cores1_handoff_sem_addrs;
+            std::vector<uint32_t> cores2_handoff_sem_addrs;
         };
 
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

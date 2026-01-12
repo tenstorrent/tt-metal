@@ -190,23 +190,6 @@ void kernel_main() {
     noc_semaphore_set(local_semaphore_ptr, 0);
     DPRINT << "after waiting for fabric semaphore\n";
 
-    /*
-    tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
-    DPRINT << "after fabric client disconnect\n";
-    if (is_termination_master) {
-        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
-        noc_semaphore_wait(termination_sync_ptr, 3);
-        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
-    } else {
-        uint64_t dest_addr =
-            safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-        noc_semaphore_inc(dest_addr, 1);
-        noc_async_atomic_barrier();
-    }
-
-    */
-    DPRINT << "after termination sync\n";
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
 
     cb_reserve_back(receiver_cb_id_l, input_num_tiles);
@@ -215,6 +198,14 @@ void kernel_main() {
     const uint64_t packet_noc_addr = get_noc_addr(current_core_noc_x, current_core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();
+
+    // Write Round 1 received data to data core's fw_intermediate shard for debugging
+    // The fabric wrote to worker core (current_core_noc_x/y), but fw_intermediate is sharded on data cores
+    // (core_noc_x/y)
+    uint64_t fw_interm_data_core_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
+    noc_async_write(packet_l1_addr, fw_interm_data_core_addr, new_packet_size_bytes);
+    noc_async_write_barrier();
+    DPRINT << "wrote round1 fw data to data core at (" << core_noc_x << ", " << core_noc_y << ")\n";
 
     tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
@@ -233,5 +224,25 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);
     DPRINT << "end of round 1\n";
+
+    // Reader2 terminates its mux (forward for D0/D2, backward for D1/D3)
+    // 8 workers share the mux: 4 Reader2 + 4 Writer1 (or Writer2 depending on device)
+    // The termination master waits for 7 signals from the other workers
+    // This MUST happen after all work is done to avoid deadlock
+    if (is_termination_master) {
+        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
+        DPRINT << "waiting for 7 termination signals\n";
+        noc_semaphore_wait(termination_sync_ptr, 7);
+        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+        DPRINT << "terminated mux\n";
+    } else {
+        uint64_t dest_addr =
+            safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
+        noc_semaphore_inc(dest_addr, 1);
+        noc_async_atomic_barrier();
+        DPRINT << "signaled termination master\n";
+    }
+    DPRINT << "after termination sync\n";
+
     DPRINT << "end of reader 2 kernel\n";
 }
