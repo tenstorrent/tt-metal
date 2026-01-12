@@ -86,8 +86,47 @@ jobs:
 
             echo "Membership check for $COMMENT_AUTHOR: HTTP $MEMBERSHIP_HTTP_CODE"
 
-            # HTTP 204 = member, HTTP 404 = not a member or private membership, HTTP 302 = public member
-            if [ "$MEMBERSHIP_HTTP_CODE" = "204" ] || [ "$MEMBERSHIP_HTTP_CODE" = "302" ]; then
+            # Handle different HTTP response codes
+            # 204 = member, 302 = public member
+            # 404 = not a member or private membership
+            # 401 = authentication failed (invalid/expired token)
+            # 403 = forbidden (token lacks read:org permission or rate limited)
+            if [ "$MEMBERSHIP_HTTP_CODE" = "401" ]; then
+              echo "❌ CRITICAL: ORG_READ_GITHUB_TOKEN is invalid or expired (HTTP 401)"
+              echo "The token must be regenerated with 'read:org' scope and updated in repository secrets."
+              
+              # Verify token is completely invalid by testing against a basic endpoint
+              TOKEN_TEST_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                     -H "Accept: application/vnd.github.v3+json" \
+                                     "https://api.github.com/user")
+              
+              if [ "$TOKEN_TEST_CODE" = "401" ]; then
+                echo "Token validation failed (HTTP 401). Token is invalid, expired, or revoked."
+              else
+                echo "Token validates (HTTP $TOKEN_TEST_CODE) but lacks organization access. Check token scopes include 'read:org'."
+              fi
+              
+              # Fail the workflow to force attention to the token issue
+              echo "::error::ORG_READ_GITHUB_TOKEN secret is invalid or expired. Please regenerate the token with 'read:org' scope."
+              exit 1
+            elif [ "$MEMBERSHIP_HTTP_CODE" = "403" ]; then
+              # Check if this is rate limiting or permission issue
+              RATE_LIMIT_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                         -H "Accept: application/vnd.github.v3+json" \
+                                         "$MEMBERSHIP_API")
+              
+              if echo "$RATE_LIMIT_RESPONSE" | grep -q "rate limit"; then
+                echo "⚠️  WARNING: GitHub API rate limit exceeded (HTTP 403)"
+                echo "::warning::GitHub API rate limit exceeded. The workflow will retry automatically."
+                # Don't fail, let it retry
+                echo "should-run=false" >> $GITHUB_OUTPUT
+              else
+                echo "❌ CRITICAL: ORG_READ_GITHUB_TOKEN lacks required permissions (HTTP 403)"
+                echo "The token must have 'read:org' scope to check organization membership."
+                echo "::error::ORG_READ_GITHUB_TOKEN lacks 'read:org' permission. Please regenerate the token with proper scopes."
+                exit 1
+              fi
+            elif [ "$MEMBERSHIP_HTTP_CODE" = "204" ] || [ "$MEMBERSHIP_HTTP_CODE" = "302" ]; then
               echo "✅ User $COMMENT_AUTHOR is a member of tenstorrent organization"
               echo "should-run=true" >> $GITHUB_OUTPUT
               echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
@@ -215,8 +254,9 @@ jobs:
                 -d '{"content": "rocket"}' \
                 "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
 
-            else
-              echo "❌ User $COMMENT_AUTHOR is not a member of tenstorrent organization (HTTP $MEMBERSHIP_HTTP_CODE)"
+            elif [ "$MEMBERSHIP_HTTP_CODE" = "404" ]; then
+              # User is not a member of the organization
+              echo "❌ User $COMMENT_AUTHOR is not a member of tenstorrent organization (HTTP 404)"
               echo "should-run=false" >> $GITHUB_OUTPUT
 
               # Add unauthorized reaction
@@ -242,6 +282,11 @@ jobs:
                 "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
 
               rm -f "$TEMP_JSON_FILE"
+            else
+              # Unexpected HTTP code
+              echo "⚠️  WARNING: Unexpected HTTP code $MEMBERSHIP_HTTP_CODE when checking organization membership for $COMMENT_AUTHOR"
+              echo "::warning::Unexpected HTTP $MEMBERSHIP_HTTP_CODE from GitHub API. Expected 204/302 (member), 404 (not member), 401 (invalid token), or 403 (rate limit/permission)."
+              echo "should-run=false" >> $GITHUB_OUTPUT
             fi
           else
             echo "should-run=false" >> $GITHUB_OUTPUT
