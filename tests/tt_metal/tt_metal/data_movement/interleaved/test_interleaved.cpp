@@ -181,18 +181,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     }
 
     // Results comparison
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal = (packed_output == packed_golden);
 
-    if (!pcc) {
-        log_error(tt::LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(tt::LogTest, "Equality Check failed");
         log_info(tt::LogTest, "Golden vector");
         print_vector(unpack_vector<bfloat16, uint32_t>(packed_golden));
         log_info(tt::LogTest, "Output vector");
         print_vector(unpack_vector<bfloat16, uint32_t>(packed_output));
     }
 
-    return pcc;
+    return is_equal;
 }
 }  // namespace unit_tests::dm::interleaved_page
 

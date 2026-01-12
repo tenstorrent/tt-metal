@@ -8,7 +8,7 @@
 #include <random>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/blockfloat_common.hpp>
+#include "impl/data_format/blockfloat_common.hpp"
 #include <vector>
 #include <tt_stl/assert.hpp>
 

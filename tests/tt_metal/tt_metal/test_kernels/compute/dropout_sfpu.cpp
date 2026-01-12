@@ -7,6 +7,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "experimental/circular_buffer.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -16,15 +17,18 @@ void MAIN {
     uint32_t int_probability = get_compile_time_arg_val(3);
     uint32_t int_scale_factor = get_compile_time_arg_val(4);
 
+    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
+    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
     dropout_kernel_init(seed);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(tt::CBIndex::c_16, per_core_block_dim);
+        cb16.reserve_back(per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             acquire_dst();
 
             // Pop tile after tile, copy to DST and pack
-            cb_wait_front(tt::CBIndex::c_0, 1);
+            cb0.wait_front(1);
 
             copy_tile(tt::CBIndex::c_0, 0, 0);
 
@@ -32,11 +36,11 @@ void MAIN {
 
             pack_tile(0, tt::CBIndex::c_16);
 
-            cb_pop_front(tt::CBIndex::c_0, 1);
+            cb0.pop_front(1);
 
             release_dst();
         }
-        cb_push_back(tt::CBIndex::c_16, per_core_block_dim);
+        cb16.push_back(per_core_block_dim);
     }
 }
 }  // namespace NAMESPACE

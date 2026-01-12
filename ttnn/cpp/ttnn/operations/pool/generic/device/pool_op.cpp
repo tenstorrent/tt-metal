@@ -23,7 +23,7 @@ void validate_pool2d(
     const Pool2DType pool_type,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const MemoryConfig& out_mem_config,
-    const std::optional<const int32_t> divisor_override,
+    const std::optional<const int32_t> /*divisor_override*/,
     const bool return_indices,
     const Layout& output_layout) {
     // check the input tensor
@@ -95,7 +95,7 @@ void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
-    const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
+    const operation_attributes_t& op_attr, const tensor_args_t& /*tensor*/) {
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& out_mem_config = op_attr.memory_config_;
     const auto& output_dtype = op_attr.output_dtype_;
