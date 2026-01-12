@@ -6,10 +6,6 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/matmul.h"
-#include "api/debug/dprint.h"
-
-#include "api/debug/dprint_pages.h"
-#include "api/debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -22,7 +18,7 @@ void MAIN {
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
     constexpr auto cb_c2c_mm0 = tt::CBIndex::c_2;
     constexpr auto cb_c2c_mm1 = tt::CBIndex::c_3;
-    constexpr auto cb_c2w_elt = tt::CBIndex::c_7;
+    constexpr auto cb_c2w_elt = tt::CBIndex::c_4;
     constexpr auto cb_r2c_in2 = tt::CBIndex::c_5;
     constexpr auto cb_c2w_mm2 = tt::CBIndex::c_6;
 
@@ -48,9 +44,9 @@ void MAIN {
     const uint32_t w2_tile_id_start = core_id < 32 ? 4 * core_id : 4 * 32 + 3 * (core_id - 32);
 
     // Read W0 and W1 from CB into registers
-    // reconfig_data_format(cb_s2c_in,cb_r2c_w0 );
-    // pack_reconfig_data_format(cb_c2c_mm0);
-    // mm_init(cb_s2c_in, cb_r2c_w0, cb_c2c_mm0);
+    reconfig_data_format(cb_s2c_in, cb_r2c_w0);
+    pack_reconfig_data_format(cb_c2c_mm0);
+    mm_init(cb_s2c_in, cb_r2c_w0, cb_c2c_mm0);
     tile_regs_acquire();
     tile_regs_wait();
     for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
@@ -58,16 +54,16 @@ void MAIN {
         matmul_tiles(cb_s2c_in, cb_r2c_w0, i, 0, dst0);
         cb_pop_front(cb_r2c_w0, 1);
     }
-    // silu_tile_init();
-    // silu_tile(dst0);
+    silu_tile_init();
+    silu_tile(dst0);
     tile_regs_commit();
     cb_reserve_back(cb_c2c_mm0, 1);
     pack_tile(dst0, cb_c2c_mm0);
     cb_push_back(cb_c2c_mm0, 1);
     tile_regs_release();
 
-    // reconfig_data_format(cb_s2c_in,cb_r2c_w1 );
-    // pack_reconfig_data_format(cb_c2c_mm1);
+    reconfig_data_format(cb_s2c_in, cb_r2c_w1);
+    pack_reconfig_data_format(cb_c2c_mm1);
     mm_init(cb_s2c_in, cb_r2c_w1, cb_c2c_mm1);
 
     tile_regs_acquire();
@@ -84,30 +80,30 @@ void MAIN {
     tile_regs_release();
 
     // Write to cb_c2w_elt
-    // binary_op_init_common(cb_c2c_mm0,cb_c2c_mm1,cb_c2w_elt);
-    // reconfig_data_format(cb_c2c_mm0, cb_c2c_mm1);
-    // pack_reconfig_data_format(cb_c2w_elt);
-    // mul_tiles_init(cb_c2c_mm0, cb_c2c_mm1);
-    // for (uint32_t i = 0; i < num_elt_tiles; ++i) {
-    //     tile_regs_acquire();
-    //     tile_regs_wait();
-    //     cb_wait_front(cb_c2c_mm0, 1);
-    //     cb_wait_front(cb_c2c_mm1, 1);
-    //     mul_tiles(cb_c2c_mm0, cb_c2c_mm1, 0, 0, dst0);
-    //     cb_pop_front(cb_c2c_mm0, 1);
-    //     cb_pop_front(cb_c2c_mm1, 1);
-    //     tile_regs_commit();
-    //     cb_reserve_back(cb_c2w_elt, 1);
-    //     pack_tile(dst0, cb_c2w_elt);
-    //     tile_regs_release();
-    //     cb_push_back(cb_c2w_elt, 1);
-    // }
-    // cb_wait_front(cb_c2w_elt, 1);
+    binary_op_init_common(cb_c2c_mm0, cb_c2c_mm1, cb_c2w_elt);
+    reconfig_data_format(cb_c2c_mm0, cb_c2c_mm1);
+    pack_reconfig_data_format(cb_c2w_elt);
+    mul_tiles_init(cb_c2c_mm0, cb_c2c_mm1);
+    for (uint32_t i = 0; i < num_elt_tiles; ++i) {
+        tile_regs_acquire();
+        tile_regs_wait();
+        cb_wait_front(cb_c2c_mm0, 1);
+        cb_wait_front(cb_c2c_mm1, 1);
+        mul_tiles(cb_c2c_mm0, cb_c2c_mm1, 0, 0, dst0);
+        cb_pop_front(cb_c2c_mm0, 1);
+        cb_pop_front(cb_c2c_mm1, 1);
+        tile_regs_commit();
+        cb_reserve_back(cb_c2w_elt, 1);
+        pack_tile(dst0, cb_c2w_elt);
+        tile_regs_release();
+        cb_push_back(cb_c2w_elt, 1);
+    }
+    cb_wait_front(cb_c2w_elt, 1);
     cb_push_back(tt::CBIndex::c_4, 1);
 
     mm_init_short(cb_r2c_in2, cb_r2c_w2, cb_c2w_mm2);
-    // reconfig_data_format(cb_r2c_in2, cb_r2c_w2);
-    // pack_reconfig_data_format(cb_c2w_mm2);
+    reconfig_data_format(cb_r2c_in2, cb_r2c_w2);
+    pack_reconfig_data_format(cb_c2w_mm2);
     tile_regs_acquire();
     tile_regs_wait();
     for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {

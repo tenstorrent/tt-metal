@@ -41,7 +41,7 @@ std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tenso
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en) {
     return {
-        operation_attributes_t{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en},
+        operation_attributes_t{},
         tensor_args_t{
             .input_tensor = input_tensor,
             .w0_tensor = w0_tensor,
