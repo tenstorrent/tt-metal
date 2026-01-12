@@ -763,7 +763,10 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -1333,7 +1336,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_strided_reduce_scatter_async_
                 chunks_per_sync,
                 num_workers_per_direction_opt,
                 num_buffers_per_channel,
-                core_grid_offset);
+                core_grid_offset,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt);
 
     auto override_runtime_arguments_callback =
         [reader_kernel_id,
@@ -1395,7 +1401,10 @@ StridedReduceScatterProgramArtifacts build_line_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt) {
     /**
      * Line Reduce Scatter
      *
@@ -2055,7 +2064,10 @@ tt::tt_metal::operation::ProgramWithCallbacks line_strided_reduce_scatter_async_
                 chunks_per_sync,
                 num_workers_per_direction_opt,
                 num_buffers_per_channel,
-                core_grid_offset);
+                core_grid_offset,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt);
     auto override_runtime_arguments_callback =
         [reader_kernel_id,
          writer_kernel_id,
@@ -2121,7 +2133,10 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset) {
+    CoreCoord core_grid_offset,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt) {
     return ::ttnn::build_ring_strided_reduce_scatter_async_program_artifacts(
         program,
         input_tensor,
@@ -2143,7 +2158,10 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         chunks_per_sync,
         num_workers_per_direction_opt,
         num_buffers_per_channel,
-        core_grid_offset);
+        core_grid_offset,
+        mm_cores_y,
+        mm_block_ht,
+        mm_block_wt);
 }
 
 StridedReduceScatterProgramArtifacts build_line_strided_reduce_scatter_async_program_artifacts(
@@ -2167,7 +2185,10 @@ StridedReduceScatterProgramArtifacts build_line_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset) {
+    CoreCoord core_grid_offset,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt) {
     return ::ttnn::build_line_strided_reduce_scatter_async_program_artifacts(
         program,
         input_tensor,
@@ -2189,7 +2210,10 @@ StridedReduceScatterProgramArtifacts build_line_strided_reduce_scatter_async_pro
         chunks_per_sync,
         num_workers_per_direction_opt,
         num_buffers_per_channel,
-        core_grid_offset);
+        core_grid_offset,
+        mm_cores_y,
+        mm_block_ht,
+        mm_block_wt);
 }
 
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
@@ -2317,7 +2341,10 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
-        CoreCoord(0, 0));
+        CoreCoord(0, 0),
+        operation_attributes.mm_cores_y,
+        operation_attributes.mm_block_ht,
+        operation_attributes.mm_block_wt);
 
     return {std::move(program), std::move(shared_vars)};
 }
@@ -2412,7 +2439,10 @@ LineStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
-        CoreCoord(0, 0));
+        CoreCoord(0, 0),
+        operation_attributes.mm_cores_y,
+        operation_attributes.mm_block_ht,
+        operation_attributes.mm_block_wt);
 
     return {std::move(program), std::move(shared_vars)};
 }

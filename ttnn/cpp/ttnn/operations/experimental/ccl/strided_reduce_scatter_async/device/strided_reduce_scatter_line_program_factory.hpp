@@ -61,7 +61,10 @@ StridedReduceScatterProgramArtifacts build_line_strided_reduce_scatter_async_pro
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset);
+    CoreCoord core_grid_offset,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_ht,
+    std::optional<uint32_t> mm_block_wt);
 
 // Override runtime arguments helper for line topology
 void line_strided_reduce_scatter_async_helper_override_runtime_arguments(
