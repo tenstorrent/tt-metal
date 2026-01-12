@@ -2405,7 +2405,7 @@ void UDMFabricUnicastCommon(
         worker_mem_map_risc1.packet_payload_size_bytes = single_payload_size_bytes * 2 - 16;
     }
 
-    log_info(
+    log_debug(
         tt::LogTest,
         "RISC0 mem_map: source_l1_buffer=0x{:x}, target=0x{:x}, test_results=0x{:x}, notification=0x{:x}, "
         "payload_size={}, test_results_size={}",
@@ -2417,7 +2417,7 @@ void UDMFabricUnicastCommon(
         worker_mem_map.test_results_size_bytes);
 
     if (dual_risc) {
-        log_info(
+        log_debug(
             tt::LogTest,
             "RISC1 mem_map: source_l1_buffer=0x{:x}, target=0x{:x}, test_results=0x{:x}, notification=0x{:x}, "
             "payload_size={}, test_results_size={}",
@@ -2427,7 +2427,7 @@ void UDMFabricUnicastCommon(
             worker_mem_map_risc1.notification_mailbox_address,
             worker_mem_map_risc1.packet_payload_size_bytes,
             worker_mem_map_risc1.test_results_size_bytes);
-        log_info(
+        log_debug(
             tt::LogTest,
             "DualRisc: data_space_size={}, region_size={}, num_packets={}",
             mem_helper.data_space_size,
