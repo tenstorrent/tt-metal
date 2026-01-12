@@ -39,7 +39,6 @@ void kernel_main() {
     address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
     const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
@@ -52,7 +51,6 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<initial_ct_idx + input_ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 
-    uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
 
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
@@ -78,7 +76,6 @@ void kernel_main() {
         uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
         uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
 
-        chunk_count = 0;
         uint32_t input_pages_read_in_row = start_pages_read_in_row;
         uint32_t input_row_offset = start_row_offset;
 
@@ -111,11 +108,10 @@ void kernel_main() {
         while (tiles_read < tiles_to_read) {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
-            if (do_reduce && (chunk_count % chunks_per_sync == 0)) {
+            if (do_reduce) {
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                 sem_target++;
             }
-            chunk_count++;
 
             uint32_t tiles_to_read_in_current_direction = 0;
             if (direction) {

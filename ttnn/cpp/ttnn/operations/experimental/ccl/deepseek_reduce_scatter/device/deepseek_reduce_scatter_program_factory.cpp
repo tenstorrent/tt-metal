@@ -217,15 +217,12 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
             uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
 
-            uint32_t chunks_per_sync_val = 1;  // TODO: (GR) remove
-
             // reader
             std::vector<uint32_t> reader_rt_args = {
                 input_tensor.buffer()->address(),          // input_tensor_address
                 intermediate_tensor.buffer()->address(),   // intermediate_tensor_address
                 multidevice_semaphores.at(dir).address(),  // out_ready_semaphore
                 dir,                                       // direction
-                chunks_per_sync_val,                       // chunks_per_sync
                 start_tiles_read,                          // start_tiles_read
                 start_tiles_to_read,                       // start_tiles_to_read
                 start_pages_read_in_row,                   // start_pages_read_in_row
@@ -244,7 +241,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 multidevice_semaphores.at(num_directions_per_link).address(),  // batch_ready_semaphore
                 barrier_semaphore.address(),                                   // barrier_sem
                 dir,                                                           // direction
-                chunks_per_sync_val,                                           // chunks_per_sync
                 start_pages_read_in_row,  // start_pages_read_in_row (unused by dim0 kernel)
                 start_row_offset,         // start_row_offset (unused by dim0 kernel)
                 start_tiles_read,         // start_tiles_read

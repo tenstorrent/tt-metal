@@ -51,7 +51,6 @@ void kernel_main() {
     size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
-    const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
@@ -144,7 +143,6 @@ void kernel_main() {
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     // done barrier
 
-    uint32_t chunk_count = 0;
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
         uint32_t actual_slice_idx;
@@ -157,8 +155,6 @@ void kernel_main() {
         // If not the last slice, write what's on cb_output_id forward
         uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
         if (i < (ring_size - 1)) {
-            chunk_count = 0;
-
             uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
             uint32_t intermediate_pages_read_in_row = start_pages_read_in_row;
             uint32_t intermediate_row_offset = start_row_offset;
@@ -267,20 +263,6 @@ void kernel_main() {
                     tiles_read += tiles_to_read_in_other_direction;
                 }
 
-                chunk_count++;
-                if (chunk_count % chunks_per_sync == 0) {
-                    // 2. unicast output ready semaphore
-                    uint64_t out_ready_sem_noc_addr_in_pkt =
-                        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                        fabric_connection,
-                        seminc_route_id,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
-                }
-            }
-
-            if (chunk_count % chunks_per_sync != 0) {
-                // 2. unicast output ready semaphore
                 uint64_t out_ready_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
@@ -288,6 +270,7 @@ void kernel_main() {
                     seminc_route_id,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
             }
+
             noc_async_writes_flushed();
         } else {
             // Otherwise, on the last slice, write it to output buffer
