@@ -64,6 +64,7 @@ class RMSNorm(RMSNormBase):
             epsilon=hf_config.rms_norm_eps,
             weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
             compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
     @classmethod

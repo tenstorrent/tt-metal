@@ -74,6 +74,7 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cluster_axis=0,
                 topology=ttnn.Topology.Linear,
+                num_links=4,
             ),
         }
 

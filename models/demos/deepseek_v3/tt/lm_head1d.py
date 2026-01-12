@@ -82,10 +82,29 @@ class LMHead1D(AbstractModule):
         }
 
     @classmethod
-    def _model_config(
-        cls,
-        mesh_device: ttnn.Device,
-    ) -> ModelPrefillConfig | ModelDecodeConfig:
+    def decode_model_config(cls, mesh_device: ttnn.Device) -> ModelDecodeConfig:
+        """Generate model configuration for this module."""
+        # Construct the config
+        return {
+            "linear": LinearConfig(
+                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            ),
+            "all_gather": AllGatherAsyncConfig(
+                mesh_device=mesh_device,
+                cluster_axis=1,
+                dim=-1,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+                num_links=4,
+            ),
+            "input_memory_config": ttnn.L1_MEMORY_CONFIG,
+            "output_memory_config": ttnn.L1_MEMORY_CONFIG,
+        }
+
+    @classmethod
+    def prefill_model_config(cls, mesh_device: ttnn.Device) -> ModelPrefillConfig:
         """Generate model configuration for this module."""
         # Construct the config
         return {
@@ -100,18 +119,11 @@ class LMHead1D(AbstractModule):
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
+                num_links=4,
             ),
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
         }
-
-    @classmethod
-    def decode_model_config(cls, mesh_device: ttnn.Device) -> ModelDecodeConfig:
-        return cls._model_config(mesh_device)
-
-    @classmethod
-    def prefill_model_config(cls, mesh_device: ttnn.Device) -> ModelPrefillConfig:
-        return cls._model_config(mesh_device)
 
     @classmethod
     def create_state(cls, mesh_device: ttnn.Device, ccl: CCL) -> ModelState:
