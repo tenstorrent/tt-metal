@@ -81,7 +81,7 @@ jobs:
             
             if [ "$pr_count" -gt "$base_count" ]; then
               echo "| $path | $base_count | $pr_count | ❌ New tests added (+$((pr_count - base_count))) |" >> $GITHUB_STEP_SUMMARY
-              echo "::error::New tests detected in $path/ ($base_count → $pr_count)"
+              echo "::notice::New tests detected in $path/ ($base_count → $pr_count)"
               FAILED=1
             else
               echo "| $path | $base_count | $pr_count | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
@@ -90,7 +90,7 @@ jobs:
           
           if [ "$FAILED" -eq 1 ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "❌ **This PR adds new tests to locked directories.**" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **This PR adds new tests to ttnn in APC.**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "These test directories have a locked test count to maintain stable APC runtime." >> $GITHUB_STEP_SUMMARY
             echo "Please look into removing existing lower priority tests to add new tests." >> $GITHUB_STEP_SUMMARY
