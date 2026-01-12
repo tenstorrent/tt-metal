@@ -47,7 +47,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& intermediate_tensor,
     const ttnn::Tensor& output_tensor,
-    const ttnn::MeshCoordinate& sender_device_coord,
+    const ttnn::MeshCoordinate& sender_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
     uint32_t ring_index,
@@ -281,6 +281,23 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             if (output_is_sharded) {
                 shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
             }
+
+            const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_coord);
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+            uint32_t num_connections = 1;
+            dst_nodes.reserve(num_connections);
+            if (dir == 0) {
+                // backward
+                const auto backward_coord_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+                dst_nodes.push_back(backward_coord_fabric_node_id);
+            } else {
+                // forward
+                const auto forward_coord_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+                dst_nodes.push_back(forward_coord_fabric_node_id);
+            }
+            append_routing_plane_connection_manager_rt_args(
+                sender_fabric_node_id, dst_nodes, {link}, program, writer_kernel_id, {core}, writer_rt_args);
+
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
 
             std::vector<uint32_t> reduce_rt_args = {

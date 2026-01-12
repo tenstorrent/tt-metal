@@ -41,7 +41,7 @@ constexpr uint32_t slice_C = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Ht = get_compile_time_arg_val(13);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(14);
 
-constexpr uint32_t ct_idx = 15;
+constexpr uint32_t initial_ct_idx = 15;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -63,21 +63,21 @@ void kernel_main() {
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
-    constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<initial_ct_idx>();
+    constexpr uint32_t intermediate_ct_offset = intermediate_tensor_args.num_compile_time_args();
     auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, page_size);
+
+    constexpr uint32_t output_addrgen_ct_idx = initial_ct_idx + intermediate_ct_offset;
 
 #ifdef OUTPUT_IS_SHARDED
     using output_tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(ct_idx + ct_offset),       // Memory layout
-        get_compile_time_arg_val(ct_idx + ct_offset + 1),   // The number of sharding cores
-        get_compile_time_arg_val(ct_idx + ct_offset + 2),   // The page size we offset each write to
-        get_compile_time_arg_val(ct_idx + ct_offset + 3),   // The number of pages in each sharding row not including
-                                                            // padding pages
-        get_compile_time_arg_val(ct_idx + ct_offset + 4),   // This defines times when contiguous pages can't be
-                                                            // calculated
-        get_compile_time_arg_val(ct_idx + ct_offset + 5),   // pages_per_shard_x
-        get_compile_time_arg_val(ct_idx + ct_offset + 6)>;  // pages_per_shard_y
+        get_compile_time_arg_val(output_addrgen_ct_idx),
+        get_compile_time_arg_val(output_addrgen_ct_idx + 1),
+        get_compile_time_arg_val(output_addrgen_ct_idx + 2),
+        get_compile_time_arg_val(output_addrgen_ct_idx + 3),
+        get_compile_time_arg_val(output_addrgen_ct_idx + 4),
+        get_compile_time_arg_val(output_addrgen_ct_idx + 5),
+        get_compile_time_arg_val(output_addrgen_ct_idx + 6)>;
 
     const auto [output_mapping_table, output_rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<output_tensor_shard_info>(get_arg_addr(arg_idx));
@@ -86,7 +86,7 @@ void kernel_main() {
 
     arg_idx += output_rt_increment;
 #else
-    constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
+    constexpr auto output_tensor_args = TensorAccessorArgs<output_addrgen_ct_idx>();
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
 #endif
 

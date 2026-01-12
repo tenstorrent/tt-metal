@@ -47,7 +47,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& intermediate_tensor,
     const ttnn::Tensor& output_tensor,
-    const ttnn::MeshCoordinate& sender_device_coord,
+    const ttnn::MeshCoordinate& sender_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
     uint32_t ring_index,
