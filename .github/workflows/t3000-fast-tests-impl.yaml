@@ -88,8 +88,8 @@ jobs:
         if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
-          # source tests/scripts/t3000/run_t3000_unit_tests.sh
-          # run_t3000_ttfabric_tests
+          source tests/scripts/t3000/run_t3000_unit_tests.sh
+          run_t3000_ttfabric_tests
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() && steps.t3k-fabric-tests.outcome == 'failure' }}
         with:
