@@ -2256,6 +2256,17 @@ def _extract_rms_norm_pre_all_gather_parameters(config: List) -> Optional[Dict]:
                     break
             params["output_memory_config"] = output_memory_config or tensor_config.memory_config
 
+            # Extract program_config from arg4 (LayerNormShardedMultiCoreProgramConfig)
+            program_config = None
+            for arg in config:
+                if isinstance(arg, dict) and "arg4" in arg:
+                    arg4 = arg["arg4"]
+                    if isinstance(arg4, dict) and "LayerNormShardedMultiCoreProgramConfig" in arg4:
+                        program_config = arg4["LayerNormShardedMultiCoreProgramConfig"]
+                        break
+            if program_config:
+                params["program_config"] = program_config
+
         return params if params else None
     except Exception:
         return None
@@ -2312,6 +2323,10 @@ def _transform_rms_norm_pre_all_gather_parameters(
                 transformed_config["input_a_memory_config"] = parse_memory_config(input_a_mem_config, input_a_shape)
                 transformed_config["input_b_memory_config"] = parse_memory_config(input_b_mem_config, input_b_shape)
                 transformed_config["output_memory_config"] = parse_memory_config(output_mem_config, input_a_shape)
+
+            # Pass through program_config if present
+            if "program_config" in config:
+                transformed_config["program_config"] = config["program_config"]
 
             transformed_configs.append(transformed_config)
 

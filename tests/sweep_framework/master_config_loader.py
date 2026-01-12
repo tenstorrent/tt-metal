@@ -1092,6 +1092,20 @@ class MasterConfigLoader:
                 exponent_list = [] if self._matches_operation(operation_name, "pow") else None
                 min_list = [] if self._matches_operation(operation_name, "clamp") else None
                 max_list = [] if self._matches_operation(operation_name, "clamp") else None
+                # rms_norm specific parameters
+                program_config_list = (
+                    []
+                    if (
+                        operation_name
+                        in [
+                            "rms_norm_pre_all_gather",
+                            "ttnn::rms_norm_pre_all_gather",
+                            "rms_norm_post_all_gather",
+                            "ttnn::rms_norm_post_all_gather",
+                        ]
+                    )
+                    else None
+                )
                 # dim parameter is used by multiple operations
                 dim_list = (
                     []
@@ -1173,8 +1187,20 @@ class MasterConfigLoader:
                     # Convert shape to tuple so it serializes as a string for proper deserialization
                     input_shapes.append(tuple(cfg["shape"]))
                     # Parse dtype/layout strings to ttnn objects
-                    input_a_dtypes.append(self.parse_dtype(cfg["dtype"]))
-                    input_a_layouts.append(self.parse_layout(cfg["layout"]))
+                    parsed_dtype = self.parse_dtype(cfg["dtype"])
+                    parsed_layout = self.parse_layout(cfg["layout"])
+
+                    # Override UINT16 TILE to ROW_MAJOR for reshape to avoid device operation assertion
+                    # The reshape device operation doesn't support UINT16, but ROW_MAJOR uses view path
+                    if (
+                        operation_name == "reshape"
+                        and parsed_dtype == ttnn.uint16
+                        and parsed_layout == ttnn.TILE_LAYOUT
+                    ):
+                        parsed_layout = ttnn.ROW_MAJOR_LAYOUT
+
+                    input_a_dtypes.append(parsed_dtype)
+                    input_a_layouts.append(parsed_layout)
                     # Parse memory configs to ttnn objects (for proper serialization)
                     # Check if already a MemoryConfig object (from some extractors)
                     mem_config = cfg["memory_config"]
@@ -1203,6 +1229,16 @@ class MasterConfigLoader:
                         target_shape_list.append(cfg["target_shape"])
                     if self._matches_operation(operation_name, "repeat") and "repeat_shape" in cfg:
                         repeat_shape_list.append(cfg["repeat_shape"])
+                    if operation_name in [
+                        "rms_norm_pre_all_gather",
+                        "ttnn::rms_norm_pre_all_gather",
+                        "rms_norm_post_all_gather",
+                        "ttnn::rms_norm_post_all_gather",
+                    ]:
+                        if "program_config" in cfg:
+                            program_config_list.append(cfg["program_config"])
+                        else:
+                            program_config_list.append(None)
                     if operation_name == "pad" or operation_name == "ttnn::pad":
                         if "padding" in cfg and "value" in cfg:
                             # Using padding format
@@ -1533,6 +1569,16 @@ class MasterConfigLoader:
                     if repeat_shape_list:
                         param_names.append("repeat_shape")
                         param_lists.append(repeat_shape_list)
+                # Add rms_norm program_config
+                if operation_name in [
+                    "rms_norm_pre_all_gather",
+                    "ttnn::rms_norm_pre_all_gather",
+                    "rms_norm_post_all_gather",
+                    "ttnn::rms_norm_post_all_gather",
+                ]:
+                    if program_config_list:
+                        param_names.append("program_config")
+                        param_lists.append(program_config_list)
                 # Add pow parameters
                 if self._matches_operation(operation_name, "pow"):
                     if exponent_list:
