@@ -27,12 +27,12 @@ HIGH_PRECISION_PCC = 0.9999
 
 def create_sharded_memory_config(layout_type, grid_size, tensor_shape=None):
     """Create a sharded memory configuration for testing.
-    
+
     Args:
         layout_type: "height_sharded", "width_sharded", or "block_sharded"
         grid_size: Device grid size
         tensor_shape: Optional tensor shape for size optimization
-    
+
     Returns:
         ttnn.MemoryConfig for the specified sharding layout
     """
@@ -43,7 +43,7 @@ def create_sharded_memory_config(layout_type, grid_size, tensor_shape=None):
         })
         memory_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         orientation = ttnn.ShardOrientation.ROW_MAJOR
-        
+
     elif layout_type == "width_sharded":
         cores_to_use = min(grid_size.y, MAX_TEST_CORES)
         shard_grid = ttnn.CoreRangeSet({
@@ -51,52 +51,76 @@ def create_sharded_memory_config(layout_type, grid_size, tensor_shape=None):
         })
         memory_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
         orientation = ttnn.ShardOrientation.COL_MAJOR
-        
+
     elif layout_type == "block_sharded":
         cores_x = min(4, grid_size.x)
         cores_y = min(4, grid_size.y)
-        shard_grid = ttnn.CoreRangeSet({
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores_x - 1, cores_y - 1))
-        })
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(cores_x - 1, cores_y - 1),
+                )
+            }
+        )
         memory_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
         orientation = ttnn.ShardOrientation.ROW_MAJOR
-        
+
     else:
         raise ValueError(f"Unsupported layout_type: {layout_type}")
-    
+
     # Use default shard size for simplicity and compatibility
-    shard_spec = ttnn.ShardSpec(shard_grid, [DEFAULT_SHARD_HEIGHT, DEFAULT_SHARD_WIDTH], orientation)
+    shard_spec = ttnn.ShardSpec(
+        shard_grid, [DEFAULT_SHARD_HEIGHT, DEFAULT_SHARD_WIDTH], orientation
+    )
     return ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
 
 
-def run_conv3d_with_memory_config(device, input_shape, out_channels, kernel_size, stride, padding, 
-                                  padding_mode, input_mem_config=None, output_mem_config=None):
+def run_conv3d_with_memory_config(
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    padding,
+    padding_mode,
+    input_mem_config=None,
+    output_mem_config=None,
+):
     """Run conv3d test with specified memory configurations.
-    
+
     Returns:
         Tuple of (tt_output, gt_output) for comparison
     """
     # Setup test
-    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = (
+        setup_conv3d_test(
+            input_shape,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            padding_mode,
+            device,
+        )
     )
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
-    
+
     # Prepare weights and bias (always interleaved for simplicity)
     tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device)
-    
+
     # Convert input to specified memory config if provided
     if input_mem_config is not None:
         try:
             tt_input = ttnn.to_memory_config(tt_input, input_mem_config)
         except Exception as e:
             pytest.skip(f"Incompatible input memory configuration: {e}")
-    
+
     # Create config
     grid_size = device.compute_with_storage_grid_size()
     config = create_conv3d_config(compute_with_storage_grid_size=grid_size)
-    
+
     # Run conv3d
     conv3d_kwargs = {
         "input_tensor": tt_input,
@@ -111,11 +135,11 @@ def run_conv3d_with_memory_config(device, input_shape, out_channels, kernel_size
         "config": config,
         "compute_kernel_config": kernel_config,
     }
-    
+
     # Add output memory config if specified
     if output_mem_config is not None:
         conv3d_kwargs["memory_config"] = output_mem_config
-    
+
     try:
         tt_output = ttnn.experimental.conv3d(**conv3d_kwargs)
     except Exception as e:
@@ -123,14 +147,14 @@ def run_conv3d_with_memory_config(device, input_shape, out_channels, kernel_size
             pytest.skip(f"Output memory configuration not supported: {e}")
         else:
             raise
-    
+
     # Convert output to interleaved for comparison if needed
     if output_mem_config is not None:
         tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
-    
+
     # Reshape output
     tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
-    
+
     return tt_output, gt_output
 
 
@@ -151,9 +175,14 @@ def run_conv3d_with_memory_config(device, input_shape, out_channels, kernel_size
 )
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
-def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
+def test_conv3d_sweep_shapes(
+    device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode
+):
     if padding == (0, 0, 0) and padding_mode == "replicate":
-        pytest.skip("Skipping padding (0, 0, 0) and padding_mode replicate because it's duplicate")
+        pytest.skip(
+            "Skipping padding (0, 0, 0) and padding_mode replicate "
+            "because it's duplicate"
+        )
     input_shape = (B, C_in, T, H, W)
     out_channels = C_out
     kernel_size = kernel_size
@@ -161,7 +190,16 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
     padding = padding
     padding_mode = padding_mode
     grid_size = device.compute_with_storage_grid_size()
-    run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
+    run_conv3d_test(
+        device,
+        input_shape,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        padding_mode,
+        grid_size=grid_size,
+    )
 
 
 @pytest.mark.parametrize(
@@ -172,7 +210,9 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
     ],
 )
 @pytest.mark.timeout(1000)
-def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
+def test_conv3d_sweep_blocks(
+    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode
+):
     """
     For a specific shape, sweep through different block sizes.
     Constrain the sweep such that the num_patches in a block doesn't exceed 64
@@ -186,7 +226,9 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
     C_in_blocks = filter(lambda x: C % x == 0, range(32, C + 1, 32))
-    C_out_blocks = filter(lambda x: out_channels % x == 0, range(32, out_channels + 1, 32))
+    C_out_blocks = filter(
+        lambda x: out_channels % x == 0, range(32, out_channels + 1, 32)
+    )
     T_out_blocks = [2**i for i in range(int(math.log2(D_out)))]
     H_out_blocks = [2**i for i in range(int(math.log2(H_out)))]
     W_out_blocks = [2**i for i in range(int(math.log2(W_out)))]
@@ -196,8 +238,10 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
 
     import itertools
 
-    for C_in_block, C_out_block, T_out_block, H_out_block, W_out_block in itertools.product(
-        C_in_blocks, C_out_blocks, T_out_blocks, H_out_blocks, W_out_blocks
+    for C_in_block, C_out_block, T_out_block, H_out_block, W_out_block in (
+        itertools.product(
+            C_in_blocks, C_out_blocks, T_out_blocks, H_out_blocks, W_out_blocks
+        )
     ):
         num_patches_in_block = T_out_block * H_out_block * W_out_block
         if num_patches_in_block > MAX_NUM_PATCHES_IN_BLOCK:
@@ -205,11 +249,16 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
         if (C_in_block == 128 or C_out_block == 128) and num_patches_in_block > 32:
             continue
 
-        logger.info(f"Testing {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}")
+        logger.info(
+            f"Testing {C_in_block}, {C_out_block}, {T_out_block}, "
+            f"{H_out_block}, {W_out_block}"
+        )
         # Prepare weights with specified C_in_block
         if prev_C_in_block != C_in_block:
             # Only prepare if changing C_in_block
-            tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+            tt_weight, tt_bias = prepare_weights(
+                conv3d_module, C, out_channels, device, C_in_block=C_in_block
+            )
             prev_C_in_block = C_in_block
 
         config = create_conv3d_config(
@@ -236,7 +285,9 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             compute_kernel_config=kernel_config,
         )
         # Reshape output and verify results
-        tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+        tt_output = reshape_output(
+            tt_output, N, D_out, H_out, W_out, out_channels, device
+        )
 
         assert tt_output.shape == gt_output.shape
         pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.99)
@@ -312,7 +363,9 @@ def test_conv3d_mochi_shapes(
     C = input_shape[1]
 
     # Prepare weights with specified C_in_block
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+    tt_weight, tt_bias = prepare_weights(
+        conv3d_module, C, out_channels, device, C_in_block=C_in_block
+    )
 
     config = create_conv3d_config(
         T_out_block=T_out_block,
@@ -358,28 +411,45 @@ def test_conv3d_mochi_shapes(
     "input_layout",
     ["interleaved", "height_sharded", "width_sharded", "block_sharded"],
 )
-def test_conv3d_sharded_layouts(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, input_layout):
+def test_conv3d_sharded_layouts(
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    padding,
+    padding_mode,
+    input_layout,
+):
     """Test Conv3d with various input memory layouts.
-    
+
     This test validates that Conv3d works correctly with different memory layouts,
     leveraging TensorAccessor's unified memory access for sharded tensors.
     """
     torch.manual_seed(42)
-    
+
     grid_size = device.compute_with_storage_grid_size()
-    
+
     # Create input memory config
     if input_layout == "interleaved":
         input_mem_config = None  # Use default interleaved
     else:
-        input_mem_config = create_sharded_memory_config(input_layout, grid_size, input_shape)
-    
+        input_mem_config = create_sharded_memory_config(
+            input_layout, grid_size, input_shape
+        )
+
     # Run test
     tt_output, gt_output = run_conv3d_with_memory_config(
-        device, input_shape, out_channels, kernel_size, stride, padding, 
-        padding_mode, input_mem_config=input_mem_config
+        device,
+        input_shape,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        padding_mode,
+        input_mem_config=input_mem_config,
     )
-    
+
     # Validate results
     assert tt_output.shape == gt_output.shape
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=PCC_TOLERANCE)
@@ -393,23 +463,27 @@ def test_conv3d_sharded_layouts(device, input_shape, out_channels, kernel_size, 
         [(1, 64, 8, 8, 8), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
     ],
 )
-def test_conv3d_sharded_output(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
+def test_conv3d_sharded_output(
+    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode
+):
     """Test Conv3d with sharded output memory configuration.
-    
+
     This test validates that Conv3d can produce output directly in sharded layout,
     which is important for chaining operations without intermediate conversions.
     """
     torch.manual_seed(42)
-    
+
     grid_size = device.compute_with_storage_grid_size()
-    output_mem_config = create_sharded_memory_config("height_sharded", grid_size, input_shape)
-    
+    output_mem_config = create_sharded_memory_config(
+        "height_sharded", grid_size, input_shape
+    )
+
     # Run test
     tt_output, gt_output = run_conv3d_with_memory_config(
-        device, input_shape, out_channels, kernel_size, stride, padding, 
+        device, input_shape, out_channels, kernel_size, stride, padding,
         padding_mode, output_mem_config=output_mem_config
     )
-    
+
     # Validate results
     assert tt_output.shape == gt_output.shape
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=PCC_TOLERANCE)
@@ -424,34 +498,42 @@ def test_conv3d_sharded_output(device, input_shape, out_channels, kernel_size, s
         [(1, 32, 4, 4, 4), 32, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
-def test_conv3d_interleaved_vs_sharded_equivalence(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
+def test_conv3d_interleaved_vs_sharded_equivalence(
+    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode
+):
     """Test numerical equivalence between interleaved and sharded layouts.
-    
+
     This test validates that TensorAccessor provides correct unified access
     by comparing results from interleaved and sharded inputs.
     """
     torch.manual_seed(42)
-    
+
     grid_size = device.compute_with_storage_grid_size()
-    
+
     # Run with interleaved input
     tt_output_interleaved, gt_output = run_conv3d_with_memory_config(
         device, input_shape, out_channels, kernel_size, stride, padding, padding_mode
     )
-    
+
     # Run with sharded input
-    sharded_mem_config = create_sharded_memory_config("height_sharded", grid_size, input_shape)
+    sharded_mem_config = create_sharded_memory_config(
+        "height_sharded", grid_size, input_shape
+    )
     tt_output_sharded, _ = run_conv3d_with_memory_config(
-        device, input_shape, out_channels, kernel_size, stride, padding, 
+        device, input_shape, out_channels, kernel_size, stride, padding,
         padding_mode, input_mem_config=sharded_mem_config
     )
-    
+
     # Compare outputs (should be nearly identical)
-    pcc_passed, pcc_message = check_with_pcc(tt_output_interleaved, tt_output_sharded, pcc=HIGH_PRECISION_PCC)
+    pcc_passed, pcc_message = check_with_pcc(
+        tt_output_interleaved, tt_output_sharded, pcc=HIGH_PRECISION_PCC
+    )
     logger.info(f"Interleaved vs Sharded equivalence: {pcc_message}")
     assert pcc_passed, f"{pcc_message} - Layouts produce different results"
-    
+
     # Also verify against PyTorch ground truth
-    pcc_passed_gt, pcc_message_gt = check_with_pcc(gt_output, tt_output_sharded, pcc=PCC_TOLERANCE)
+    pcc_passed_gt, pcc_message_gt = check_with_pcc(
+        gt_output, tt_output_sharded, pcc=PCC_TOLERANCE
+    )
     logger.info(f"Sharded vs PyTorch: {pcc_message_gt}")
     assert pcc_passed_gt, f"{pcc_message_gt} - Sharded output differs from PyTorch"
