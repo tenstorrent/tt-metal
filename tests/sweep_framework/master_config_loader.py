@@ -297,7 +297,17 @@ class MasterConfigLoader:
             if nd_shard_spec and isinstance(nd_shard_spec, dict):
                 shard_spec = nd_shard_spec
 
-            if shard_spec and shard_spec != "std::nullopt" and tensor_shape:
+            # Check if shard_spec is nullopt - BLOCK_SHARDED can have nullopt shard_spec (default sharding)
+            if shard_spec == "std::nullopt" or not shard_spec:
+                # No shard spec - for BLOCK_SHARDED, return config without shard_spec
+                if "BLOCK_SHARDED" in memory_layout:
+                    # BLOCK_SHARDED without explicit shard_spec is valid (uses default sharding)
+                    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type_ttnn)
+                else:
+                    # Other sharded layouts need shard_spec, fall back to interleaved
+                    return ttnn.DRAM_MEMORY_CONFIG
+
+            if tensor_shape:
                 # Extract shard shape - prefer cleaner array format from nd_shard_spec
                 shard_shape = None
                 if "shard_shape" in shard_spec:
@@ -567,6 +577,20 @@ class MasterConfigLoader:
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=False
                 )
+            elif self._matches_operation(operation_name, "fill"):
+                print(f"🔧 Detected fill operation - extracting fill_value parameter")
+                return self._get_fill_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
+            elif self._matches_operation(operation_name, "split"):
+                print(f"🔧 Detected split operation - extracting split_size and dim parameters")
+                return self._get_split_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
+            elif self._matches_operation(operation_name, "scatter"):
+                print(f"🔧 Detected scatter operation - extracting dim parameter")
+                return self._get_scatter_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
+            elif self._matches_operation(operation_name, "fast_reduce_nc"):
+                print(f"🔧 Detected fast_reduce_nc operation - extracting dims parameter")
+                return self._get_fast_reduce_nc_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=False
+                )
             elif self._matches_operation(
                 operation_name, "scaled_dot_product_attention"
             ) and not self._matches_operation(operation_name, "decode"):
@@ -738,21 +762,22 @@ class MasterConfigLoader:
                                     parsed_layout = ttnn.ROW_MAJOR_LAYOUT
 
                         # Determine output memory config based on operation
-                        # First, try to extract output memory config from arg1 (for operations like interleaved_to_sharded)
+                        # First, try to extract output memory config from arg1
                         output_mem_config = None
-                        if self._matches_operation(operation_name, "interleaved_to_sharded"):
-                            # interleaved_to_sharded has output memory config in arg1
-                            for arg in config:
-                                if isinstance(arg, dict) and "arg1" in arg:
-                                    if isinstance(arg["arg1"], dict) and "MemoryConfig" in arg["arg1"]:
-                                        try:
-                                            output_mem_config = self.parse_memory_config(
-                                                arg["arg1"]["MemoryConfig"], tensor_config.shape
-                                            )
-                                            break
-                                        except Exception as e:
-                                            # If parsing fails, continue to next arg or use default
-                                            pass
+
+                        # Extract from arg1 for operations that have output memory config in arg1
+                        # (interleaved_to_sharded, nlp_concat_heads, etc.)
+                        for arg in config:
+                            if isinstance(arg, dict) and "arg1" in arg:
+                                if isinstance(arg["arg1"], dict) and "MemoryConfig" in arg["arg1"]:
+                                    try:
+                                        output_mem_config = self.parse_memory_config(
+                                            arg["arg1"]["MemoryConfig"], tensor_config.shape
+                                        )
+                                        break
+                                    except Exception as e:
+                                        # If parsing fails, continue to next arg or use default
+                                        pass
 
                         # If not extracted from arg1, use operation-specific defaults
                         if output_mem_config is None:
@@ -773,13 +798,9 @@ class MasterConfigLoader:
                                     output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
                                 else:
                                     output_mem_config = parsed_mem_config
-                            elif self._matches_operation(operation_name, "nlp_concat_heads"):
-                                # nlp_concat_heads changes output shape: [B,H,S,D] -> [B,1,S,H*D]
-                                # If input is sharded but output has nullopt shard_spec (incomplete config),
-                                # use INTERLEAVED as safe default since shard dimensions would differ
-                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
                             else:
-                                # For most unary ops, output matches input
+                                # For most unary ops (including nlp_concat_heads), output matches input
+                                # unless explicitly specified in arg1 (which is checked above)
                                 output_mem_config = parsed_mem_config
 
                         # Extract storage_type from tensor_config
@@ -972,6 +993,19 @@ class MasterConfigLoader:
                         "nlp_concat_heads_decode",
                         "experimental::nlp_concat_heads_decode",
                         "ttnn::experimental::nlp_concat_heads_decode",
+                        "split_query_key_value_and_split_heads",
+                        "experimental::split_query_key_value_and_split_heads",
+                        "ttnn::experimental::split_query_key_value_and_split_heads",
+                    ]
+                    else None
+                )
+                kv_input_height_list = (
+                    []
+                    if operation_name
+                    in [
+                        "split_query_key_value_and_split_heads",
+                        "experimental::split_query_key_value_and_split_heads",
+                        "ttnn::experimental::split_query_key_value_and_split_heads",
                     ]
                     else None
                 )
@@ -1136,6 +1170,19 @@ class MasterConfigLoader:
                         and "num_heads" in cfg
                     ):
                         num_heads_list.append(cfg["num_heads"])
+                    # Extract split_query_key_value_and_split_heads parameters
+                    if operation_name in [
+                        "split_query_key_value_and_split_heads",
+                        "experimental::split_query_key_value_and_split_heads",
+                        "ttnn::experimental::split_query_key_value_and_split_heads",
+                    ]:
+                        if "num_heads" in cfg:
+                            num_heads_list.append(cfg["num_heads"])
+                        if "kv_input_height" in cfg:
+                            kv_input_height_list.append(cfg["kv_input_height"])
+                        else:
+                            # Default value if not extracted (will be None)
+                            kv_input_height_list.append(None)
                     # Extract max_pool2d parameters
                     if self._matches_operation(operation_name, "max_pool2d"):
                         if "batch_size" in cfg:
@@ -1359,6 +1406,18 @@ class MasterConfigLoader:
                 ):
                     param_names.append("num_heads")
                     param_lists.append(num_heads_list)
+                # Add split_query_key_value_and_split_heads parameters
+                if operation_name in [
+                    "split_query_key_value_and_split_heads",
+                    "experimental::split_query_key_value_and_split_heads",
+                    "ttnn::experimental::split_query_key_value_and_split_heads",
+                ]:
+                    if num_heads_list:
+                        param_names.append("num_heads")
+                        param_lists.append(num_heads_list)
+                    if kv_input_height_list:
+                        param_names.append("kv_input_height")
+                        param_lists.append(kv_input_height_list)
                 # Add max_pool2d parameters
                 if self._matches_operation(operation_name, "max_pool2d"):
                     if batch_size_list and input_h_list and input_w_list and channels_list:
@@ -2749,6 +2808,118 @@ class MasterConfigLoader:
 
             traceback.print_exc()
             return {}
+
+    def _get_fill_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for fill operation which requires fill_value parameter"""
+        # Extract fill_value from arg1
+        fill_values = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    fill_value = args[1]["arg1"]
+                    try:
+                        # Convert string to float
+                        fill_values.append(float(fill_value))
+                    except:
+                        fill_values.append(0.0)
+
+        # Get base parameters using unary operation logic
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add fill_value parameter
+        if fill_values:
+            params["fill_value"] = fill_values
+
+        return params
+
+    def _get_split_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for split operation which requires split_size and dim parameters"""
+        split_sizes = []
+        dims = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg1 is split_size/num_chunks, arg2 is dim
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    try:
+                        split_sizes.append(int(args[1]["arg1"]))
+                    except:
+                        split_sizes.append(1)
+                if len(args) > 2 and isinstance(args[2], dict) and "arg2" in args[2]:
+                    try:
+                        dims.append(int(args[2]["arg2"]))
+                    except:
+                        dims.append(0)
+
+        # Get base parameters
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add operation-specific parameters
+        if split_sizes:
+            params["split_size"] = split_sizes
+        if dims:
+            params["dim"] = dims
+
+        return params
+
+    def _get_scatter_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for scatter operation which has 3 tensor inputs and dim parameter"""
+        dims = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg1 is dim (arg0=input, arg2=index, arg3=src)
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    try:
+                        dims.append(int(args[1]["arg1"]))
+                    except:
+                        dims.append(0)
+
+        # Get base parameters - scatter is a 3-tensor operation
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add dim parameter
+        if dims:
+            params["dim"] = dims
+
+        return params
+
+    def _get_fast_reduce_nc_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for fast_reduce_nc operation which requires dims list parameter"""
+        dims_list = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg1 is dims list
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    dims_value = args[1]["arg1"]
+                    if isinstance(dims_value, list):
+                        dims_list.append(dims_value)
+                    elif isinstance(dims_value, str):
+                        try:
+                            import ast
+
+                            dims_list.append(ast.literal_eval(dims_value))
+                        except:
+                            dims_list.append([0, 1])
+
+        # Get base parameters
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add dims parameter
+        if dims_list:
+            params["dims"] = dims_list
+
+        return params
 
     def _get_nlp_create_qkv_heads_suite_parameters(
         self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False

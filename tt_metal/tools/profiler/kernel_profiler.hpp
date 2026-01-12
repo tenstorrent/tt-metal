@@ -125,14 +125,15 @@ __attribute__((noinline)) void init_profiler(
     defined(COMPILE_FOR_BRISC)
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
-
+    if constexpr (NON_DROPPING) {
+        profiler_control_buffer[DROPPED_ZONES] = 0;
+    }
     if (runCounter == 0) {
         for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
             for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
                 profiler_data_buffer[riscID].data[i] = 0;
             }
         }
-
         profiler_control_buffer[NOC_X] = my_x[0];
         profiler_control_buffer[NOC_Y] = my_y[0];
     }
@@ -141,6 +142,13 @@ __attribute__((noinline)) void init_profiler(
         for (uint32_t i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i++) {
             // TODO(MO): Clean up magic numbers
             profiler_data_buffer[riscID].data[i] = 0x80000000;
+        }
+        for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+#if !defined(COMPILE_FOR_IDLE_ERISC)
+            // Update every risc's trace ID
+            profiler_data_buffer[riscID].data[ID_LH] =
+                (traceCount & 0xFFFF) << 11 | ((profiler_data_buffer[riscID].data[ID_LH] & 0x7FF));
+#endif
         }
     }
 #endif
@@ -340,7 +348,7 @@ __attribute__((noinline)) void finish_profiler() {
 #else
         // Need to preserve the upper bits of ID_LH which contain the trace ID
         profiler_data_buffer[riscID].data[ID_LH] =
-            ((traceCount & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | riscID;
+            (profiler_data_buffer[riscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | riscID);
 #endif
         int hostIndex = kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER + riscID;
         int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
@@ -426,12 +434,8 @@ __attribute__((noinline)) void quick_push() {
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC)
-    profiler_data_buffer[myRiscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
-#else
     profiler_data_buffer[myRiscID].data[ID_LH] =
-        ((traceCount & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | myRiscID;
-#endif
+        (profiler_data_buffer[myRiscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | myRiscID);
 
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
 
@@ -607,13 +611,31 @@ inline __attribute__((always_inline)) void flush_to_dram_if_full(uint32_t additi
     }
 }
 
-template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
-inline __attribute__((always_inline)) void timeStampedData(uint64_t data) {
-    if (bufferHasRoom<dispatch>()) {
-        mark_time_at_index_inlined(wIndex, get_const_id(data_id, TS_DATA));
+template <
+    uint32_t data_id,
+    DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH,
+    PacketTypes packet_type = kernel_profiler::PacketTypes::TS_DATA,
+    typename... Args>
+inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args... trailers) {
+    constexpr uint32_t total_data_count = 1 + sizeof...(trailers);
+    constexpr uint32_t expected_size = kernel_profiler::TimestampedDataSize<packet_type>::size;
+
+    static_assert(
+        expected_size == 0 || total_data_count == expected_size,
+        "Number of arguments does not match expected size for this PacketType");
+
+    constexpr uint32_t additional_slots = sizeof...(trailers);
+
+    if (bufferHasRoom<dispatch>(additional_slots)) {
+        mark_time_at_index_inlined(wIndex, get_const_id(data_id, packet_type));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+
         profiler_data_buffer[myRiscID].data[wIndex++] = data >> 32;
         profiler_data_buffer[myRiscID].data[wIndex++] = (data << 32) >> 32;
+
+        ((profiler_data_buffer[myRiscID].data[wIndex++] = trailers >> 32,
+          profiler_data_buffer[myRiscID].data[wIndex++] = (trailers << 32) >> 32),
+         ...);
     }
 }
 

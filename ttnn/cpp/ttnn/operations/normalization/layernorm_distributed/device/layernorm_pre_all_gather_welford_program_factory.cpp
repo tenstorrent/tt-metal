@@ -269,7 +269,7 @@ LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGath
 
 void LayerNormPreAllGatherWelfordProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormPreAllGatherOperationAttributes& operation_attributes,
+    const LayerNormPreAllGatherOperationAttributes& /*operation_attributes*/,
     const LayerNormPreAllGatherTensorArgs& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;

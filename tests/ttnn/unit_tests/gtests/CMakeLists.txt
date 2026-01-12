@@ -215,3 +215,4 @@ setup_ttnn_test_target(unit_tests_ttnn_emitc)
 tt_set_runtime_rpath(unit_tests_ttnn_emitc TTNN)
 
 add_subdirectory(multiprocess)
+add_subdirectory(udm)

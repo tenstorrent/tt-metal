@@ -108,6 +108,9 @@ set(CPACK_PACKAGE_NAME tt)
 # Suppress the summary so that we can have per-component summaries
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "")
 
+set(CPACK_DEBIAN_COMPRESSION_TYPE zstd)
+set(CPACK_THREADS 0) # Enable multithreading for compression
+
 # Use project config file to defer build-type-specific configuration to packaging time
 # This is necessary for multi-config generators.
 configure_file(

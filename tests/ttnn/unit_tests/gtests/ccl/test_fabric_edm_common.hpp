@@ -76,11 +76,11 @@ protected:
     MeshShape GetDeterminedMeshShape() const {
         if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
             return MeshShape{8, 4};
-        } else if (num_devices_ == 4) {
-            return MeshShape{1, 4};
-        } else {
-            return MeshShape{2, 4};
         }
+        if (num_devices_ == 4) {
+            return MeshShape{1, 4};
+        }
+        return MeshShape{2, 4};
     }
 
     // Validates environment and hardware for tests
@@ -369,7 +369,7 @@ bool RunPipelinedWorkersTest(
     const tt::DataFormat data_format,
     const size_t page_size_bytes,
     const size_t cb_packet_size_in_pages,
-    const size_t num_packets_per_cb,
+    const size_t /*num_packets_per_cb*/,
     auto layout,
 
     std::vector<std::vector<size_t>> worker_chunk_read_order,

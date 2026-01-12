@@ -6,6 +6,11 @@ set(MAIN_SOURCES
     3tier/common.cpp
 )
 
+set(llama_inference_SOURCES
+    llama_inference.cpp
+    utils.cpp
+)
+
 set(OPTIMIZER_SOURCES
     3tier/optimizer_worker.cpp
     3tier/common.cpp
@@ -19,6 +24,10 @@ set(AGGREGATOR_SOURCES
 add_executable(nano_gpt ${MAIN_SOURCES})
 target_link_libraries(nano_gpt PRIVATE ttml)
 tt_train_set_executable_rpath(nano_gpt TTNN)
+
+add_executable(llama_inference ${llama_inference_SOURCES})
+target_link_libraries(llama_inference PRIVATE ttml)
+tt_train_set_executable_rpath(llama_inference TTNN)
 
 add_executable(nano_gpt_aggregator ${AGGREGATOR_SOURCES})
 target_link_libraries(nano_gpt_aggregator PRIVATE ttml)

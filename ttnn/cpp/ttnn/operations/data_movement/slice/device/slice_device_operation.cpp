@@ -249,20 +249,19 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     if (input.layout() == Layout::ROW_MAJOR) {
         if (input.is_sharded()) {
             return program::SliceRmShardedProgramFactory{};
-        } else if (has_step) {
-            return program::SliceRmStrideProgramFactory{};
-        } else {
-            return program::SliceRmProgramFactory{};
         }
-    } else {
-        // Layout::TILE
-        return program::SliceTileProgramFactory{};
+        if (has_step) {
+            return program::SliceRmStrideProgramFactory{};
+        }
+        return program::SliceRmProgramFactory{};
     }
+    // Layout::TILE
+    return program::SliceTileProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>
 SliceDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, const Tensor& output) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args, const Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = output;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, true);

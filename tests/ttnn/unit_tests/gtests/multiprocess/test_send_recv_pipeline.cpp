@@ -131,10 +131,8 @@ std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecti
     if (curr_stage_index > neighbor_stage_index) {
         // Neighbor feeds into my stage
         return std::make_pair(my_stage.entry_node_coord, neighbor_stage.exit_node_coord);
-    } else {
-        // My stage feeds into neighbor
-        return std::make_pair(my_stage.exit_node_coord, neighbor_stage.entry_node_coord);
-    }
+    }  // My stage feeds into neighbor
+    return std::make_pair(my_stage.exit_node_coord, neighbor_stage.entry_node_coord);
 }
 
 PhysicalSystemDescriptor create_physical_system_descriptor() {
@@ -210,7 +208,7 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
     const bool is_pipeline_end = (*distributed_context->rank() == *pipeline_end_rank);
     const bool is_intermediate = !is_pipeline_start && !is_pipeline_end;
 
-    Tensor intermediate_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
+    Tensor intermediate_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
 
     if (is_pipeline_start) {
         // Pipeline start: Copy data from start coord to exit node using an intermediate socket
@@ -292,7 +290,7 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
             auto run_receiver_step = [&](uint32_t i) {
                 ttnn::experimental::recv_async(intermediate_tensor, recv_socket);
                 ttnn::experimental::send_async(intermediate_tensor, intermed_send);
-                Tensor output_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
+                Tensor output_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
                 ttnn::experimental::recv_async(output_tensor, intermed_recv);
                 auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
                 auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<uint32_t>();
