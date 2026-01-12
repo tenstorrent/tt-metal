@@ -17,6 +17,7 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_fabric_builder_local_connections.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_z_router_integration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_z_router_device_detection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_fabric_topology_helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_mux.cpp
@@ -29,6 +30,7 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
+        yaml-cpp::yaml-cpp
 )
 
 target_include_directories(
@@ -240,6 +242,43 @@ target_include_directories(
 
 set_target_properties(
     test_addrgen_write
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
+# ---- Test: bandwidth telemetry validation ----
+add_executable(
+    test_bandwidth_telemetry_validation
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_bandwidth_telemetry_validation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/run_unicast_once.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/common/perf_helpers.cpp
+)
+
+target_link_libraries(
+    test_bandwidth_telemetry_validation
+    PRIVATE
+        tt_metal
+        gtest
+        test_common_libs
+)
+
+add_dependencies(test_bandwidth_telemetry_validation tt_metal)
+
+target_include_directories(
+    test_bandwidth_telemetry_validation
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+)
+
+set_target_properties(
+    test_bandwidth_telemetry_validation
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric

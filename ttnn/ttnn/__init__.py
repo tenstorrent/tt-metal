@@ -120,6 +120,13 @@ from ttnn._ttnn.multi_device import (
     aggregate_tensor,
     distribute_tensor,
     using_distributed_env,
+    Rank,
+    Size,
+    init_distributed_context,
+    is_initialized as distributed_context_is_initialized,
+    get_rank as distributed_context_get_rank,
+    get_size as distributed_context_get_size,
+    barrier as distributed_context_barrier,
 )
 
 from ttnn._ttnn.events import (
@@ -239,6 +246,8 @@ from ttnn.types import (
     DataMovementConfigDescriptor,
     ComputeConfigDescriptor,
     KernelDescriptor,
+    RuntimeArgs,
+    RuntimeArgsColProxy,
     SemaphoreDescriptor,
     ProgramDescriptor,
     cb_descriptor_from_sharded_tensor,
@@ -343,6 +352,7 @@ import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
 
+divide = ttnn.div
 sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply
@@ -350,7 +360,7 @@ mul_ = ttnn.multiply_
 div_ = ttnn.divide_
 
 
-# TODO: pybind the overloaded operators below
+# TODO: nanobind the overloaded operators below
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
@@ -379,7 +389,6 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
-    LayerNormDistributedDefaultProgramConfig,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
@@ -415,6 +424,11 @@ from ttnn.operations.conv2d import (
     prepare_conv_transpose2d_weights,
     prepare_conv_transpose2d_bias,
     SlidingWindowParallelConfig,
+    Op2DSliceConfig,
+    Op2DDRAMSliceHeight,
+    Op2DDRAMSliceWidth,
+    Op2DL1Full,
+    Op2DL1FullSliceConfig,
 )
 
 from ttnn.operations.pool import (

@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prod_nc_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::reduction::prod_nc {
 
 ProdNcDeviceOperation::program_factory_t ProdNcDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::ProdNcProgramFactory{};
 }
 
@@ -40,7 +41,7 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
             output_shape[i]);
     }
 
-    // prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_pybind.hpp
+    // prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_nanobind.hpp
     TT_FATAL(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",
@@ -48,20 +49,24 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
 }
 
 ProdNcDeviceOperation::spec_return_value_t ProdNcDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Inplace operation - return output tensor's spec
     return tensor_args.output.tensor_spec();
 }
 
 ProdNcDeviceOperation::tensor_return_value_t ProdNcDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Inplace operation - return output tensor
     return tensor_args.output;
 }
 
-std::tuple<ProdNcDeviceOperation::operation_attributes_t, ProdNcDeviceOperation::tensor_args_t>
-ProdNcDeviceOperation::invoke(const Tensor& input, const Tensor& output, int64_t dim) {
-    return {operation_attributes_t{.dim = dim}, tensor_args_t{.input = input, .output = output}};
-}
-
 }  // namespace ttnn::operations::reduction::prod_nc
+
+namespace ttnn::prim {
+ttnn::Tensor prod_nc(const ttnn::Tensor& input, const ttnn::Tensor& output, int64_t dim) {
+    using OperationType = ttnn::operations::reduction::prod_nc::ProdNcDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{.dim = dim},
+        OperationType::tensor_args_t{.input = input, .output = output});
+}
+}  // namespace ttnn::prim

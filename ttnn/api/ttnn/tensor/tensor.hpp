@@ -54,11 +54,6 @@ public:
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 
-    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
-    // If not set, the tensor can either be on host or allocated on a single device.
-    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
-    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
@@ -105,10 +100,10 @@ public:
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
     // The primary use case for this API is to interop with Python, where `MemoryPin` can be set to retain the lifetime
-    // of the Python object that owns the underlying data. For example, in pybind11:
+    // of the Python object that owns the underlying data. For example, in nanobind:
     //
-    // py::object py_tensor = ...;
-    // MemoryPin py_data_pin(std::make_shared<py::object>(py_tensor));
+    // nb::object py_tensor = ...;
+    // MemoryPin py_data_pin(std::make_shared<nb::object>(py_tensor));
     // Tensor tensor = Tensor::from_borrowed_data(buffer, shape, py_data_pin);
     //
     // This API can also be used to create file-backed Tensors by means of `mmap`:
@@ -164,9 +159,6 @@ public:
     // If the tensor resides on a device, it will be brough back to host.
     template <typename T>
     [[nodiscard]] std::vector<T> to_vector(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
-
-    template <typename T>
-    [[nodiscard]] T item(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
@@ -280,19 +272,16 @@ public:
 private:
     static std::atomic<std::uint64_t> tensor_id_counter;
 
+    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
+    // If not set, the tensor can either be on host or allocated on a single device.
+    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
+    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
+
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
-
-[[deprecated]] Tensor create_device_tensor(
-    const tt::tt_metal::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config = MemoryConfig{},
-    const std::optional<Tile>& tile = std::nullopt);
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
 void memcpy(
@@ -321,16 +310,9 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
-// Allocates a tensor on device.
-Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-
 // Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
 // shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-
-// Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
-void write_tensor(
-    const Tensor& src, Tensor& dst, bool blocking = true, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
 
@@ -343,6 +325,8 @@ Tensor to_dtype(const Tensor& tensor, DataType dtype);
 }  // namespace ops
 
 }  // namespace tt::tt_metal
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor);
 
 namespace ttnn {
 

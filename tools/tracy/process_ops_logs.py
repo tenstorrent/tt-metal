@@ -335,28 +335,38 @@ def import_tracy_op_logs(
     for opData in opsData:
         ops[opData["global_call_count"]] = opData
 
-    tracyOpTimesData = []
-    with open(tracyOpTimesLog, "r") as csvFile:
-        csvReader = csv.DictReader(csvFile)
-        tracyOpTimesData = list(csvReader)
+    try:
+        df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
+    except (ImportError, ValueError):
+        df = pd.read_csv(tracyOpTimesLog)
 
-    for op in tracyOpTimesData:
-        if "TT_DNN" in op["name"] or "TT_METAL" in op["name"]:
+    # Filter and update host_time for TT_DNN/TT_METAL ops
+    tt_mask = df["name"].str.contains("TT_DNN|TT_METAL", regex=True, na=False)
+    if tt_mask.any():
+        tt_df = df[tt_mask]
+        for op in tt_df.to_dict(orient="records"):
             opID = int(op["zone_text"].split(":")[-1])
-            assert opID in ops, f"Op time for op {opID} must present"
+            assert opID in ops, f"Op time for op {opID} must present. OpID: {opID}, Name: {op['name']}"
             ops[opID]["host_time"] = op
 
-    for op in tracyOpTimesData:
-        if op["special_parent_text"] and "id:" in op["special_parent_text"]:
-            parentOpID = int(op["special_parent_text"].split(":")[-1])
+    parent_mask = df["special_parent_text"].str.contains("id:", na=False)
+    if parent_mask.any():
+        child_df = df[parent_mask].copy()
+        child_df["parentOpID"] = child_df["special_parent_text"].str.rsplit(":", n=1).str[-1].astype(int)
 
-            if "child_calls" in ops[parentOpID]:
-                if op["name"] in ops[parentOpID]["child_calls"]:
-                    ops[parentOpID]["child_calls"][op["name"]] += int(op["exec_time_ns"])
-                else:
-                    ops[parentOpID]["child_calls"][op["name"]] = int(op["exec_time_ns"])
-            else:
-                ops[parentOpID]["child_calls"] = {op["name"]: int(op["exec_time_ns"])}
+        # Only process children of ops we know about
+        child_df = child_df[child_df["parentOpID"].isin(ops)]
+
+        if not child_df.empty:
+            # Aggregate durations by (parentOpID, name)
+            summary = child_df.groupby(["parentOpID", "name"])["exec_time_ns"].sum()
+            for (pID, name), total_ns in summary.items():
+                opData = ops[pID]
+                if "child_calls" not in opData:
+                    opData["child_calls"] = {}
+                cc = opData["child_calls"]
+                # Use name as key, add up total execution time
+                cc[name] = cc.get(name, 0) + int(total_ns)
 
     return ops, signposts, traceReplays
 

@@ -195,7 +195,7 @@ BcastMultiCoreWProgramFactory::cached_program_t BcastMultiCoreWProgramFactory::c
 
 void BcastMultiCoreWProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const uint32_t num_cores_x = cached_program.shared_variables.compute_with_storage_grid_size.x;

@@ -4,7 +4,7 @@
 
 #include "tilize_with_val_padding_single_core_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -187,7 +187,7 @@ TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSing
 
 void TilizeWithValPaddingSingleCoreFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& output) {
     auto& program = cached_program.program;

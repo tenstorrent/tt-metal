@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::nonzero::program {
 
 NonZeroIndicesProgramFactory::cached_program_t NonZeroIndicesProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
     const auto& input = tensor_args.input;
@@ -91,7 +91,7 @@ NonZeroIndicesProgramFactory::cached_program_t NonZeroIndicesProgramFactory::cre
 
 void NonZeroIndicesProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
     auto& program = cached_program.program;

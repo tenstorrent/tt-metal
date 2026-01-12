@@ -4,19 +4,20 @@
 
 #pragma once
 
-#include <functional>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::ccl::strided_all_gather_async {
 
 struct operation_attributes_t {
-    const std::vector<IDevice*> devices;
+    const std::vector<tt::tt_metal::IDevice*> devices;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
-    const MemoryConfig output_mem_config;
+    const tt::tt_metal::MemoryConfig output_mem_config;
     const ttnn::ccl::Topology topology;
     const std::vector<GlobalSemaphore> semaphore;
     const std::optional<uint32_t> cluster_axis;

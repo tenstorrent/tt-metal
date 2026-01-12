@@ -2,16 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple, List
-import os
-import itertools
-import random
+from typing import Optional, Tuple
 import torch
 
-import ttnn
-
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.conv2d_common import (
     run_conv2d_short_sweep,
     run_conv1d_short_sweep,
@@ -21,7 +14,8 @@ from tests.sweep_framework.sweep_utils.conv2d_common import (
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 60
+# Conv2d operations can be slow, especially with large kernels/channels
+TIMEOUT = 180
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -33,7 +27,8 @@ parameters = {
         "input_specs": [
             # Contains following params
             # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias]
-            [1, 16, 8, 4, 4, 1, 1, 1, 1, 0, 0, 1, 1, 1, False],
+            # Use tuple so it serializes as a string for proper deserialization
+            (1, 16, 8, 4, 4, 1, 1, 1, 1, 0, 0, 1, 1, 1, False),
         ],
         "is_conv1d": [False],
         "storage_type": ["StorageType::DEVICE"],  # Sample uses device
@@ -45,19 +40,13 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def run(
     input_specs,
     is_conv1d=False,
-    compute_config=None,
-    dtype=None,
     config_tensors_in_dram=False,
-    storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     # Call the short sweep function
     if is_conv1d:
@@ -65,10 +54,17 @@ def run(
     else:
         result = run_conv2d_short_sweep(input_specs, device, config_tensors_in_dram=config_tensors_in_dram)
 
-    # Convert short_sweep format [pcc_bool, perf, timestamp, tensor1, tensor2]
+    # Convert short_sweep format [pcc_bool, pcc_value, e2e_perf, output_tensor, expected_tensor]
     # to model_traced format [pcc_tuple, e2e_perf]
-    pcc_passed = result[0]
-    e2e_perf = result[1]
-    pcc_message = f"PCC: {e2e_perf:.6f}" if pcc_passed else "PCC check failed"
+    # result[0]: bool (PCC passed/failed)
+    # result[1]: float (actual PCC value)
+    # result[2]: int/float (e2e performance time)
 
-    return [(pcc_passed, pcc_message), e2e_perf]
+    pcc_passed = bool(result[0])
+    pcc_value = float(result[1])
+    e2e_perf = result[2]
+
+    # Format as (bool, message) tuple expected by sweep framework
+    pcc_result = (pcc_passed, f"PCC: {pcc_value:.6f}")
+
+    return [pcc_result, e2e_perf]

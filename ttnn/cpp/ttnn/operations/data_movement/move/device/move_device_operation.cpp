@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "move_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement::move {
 
 MoveDeviceOperation::program_factory_t MoveDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     switch (operation_attributes.move_op_parallelization_strategy) {
         case MoveOpParallelizationStrategy::MULTI_CORE_SHARDED: return program::MoveShardedProgramFactory{};
         case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP: return program::MoveOverlapProgramFactory{};
@@ -29,20 +30,20 @@ void MoveDeviceOperation::validate_on_program_cache_hit(
 }
 
 MoveDeviceOperation::spec_return_value_t MoveDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Output spec is same as output tensor spec
     return tensor_args.output_tensor.tensor_spec();
 }
 
 MoveDeviceOperation::tensor_return_value_t MoveDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Output tensor is already created and passed in tensor_args
     return tensor_args.output_tensor;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<MoveDeviceOperation::tensor_return_value_t>
 MoveDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -53,13 +54,18 @@ MoveDeviceOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<MoveDeviceOperation::operation_attributes_t, MoveDeviceOperation::tensor_args_t> MoveDeviceOperation::invoke(
+}  // namespace ttnn::operations::data_movement::move
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::move::MoveDeviceOperation::tensor_return_value_t move(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const MoveOpParallelizationStrategy& move_op_parallelization_strategy) {
+    const ttnn::operations::data_movement::move::MoveOpParallelizationStrategy& move_op_parallelization_strategy) {
+    using OperationType = ttnn::operations::data_movement::move::MoveDeviceOperation;
     bool backwards = false;
-    if (move_op_parallelization_strategy == MoveOpParallelizationStrategy::MULTI_CORE) {
+    if (move_op_parallelization_strategy ==
+        ttnn::operations::data_movement::move::MoveOpParallelizationStrategy::MULTI_CORE) {
         Buffer* src_buffer = input_tensor.buffer();
         Buffer* dst_buffer = output_tensor.buffer();
         const bool src_and_dst_in_l1 = src_buffer->buffer_type() == tt::tt_metal::BufferType::L1 &&
@@ -70,12 +76,11 @@ std::tuple<MoveDeviceOperation::operation_attributes_t, MoveDeviceOperation::ten
         const bool ranges_overlap = (src_base < dst_base + copy_size_bytes) && (dst_base < src_base + copy_size_bytes);
         backwards = src_and_dst_in_l1 && ranges_overlap && (dst_base > src_base);
     }
-    return {
-        operation_attributes_t{
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .output_mem_config = output_mem_config,
             .move_op_parallelization_strategy = move_op_parallelization_strategy,
             .backwards = backwards},
-        tensor_args_t{.input_tensor = input_tensor, .output_tensor = output_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .output_tensor = output_tensor});
 }
-
-}  // namespace ttnn::operations::data_movement::move
+}  // namespace ttnn::prim

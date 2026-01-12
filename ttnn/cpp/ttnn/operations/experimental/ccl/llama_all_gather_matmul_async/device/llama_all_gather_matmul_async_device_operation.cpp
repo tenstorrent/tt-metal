@@ -3,17 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.hpp"
-
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/global_semaphore.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async {
 
 LlamaAllGatherMatmulAsyncDeviceOperation::program_factory_t
 LlamaAllGatherMatmulAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::LlamaAllGatherMatmulAsyncProgramFactory{};
 }
 
@@ -77,7 +75,8 @@ spec_return_value_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_output_spe
         aggregated_shape, TensorLayout(input0.dtype(), input0.tensor_spec().page_config(), aggregated_mem_config));
 
     // Matmul output spec - using aggregated tensor as input to matmul
-    ttnn::TensorSpec matmul_output_specs = args.matmul_struct.compute_output_specs({input0, input1}, {})[0];
+    ttnn::TensorSpec matmul_output_specs =
+        matmul::MatmulDeviceOperation::compute_output_specs(args.matmul_struct, {{input0, input1}, {}})[0];
 
     return spec_return_value_t{.mm = matmul_output_specs, .aggregated = aggregated_tensor_spec};
 }
@@ -92,7 +91,8 @@ tensor_return_value_t LlamaAllGatherMatmulAsyncDeviceOperation::create_output_te
     ttnn::Tensor aggregated_tensor = create_device_tensor(specs.aggregated, input0.device());
 
     // Matmul output tensor
-    ttnn::Tensor matmul_output_tensor = args.matmul_struct.create_output_tensors({aggregated_tensor, input1})[0];
+    ttnn::Tensor matmul_output_tensor =
+        matmul::MatmulDeviceOperation::create_output_tensors(args.matmul_struct, {{aggregated_tensor, input1}, {}})[0];
 
     return tensor_return_value_t{.mm = matmul_output_tensor, .aggregated = aggregated_tensor};
 }
@@ -138,26 +138,31 @@ tt::stl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_
         intermediate_memory_config);
 }
 
-std::tuple<
-    LlamaAllGatherMatmulAsyncDeviceOperation::operation_attributes_t,
-    LlamaAllGatherMatmulAsyncDeviceOperation::tensor_args_t>
-LlamaAllGatherMatmulAsyncDeviceOperation::invoke(
-    const Tensor& input0,
-    const Tensor& input1,
-    const Tensor& intermediate_tensor,
-    const int32_t dim,
-    const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    const ttnn::ccl::Topology topology,
-    const GlobalSemaphore& global_semaphore,
-    const std::optional<tt::tt_metal::MemoryConfig>& ag_memory_config,
-    const std::optional<tt::tt_metal::MemoryConfig>& mm_memory_config,
-    const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const DataType> dtype,
-    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
+}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::LlamaAllGatherMatmulAsyncDeviceOperation::
+    tensor_return_value_t
+    llama_all_gather_matmul_async(
+        const Tensor& input0,
+        const Tensor& input1,
+        const Tensor& intermediate_tensor,
+        int32_t dim,
+        uint32_t cluster_axis,
+        const MeshDevice& mesh_device,
+        ttnn::ccl::Topology topology,
+        const GlobalSemaphore& global_semaphore,
+        const std::optional<tt::tt_metal::MemoryConfig>& ag_memory_config,
+        const std::optional<tt::tt_metal::MemoryConfig>& mm_memory_config,
+        std::optional<size_t> num_preferred_links,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+        std::optional<const DataType> dtype,
+        const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
+    using OperationType =
+        ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::LlamaAllGatherMatmulAsyncDeviceOperation;
     tt::tt_fabric::Topology usable_topology = ttnn::ccl::get_usable_topology(input0, topology, cluster_axis);
 
     const auto& mesh_view = mesh_device.get_view();
@@ -178,11 +183,11 @@ LlamaAllGatherMatmulAsyncDeviceOperation::invoke(
 
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input0);
 
-    operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
+    auto matmul_struct = ttnn::operations::matmul::create_matmul_attributes(
         input0,
         input1,
         /*parameters=*/
-        operations::matmul::Matmul{
+        ttnn::operations::matmul::operation_attributes_t{
             program_config,
             /*bcast_batch=*/std::nullopt,
             mm_memory_config.value_or(input0.memory_config()),
@@ -195,21 +200,24 @@ LlamaAllGatherMatmulAsyncDeviceOperation::invoke(
             /*transpose_a=*/false,
             /*transpose_b=*/false,
             /*output_tile=*/std::nullopt,
-            /*global_cb=*/global_cb});
+            /*global_cb=*/global_cb},
+        {});
 
-    return {
-        operation_attributes_t(
-            matmul_struct,
-            devices,
-            gather_dim,
-            num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-            num_devices,
-            ag_memory_config.value_or(input0.memory_config()),
-            usable_topology,
-            global_semaphore,
-            sub_device_id,
-            cluster_axis),
-        tensor_args_t{.input0 = input0, .input1 = input1, .intermediate = intermediate_tensor}};
+    auto operation_attributes = OperationType::operation_attributes_t(
+        matmul_struct,
+        devices,
+        gather_dim,
+        num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+        num_devices,
+        ag_memory_config.value_or(input0.memory_config()),
+        usable_topology,
+        global_semaphore,
+        sub_device_id,
+        cluster_axis);
+    auto tensor_args =
+        OperationType::tensor_args_t{.input0 = input0, .input1 = input1, .intermediate = intermediate_tensor};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async
+}  // namespace ttnn::prim

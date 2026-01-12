@@ -213,6 +213,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         Sq_chunk_t, q_num_chunks, Sk_chunk_t, k_num_chunks, num_cores,
         true,   //(std::uint32_t)is_causal,
         false,  //(std::uint32_t)use_provided_mask,
+        false,  //(std::uint32_t)broadcast_provided_mask_heads,
         false,  //(std::uint32_t)use_padded_mask,
         false,  //(uint32_t)is_chunked,
         0,      // block_size_t,
@@ -601,7 +602,7 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
 
 void RingDistributedSdpaMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     // Update runtime arguments for each program in the mesh workload

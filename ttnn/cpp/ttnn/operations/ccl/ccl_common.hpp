@@ -426,7 +426,7 @@ public:
     }
 
     [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]] void increment(
-        uint32_t num_pages) override {
+        uint32_t  /*num_pages*/) override {
         TT_THROW("deprecated code path for ");
     }
 
@@ -437,7 +437,7 @@ public:
         return worker_slice_shape.x * worker_slice_shape.y * this->input_page_size;
     }
 
-    void create_worker_slice_shape_for_row_major_layout(tt_xy_pair const& tensor_slice_shape, uint32_t num_workers) {
+    void create_worker_slice_shape_for_row_major_layout(tt_xy_pair const&  /*tensor_slice_shape*/, uint32_t  /*num_workers*/) {
         TT_THROW("Row major interleaved not supported by Reduce Scatter");
     }
 
@@ -721,7 +721,7 @@ private:
         uint32_t total_num_workers);
 
     Shape4D<uint32_t> calculate_tensor_slice_shape(Shape4D<uint32_t> const& input_shape, int slice_dim, uint32_t partition_size);
-    Shape4D<uint32_t> calculate_tensor_slice_offset(Shape4D<uint32_t> const& input_shape, int slice_dim, uint32_t partition_index);
+    Shape4D<uint32_t> calculate_tensor_slice_offset(Shape4D<uint32_t> const& input_shape, int slice_dim, uint32_t partition_index) const;
 
     // Class member variables
     Shape4D<uint32_t> tensor_shape{};

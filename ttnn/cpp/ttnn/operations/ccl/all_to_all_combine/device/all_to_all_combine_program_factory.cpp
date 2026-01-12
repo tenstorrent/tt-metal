@@ -273,7 +273,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
     log_debug(tt::LogOp, "Runtime arguments are being calculated for MeshCoordinate {}", mesh_coordinate);
-    for (uint32_t i = 0; i < sender_cores.size(); i++) {
+    for (const auto& sender_core : sender_cores) {
         std::vector<uint32_t> writer_runtime_args = {
             output_tensor.buffer()->address(),
             (uint32_t)cross_device_semaphore.address(),
@@ -289,7 +289,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         log_debug(
             tt::LogOp,
             "Setting runtime args for core {}. It will operate on tokens {} to {}. Global semaphore address: {}",
-            sender_cores.at(i),
+            sender_core,
             reader_runtime_args[3],
             reader_runtime_args[4],
             (uint32_t)cross_device_semaphore.address());
@@ -297,10 +297,10 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         for (const auto& neighbor_coordinate : neighbors) {
             const auto neighbor_fabric_id = mesh_device->get_fabric_node_id(neighbor_coordinate);
             append_fabric_connection_rt_args(
-                fabric_node_id, neighbor_fabric_id, link_id, program, sender_cores.at(i), writer_runtime_args);
+                fabric_node_id, neighbor_fabric_id, link_id, program, sender_core, writer_runtime_args);
         }
-        SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(i), reader_runtime_args);
-        SetRuntimeArgs(program, unary_writer_kernel_id, sender_cores.at(i), writer_runtime_args);
+        SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
+        SetRuntimeArgs(program, unary_writer_kernel_id, sender_core, writer_runtime_args);
         link_id++;
     }
 
@@ -315,7 +315,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
 void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {

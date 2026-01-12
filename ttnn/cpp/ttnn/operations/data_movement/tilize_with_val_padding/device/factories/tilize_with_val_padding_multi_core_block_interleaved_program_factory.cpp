@@ -4,7 +4,7 @@
 
 #include "tilize_with_val_padding_multi_core_block_interleaved_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -293,7 +293,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
 
 void TilizeWithValPaddingMultiCoreBlockInterleavedFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& output) {
     auto& program = cached_program.program;

@@ -57,9 +57,8 @@ void MAIN {
     }
 #else
 #if defined(TRISC0) or defined(TRISC1) or defined(TRISC2)
-#define GET_TRISC_RUN_EVAL(x, t) x##t
-#define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
-    volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
+    volatile tt_l1_ptr uint8_t * const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))
+        ->subordinate_sync.map[COMPILE_FOR_TRISC + 1];  // first entry is for NCRISC
     *trisc_run = RUN_SYNC_MSG_DONE;
 #endif
 #endif

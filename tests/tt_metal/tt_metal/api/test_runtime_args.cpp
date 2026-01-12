@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <map>
 #include <memory>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <variant>
@@ -71,7 +71,7 @@ uint32_t get_runtime_arg_addr(
 };
 
 distributed::MeshWorkload initialize_program_data_movement(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreRangeSet& core_range_set) {
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/, const CoreRangeSet& core_range_set) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
