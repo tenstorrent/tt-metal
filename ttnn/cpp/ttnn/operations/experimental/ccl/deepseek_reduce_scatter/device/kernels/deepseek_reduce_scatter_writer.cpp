@@ -39,11 +39,13 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     address_t intermediate_address = get_arg_val<address_t>(arg_idx++);
     address_t output_address = get_arg_val<address_t>(arg_idx++);
-    const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+
+    const uint8_t semaphore_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t semaphore_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    size_t op_semaphore = get_arg_val<uint32_t>(arg_idx++);
+    size_t pre_op_barrier_semaphore = get_arg_val<uint32_t>(arg_idx++);
+    size_t post_op_barrier_semaphore = get_arg_val<uint32_t>(arg_idx++);
+
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
@@ -127,15 +129,15 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
-    // barrier - multicast to entire ring of workers going in the same direction
-    uint64_t barrier_sem_noc_addr_in_pkt =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
+    // init barrier - multicast to entire ring of workers going in the same direction
+    uint64_t pre_op_barrier_semaphore_noc_addr_in_pkt =
+        safe_get_noc_addr(semaphore_noc0_x, semaphore_noc0_y, pre_op_barrier_semaphore, 0);
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection,
         mcastseminc_route_id,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_addr_in_pkt, 0});
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), ring_size - 1);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
 
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
@@ -203,12 +205,12 @@ void kernel_main() {
                 noc_async_writes_flushed();
                 cb_pop_front(cb_output_id, tile_granularity);
 
-                uint64_t out_ready_sem_noc_addr_in_pkt =
-                    safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+                uint64_t op_semaphore_noc_addr_in_pkt =
+                    safe_get_noc_addr(semaphore_noc0_x, semaphore_noc0_y, op_semaphore, 0);
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     fabric_connection,
                     seminc_route_id,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_addr_in_pkt, 0});
 
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 if (tiles_remaining_to_read > 0) {
@@ -262,18 +264,15 @@ void kernel_main() {
         }
     }
 
-    // mcast half batch ready semaphore
-    uint64_t batch_ready_sem_noc_addr_in_pkt =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
+    // end barrier
+    uint64_t post_op_barrier_semaphore_noc_addr_in_pkt =
+        safe_get_noc_addr(semaphore_noc0_x, semaphore_noc0_y, post_op_barrier_semaphore, 0);
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection,
         mcastseminc_route_id,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-    noc_async_writes_flushed();
-
-    // Reset the global semaphore before the next batch
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{post_op_barrier_semaphore_noc_addr_in_pkt, 0});
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_op_barrier_semaphore), ring_size - 1);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_op_barrier_semaphore), 0);
 
     close_connections(fabric_connection);
 

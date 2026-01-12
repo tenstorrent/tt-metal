@@ -14,8 +14,8 @@ namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
 
 struct DeepseekReduceScatterMeshWorkloadFactory {
     struct shared_variables_t {
-        std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores;
-        tt::tt_metal::GlobalSemaphore barrier_semaphore;
+        tt::tt_metal::GlobalSemaphore op_semaphore;
+        std::vector<tt::tt_metal::GlobalSemaphore> barrier_semaphores;
         DeepseekReduceScatterProgramArtifacts program_artifacts;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -31,8 +31,8 @@ struct DeepseekReduceScatterMeshWorkloadFactory {
         const ttnn::MeshCoordinate& mesh_coordinate,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
-        const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-        const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
+        const tt::tt_metal::GlobalSemaphore& op_semaphore,
+        const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
@@ -51,8 +51,8 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
     uint32_t ring_index,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+    const tt::tt_metal::GlobalSemaphore& op_semaphore,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores,
     uint32_t num_links,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset);
@@ -64,8 +64,8 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     const tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t num_directions_per_link,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+    const tt::tt_metal::GlobalSemaphore& op_semaphore,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores,
     uint32_t num_links,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& intermediate_tensor,

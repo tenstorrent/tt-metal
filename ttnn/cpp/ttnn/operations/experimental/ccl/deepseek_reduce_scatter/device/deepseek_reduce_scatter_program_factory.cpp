@@ -51,8 +51,8 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
     uint32_t ring_index,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+    const tt::tt_metal::GlobalSemaphore& op_semaphore,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores,
     uint32_t num_links,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset) {
@@ -210,32 +210,32 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
 
             // reader
             std::vector<uint32_t> reader_rt_args = {
-                input_tensor.buffer()->address(),          // input_tensor_address
-                intermediate_tensor.buffer()->address(),   // intermediate_tensor_address
-                multidevice_semaphores.at(dir).address(),  // out_ready_semaphore
-                dir,                                       // direction
-                start_tiles_read,                          // start_tiles_read
-                start_tiles_to_read,                       // start_tiles_to_read
-                start_pages_read_in_row,                   // start_pages_read_in_row
-                start_row_offset,                          // start_row_offset
+                input_tensor.buffer()->address(),         // input_tensor_address
+                intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
+                op_semaphore.address(),                   // op_semaphore
+                dir,                                      // direction
+                start_tiles_read,                         // start_tiles_read
+                start_tiles_to_read,                      // start_tiles_to_read
+                start_pages_read_in_row,                  // start_pages_read_in_row
+                start_row_offset,                         // start_row_offset
             };
 
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
             // writer
             std::vector<uint32_t> writer_rt_args = {
-                intermediate_tensor.buffer()->address(),                       // intermediate_tensor_address
-                output_tensor.buffer()->address(),                             // output_tensor_address
-                virtual_core.x,                                                // out_ready_sem_noc0_x
-                virtual_core.y,                                                // out_ready_sem_noc0_y
-                multidevice_semaphores.at(dir).address(),                      // out_ready_fwd_semaphore
-                multidevice_semaphores.at(num_directions_per_link).address(),  // batch_ready_semaphore
-                barrier_semaphore.address(),                                   // barrier_sem
-                dir,                                                           // direction
-                start_tiles_read,                                              // start_tiles_read
-                start_tiles_to_read,                                           // tiles_to_read
-                start_pages_read_in_row,                                       // start_pages_read_in_row
-                start_row_offset,                                              // start_row_offset
+                intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
+                output_tensor.buffer()->address(),        // output_tensor_address
+                virtual_core.x,                           // out_ready_sem_noc0_x
+                virtual_core.y,                           // out_ready_sem_noc0_y
+                op_semaphore.address(),                   // op_semaphore
+                barrier_semaphores.at(0).address(),       // pre_op_barrier_semaphore
+                barrier_semaphores.at(1).address(),       // post_op_barrier_semaphore
+                dir,                                      // direction
+                start_tiles_read,                         // start_tiles_read
+                start_tiles_to_read,                      // tiles_to_read
+                start_pages_read_in_row,                  // start_pages_read_in_row
+                start_row_offset,                         // start_row_offset
             };
             if (output_is_sharded) {
                 shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
@@ -277,8 +277,8 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     const tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t num_directions_per_link,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+    const tt::tt_metal::GlobalSemaphore& op_semaphore,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores,
     uint32_t num_links,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& intermediate_tensor,
@@ -294,14 +294,15 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
             auto& reader_rt_args = reader_runtime_args[core.x][core.y];
             reader_rt_args[0] = input_tensor.buffer()->address();
             reader_rt_args[1] = intermediate_tensor.buffer()->address();
-            reader_rt_args[2] = multidevice_semaphores.at(dir).address();
-            // sender writer
+            reader_rt_args[2] = op_semaphore.address();
+
+            // writer
             auto& writer_rt_args = writer_runtime_args[core.x][core.y];
             writer_rt_args[0] = intermediate_tensor.buffer()->address();
             writer_rt_args[1] = output_tensor.buffer()->address();
-            writer_rt_args[4] = multidevice_semaphores.at(dir).address();
-            writer_rt_args[5] = multidevice_semaphores.at(num_directions_per_link).address();
-            writer_rt_args[7] = barrier_semaphore.address();
+            writer_rt_args[4] = op_semaphore.address();
+            writer_rt_args[5] = barrier_semaphores.at(0).address();
+            writer_rt_args[6] = barrier_semaphores.at(1).address();
         }
     }
 }
@@ -321,23 +322,23 @@ DeepseekReduceScatterMeshWorkloadFactory::create_mesh_workload(
     auto sd_id = sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto sub_device_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
-    // 3 semaphores used for within op synchronizations
-    std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores = {
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, sub_device_core_range_set, 0),
+    // 1 semaphore used for within op synchronizations
+    tt::tt_metal::GlobalSemaphore op_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, sub_device_core_range_set, 0);
+
+    // 2 barrier semaphores used for pre/post op synchronization
+    // pre: remote tensors are allocated, post: all incoming data received
+    std::vector<tt::tt_metal::GlobalSemaphore> barrier_semaphores = {
         ttnn::global_semaphore::create_global_semaphore(mesh_device, sub_device_core_range_set, 0),
         ttnn::global_semaphore::create_global_semaphore(mesh_device, sub_device_core_range_set, 0),
     };
-
-    // 1 barrier semaphore used to ensure that all the buffers are allocated
-    tt::tt_metal::GlobalSemaphore barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, sub_device_core_range_set, 0);
 
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> sub_device_ids = {sd_id};
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, sub_device_ids);
 
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(
-            operation_attributes, coord, tensor_args, tensor_return_value, multidevice_semaphores, barrier_semaphore);
+        auto cached_program =
+            create_at(operation_attributes, coord, tensor_args, tensor_return_value, op_semaphore, barrier_semaphores);
         mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -351,8 +352,8 @@ DeepseekReduceScatterMeshWorkloadFactory::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
+    const tt::tt_metal::GlobalSemaphore& op_semaphore,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const ttnn::Tensor& intermediate_tensor = tensor_return_value.at(0);
     const ttnn::Tensor& output_tensor = tensor_return_value.at(1);
@@ -388,15 +389,15 @@ DeepseekReduceScatterMeshWorkloadFactory::create_at(
         forward_coordinate,
         backward_coordinate,
         device_index,
-        multidevice_semaphores,
-        barrier_semaphore,
+        op_semaphore,
+        barrier_semaphores,
         operation_attributes.num_links,
         operation_attributes.sub_device_id,
         first_coord);
 
     shared_variables_t shared_vars{
-        .multidevice_semaphores = multidevice_semaphores,
-        .barrier_semaphore = barrier_semaphore,
+        .op_semaphore = op_semaphore,
+        .barrier_semaphores = barrier_semaphores,
         .program_artifacts = deepseek_reduce_scatter_program_artifacts};
 
     return {std::move(program), std::move(shared_vars)};
@@ -420,8 +421,8 @@ void DeepseekReduceScatterMeshWorkloadFactory::override_runtime_arguments(
             shared_vars.program_artifacts.writer_kernel_id,
             shared_vars.program_artifacts.all_cores,
             shared_vars.program_artifacts.num_directions_per_link,
-            shared_vars.multidevice_semaphores,
-            shared_vars.barrier_semaphore,
+            shared_vars.op_semaphore,
+            shared_vars.barrier_semaphores,
             operation_attributes.num_links,
             input_tensor,
             intermediate_tensor,
