@@ -4,7 +4,7 @@ LLK Asserts
 Overview
 --------
 
-LLK Asserts provide runtime validation checks within the tt-llk codebase that implements core tensor operations. These asserts validate critical assumptions about tensor dimensions, data formats, and hardware configuration parameters at the lowest level of the compute stack.
+LLK Asserts provide runtime validation checks within the tt-llk codebase that implements core tensor operations. These asserts validate critical assumptions about tensor dimensions, data formats, and hardware configuration parameters within the device-side compute stack, executing on the accelerator hardware itself.
 
 LLK asserts complement Lightweight Kernel Asserts and the Watcher tool by providing specialized validation for the low-level kernel library that handles:
 
