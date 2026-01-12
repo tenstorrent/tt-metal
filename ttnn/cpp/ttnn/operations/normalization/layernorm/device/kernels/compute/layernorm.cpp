@@ -15,6 +15,7 @@
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
@@ -95,25 +96,19 @@ void MAIN {
 #ifdef FUSE_PRE_ADD
         reconfig_data_format(cb_in, cb_inb);
         pack_reconfig_data_format(cb_x);
-        add_tiles_init(cb_in, cb_inb);
-        for (auto block : generic::blocks(Wt, blk)) {
-            ACQ();
-            // In/inb come from the reader and need to be
-            // synced on full block size. Keep cb_x aligned
-            // to full block size as well so pre-add/no-pre-add
-            // can be handled the same way.
-            cb_wait_front(cb_in, block.full_block_size());
-            cb_wait_front(cb_inb, block.full_block_size());
-            cb_reserve_back(cb_x, block.full_block_size());
-            for (auto i : block.local()) {
-                add_tiles(cb_in, cb_inb, i, i, i);
-                pack_tile(i, cb_x);
-            }
-            REL();
-            cb_push_back(cb_x, block.full_block_size());  // push the sum into the same buffer
-            cb_pop_front(cb_in, block.full_block_size());
-            cb_pop_front(cb_inb, block.full_block_size());
-        }
+
+        // Use binary_op helper for fused pre-add (x = a + b)
+        // STREAMING_BATCHED mode: waits/pops in chunks of DEST_AUTO_LIMIT (which equals blk)
+        compute_kernel_lib::add<
+            compute_kernel_lib::BroadcastDim::NONE,
+            compute_kernel_lib::BinaryInputMode::STREAMING_BATCHED,
+            compute_kernel_lib::BinaryDataFormatReconfig::NONE,  // Already done above
+            false>(                                              // init=false, already initialized by reconfig
+            cb_in,
+            cb_inb,
+            cb_x,
+            compute_kernel_lib::BinaryTileShape::grid(1, Wt, 1));
+
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
 #else
