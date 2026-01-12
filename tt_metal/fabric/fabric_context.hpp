@@ -127,8 +127,9 @@ private:
         uint32_t buffer_size;
     };
     static constexpr Routing2DBufferTier ROUTING_2D_BUFFER_TIERS[] = {
-        {19, 19},  // 80B header - max capacity
-        {35, 35}   // 96B header - max capacity
+        // NOTE: 80B header size de-stabilized some Mesh benchmarks for 8X4 mesh, so disabling for now
+        //{19, 19},  // 80B header - max capacity
+        {35, 35}  // 96B header - max capacity
     };
 
     // ============ Private Implementation ============

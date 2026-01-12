@@ -142,8 +142,8 @@ struct FabricHeaderConfig {
 #ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
     static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE;
 #else
-    // Default: 32 bytes (96B header)
-    static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = 32;
+    // Default: 35 bytes (96B header)
+    static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = 35;
 #endif
 
     // Validation (Fail fast)
