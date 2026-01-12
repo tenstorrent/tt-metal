@@ -45,6 +45,8 @@ autograd::TensorPtr memory_efficient_runner(
     autograd::GradFunction grad = [input, mask, out, &forward_impl, generator]() {
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
+        // enable gradients for the detached input so the graph is built during recomputation
+        input_detached->set_requires_grad(true);
         // run forward pass again
         autograd::TensorPtr output;
         {
@@ -62,7 +64,15 @@ autograd::TensorPtr memory_efficient_runner(
         input->add_grad(input_detached->get_grad());
     };
 
-    out->set_node(autograd::add_backward_node(std::move(grad), out, input));
+    // Add backward node unconditionally - we bypass add_backward_node's requires_grad check
+    // because during recomputation, parameters might be trainable even if input isn't.
+    // This is critical for LoRA where input from frozen embeddings has requires_grad=false
+    // but internal LoRA parameters are trainable.
+    auto links = autograd::get_links(input);
+    auto node_id = autograd::ctx().add_backward_node(std::move(grad), links);
+    out->set_node(node_id);
+    // Set output requires_grad to true since we added a backward node
+    out->set_requires_grad(true);
     return out;
 }
 
