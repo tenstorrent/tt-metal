@@ -52,7 +52,7 @@ class VisionBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
         )
-        # TODO: remove after (add issue number) is fixed
+        # TODO: remove after https://github.com/tenstorrent/tt-metal/issues/35650 is fixed
         extra_rmsnorm_kwargs = {}
         if args.base_model_name in ("Qwen2.5-VL-7B",):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
