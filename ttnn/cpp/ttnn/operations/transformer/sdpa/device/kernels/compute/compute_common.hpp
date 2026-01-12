@@ -569,7 +569,7 @@ void calculate_exponential_polynomial_init() {
     init_clamp_loadmacro<SCALE>();
 }
 
-template <bool USE_ARECIP_INSTR, bool SCALE_EN, int ITERATIONS, int POLY_DEGREE>
+template <bool USE_SFPARECIP_INSTR, bool SCALE_EN, int ITERATIONS, int POLY_DEGREE>
 void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) {
     // Clamp values < -88.5 to 0.
     run_clamp_loadmacro();
@@ -581,8 +581,12 @@ void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) 
     }
         .set(ADDR_MOD_7);
 
-    if constexpr (!USE_ARECIP_INSTR) {
-        LLK_ASSERT(
+    if (USE_SFPARECIP_INSTR) {
+#ifdef !ARCH_BLACKHOLE
+        ASSERT(false, "TTI_SFPARECIP instruction only supported on Blackhole");
+#endif
+    } else {
+        ASSERT(
             POLY_DEGREE >= 1 && POLY_DEGREE <= 4,
             "Only degree 1-4 polynomials are supported in calculate_exponential_polynomial");
 
@@ -625,19 +629,21 @@ void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) 
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
-        if constexpr (USE_ARECIP_INSTR) {
-            // if v>u, set v=v-1 to compute floor(x).
+        if constexpr (USE_SFPARECIP_INSTR) {
+            // Calculate floor(x) by setting v=v-1 if v>u.
             TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);                                    // SFPGT_MOD1_SET_CC
             TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 2);  // SFPMAD_MOD1_NEGATE_VC
             TTI_SFPENCC(0, 0, 0, 0);
 
-            // Compute exp(x - k*ln2).
+            // Calculate exp(x - k*ln2).
             TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+#ifdef ARCH_BLACKHOLE
             TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
+#endif
         } else {
             TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
 
-            // Compute polynomial.
+            // Calculate polynomial.
             if constexpr (POLY_DEGREE == 1) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else if constexpr (POLY_DEGREE == 2) {
@@ -666,7 +672,7 @@ void calculate_exponential_polynomial(const uint16_t /*exp_base_scale_factor*/) 
 
         // Store the result.
         TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0);
-        sfpi::dst_reg += 2;
+        sfpi::dst_reg += 2;  // Skip odd columns.
     }
 }
 
