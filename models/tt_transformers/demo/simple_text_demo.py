@@ -1151,6 +1151,8 @@ def test_demo_text(
                         logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
                         if all(user_done):
                             users_decoding = False
+                    else:
+                        all_outputs[user].append(user_tok)
 
             # Print out generated outputs for each user at the end of every iteration
             for user in range(global_batch_size):
@@ -1228,6 +1230,19 @@ def test_demo_text(
 
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
+
+    # Quick sanity check that the model doesn't produce special tokens=garbage output
+    is_special_tokens_produced = [False] * len(all_outputs)
+    for i, output in enumerate(all_outputs):
+        output = output[len(encoded_prompts[i]) :]
+        is_eos = [token in tokenizer.stop_tokens for token in output]
+        if any(is_eos):
+            output = output[: is_eos.index(True)]
+        is_special_tokens_produced[i] = any(token in tokenizer.all_special_ids for token in output)
+    if any(is_special_tokens_produced):
+        logger.warning(f"{sum(is_special_tokens_produced)}/{len(all_outputs)} users produced special tokens")
+        if is_ci_env:
+            assert False, "model produced special tokens"
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill") if mode != "decode" else 0
