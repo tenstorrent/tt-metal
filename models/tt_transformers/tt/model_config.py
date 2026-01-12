@@ -1768,7 +1768,6 @@ class ModelArgs:
             vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
             return vision_config
 
-        config_file = os.path.join(checkpoint_dir, "config.json")
         from transformers import AutoConfig
 
         if self.dummy_weights:
@@ -1957,7 +1956,6 @@ class ModelArgs:
             state_dict = model.state_dict()
         else:
             # Always HuggingFace since we only support HF_MODEL now
-            # if not os.path.exists(self.CKPT_DIR):
             model_cls = self.get_hf_model_cls()
             model = model_cls.from_pretrained(
                 self.CKPT_DIR,
