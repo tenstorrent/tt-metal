@@ -17,10 +17,11 @@ from tracy.process_model_log import (
 
 def get_accuracy_metrics(torch_output, tt_output):
     _pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
-    # relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / torch_output.std().item()
+    std = torch_output.std().item()
+    relative_rmse_val = (torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / std) if std != 0 else 0.0
     return {
         "pcc": pcc_val,
-        # "relative_rmse": relative_rmse_val,
+        "relative_rmse": relative_rmse_val,
     }
 
 
@@ -155,8 +156,8 @@ SHAPE2TIME = {
     "M, K, N",
     SHAPE2TIME.keys(),
 )
-@pytest.mark.parametrize("check_accuracy", [True, False])
-@pytest.mark.parametrize("dump_outputs", [True, False])
+@pytest.mark.parametrize("check_accuracy", [True, False], ids=["check_accuracy_True", "check_accuracy_False"])
+@pytest.mark.parametrize("dump_outputs", [True, False], ids=["dump_outputs_True", "dump_outputs_False"])
 def test_moe(device, M, K, N, check_accuracy, dump_outputs):
     accuracy_metrics = run_test_moe(
         device,
@@ -169,17 +170,17 @@ def test_moe(device, M, K, N, check_accuracy, dump_outputs):
 
     if check_accuracy:
         assert accuracy_metrics["pcc"] > 0.999_500
-        # assert accuracy_metrics["relative_rmse"] < 0.02
+        assert accuracy_metrics["relative_rmse"] < 0.02
 
 
 @pytest.mark.parametrize(
     "M, K, N",
     SHAPE2TIME.keys(),
 )
-@pytest.mark.parametrize("check_accuracy", [True, False])
-@pytest.mark.parametrize("dump_outputs", [True, False])
+@pytest.mark.parametrize("check_accuracy", [True, False], ids=["check_accuracy_True", "check_accuracy_False"])
+@pytest.mark.parametrize("dump_outputs", [True, False], ids=["dump_outputs_True", "dump_outputs_False"])
 def test_moe_performance(M, K, N, check_accuracy, dump_outputs):
-    command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[dump_outputs={dump_outputs}-check_accuracy={check_accuracy}-M={M}-K={K}-N={N}-dispatch_row]"
+    command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[dump_outputs_{dump_outputs}-check_accuracy_{check_accuracy}-M={M}-K={K}-N={N}-dispatch_row]"
     run_device_profiler(command, "ttnn_moe_performance", device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log("ttnn_moe_performance", float_columns=["DEVICE KERNEL DURATION [ns]"])
     duration_us = int(r["DEVICE KERNEL DURATION [ns]"].min()) / 1000.0
