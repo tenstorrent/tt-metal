@@ -480,8 +480,14 @@ def test_conv3d_sharded_output(
 
     # Run test
     tt_output, gt_output = run_conv3d_with_memory_config(
-        device, input_shape, out_channels, kernel_size, stride, padding,
-        padding_mode, output_mem_config=output_mem_config
+        device,
+        input_shape,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        padding_mode,
+        output_mem_config=output_mem_config,
     )
 
     # Validate results
@@ -520,8 +526,14 @@ def test_conv3d_interleaved_vs_sharded_equivalence(
         "height_sharded", grid_size, input_shape
     )
     tt_output_sharded, _ = run_conv3d_with_memory_config(
-        device, input_shape, out_channels, kernel_size, stride, padding,
-        padding_mode, input_mem_config=sharded_mem_config
+        device,
+        input_shape,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        padding_mode,
+        input_mem_config=sharded_mem_config,
     )
 
     # Compare outputs (should be nearly identical)
