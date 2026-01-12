@@ -479,7 +479,6 @@ class ModelArgs:
         self.fuse_qkv = False
         self.fuse_mlp = False
         self.trust_remote_code_hf = False
-        self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
@@ -498,7 +497,6 @@ class ModelArgs:
         if HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
-            self.from_hf_url = True
 
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
@@ -1752,7 +1750,8 @@ class ModelArgs:
             vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
             return vision_config
 
-        if self.from_hf_url:
+        config_file = os.path.join(checkpoint_dir, "config.json")
+        if not os.path.exists(config_file):
             from transformers import AutoConfig
 
             if self.dummy_weights:
@@ -1785,7 +1784,6 @@ class ModelArgs:
             else:
                 self._set_params_from_dict(config)
         else:
-            config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
@@ -1947,7 +1945,7 @@ class ModelArgs:
             state_dict = model.state_dict()
         else:
             # Always HuggingFace since we only support HF_MODEL now
-            if self.from_hf_url:
+            if not os.path.exists(self.CKPT_DIR):
                 model_cls = self.get_hf_model_cls()
                 model = model_cls.from_pretrained(
                     self.CKPT_DIR,
