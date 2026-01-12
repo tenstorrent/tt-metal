@@ -22,6 +22,7 @@ file(
     llama_reduce_scatter_create_heads/device/kernels/*
     neighbor_pad_async/device/kernels/*
     reduce_scatter_minimal_async/device/kernels/*
+    strided_reduce_scatter_async/device/kernels/*
     ring_attention_all_gather_async/device/kernels/*
     rms_allgather/device/kernels/*
     send_recv_async/send_async/device/kernels/*
@@ -49,6 +50,11 @@ target_sources(
             reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
             reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
+            strided_reduce_scatter_async/device/strided_reduce_scatter_async_op_device_operation.hpp
+            strided_reduce_scatter_async/device/strided_reduce_scatter_async_op_device_operation_types.hpp
+            strided_reduce_scatter_async/device/strided_reduce_scatter_ring_program_factory.hpp
+            strided_reduce_scatter_async/device/strided_reduce_scatter_line_program_factory.hpp
+            strided_reduce_scatter_async/strided_reduce_scatter_async.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -100,6 +106,9 @@ target_sources(
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
+        strided_reduce_scatter_async/strided_reduce_scatter_async.cpp
+        strided_reduce_scatter_async/device/strided_reduce_scatter_async_op_device_operation.cpp
+        strided_reduce_scatter_async/device/strided_reduce_scatter_async_program.cpp
         send_recv_async/send_async/send_async.cpp
         send_recv_async/send_async/device/send_async_op_device_operation.cpp
         send_recv_async/send_async/device/send_async_op_program_factory.cpp
