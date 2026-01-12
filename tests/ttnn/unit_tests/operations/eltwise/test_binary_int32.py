@@ -1096,7 +1096,7 @@ def test_binary_scalar_div_int32(device):
     "ttnn_op",
     [
         ttnn.remainder,
-        # ttnn.fmod,
+        ttnn.fmod,
     ],
 )
 def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
@@ -1127,9 +1127,6 @@ def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
 
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
-
-    print(output_tensor)
-    print(torch_output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
 
