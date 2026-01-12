@@ -6,9 +6,43 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 
-uint32_t compute_actual_k_block(uint32_t k_block_iter) { return k_block_iter; }
+uint32_t compute_actual_k_block(
+    uint32_t k_block_iter,
+    uint32_t total_k_block_count,
+    uint32_t my_rank,
+    uint32_t k_blocks_per_device,
+    uint32_t num_devices,
+    bool is_forward) {
+    // Start with self, then go backward, then forward.
+    // Each time, read all k_blocks on device before moving on
+    // If is_forward is false, iterate in the backwards order
+    uint32_t actual_k_block_iter = is_forward ? k_block_iter : (total_k_block_count - 1 - k_block_iter);
+    uint32_t device_iter = actual_k_block_iter / k_blocks_per_device;
+    uint32_t device_k_block_iter = actual_k_block_iter % k_blocks_per_device;
+    uint32_t direction_offset = (device_iter + 1) / 2;
+    int32_t actual_device_rank = 0;
+    if (device_iter % 2) {
+        // Backward
+        actual_device_rank = my_rank - direction_offset;
+        if (actual_device_rank < 0) {
+            actual_device_rank = num_devices + actual_device_rank;
+        }
+    } else {
+        // Forward
+        actual_device_rank = my_rank + direction_offset;
+        if ((uint32_t)actual_device_rank >= num_devices) {
+            actual_device_rank = actual_device_rank - num_devices;
+        }
+    }
+    uint32_t k_block_start = k_blocks_per_device * actual_device_rank;
+    return k_block_start + device_k_block_iter;
+}
 
-bool is_backward_k_block_iter(uint32_t k_block_iter) { return !(k_block_iter % 2); }
+bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_device) {
+    // Start with self, then go backward, then forward
+    uint32_t device_iter = k_block_iter / k_blocks_per_device;
+    return (device_iter % 2);
+}
 
 bool is_injector(uint32_t use_backward, bool is_injector_core_backward, bool is_injector_core_forward) {
     return (is_injector_core_backward && use_backward) || (is_injector_core_forward && !use_backward);
