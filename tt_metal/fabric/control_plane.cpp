@@ -46,7 +46,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>

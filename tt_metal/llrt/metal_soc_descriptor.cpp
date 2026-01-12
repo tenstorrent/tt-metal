@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
