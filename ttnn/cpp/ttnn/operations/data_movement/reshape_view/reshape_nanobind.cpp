@@ -101,7 +101,7 @@ void bind_reshape_view(nb::module_& mod) {
 
             Args:
                 * input_tensor: Input Tensor.
-                * new_shape: New shape of tensor.
+                * shape: Shape of tensor.
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config

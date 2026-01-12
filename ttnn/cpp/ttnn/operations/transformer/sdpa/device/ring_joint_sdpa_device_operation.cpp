@@ -22,7 +22,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa {
 
 RingJointSDPADeviceOperation::program_factory_t RingJointSDPADeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::RingJointSDPAProgramFactory{};
 }
 
@@ -211,15 +211,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH);
 
     TT_FATAL(
-        N_local % q_chunk_size == 0,
-        "Local sequence length must be divisible by q_chunk_size. Got N_local: {}, q_chunk_size: {}",
+        N_local % tt::constants::TILE_HEIGHT == 0,
+        "Local sequence length must be divisible by TILE_HEIGHT. Got N_local: {}, TILE_HEIGHT: {}",
         N_local,
-        q_chunk_size);
-    TT_FATAL(
-        N_local % k_chunk_size == 0,
-        "Local sequence length must be divisible by k_chunk_size. Got N_local: {}, k_chunk_size: {}",
-        N_local,
-        k_chunk_size);
+        tt::constants::TILE_HEIGHT);
 
     // Validate padding: Only the sequence dimension may be padded
     auto validate_padding = [](const Tensor& tensor) {
@@ -374,7 +369,7 @@ ring_joint_scaled_dot_product_attention(
         .gathered_k = persistent_output_buffer_k,
         .gathered_v = persistent_output_buffer_v};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

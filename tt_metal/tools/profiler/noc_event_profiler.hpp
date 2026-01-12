@@ -48,6 +48,12 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> decode_noc_id_into_coord(uint32_t id,
         interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc) >> NOC_COORD_REG_OFFSET);
 }
 
+FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t dst_addr) {
+    KernelProfilerNocEventMetadata ev_md;
+    ev_md.data.local_event_dst_trailer.dst_addr = dst_addr;
+    return ev_md;
+}
+
 template <uint32_t STATIC_ID = 12345>
 FORCE_INLINE void recordNocEvent(
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
@@ -55,7 +61,8 @@ FORCE_INLINE void recordNocEvent(
     int32_t dst_y = -1,
     uint32_t num_bytes = 0,
     int8_t vc = -1,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint32_t dst_addr = 0) {
     KernelProfilerNocEventMetadata ev_md;
 
     auto& local_noc_event = ev_md.data.local_event;
@@ -67,8 +74,20 @@ FORCE_INLINE void recordNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+    if constexpr (kernel_profiler::NON_DROPPING) {
+        KernelProfilerNocEventMetadata dst_data = createNocEventDstTrailer(dst_addr);
+
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
+
+        kernel_profiler::timeStampedData<
+            STATIC_ID,
+            kernel_profiler::DoingDispatch::DISPATCH,
+            kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
+    } else {
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
+        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+    }
 }
 
 template <uint32_t STATIC_ID = 12345>

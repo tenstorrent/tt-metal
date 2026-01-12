@@ -10,7 +10,7 @@
 namespace ttnn::operations::data_movement {
 
 InterleavedToShardedDeviceOperation::program_factory_t InterleavedToShardedDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t&  /*tensor_args*/) {
     return interleaved_to_sharded::InterleavedToShardedProgramFactory{};
 }
 
@@ -112,7 +112,7 @@ ttnn::operations::data_movement::InterleavedToShardedDeviceOperation::tensor_ret
     bool keep_l1_aligned,
     const std::optional<Tensor>& preallocated_output) {
     using OperationType = ttnn::operations::data_movement::InterleavedToShardedDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{output_mem_config, output_dtype, keep_l1_aligned},
         OperationType::tensor_args_t{input_tensor, preallocated_output});
 }

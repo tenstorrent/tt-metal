@@ -8,7 +8,7 @@
 namespace ttnn::operations::experimental::nlp_concat_heads_boltz {
 
 NLPConcatHeadsBoltzDeviceOperation::program_factory_t NLPConcatHeadsBoltzDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return NLPConcatHeadsBoltzProgramFactory{};
 }
 
@@ -130,7 +130,7 @@ ttnn::operations::experimental::nlp_concat_heads_boltz::tensor_return_value_t nl
     auto operation_attributes = OperationType::operation_attributes_t{memory_config};
     auto tensor_args = OperationType::tensor_args_t{input_tensor, std::move(optional_output_tensor)};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

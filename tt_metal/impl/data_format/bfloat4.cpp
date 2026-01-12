@@ -21,13 +21,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
 
-std::vector<uint32_t> pack_fp32_vec_as_bfp4_tiles(
-    tt::stl::Span<const float> fp32_vec,
-    bool row_major_input,
-    bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile) {
-    return pack_as_bfp_tiles<tt::DataFormat::Bfp4_b>(fp32_vec, row_major_input, is_exp_a, tile);
-}
+constexpr int log2(int n) { return (n <= 1) ? 0 : std::bit_width(static_cast<unsigned>(n)) - 1; }
 
 template <typename T>
 std::vector<uint32_t> pack_as_bfp4_tiles(
@@ -94,7 +88,14 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
     int data_dwords_per_exp_log2 = log2(data_dwords_per_exp);
 
     // the exponent index will always be 0 when tile_HW == 16, between 0-1 when tile_HW == 32, and between 0-3 otherwise
-    uint32_t exp_bit_mask = (tile_HW == 16) ? 0x0 : (tile_HW == 32) ? 0x1 : 0x3;
+    uint32_t exp_bit_mask;
+    if (tile_HW == 16) {
+        exp_bit_mask = 0x0;
+    } else if (tile_HW == 32) {
+        exp_bit_mask = 0x1;
+    } else {
+        exp_bit_mask = 0x3;
+    }
 
     uint32_t size_bytes = bfp_tiles.size() * 4;
     uint32_t single_bfp_tile_size =
@@ -223,7 +224,8 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                 // Flush denormals to zero
                                 // Check if shift > exp and mantissa is not zero
                                 simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector0);
-                                simde__m256i mask_nonzero_mantissa = simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
+                                simde__m256i mask_nonzero_mantissa =
+                                    simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
                                 mask_denormal0 = simde_mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
 
                                 exp_vector0 = simde_mm256_blendv_epi8(
@@ -238,7 +240,8 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                 // Flush denormals to zero
                                 // Check if shift > exp and mantissa is not zero
                                 simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector1);
-                                simde__m256i mask_nonzero_mantissa = simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
+                                simde__m256i mask_nonzero_mantissa =
+                                    simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
                                 mask_denormal1 = simde_mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
                                 exp_vector1 = simde_mm256_blendv_epi8(
                                     simde_mm256_sub_epi32(exp_vector1, simde_mm256_add_epi32(rebias_offset, shift_cnt)),

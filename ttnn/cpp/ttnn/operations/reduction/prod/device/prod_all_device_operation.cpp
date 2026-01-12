@@ -9,7 +9,7 @@
 namespace ttnn::operations::reduction::prod_all {
 
 ProdAllDeviceOperation::program_factory_t ProdAllDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::ProdAllProgramFactory{};
 }
 
@@ -19,7 +19,7 @@ void ProdAllDeviceOperation::validate_on_program_cache_hit(
 }
 
 void ProdAllDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
     TT_FATAL(
@@ -58,7 +58,7 @@ ProdAllDeviceOperation::tensor_return_value_t ProdAllDeviceOperation::create_out
 namespace ttnn::prim {
 ttnn::Tensor prod_all(const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
     using OperationType = ttnn::operations::reduction::prod_all::ProdAllDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.output_mem_config = output_mem_config},
         OperationType::tensor_args_t{.input = input});
 }

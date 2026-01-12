@@ -10,7 +10,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::transformer {
 
 ConcatenateHeadsDeviceOperation::program_factory_t ConcatenateHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::ConcatenateHeadsProgramFactory{};
 }
 
@@ -109,7 +109,7 @@ ttnn::operations::experimental::transformer::ConcatenateHeadsDeviceOperation::te
     };
     auto tensor_args = OperationType::tensor_args_t{.input = input_tensor, .preallocated_output = preallocated_output};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

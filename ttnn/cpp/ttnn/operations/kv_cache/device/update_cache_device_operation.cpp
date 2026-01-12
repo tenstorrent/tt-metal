@@ -10,12 +10,11 @@ namespace ttnn::operations::kv_cache {
 using namespace tt::constants;
 
 UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.op_type == UpdateCacheOpType::FILL) {
         return program::FillCacheMultiCoreProgramFactory{};
-    } else {
-        return program::UpdateCacheMultiCoreProgramFactory{};
     }
+    return program::UpdateCacheMultiCoreProgramFactory{};
 }
 
 void UpdateKVCacheOperation::validate_on_program_cache_miss(
@@ -161,13 +160,13 @@ void UpdateKVCacheOperation::validate_on_program_cache_hit(
 }
 
 spec_return_value_t UpdateKVCacheOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache.tensor_spec();
 }
 
 tensor_return_value_t UpdateKVCacheOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache;
 }
@@ -190,15 +189,13 @@ ttnn::operations::kv_cache::UpdateKVCacheOperation::tensor_return_value_t update
     const ttnn::operations::kv_cache::UpdateCacheOpType op_type,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::operations::kv_cache::UpdateKVCacheOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .batch_idx = batch_idx,
             .update_idx = update_index,
             .batch_offset = batch_offset,
             .op_type = op_type,
             .compute_kernel_config = compute_kernel_config},
-        OperationType::tensor_args_t{
-            .cache = cache,
-            .input = input});
+        OperationType::tensor_args_t{.cache = cache, .input = input});
 }
 }  // namespace ttnn::prim

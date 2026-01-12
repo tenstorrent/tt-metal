@@ -10,7 +10,7 @@
 namespace ttnn::operations::data_movement::copy {
 
 CopyDeviceOperation::program_factory_t CopyDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return copy::program::CopyProgramFactory{};
 }
 
@@ -94,7 +94,7 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
 CopyDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
     std::vector<Tensor>& output_tensors) {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
@@ -124,7 +124,7 @@ ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_
     const std::optional<Tensor>& preallocated_output,
     bool backwards) {
     using OperationType = ttnn::operations::data_movement::copy::CopyDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{output_mem_config, output_dtype, backwards},
         OperationType::tensor_args_t{input, preallocated_output});
 }

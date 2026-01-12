@@ -24,7 +24,7 @@ mem_configs = [
 ]
 
 
-@pytest.mark.parametrize("accurate_mode", [True])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
@@ -45,7 +45,7 @@ mem_configs = [
 class TestUnary_Div:
     def test_run_unary_div(
         self,
-        accurate_mode,
+        fast_and_approximate_mode,
         round_mode,
         input_shapes,
         scalar,
@@ -61,7 +61,7 @@ class TestUnary_Div:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "accurate_mode": accurate_mode,
+                "fast_and_approximate_mode": fast_and_approximate_mode,
                 "round_mode": round_mode,
                 "scalar": scalar,
             }

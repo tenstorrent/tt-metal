@@ -87,7 +87,7 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
 }
 
 spec_return_value_t SamplingDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }
@@ -123,7 +123,7 @@ ttnn::Tensor sampling(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& preallocated_output_tensor) {
     using OperationType = ttnn::operations::reduction::sampling::SamplingDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.seed = seed, .sub_core_grids = sub_core_grids},
         OperationType::tensor_args_t{
             .input_values = input_values_tensor,

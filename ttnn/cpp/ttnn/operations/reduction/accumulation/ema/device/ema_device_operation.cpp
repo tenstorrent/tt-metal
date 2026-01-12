@@ -13,7 +13,7 @@ namespace ttnn::operations::reduction::ema {
 using namespace tt::tt_metal;
 
 EmaDeviceOperation::program_factory_t EmaDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return program::EmaProgramFactory{};
 }
 
@@ -97,7 +97,7 @@ ttnn::Tensor ema_device(
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<Tensor> optional_output_tensor) {
     using OperationType = ttnn::operations::reduction::ema::EmaDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .alpha = alpha,
             .grid_size = grid_size,

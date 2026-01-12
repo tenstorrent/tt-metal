@@ -10,7 +10,7 @@
 namespace ttnn::operations::data_movement::fill_rm {
 
 FillRMDeviceOperation::program_factory_t FillRMDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::FillRMProgramFactory{};
 }
 
@@ -67,7 +67,7 @@ tensor_return_value_t FillRMDeviceOperation::create_output_tensors(
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<FillRMDeviceOperation::tensor_return_value_t>
 FillRMDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value) {
     using namespace tt::tt_metal;
@@ -95,7 +95,7 @@ ttnn::Tensor fill_rm(
     float val_lo,
     const MemoryConfig& output_memory_config) {
     using OperationType = ttnn::operations::data_movement::fill_rm::FillRMDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .N = N,
             .C = C,

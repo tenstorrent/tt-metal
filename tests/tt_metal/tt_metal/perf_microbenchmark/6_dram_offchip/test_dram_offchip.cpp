@@ -367,7 +367,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
 
     std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
-    for (size_t i = 0; i < vec.size(); i++) {
+    for (unsigned int& elem : vec) {
         float num_1_float = rand_float() + offset;
         float num_2_float = rand_float() + offset;
 
@@ -375,7 +375,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
         bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
 
         // pack 2 uint16 into uint32
-        vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+        elem = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
     return vec;
 }
@@ -424,7 +424,7 @@ bool assign_runtime_args_to_program(
     tt_metal::Program& program,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
-    const uint32_t& num_cores_x,
+    const uint32_t& /*num_cores_x*/,
     const CoreRangeSet& core_group_1,
     const CoreRangeSet& core_group_2,
     const uint32_t& num_tiles_per_core_group_1,
@@ -432,8 +432,8 @@ bool assign_runtime_args_to_program(
     const tt_metal::KernelHandle& kernel,
     const uint32_t& input_buffer_addr,
     const uint32_t& num_reqs_at_a_time,
-    const uint32_t& single_tile_size,
-    const tt::DataFormat& tile_format) {
+    const uint32_t& /*single_tile_size*/,
+    const tt::DataFormat& /*tile_format*/) {
     bool pass = true;
     for (uint32_t i = 0, num_tiles_used = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -464,7 +464,7 @@ bool validation(
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
-    const uint32_t& num_cores_x,
+    const uint32_t& /*num_cores_x*/,
     const CoreRangeSet& core_group_1,
     const CoreRangeSet& core_group_2,
     const uint32_t& num_tiles_per_core_group_1,

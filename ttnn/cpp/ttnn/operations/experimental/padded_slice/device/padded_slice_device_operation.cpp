@@ -11,14 +11,14 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::padded_slice {
 
 PaddedSliceDeviceOperation::program_factory_t PaddedSliceDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return program::PaddedSliceRMProgramFactory{};
-    } else if (tensor_args.input.layout() == Layout::TILE) {
-        return program::PaddedSliceTileProgramFactory{};
-    } else {
-        TT_THROW("Unsupported layout for padded_slice operation: {}", tensor_args.input.layout());
     }
+    if (tensor_args.input.layout() == Layout::TILE) {
+        return program::PaddedSliceTileProgramFactory{};
+    }
+    TT_THROW("Unsupported layout for padded_slice operation: {}", tensor_args.input.layout());
 }
 
 void PaddedSliceDeviceOperation::validate_on_program_cache_hit(
@@ -28,7 +28,6 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_hit(
 
 void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-
     const auto& input_tensor_a = tensor_args.input;
 
     // Validate step parameter early - padded_slice does not support strided slices
@@ -141,7 +140,7 @@ ttnn::operations::experimental::padded_slice::PaddedSliceDeviceOperation::tensor
         .output_mem_config = output_mem_config};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

@@ -51,10 +51,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.logical_shape().size() == 5,
         "Activation tensor must have 5 dimensions. got {}",
         input_tensor_a.logical_shape().size());
-    TT_FATAL(
-        input_tensor_a.logical_shape()[0] == 1,
-        "Activation tensor must have batch size 1. got {}",
-        input_tensor_a.logical_shape()[0]);
     // check row-major
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Activation tensor must be row-major.");
 
@@ -243,7 +239,7 @@ ttnn::operations::experimental::conv3d::Conv3dDeviceOperation::tensor_return_val
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

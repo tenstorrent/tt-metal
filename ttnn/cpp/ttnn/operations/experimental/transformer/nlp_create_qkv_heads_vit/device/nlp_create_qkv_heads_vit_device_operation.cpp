@@ -8,7 +8,7 @@
 namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit {
 
 NlpCreateHeadsVitDeviceOperation::program_factory_t NlpCreateHeadsVitDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::NlpCreateQkvHeadsVitProgramFactory{};
 }
 
@@ -111,7 +111,7 @@ std::vector<Tensor> nlp_create_qkv_heads_vit(
     auto tensor_args =
         OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensors = optional_output_tensors};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

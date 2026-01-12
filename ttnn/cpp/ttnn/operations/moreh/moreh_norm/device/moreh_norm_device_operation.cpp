@@ -114,11 +114,11 @@ MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory
     const auto input_rank = tensor_args.input.padded_shape().rank();
     if (dim == input_rank - 1) {
         return ProgramFactoryWOther{};
-    } else if (dim == input_rank - 2) {
-        return ProgramFactoryHOther{};
-    } else {
-        return ProgramFactoryNCOther{};
     }
+    if (dim == input_rank - 2) {
+        return ProgramFactoryHOther{};
+    }
+    return ProgramFactoryNCOther{};
 }
 
 void MorehNormOperation::validate_on_program_cache_miss(
@@ -196,7 +196,7 @@ ttnn::operations::moreh::moreh_norm::MorehNormOperation::tensor_return_value_t m
     };
     auto tensor_args = OperationType::tensor_args_t{input, output};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

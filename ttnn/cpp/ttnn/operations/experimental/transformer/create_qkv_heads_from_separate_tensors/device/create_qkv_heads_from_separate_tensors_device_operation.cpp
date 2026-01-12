@@ -225,7 +225,7 @@ CreateQKVHeadsSeparateTensorsDeviceOperation::create_output_tensors(
 
 CreateQKVHeadsSeparateTensorsDeviceOperation::program_factory_t
 CreateQKVHeadsSeparateTensorsDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return CreateQKVHeadsSeparateTensorsProgramFactory{};
 }
 
@@ -268,7 +268,7 @@ std::tuple<Tensor, Tensor, Tensor> create_qkv_heads_from_separate_tensors(
         .input_tensor_kv = input_tensor_kv,
         .optional_output_tensors = optional_output_tensors};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

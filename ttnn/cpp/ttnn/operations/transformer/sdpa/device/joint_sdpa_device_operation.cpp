@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer::sdpa::joint_sdpa {
 
 JointSDPADeviceOperation::program_factory_t JointSDPADeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::JointSDPAProgramFactory{};
 }
 
@@ -215,7 +215,7 @@ joint_scaled_dot_product_attention(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

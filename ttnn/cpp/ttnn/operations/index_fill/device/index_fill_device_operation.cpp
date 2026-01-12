@@ -1,14 +1,13 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "index_fill_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::index_fill {
 IndexFillOperation::program_factory_t IndexFillOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return MultiCore{};
 }
 
@@ -58,7 +57,7 @@ ttnn::Tensor index_fill(
     const std::variant<float, int> value,
     const std::optional<MemoryConfig>& memory_config) {
     using OperationType = ttnn::operations::index_fill::IndexFillOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{dim, value, memory_config.value_or(input.memory_config())},
         OperationType::tensor_args_t{input, index});
 }

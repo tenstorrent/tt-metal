@@ -55,14 +55,14 @@ bool check_mergeable(const MeshCoordinateRange& a, const MeshCoordinateRange& b)
     if (diff_dims.empty()) {
         // Ranges are identical.
         return true;
-    } else if (diff_dims.size() == 1) {
+    }
+    if (diff_dims.size() == 1) {
         // Ranges are adjacent or overlap along one dimension.
         size_t diff_dim = diff_dims[0];
         return std::max(a.start_coord()[diff_dim], b.start_coord()[diff_dim]) <=
                std::min(a.end_coord()[diff_dim], b.end_coord()[diff_dim]) + 1;
-    } else {
-        return a.contains(b) || b.contains(a);
     }
+    return a.contains(b) || b.contains(a);
 }
 
 int32_t normalize_index(int32_t index, int32_t size) {
@@ -257,9 +257,8 @@ const MeshCoordinate& MeshCoordinateRange::end_coord() const { return end_; }
 MeshCoordinate::BoundaryMode MeshCoordinateRange::get_boundary_mode() const {
     if (wraparound_shape_.has_value()) {
         return MeshCoordinate::BoundaryMode::WRAP;
-    } else {
-        return MeshCoordinate::BoundaryMode::NONE;
     }
+    return MeshCoordinate::BoundaryMode::NONE;
 }
 
 MeshShape MeshCoordinateRange::shape() const {
@@ -488,7 +487,8 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
                 ranges_.erase(it);
                 did_merge = true;
                 break;
-            } else if (merged.intersects(*it) || it->intersects(merged)) {
+            }
+            if (merged.intersects(*it) || it->intersects(merged)) {
                 // There is an intersection between `merged` and `it`.
                 // For simplicity, erase the entire `it`, but add back what isn't present in `merged`.
                 for (const auto& coord : *it) {
@@ -615,15 +615,13 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
         }
 
         return complement_set;
-    } else {
-        // Slow path: iterate over all coordinates in the parent range, and create ranges for the complement.
-        for (const auto& coord : parent) {
-            if (!intersection.contains(coord)) {
-                complement_set.merge(MeshCoordinateRange(coord, coord));
-            }
+    }  // Slow path: iterate over all coordinates in the parent range, and create ranges for the complement.
+    for (const auto& coord : parent) {
+        if (!intersection.contains(coord)) {
+            complement_set.merge(MeshCoordinateRange(coord, coord));
         }
-        return complement_set;
     }
+    return complement_set;
 }
 
 std::vector<MeshCoordinate> MeshCoordinateRangeSet::coords() const {

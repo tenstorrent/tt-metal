@@ -183,8 +183,7 @@ UntilizeMultiCoreParallelizeColumnProgramFactory::create(
 
     auto nsticks_per_core = ntiles_per_column * TILE_HEIGHT;
 
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        CoreCoord core = cores[i];
+    for (auto core : cores) {
         if (!full_cores.contains(core)) {
             continue;
         }
@@ -240,7 +239,7 @@ UntilizeMultiCoreParallelizeColumnProgramFactory::create(
 
 void UntilizeMultiCoreParallelizeColumnProgramFactory::override_runtime_arguments(
     UntilizeMultiCoreParallelizeColumnProgramFactory::cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& /*operation_attributes*/,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;

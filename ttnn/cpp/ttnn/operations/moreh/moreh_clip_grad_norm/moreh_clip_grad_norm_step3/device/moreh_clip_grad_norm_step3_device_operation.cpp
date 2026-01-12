@@ -11,7 +11,7 @@
 namespace ttnn::operations::moreh::moreh_clip_grad_norm_step3 {
 
 void MorehClipGradNormStep3Operation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     auto input_tensors = tensor_args.inputs;
     for (const auto& input : input_tensors) {
         ttnn::operations::check_tensor(input, "moreh_clip_grad_norm_step3", "input");
@@ -21,7 +21,7 @@ void MorehClipGradNormStep3Operation::validate_inputs(
 };
 
 MorehClipGradNormStep3Operation::program_factory_t MorehClipGradNormStep3Operation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 };
 
@@ -37,7 +37,7 @@ void MorehClipGradNormStep3Operation::validate_on_program_cache_hit(
 
 // No output
 MorehClipGradNormStep3Operation::spec_return_value_t MorehClipGradNormStep3Operation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     std::vector<TensorSpec> output_specs;
     output_specs.reserve(tensor_args.inputs.size());
     for (const auto& input : tensor_args.inputs) {
@@ -48,7 +48,7 @@ MorehClipGradNormStep3Operation::spec_return_value_t MorehClipGradNormStep3Opera
 
 // No output
 MorehClipGradNormStep3Operation::tensor_return_value_t MorehClipGradNormStep3Operation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     return tensor_args.inputs;
 };
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step3
@@ -64,6 +64,6 @@ moreh_clip_grad_norm_step3(
     auto operation_attributes = OperationType::operation_attributes_t{
         memory_config.value_or(inputs.at(0).memory_config()), compute_kernel_config};
     auto tensor_args = OperationType::tensor_args_t{inputs, clip_coef_clamped};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

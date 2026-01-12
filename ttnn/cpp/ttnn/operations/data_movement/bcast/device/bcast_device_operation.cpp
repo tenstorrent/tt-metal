@@ -8,6 +8,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::data_movement::bcast {
 
@@ -246,7 +247,7 @@ tt::stl::hash::hash_t BcastDeviceOperation::compute_program_hash(
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
 BcastDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const Tensor& input_tensor0 = tensor_args.input_a;
@@ -277,7 +278,7 @@ ttnn::operations::data_movement::bcast::BcastDeviceOperation::tensor_return_valu
     bool in_place,
     const std::optional<Tensor>& preallocated_output) {
     using OperationType = ttnn::operations::data_movement::bcast::BcastDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .math_op = bcast_op, .dim = bcast_dim, .output_mem_config = output_mem_config, .in_place = in_place},
         OperationType::tensor_args_t{

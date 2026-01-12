@@ -22,7 +22,7 @@ void NonZeroIndicesDeviceOperation::validate_on_program_cache_hit(
 }
 
 void NonZeroIndicesDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto input_tensor_shape = input_tensor.padded_shape();
     TT_FATAL(
@@ -57,7 +57,7 @@ namespace ttnn::prim {
 ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation::tensor_return_value_t nonzero(
     const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& memory_config) {
     using OperationType = ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.output_memory_config = memory_config},
         OperationType::tensor_args_t{.input = input_tensor});
 }

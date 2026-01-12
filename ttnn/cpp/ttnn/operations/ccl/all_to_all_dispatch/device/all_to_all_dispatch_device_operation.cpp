@@ -14,7 +14,7 @@
 namespace ttnn::operations::ccl {
 
 AllToAllDispatchDeviceOperation::program_factory_t AllToAllDispatchDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return AllToAllDispatchSparse{};
 }
 
@@ -173,7 +173,7 @@ ttnn::operations::ccl::AllToAllDispatchDeviceOperation::tensor_return_value_t al
     ttnn::operations::ccl::AllToAllDispatchDeviceOperation::AllToAllTransferType impl,
     uint32_t output_concat_dim) {
     using OperationType = ttnn::operations::ccl::AllToAllDispatchDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .worker_core_range_set = worker_core_range_set,
             .output_mem_config = memory_config,

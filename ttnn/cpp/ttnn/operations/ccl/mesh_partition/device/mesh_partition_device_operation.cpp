@@ -23,7 +23,7 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
 }  // namespace detail
 
 MeshPartitionDeviceOperation::program_factory_t MeshPartitionDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return MeshPartition{};
 }
 
@@ -108,7 +108,7 @@ ttnn::Tensor mesh_partition(
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
     using OperationType = ttnn::operations::ccl::MeshPartitionDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
             .cluster_axis = cluster_axis,

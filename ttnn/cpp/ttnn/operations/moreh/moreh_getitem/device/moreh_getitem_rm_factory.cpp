@@ -125,8 +125,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(input_5d.buffer()).append_to(reader_compile_time_args);
-    for (uint32_t dim = 0; dim < 5; dim++) {
-        index_info[dim].args.append_to(reader_compile_time_args);
+    for (auto& dim : index_info) {
+        dim.args.append_to(reader_compile_time_args);
     }
     auto reader_kernel_id = CreateReadKernel(
         program,
@@ -231,7 +231,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
 void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;

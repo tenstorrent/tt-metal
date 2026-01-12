@@ -15,13 +15,14 @@ from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
 @pytest.mark.parametrize("shape", [(1, 1, 512, 512)])
 @pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
-def test_multi_device_events(t3k_mesh_device, shape):
-    if t3k_mesh_device.get_num_devices() <= 1:
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_multi_device_events(mesh_device, shape):
+    if mesh_device.get_num_devices() <= 1:
         pytest.skip("This test requires multiple devices")
 
     # Preallocate activation tensors.
-    input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)
-    input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)
+    input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
+    input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
 
     # Send workload/ops on CQ 0 and Data on CQ 1. Use events for synchronization
     workload_cq = 0
@@ -34,10 +35,10 @@ def test_multi_device_events(t3k_mesh_device, shape):
     for i in range(10):
         # Create torch inputs, for validation
         torch_input_tensor_0 = torch.rand(
-            (t3k_mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
+            (mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
         )
         torch_input_tensor_1 = torch.rand(
-            (t3k_mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
+            (mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
         )
         # Compute torch golden for validation
         torch_output_golden = torch.neg(
@@ -48,10 +49,10 @@ def test_multi_device_events(t3k_mesh_device, shape):
         )
         # Convert torch tensors to TTNN Multi-Device Host Tensors
         ttnn_input_tensor_0 = ttnn.from_torch(
-            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0)
+            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(mesh_device, dim=0)
         )
         ttnn_input_tensor_1 = ttnn.from_torch(
-            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0)
+            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(mesh_device, dim=0)
         )
 
         # Copy TTNN host tensors into preallocated Mult-Device tensors, using data-movement CQ
@@ -59,20 +60,20 @@ def test_multi_device_events(t3k_mesh_device, shape):
         ttnn.copy_host_to_device_tensor(ttnn_input_tensor_0, input_0_dev, cq_id=data_movement_cq)
         ttnn.copy_host_to_device_tensor(ttnn_input_tensor_1, input_1_dev, cq_id=data_movement_cq)
         # Wait for write to be completed before issuing workload
-        write_event = ttnn.record_event(t3k_mesh_device, data_movement_cq)
+        write_event = ttnn.record_event(mesh_device, data_movement_cq)
         ttnn.wait_for_event(workload_cq, write_event)
         logger.info("Execute Workload")
         # Execute workload
         ttnn_output = run_op_chain(input_0_dev, input_1_dev, workload_cq)
         # Wait for workload to be completed before issuing read
-        workload_event = ttnn.record_event(t3k_mesh_device, workload_cq)
+        workload_event = ttnn.record_event(mesh_device, workload_cq)
         ttnn.wait_for_event(data_movement_cq, workload_event)
         logger.info("Read Back Workload Outputs")
         # Read device outputs and validate
         ttnn_torch_output_tensor = ttnn.to_torch(
             ttnn_output,
-            mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0),
-            device=t3k_mesh_device,
+            mesh_composer=ConcatMeshToTensor(mesh_device, dim=0),
+            device=mesh_device,
             cq_id=data_movement_cq,
         )
         assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.96)

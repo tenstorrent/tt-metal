@@ -17,7 +17,7 @@ constexpr int MAX_HEAD = 32;
 
 AllReduceCreateQkvHeadsDeviceOperation::program_factory_t
 AllReduceCreateQkvHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return program::AllReduceCreateQkvHeadsMeshWorkloadFactory{};
 }
 
@@ -352,7 +352,7 @@ ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads::tensor_return_
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .buffer_tensor = buffer_tensor, .batch_offset_tensor = batch_offset_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

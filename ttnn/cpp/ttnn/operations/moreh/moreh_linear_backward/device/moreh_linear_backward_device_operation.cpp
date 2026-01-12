@@ -14,7 +14,7 @@
 namespace ttnn::operations::moreh::moreh_linear_backward {
 
 void MorehBiasAddBackwardOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& bias_grad = tensor_args.bias_grad;
 
     if (bias_grad.has_value()) {
@@ -25,7 +25,7 @@ void MorehBiasAddBackwardOperation::validate_inputs(
 }
 
 MorehBiasAddBackwardOperation::program_factory_t MorehBiasAddBackwardOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& bias_grad = tensor_args.bias_grad.value();
     if (is_scalar(bias_grad)) {
         return SingleCoreProgramFactory();
@@ -83,7 +83,7 @@ moreh_bias_add_backward(
         init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{output_grad, bias, bias_grad};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

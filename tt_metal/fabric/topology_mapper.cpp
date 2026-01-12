@@ -371,8 +371,7 @@ TopologyMapper::TopologyMapper(
         }
 
         // Decode and populate mesh_host_rank_to_mpi_rank_ from gathered data
-        for (std::size_t idx = 0; idx < gathered.size(); ++idx) {
-            const auto encoded = gathered[idx];
+        for (const auto encoded : gathered) {
             if (encoded == sentinel) {
                 continue;
             }
@@ -580,8 +579,7 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
     // Build an ordered map from MPI rank to (mesh_id, host_rank) pairs for deterministic iteration
     std::map<int, std::map<MeshId, MeshHostRankId>> mpi_rank_to_mesh_bindings;
     mesh_host_rank_to_mpi_rank_.clear();
-    for (std::size_t idx = 0; idx < gathered.size(); ++idx) {
-        const auto encoded = gathered[idx];
+    for (const auto encoded : gathered) {
         if (encoded == sentinel) {
             continue;
         }

@@ -102,7 +102,9 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
             const auto k_shape = k.logical_shape();
 
             TT_FATAL(mask_shape[0] == q_shape[0], "Mask batch dim must match Q batch dim");
-            TT_FATAL(mask_shape[1] == 1, "Mask num_heads must be 1 to be broadcasted across all heads");
+            TT_FATAL(
+                mask_shape[1] == 1 || mask_shape[1] == q_shape[1],
+                "Mask num_heads must either be 1 (to be broadcasted across all heads) or must match Q heads dimension");
             TT_FATAL(mask_shape[2] == q_shape[2], "Mask sequence length must match Q sequence length");
             TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
 
@@ -259,6 +261,14 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
                 "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
+
+            // Validate that chunk_start_idx is a multiple of q_chunk_size
+            // This is required because chunk_start_idx is divided by q_chunk_size to compute chunked_q_chunk_offset
+            TT_FATAL(
+                attrs.chunk_start_idx.value() % q_chunk_size == 0,
+                "chunk_start_idx must be a multiple of q_chunk_size. Got chunk_start_idx: {}, q_chunk_size: {}",
+                attrs.chunk_start_idx.value(),
+                q_chunk_size);
         }
 
         // In chunked mode, K's sequence dimension should be >= Q's sequence dimension + chunk_start_idx
@@ -478,7 +488,7 @@ ttnn::operations::transformer::sdpa::SDPAOperation::tensor_return_value_t sdpa(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using OperationType = ttnn::operations::transformer::sdpa::SDPAOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .scale = scale,
             .output_mem_config = output_mem_config,

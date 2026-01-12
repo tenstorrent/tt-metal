@@ -11,7 +11,7 @@
 namespace ttnn::operations::ccl::all_broadcast {
 
 AllBroadcastDeviceOperation::program_factory_t AllBroadcastDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return program::AllBroadcastProgramFactory{};
 }
 
@@ -136,7 +136,7 @@ std::vector<ttnn::Tensor> all_broadcast(
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .num_links = num_links,
             .ring_size = num_devices,

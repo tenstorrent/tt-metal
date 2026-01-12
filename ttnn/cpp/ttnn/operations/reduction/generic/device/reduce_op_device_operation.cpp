@@ -24,7 +24,7 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
 }
 
 void ReduceDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
@@ -124,7 +124,7 @@ ttnn::Tensor reduce(
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::reduction::generic::ReduceDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             reduce_math,
             reduce_dim,

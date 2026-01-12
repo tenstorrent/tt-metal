@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::gelu_backward {
 
 GeluBackwardDeviceOperation::program_factory_t GeluBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::GeluBackwardProgramFactory{};
 }
 
@@ -149,7 +149,7 @@ ttnn::operations::experimental::gelu_backward::GeluBackwardDeviceOperation::tens
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output, .input = input, .preallocated_input_grad = preallocated_output};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

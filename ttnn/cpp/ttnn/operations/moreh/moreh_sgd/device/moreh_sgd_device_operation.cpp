@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::moreh::moreh_sgd {
 void MorehSgdOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& params_in = tensor_args.param_in;
     const auto& grad = tensor_args.grad;
 
@@ -32,7 +32,7 @@ void MorehSgdOperation::validate_inputs(
 }
 
 MorehSgdOperation::program_factory_t MorehSgdOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 };
 
@@ -127,6 +127,6 @@ ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t mor
         momentum_buffer_out_memory_config.value_or(param_in.memory_config()),
         init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{param_in, grad, momentum_buffer_in, param_out, momentum_buffer_out};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

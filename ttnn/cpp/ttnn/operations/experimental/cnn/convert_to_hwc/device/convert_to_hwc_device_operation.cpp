@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::cnn {
 
 ConvertToHWCDeviceOperation::program_factory_t ConvertToHWCDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::ConvertToHWCProgramFactory{};
 }
 
@@ -86,7 +86,7 @@ ttnn::operations::experimental::cnn::ConvertToHWCDeviceOperation::tensor_return_
     };
     auto tensor_args = OperationType::tensor_args_t{.input = input};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

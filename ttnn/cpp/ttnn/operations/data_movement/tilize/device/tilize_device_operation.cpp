@@ -9,7 +9,7 @@
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
-
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
@@ -121,7 +121,34 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     if (!operation_attributes.enough_space_height) {
         return program::TilizeMultiCoreBlockProgramFactory{};
     }
+    auto sub_core_grids = operation_attributes.sub_core_grids;
 
+    uint32_t num_tiles_per_row = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+
+    uint32_t num_tiles_per_col = input_tensor_a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+
+    int32_t ntiles = input_tensor_a.physical_volume() / tt::constants::TILE_HW;
+    uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t nblocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_block);
+
+    auto* device = input_tensor_a.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
+
+    size_t grid_area = available_grid.num_cores();
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block &&
+        (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
+        uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
+                                    (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+        if (ncores < ncores_wh.ncores) {
+            return program::TilizeMultiCoreBlockProgramFactory{};
+        }
+    }
     return program::TilizeMultiCoreInterleavedProgramFactory{};
 }
 
@@ -144,7 +171,7 @@ ttnn::Tensor tilize(
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::data_movement::TilizeDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),

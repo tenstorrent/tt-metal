@@ -14,7 +14,7 @@
 namespace ttnn::operations::ccl {
 
 AllToAllCombineDeviceOperation::program_factory_t AllToAllCombineDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return AllToAllCombineFromSparse{};
 }
 
@@ -174,7 +174,7 @@ ttnn::Tensor all_to_all_combine(
     const CoreRangeSet& worker_core_range_set,
     uint32_t output_shard_dim) {
     using OperationType = ttnn::operations::ccl::AllToAllCombineDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_mem_config = memory_config,
             .axis = axis,

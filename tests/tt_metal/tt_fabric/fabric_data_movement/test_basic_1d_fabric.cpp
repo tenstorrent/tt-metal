@@ -53,7 +53,7 @@ struct WorkerMemMap {
 
 // Utility function reused across tests to get address params
 WorkerMemMap generate_worker_mem_map(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology topology) {
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
@@ -836,9 +836,9 @@ void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
     for (const auto& mmio_chip_id : mmio_chip_ids) {
         const auto& tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_chip_id);
-        for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+        for (const auto& tunnel : tunnels_from_mmio) {
             // idx 0 in the tunnel is the mmio chip itself
-            const auto remote_chip_id = tunnels_from_mmio[t][1];
+            const auto remote_chip_id = tunnel[1];
             log_info(tt::LogTest, "Running tests for chips: {} and {}", mmio_chip_id, remote_chip_id);
             run_unicast_test_bw_chips(fixture, mmio_chip_id, remote_chip_id, 1);
             run_unicast_test_bw_chips(fixture, remote_chip_id, mmio_chip_id, 1);
@@ -1052,7 +1052,7 @@ void RunTestMCastConnAPI(
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
 
     // Wait for receivers to finish
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+    for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
             auto receiver_device = fixture->get_device(physical_end_device_ids[i]);
             fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
@@ -1078,15 +1078,11 @@ void RunTestMCastConnAPI(
     uint64_t sender_bytes =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            log_info(
-                tt::LogTest,
-                "Checking Status of {} Rx on physical device {}",
-                routing_direction,
-                physical_end_device_ids[i]);
+    for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+        for (int device_id : physical_end_device_ids) {
+            log_info(tt::LogTest, "Checking Status of {} Rx on physical device {}", routing_direction, device_id);
 
-            const auto& receiver_device = fixture->get_device(physical_end_device_ids[i]);
+            const auto& receiver_device = fixture->get_device(device_id);
             std::vector<uint32_t> recv_status;
 
             tt_metal::detail::ReadFromDeviceL1(
@@ -1623,10 +1619,10 @@ void RunTest2DMCastConnAPI(
     uint64_t sender_bytes =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
-    for (uint32_t i = 0; i < rx_physical_device_ids.size(); i++) {
-        log_info(tt::LogTest, "Checking Status of Rx on physical device {}", rx_physical_device_ids[i]);
+    for (unsigned int rx_physical_device_id : rx_physical_device_ids) {
+        log_info(tt::LogTest, "Checking Status of Rx on physical device {}", rx_physical_device_id);
 
-        const auto& receiver_device = fixture->get_device(rx_physical_device_ids[i]);
+        const auto& receiver_device = fixture->get_device(rx_physical_device_id);
         std::vector<uint32_t> recv_status;
 
         tt_metal::detail::ReadFromDeviceL1(
@@ -1818,7 +1814,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     log_info(tt::LogTest, "Sender Finished");
 
     // Wait for receivers to finish
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+    for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
             auto receiver_device = fixture->get_device(physical_end_device_ids[i]);
             fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
@@ -1844,9 +1840,9 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     uint64_t sender_bytes =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            const auto& receiver_device = fixture->get_device(physical_end_device_ids[i]);
+    for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+        for (int device_id : physical_end_device_ids) {
+            const auto& receiver_device = fixture->get_device(device_id);
 
             log_info(
                 tt::LogTest,
@@ -1854,7 +1850,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
                 routing_direction,
                 receiver_logical_core.x,
                 receiver_logical_core.y,
-                physical_end_device_ids[i]);
+                device_id);
 
             std::vector<uint32_t> recv_status;
 

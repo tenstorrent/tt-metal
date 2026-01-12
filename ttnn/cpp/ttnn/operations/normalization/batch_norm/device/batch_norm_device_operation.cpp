@@ -29,7 +29,7 @@ inline void check_tensor_BN(const Tensor& tensor, std::string_view name, std::ui
 }  // namespace
 
 void BatchNormOperation::validate_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
 
     // input (N, C, H, W)
@@ -56,7 +56,7 @@ void BatchNormOperation::validate_tensors(
 }
 
 BatchNormOperation::program_factory_t BatchNormOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return BatchNormFactory();
 }
 
@@ -189,6 +189,6 @@ ttnn::operations::normalization::BatchNormOperation::tensor_return_value_t batch
         input.dtype()};
     OperationType::tensor_args_t tensor_args{input, batch_mean, batch_var, std::move(weight), std::move(bias), std::move(output)};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
