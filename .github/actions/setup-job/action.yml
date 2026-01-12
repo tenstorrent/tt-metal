@@ -76,7 +76,7 @@ runs:
         ls -la
         WHEEL_FILENAME=$(ls -1 *.whl)
         echo "📦 Installing $WHEEL_FILENAME"
-        uv pip3 install "$WHEEL_FILENAME"
+        uv pip install "$WHEEL_FILENAME"
       shell: bash
 
     - name: Set up env vars for watcher
