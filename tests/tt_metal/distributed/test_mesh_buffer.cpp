@@ -8,7 +8,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <array>
 #include <cstddef>
-#include <initializer_list>
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -80,6 +81,83 @@ struct DeviceLocalShardedBufferTestConfig {
             this->tensor2d_shape_in_pages());
     }
 };
+
+// Helper function to print detailed mismatch information between two uint32_t vectors
+template <typename T>
+void print_vector_mismatch_details(const std::vector<T>& dst_aligned, const std::vector<T>& src) {
+    if (dst_aligned == src) {
+        return;  // No mismatch, nothing to print
+    }
+
+    size_t size = std::min(dst_aligned.size(), src.size());
+    std::vector<std::pair<size_t, size_t>> mismatch_ranges;  // pairs of (start_offset, count)
+
+    // Find all ranges of mismatches
+    size_t i = 0;
+    while (i < size) {
+        if (dst_aligned[i] != src[i]) {
+            size_t start = i;
+            size_t count = 0;
+            while (i < size && dst_aligned[i] != src[i]) {
+                count++;
+                i++;
+            }
+            mismatch_ranges.emplace_back(start, count);
+        } else {
+            i++;
+        }
+    }
+
+    // Print information for each mismatch range
+    std::cout << "\n=== DATA MISMATCH DETECTED ===\n";
+    std::cout << "Total elements: " << size << "\n";
+    std::cout << "Number of mismatch ranges: " << mismatch_ranges.size() << "\n\n";
+
+    for (const auto& [start_offset, mismatch_count] : mismatch_ranges) {
+        std::cout << "Mismatch Range: offset=" << start_offset << ", count=" << mismatch_count << "\n";
+
+        // Print header
+        std::cout << "Offset   ";
+        for (int j = 0; j < 8; j++) {
+            std::cout << " | Dst:" << j << "    Src:" << j << "   ";
+        }
+        std::cout << "|\n";
+        std::cout << std::string(190, '-') << "\n";
+
+        // Print up to 128 pairs (or the actual count if less)
+        size_t pairs_to_print = std::min(mismatch_count, size_t(128));
+
+        for (size_t offset = 0; offset < pairs_to_print; offset += 8) {
+            size_t pairs_in_line = std::min(size_t(8), pairs_to_print - offset);
+
+            // Print offset for this line
+            std::cout << std::setw(8) << std::left << (start_offset + offset) << " ";
+
+            // Print 8 pairs (or fewer if at the end)
+            for (size_t j = 0; j < pairs_in_line; j++) {
+                size_t idx = start_offset + offset + j;
+                std::cout << " | 0x" << std::hex << std::setfill('0') << std::setw(8) << dst_aligned[idx] << " 0x"
+                          << std::hex << std::setfill('0') << std::setw(8) << src[idx];
+                std::cout << std::dec << std::setfill(' ');
+            }
+            // Fill remaining columns if less than 8 pairs in this line
+            for (size_t j = pairs_in_line; j < 8; j++) {
+                std::cout << " |                      ";
+            }
+            std::cout << " |\n";
+        }
+
+        if (mismatch_count > 128) {
+            std::cout << "... (" << (mismatch_count - 128) << " more mismatched values not shown)\n";
+        }
+        std::cout << "\n";
+    }
+
+    if (dst_aligned.size() != src.size()) {
+        std::cout << "WARNING: Size mismatch - dst_aligned.size()=" << dst_aligned.size()
+                  << ", src.size()=" << src.size() << "\n";
+    }
+}
 
 TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
@@ -761,6 +839,66 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     std::vector<uint8_t> dst_aligned(dst_ptr_unaligned, dst_ptr_unaligned + bytes_per_device);
 
     EXPECT_EQ(dst_aligned, src);
+}
+
+TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
+    if (!tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    // Use a replicated mesh buffer so per-device buffers are interleaved (not sharded)
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    // Make the buffer multiple tiles to exercise multi-page transfers
+    const uint32_t tiles_per_device = 128;
+    const uint32_t bytes_per_device = tiles_per_device * single_tile_size;
+
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    constexpr int device_read_align{64};
+    ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
+        << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
+        << std::endl;
+    // Prepare write source buffer and pin the entire destination range for the target shard
+    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+        bytes_per_device / sizeof(uint32_t), 0);
+    std::iota(src->begin(), src->end(), 0);
+    // Create HostBuffer on top of src
+    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+    // Prepare read destination buffer. Use aigned vector for ease of verification with src above.
+    auto dst = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>(
+        bytes_per_device / sizeof(uint32_t), 0);
+
+    distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
+    for (auto coord : coord_range) {
+        log_info(tt::LogTest, "Testing writing from pinned memory to shard at coord {}", coord);
+        auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+        auto pinned_unique = tt_metal::experimental::PinnedMemory::Create(
+            *mesh_device_,
+            coordinate_range_set,
+            host_buffer,
+            /*map_to_noc=*/true);
+        std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+
+        auto write_transfer = distributed::ShardDataTransfer{coord}
+                                 .host_data(static_cast<void*>(src->data()))
+                                 .region(BufferRegion(0, bytes_per_device));
+        tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_shared);
+        mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+
+        // Read back via hugepage
+        std::fill(dst.begin(), dst.end(), 0);
+        auto read_transfer = distributed::ShardDataTransfer{coord}
+                                 .host_data(static_cast<void*>(dst.data()))
+                                 .region(BufferRegion(0, bytes_per_device));
+        mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+        EXPECT_EQ(*src, dst);
+    }
 }
 
 }  // namespace
