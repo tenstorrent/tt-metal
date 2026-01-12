@@ -1,41 +1,46 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t start_id = get_arg_val<uint32_t>(1);
+    uint32_t single_block_size_row_arg = get_arg_val<uint32_t>(2);
+    uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr uint32_t num_tiles_per_2d = get_compile_time_arg_val(1);
+    constexpr uint32_t third_dim = get_compile_time_arg_val(2);
+    constexpr uint32_t total_tiles_per_row = get_compile_time_arg_val(3);
+    constexpr auto dst_args = TensorAccessorArgs<4>();
 
-    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
+    // single-tile ublocks
+    constexpr uint32_t onetile = 1;
+    const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
-#ifdef OUT_SHARDED
-    cb_wait_front(cb_id_out, num_pages);
-#else
-
-    // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
-    constexpr uint32_t onepage = 1;
-
-    const auto s = TensorAccessor(dst_args, dst_addr, page_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
 #ifdef BACKWARDS
-    uint32_t end_id = start_id - num_pages;
-    for (uint32_t i = start_id; i != end_id; --i) {
+    for (uint32_t dim = 0; dim > -third_dim; dim--) {
+        for (uint32_t c = 0; c > -single_block_size_col_arg; c--) {
+            for (uint32_t r = 0; r > -single_block_size_row_arg; r--) {
+                uint32_t tile = -start_id + dim * num_tiles_per_2d + c * total_tiles_per_row + r;
 #else
-    uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {
+    for (uint32_t dim = 0; dim < third_dim; dim++) {
+        for (uint32_t c = 0; c < single_block_size_col_arg; c++) {
+            for (uint32_t r = 0; r < single_block_size_row_arg; r++) {
+                uint32_t tile = start_id + dim * num_tiles_per_2d + c * total_tiles_per_row + r;
 #endif
-        cb_wait_front(cb_id_out, onepage);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_page(i, s, l1_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out, onepage);
+                cb_wait_front(cb_id_out, onetile);
+                uint32_t l1_read_addr = get_read_ptr(cb_id_out);
+
+                noc_async_write_tile(tile, s, l1_read_addr);
+
+                noc_async_write_barrier();
+                cb_pop_front(cb_id_out, onetile);
+            }
+        }
     }
-#endif
 }
