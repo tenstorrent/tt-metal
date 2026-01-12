@@ -1,52 +1,121 @@
-# MPI configuration for TT-Metalium
+# =============================================================================
+# MPI Configuration for TT-Metalium
+# =============================================================================
 #
-# This file centralizes the MPI configuration to avoid duplication
-# between tt_metal/CMakeLists.txt and tt_metal/distributed/CMakeLists.txt.
+# Overview
+# --------
+# This module configures MPI support for distributed computing. It handles:
+# - Detection of custom ULFM MPI (Ubuntu) or system OpenMPI (Fedora)
+# - Creation of the OpenMPI::MPI target for linking
+# - Extraction of MPI library paths for RPATH configuration
+# - Sanitization of MPI link flags to prevent RPATH pollution
 #
-# ULFM (User-Level Failure Mitigation) is an extension to OpenMPI that
-# provides fault tolerance features. OpenMPI 5.0+ includes ULFM by default,
-# while earlier versions require a custom build.
+# Why Call From tt_metal/CMakeLists.txt Instead of distributed/CMakeLists.txt?
+# ----------------------------------------------------------------------------
+# tt_configure_mpi() sets variables via PARENT_SCOPE, which only propagates
+# one level up. If called from distributed/CMakeLists.txt:
 #
-# For Ubuntu builds: Custom ULFM build at /opt/openmpi-v5.0.7-ulfm
-# For Fedora builds: System OpenMPI 5+ (includes ULFM natively)
+#   tt_metal/CMakeLists.txt
+#   └── add_subdirectory(distributed)
+#       └── tt_configure_mpi()  # Sets vars in distributed/ scope
+#           ↑ PARENT_SCOPE goes here, NOT to tt_metal/
+#
+# But tt_metal/CMakeLists.txt needs TT_METAL_MPI_LIB_DIR for RPATH configuration.
+# CMake doesn't automatically propagate variables from child to parent scope.
+#
+# Solution: Call tt_configure_mpi() from tt_metal/CMakeLists.txt BEFORE
+# add_subdirectory(distributed). Variables are set in tt_metal/ scope and
+# automatically inherited by distributed/ (CMake propagates DOWN, not UP).
+#
+#   tt_metal/CMakeLists.txt
+#   ├── tt_configure_mpi()      # Sets vars in tt_metal/ scope
+#   └── add_subdirectory(distributed)  # Inherits vars from parent
+#
+# MPI Implementations
+# -------------------
+# - Ubuntu: Custom ULFM build at /opt/openmpi-v5.0.7-ulfm
+#   - ULFM (User-Level Failure Mitigation) provides fault tolerance
+#   - TT_METAL_USING_ULFM=TRUE, TT_METAL_MPI_LIB_DIR=/opt/.../lib
+#
+# - Fedora: System OpenMPI 5+ (includes ULFM natively)
+#   - MPI found via find_package(MPI)
+#   - TT_METAL_USING_ULFM=FALSE, TT_METAL_MPI_LIB_DIR=/usr/lib64/openmpi/lib
+#
+# Output Variables (set in PARENT_SCOPE)
+# --------------------------------------
+# - USE_MPI: TRUE if MPI is available and enabled
+# - TT_METAL_USING_ULFM: TRUE if using custom ULFM build (Ubuntu)
+# - TT_METAL_MPI_LIB_DIR: Directory containing libmpi.so (for RPATH)
+# - OpenMPI::MPI: Target for linking against MPI
+#
+# Why TT_METAL_MPI_LIB_DIR?
+# -------------------------
+# tt_metal uses BUILD_WITH_INSTALL_RPATH=TRUE (see cmake/packaging.cmake for why).
+# This means INSTALL_RPATH is embedded at build time. For tests to find libmpi.so,
+# the MPI library directory must be in INSTALL_RPATH. TT_METAL_MPI_LIB_DIR provides
+# this path, which is added to tt_metal's INSTALL_RPATH after $ORIGIN.
+#
+# Debugging Tips
+# --------------
+# - Check CMake output for "Using ULFM MPI from" or "MPI library directory:"
+# - Verify RPATH with: readelf -d build/lib/libtt_metal.so | grep -i path
+# - Test MPI linking: ldd build/lib/libtt_metal.so | grep mpi
+# - If libmpi.so.40 not found, check TT_METAL_MPI_LIB_DIR is in RPATH
+#
+# =============================================================================
 
 # Default ULFM prefix - can be overridden via -DULFM_PREFIX=/path/to/ulfm
-# This is where the custom ULFM MPI build is installed (typically on Ubuntu)
 if(NOT DEFINED ULFM_PREFIX)
     set(ULFM_PREFIX "/opt/openmpi-v5.0.7-ulfm" CACHE PATH "Path to ULFM MPI installation")
 endif()
-
-# Function to configure MPI library support
-# Checks for custom ULFM or system MPI, sets up the OpenMPI::MPI target,
-# and defines USE_MPI and TT_METAL_USING_ULFM variables.
-#
+# -----------------------------------------------------------------------------
+# tt_configure_mpi - Configure MPI support and create OpenMPI::MPI target
+# -----------------------------------------------------------------------------
 # Arguments:
-#   enable_distributed: Whether distributed compute is enabled (ON/OFF)
-#   use_mpi_out_var: Variable to store the result (TRUE/FALSE) - set in PARENT_SCOPE
+#   enable_distributed: Whether distributed compute is enabled (ENABLE_DISTRIBUTED)
+#   use_mpi_out_var: Output variable name for MPI availability (e.g., USE_MPI)
+#
+# Sets in PARENT_SCOPE:
+#   ${use_mpi_out_var}: TRUE if MPI is configured, FALSE otherwise
+#   TT_METAL_USING_ULFM: TRUE if using custom ULFM build
+#   TT_METAL_MPI_LIB_DIR: Directory containing libmpi.so (for RPATH)
+#
+# Creates:
+#   OpenMPI::MPI: Target for linking against MPI
+#
 function(tt_configure_mpi enable_distributed use_mpi_out_var)
+    # Initialize output variables (will be overwritten if MPI is found)
     set(${use_mpi_out_var} FALSE PARENT_SCOPE)
     set(TT_METAL_USING_ULFM FALSE PARENT_SCOPE)
     set(TT_METAL_MPI_LIB_DIR "" PARENT_SCOPE)
 
-    # Early exit if distributed compute is disabled
     if(NOT ${enable_distributed})
+        message(STATUS "Distributed compute disabled, skipping MPI configuration")
         return()
     endif()
 
-    # If MPI was already configured in this CMake run, don't recreate targets.
-    # (This can happen if multiple subdirs include mpi-config.cmake.)
+    # Guard against multiple calls (e.g., if included from multiple places)
+    # The OpenMPI::MPI target is GLOBAL, so it persists across the entire build
     if(TARGET OpenMPI::MPI)
+        message(DEBUG "OpenMPI::MPI target already exists, skipping reconfiguration")
         set(${use_mpi_out_var} TRUE PARENT_SCOPE)
         return()
     endif()
 
-    # Try Custom ULFM MPI first (Ubuntu)
+    # =========================================================================
+    # Strategy 1: Custom ULFM MPI (Ubuntu CI builds)
+    # =========================================================================
+    # Ubuntu doesn't have OpenMPI 5+ in repos, so CI uses a custom ULFM build.
+    # We check for this FIRST because it takes precedence over system MPI.
+    #
     if(EXISTS "${ULFM_PREFIX}/lib/libmpi.so.40")
         message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
         set(TT_METAL_USING_ULFM TRUE PARENT_SCOPE)
         set(TT_METAL_MPI_LIB_DIR "${ULFM_PREFIX}/lib" PARENT_SCOPE)
         set(${use_mpi_out_var} TRUE PARENT_SCOPE)
 
+        # Create IMPORTED target pointing directly to the ULFM library
+        # GLOBAL makes it visible across the entire build (not just this directory)
         add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
         set_target_properties(
             OpenMPI::MPI
@@ -61,18 +130,35 @@ function(tt_configure_mpi enable_distributed use_mpi_out_var)
         return()
     endif()
 
-    # Try System MPI (Fedora/Others)
+    # =========================================================================
+    # Strategy 2: System MPI (Fedora, or Ubuntu with system OpenMPI)
+    # =========================================================================
+    # Use CMake's FindMPI to locate system-installed MPI.
+    # On Fedora, this finds /usr/lib64/openmpi/lib/libmpi.so
+    #
     find_package(MPI QUIET COMPONENTS C)
     if(NOT MPI_FOUND)
-        message(FATAL_ERROR "ENABLE_DISTRIBUTED is ON but no MPI implementation found.")
+        message(
+            FATAL_ERROR
+            "ENABLE_DISTRIBUTED is ON but no MPI implementation found.\n"
+            "  - Ubuntu: Install custom ULFM to ${ULFM_PREFIX}, or\n"
+            "  - Fedora: Install openmpi-devel package"
+        )
     endif()
 
     set(${use_mpi_out_var} TRUE PARENT_SCOPE)
 
     # Extract MPI library directory for RPATH
-    # This is needed when BUILD_WITH_INSTALL_RPATH=TRUE so tests can find libmpi.so
+    # Why needed: tt_metal uses BUILD_WITH_INSTALL_RPATH=TRUE, so INSTALL_RPATH
+    # is embedded at build time. Tests need the MPI library directory in RPATH
+    # to find libmpi.so at runtime without setting LD_LIBRARY_PATH.
+    #
+    # MPI_C_LIBRARIES typically contains: /usr/lib64/openmpi/lib/libmpi.so
+    # We extract the directory: /usr/lib64/openmpi/lib
+    #
     if(MPI_C_LIBRARIES)
         list(GET MPI_C_LIBRARIES 0 _first_mpi_lib)
+        # Skip if it's a flag (starts with -) rather than a path
         if(_first_mpi_lib AND NOT _first_mpi_lib MATCHES "^-")
             get_filename_component(_mpi_lib_dir "${_first_mpi_lib}" DIRECTORY)
             set(TT_METAL_MPI_LIB_DIR "${_mpi_lib_dir}" PARENT_SCOPE)
@@ -92,19 +178,27 @@ function(tt_configure_mpi enable_distributed use_mpi_out_var)
         message(WARNING "Non-OpenMPI implementation found. ULFM fault tolerance requires OpenMPI 5+")
     endif()
 
-    # Configure a sanitized MPI interface target.
+    # =========================================================================
+    # Create Sanitized MPI Interface Target
+    # =========================================================================
+    # Why sanitize? CMake's FindMPI on some distros includes -Wl,-rpath flags
+    # that pollute our RPATH. For example, Fedora's FindMPI adds:
     #
-    # Root cause of the Fedora RPM failure:
-    # - On some distros, CMake's FindMPI provides MPI usage requirements that include linker
-    #   rpath flags (e.g. -Wl,-rpath,/usr/lib64/openmpi/lib).
-    # - When those propagate (via our OBJECT library `distributed` into `tt_metal`), the
-    #   final link line can embed RUNPATH as:
-    #       /usr/lib64/openmpi/lib:$ORIGIN
-    #   which violates Fedora brp-check-rpaths (it requires $ORIGIN to be first).
+    #   -Wl,-rpath,/usr/lib64/openmpi/lib
     #
-    # For system MPI we do NOT need any RPATH entries at all; the loader finds MPI via
-    # standard system paths. So we build our own interface target and explicitly strip
-    # any -Wl,-rpath* flags from the MPI link requirements.
+    # When this propagates through our build (distributed -> tt_metal), the
+    # final binary gets RUNPATH like:
+    #
+    #   /usr/lib64/openmpi/lib:$ORIGIN
+    #
+    # This FAILS Fedora's brp-check-rpaths which requires $ORIGIN to be FIRST.
+    # Error: "the special '$ORIGIN' RPATHs are appearing after other RPATHs"
+    #
+    # Solution: Create our own interface target that strips -Wl,-rpath* flags.
+    # The MPI library is found via:
+    # - Standard library search path (system MPI in /usr/lib64), OR
+    # - TT_METAL_MPI_LIB_DIR in our controlled INSTALL_RPATH
+    #
     add_library(tt_openmpi_mpi INTERFACE)
     add_library(OpenMPI::MPI ALIAS tt_openmpi_mpi)
 

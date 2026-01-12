@@ -2,95 +2,72 @@
 # Automatically detects distro type and includes appropriate DEB or RPM packaging
 #
 # =============================================================================
-# RPATH / RUNPATH and Library Layout
+# RPATH / RUNPATH Handling
 # =============================================================================
 #
+# Overview
+# --------
 # This project uses $ORIGIN-based RPATH to make binaries relocatable. $ORIGIN is
-# a special token in ELF binaries that the dynamic linker (ld.so) expands at
-# runtime to the directory containing the executable or library itself.
+# a special ELF token that the dynamic linker expands at runtime to the directory
+# containing the executable or library.
 #
-# For example, if /work/build/tt-train/tests/ttml_tests has RPATH=$ORIGIN/../../lib,
-# then at runtime $ORIGIN becomes /work/build/tt-train/tests, and the linker
-# searches /work/build/tt-train/tests/../../lib -> /work/build/lib for libraries.
+# Key Implementation Details
+# --------------------------
 #
-# There are THREE different directory layouts that RPATH must support:
+# 1. Core Libraries (tt_metal, tt_stl)
+#    - Use BUILD_WITH_INSTALL_RPATH=TRUE: RPATH is correct at build time
+#    - Use install(FILES $<TARGET_FILE:...>) instead of install(TARGETS ... LIBRARY)
+#      to work around a CMake bug where install(TARGETS) can't find libraries when
+#      LIBRARY_OUTPUT_DIRECTORY is set (manifests on Ubuntu but not Fedora)
+#    - LIBRARY_OUTPUT_DIRECTORY set to ${CMAKE_BINARY_DIR}/lib for consistent
+#      library location (prevents ODR violations in multiprocess tests)
+#    - INSTALL_RPATH = "$ORIGIN" (plus MPI path for tt_metal)
 #
-# 1. CI Tar Artifact Layout
-# -------------------------
-# When the CI tar artifact (ttm_any.tar.zst) is extracted to /work/:
+# 2. MPI Library Path
+#    - tt_metal links against MPI (either custom ULFM or system OpenMPI)
+#    - MPI library directory is detected in cmake/mpi-config.cmake and exported
+#      as TT_METAL_MPI_LIB_DIR
+#    - This path is added to tt_metal's INSTALL_RPATH after $ORIGIN
+#    - Ensures tests can find libmpi.so at runtime without LD_LIBRARY_PATH
 #
-#   /work/
-#   ├── ttnn/
-#   │   └── ttnn/
-#   │       ├── _ttnn.so          <- Python bindings (nanobind)
-#   │       └── _ttnncpp.so       <- C++ library with Python bindings
-#   │
-#   ├── build/
-#   │   ├── lib/
-#   │   │   ├── libtt_metal.so    <- Core TT-Metal library
-#   │   │   ├── libtt_stl.so      <- STL library
-#   │   │   ├── libtracy.so       <- Tracy profiler (optional)
-#   │   │   └── ...
-#   │   │
-#   │   ├── tt-train/
-#   │   │   └── tests/
-#   │   │       └── ttml_tests    <- tt-train test executable
-#   │   │
-#   │   └── test/
-#   │       └── ...               <- Other test executables
-#   │
-#   └── runtime/
-#       └── ...                   <- Runtime files (kernels, firmware, etc.)
+# 3. Executables (tests, examples, tt-train)
+#    - Use tt_set_runtime_rpath() from cmake/rpath.cmake
+#    - BUILD_RPATH contains absolute paths for development
+#    - INSTALL_RPATH contains $ORIGIN-relative paths for portability
 #
-#   RPATH needed: $ORIGIN/../../build/lib (from ttnn/ttnn/ -> build/lib/)
+# Ubuntu vs Fedora Differences
+# ----------------------------
+# - Ubuntu: Uses RPATH (searched before LD_LIBRARY_PATH)
+# - Fedora: Uses RUNPATH (searched after LD_LIBRARY_PATH, stricter validation)
+# - Fedora's brp-check-rpaths requires $ORIGIN to be FIRST in RPATH
+# - Both use the same CMake configuration; differences handled transparently
 #
-# 2. Python Wheel Layout
-# ----------------------
-# When building a pip wheel, libraries are bundled INSIDE the ttnn package:
+# Directory Layouts Supported
+# ---------------------------
 #
-#   {wheel}/
-#   └── ttnn/
-#       ├── _ttnn.so              <- Python bindings (at package root)
-#       ├── build/
-#       │   └── lib/
-#       │       ├── libtt_metal.so
-#       │       ├── libtt_stl.so
-#       │       └── ...
-#       └── runtime/
-#           └── ...
+# 1. CI Tar Artifact Layout (ttm_any.tar.zst extracted to /work/):
 #
-#   RPATH needed: $ORIGIN/build/lib (from ttnn/ -> ttnn/build/lib/)
+#    /work/
+#    ├── ttnn/ttnn/
+#    │   ├── _ttnn.so, _ttnncpp.so     <- Python bindings
+#    ├── build/lib/
+#    │   ├── libtt_metal.so, libtt_stl.so, libtracy.so
+#    ├── build/tt-train/tests/
+#    │   └── ttml_tests
+#    └── runtime/
 #
-# 3. FHS Package Layout (DEB/RPM)
-# -------------------------------
-# For proper system packages, all libraries are installed to standard locations:
+# 2. Python Wheel Layout:
 #
-#   /usr/lib64/
-#   ├── _ttnn.so
-#   ├── libtt_metal.so
-#   ├── libtt_stl.so
-#   └── ...
+#    {wheel}/ttnn/
+#    ├── _ttnn.so
+#    ├── build/lib/
+#    │   └── libtt_metal.so, libtt_stl.so, ...
+#    └── runtime/
 #
-#   RPATH needed: $ORIGIN (all libs co-located in same directory)
+# 3. FHS Package Layout (DEB/RPM):
 #
-# Combined RPATH Solution
-# -----------------------
-# To support all three layouts, INSTALL_RPATH includes multiple paths:
-#
-#   INSTALL_RPATH = "$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
-#
-#   - $ORIGIN/build/lib       -> wheel layout
-#   - $ORIGIN/../../build/lib -> tar artifact layout
-#   - $ORIGIN                 -> FHS packages
-#
-# Library Dependency Chain
-# ------------------------
-#   ttml_tests -> _ttnncpp.so -> libtt_metal.so -> libtt_stl.so
-#
-# tt-train executables (in build/tt-train/tests/):
-#   CMAKE_INSTALL_RPATH includes:
-#   - $ORIGIN/../../lib           -> build/lib/ (for libtt_metal.so)
-#   - $ORIGIN/../../../ttnn/ttnn  -> ttnn/ttnn/ (for _ttnncpp.so)
+#    /usr/lib64/
+#    └── _ttnn.so, libtt_metal.so, libtt_stl.so, ...
 #
 # Why $ORIGIN instead of LD_LIBRARY_PATH?
 # ---------------------------------------
@@ -108,7 +85,6 @@ set(CPACK_PACKAGE_NAME tt)
 # Suppress the summary so that we can have per-component summaries
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "")
 
-set(CPACK_DEBIAN_COMPRESSION_TYPE zstd)
 set(CPACK_THREADS 0) # Enable multithreading for compression
 
 # Use project config file to defer build-type-specific configuration to packaging time
@@ -352,61 +328,53 @@ cpack_add_component(ttml GROUP ml)
 include(CPack)
 
 # =============================================================================
-# Historical Note: Why Build Paths Were in INSTALL_RPATH
+# Technical Notes: CMake Workarounds and Design Decisions
 # =============================================================================
 #
-# Previously, INSTALL_RPATH contained absolute build paths like:
-#   INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN"
+# CMake install(TARGETS) Bug with LIBRARY_OUTPUT_DIRECTORY
+# --------------------------------------------------------
+# When LIBRARY_OUTPUT_DIRECTORY is set, CMake's install(TARGETS ... LIBRARY)
+# command fails to locate the library file on some systems (notably Ubuntu).
+# The error manifests as "file INSTALL cannot find <path>/libfoo.so".
 #
-# This was a workaround for handling THREE different installation scenarios
-# with a single INSTALL_RPATH setting:
+# Root cause: CMake's internal path resolution for install(TARGETS) doesn't
+# properly account for LIBRARY_OUTPUT_DIRECTORY in all cases. On Fedora, a
+# lib64->lib symlink in the build directory happens to make it work.
 #
-# 1. Development/In-Tree (tt_pybinds component)
-#    ----------------------------------------
-#    The tt_pybinds component installs _ttnn.so into the SOURCE tree:
+# Workaround: Use install(FILES $<TARGET_FILE:target> DESTINATION ...) instead
+# of install(TARGETS ... LIBRARY). The generator expression correctly resolves
+# to the actual library location. However, install(FILES) doesn't do RPATH
+# fixup, so we use BUILD_WITH_INSTALL_RPATH=TRUE to embed the correct RPATH
+# at build time.
 #
-#      install(TARGETS ttnn DESTINATION ${PROJECT_SOURCE_DIR}/ttnn/ttnn
-#              COMPONENT tt_pybinds)
+# Why LIBRARY_OUTPUT_DIRECTORY is Needed
+# --------------------------------------
+# Without LIBRARY_OUTPUT_DIRECTORY, libraries go to their default locations
+# (e.g., build/tt_metal/libtt_metal.so vs build/tt_stl/libtt_stl.so). This
+# causes ODR (One Definition Rule) violations in multiprocess tests where
+# different processes might load different copies of the same library.
+# Setting LIBRARY_OUTPUT_DIRECTORY to ${CMAKE_BINARY_DIR}/lib ensures all
+# libraries are in one location, matching CI tar artifact expectations.
 #
-#    This allows developers to `import ttnn` without a full install. But at
-#    runtime, it needs to find libtt_metal.so in the BUILD directory. Hence
-#    the absolute build path was added to RPATH.
+# BUILD_WITH_INSTALL_RPATH=TRUE vs FALSE
+# --------------------------------------
+# - FALSE (default): BUILD_RPATH used during build, INSTALL_RPATH after install
+#   - Pro: CMAKE_BUILD_RPATH_USE_LINK_PATH automatically adds linked library
+#     directories (e.g., MPI) to BUILD_RPATH
+#   - Con: Requires install(TARGETS) or install(CODE) to fix RPATH after copy
 #
-# 2. CI Tar Artifacts
-#    -----------------
-#    The tar bundles files from different locations:
-#      tar ... ttnn/ttnn/*.so build/lib build/test ...
+# - TRUE: INSTALL_RPATH used at both build time and after install
+#   - Pro: Works with install(FILES) - no post-install RPATH fixup needed
+#   - Con: Must manually add all needed paths (e.g., MPI) to INSTALL_RPATH
 #
-#    Here _ttnn.so comes from the source tree (after tt_pybinds install) and
-#    libtt_metal.so comes from the build tree, with a specific relative layout.
+# We use TRUE for tt_metal and tt_stl because:
+# 1. install(FILES) workaround requires RPATH to be correct at build time
+# 2. MPI path is explicitly added to INSTALL_RPATH via TT_METAL_MPI_LIB_DIR
+# 3. $ORIGIN-based paths work correctly in all deployment scenarios
 #
-# 3. FHS Packages (DEB/RPM)
-#    ----------------------
-#    All libraries are installed to /usr/lib64/ - co-located in the same dir.
-#
-# The Problem
-# -----------
-# The original RPATH tried to handle ALL scenarios:
-#
-#   ${PROJECT_BINARY_DIR}/lib  -> Absolute build path (WRONG: doesn't exist on target)
-#   $ORIGIN/build/lib          -> Wrong relative path (resolves to ttnn/ttnn/build/lib)
-#   $ORIGIN                    -> Same directory (correct for FHS)
-#
-# The Fix
-# -------
-# Use only $ORIGIN-based relative paths:
-#
-#   $ORIGIN/../../build/lib    -> Correct for tar artifact layout
-#   $ORIGIN                    -> Correct for FHS packages
-#
-# Architectural Note
-# ------------------
-# The root cause is that tt_pybinds installs into the SOURCE tree, conflating
-# development and installation. Ideally:
-#   - Development: Use BUILD_RPATH (correctly points to build directories)
-#   - Installation: Use INSTALL_RPATH (only portable paths)
-#
-# A cleaner long-term solution would be to use symlinks or PYTHONPATH for
-# development instead of "installing" to the source tree. This would allow
-# INSTALL_RPATH to only contain paths appropriate for actual package installs.
+# Historical Note: Build Paths in RPATH
+# -------------------------------------
+# Previously, INSTALL_RPATH contained absolute build paths to support the
+# tt_pybinds component which installs into the SOURCE tree for development.
+# This was replaced with $ORIGIN-relative paths that work across all layouts.
 #

@@ -34,6 +34,8 @@ set(CPACK_RPM_METALIUM-DEV_PACKAGE_REQUIRES "json-devel >= 3.10")
 set(CPACK_RPM_NN-DEV_PACKAGE_REQUIRES "xtensor-devel >= 0.23.10")
 set(CPACK_RPM_TTML_PACKAGE_REQUIRES "python3 >= 3.8")
 
+set(CPACK_RPM_COMPRESSION_TYPE zstd)
+
 # RPM-specific settings
 set(CPACK_RPM_PACKAGE_LICENSE "Apache-2.0")
 set(CPACK_RPM_PACKAGE_VENDOR "Tenstorrent")

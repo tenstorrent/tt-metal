@@ -1,48 +1,64 @@
-# CMake helper for setting relocatable RPATH on test executables and libraries
+# =============================================================================
+# RPATH Configuration Helpers
+# =============================================================================
 #
-# This is required to support developer builds that are not installed.
+# Problem This Solves
+# -------------------
+# Executables need to find shared libraries at runtime. The dynamic linker uses
+# RPATH/RUNPATH embedded in the binary to locate dependencies. This project must
+# support:
 #
-# Fedora uses RUNPATH by default, which searches LD_LIBRARY_PATH first.
-# This means that if the library is not in LD_LIBRARY_PATH, it will not be found.
-# This is a problem because the library is not in LD_LIBRARY_PATH when it is built,
-# but it is in LD_LIBRARY_PATH when it is installed.
+# 1. Developer builds (run tests from build directory without installing)
+# 2. CI tar artifacts (specific directory layout for test infrastructure)
+# 3. FHS packages (DEB/RPM with libraries in /usr/lib64)
+#
+# Additional complexity:
+# - Ubuntu uses RPATH (searched BEFORE LD_LIBRARY_PATH)
+# - Fedora uses RUNPATH (searched AFTER LD_LIBRARY_PATH)
+# - Fedora's brp-check-rpaths requires $ORIGIN to be FIRST in RPATH
+# - Same CMake configuration must work for both distros
+#
+# Solution Architecture
+# ---------------------
+# This module provides helper functions for EXECUTABLES. Core libraries (tt_metal,
+# tt_stl) use a different approach - see their CMakeLists.txt files and the
+# documentation in cmake/packaging.cmake for details.
+#
+# For executables:
+# - BUILD_RPATH: Absolute paths + $ORIGIN-relative paths for build-time execution
+# - INSTALL_RPATH: $ORIGIN-relative paths for installed/packaged binaries
+# - BUILD_WITH_INSTALL_RPATH=FALSE: Use BUILD_RPATH during development
 #
 # Ensure GNUInstallDirs is available for CMAKE_INSTALL_LIBDIR
 include(GNUInstallDirs)
 
 # =============================================================================
-# RPATH Application Patterns - When to Use Which Function
+# Function Reference
 # =============================================================================
 #
-# This module provides three functions for different use cases:
+# tt_set_runtime_rpath(target [TTNN])
+#   For: Test executables and tools
+#   Use when: Target is an executable that needs to find libraries at runtime
+#   Examples: unit_tests_*, test_*, lightmetal_runner, ttml_tests
+#   Requires: RUNTIME_OUTPUT_DIRECTORY must be set before calling
+#   Options: TTNN - Add TTNN library paths to RPATH
 #
-# 1. tt_set_runtime_rpath() - For test executables and tools
-#    Use when: Target is an executable that needs to find libraries at runtime
-#    - Test executables (unit_tests_*, test_*)
-#    - Tools (lightmetal_runner, mem_bench, watcher_dump)
-#    - Requires: RUNTIME_OUTPUT_DIRECTORY must be set before calling
-#    - Sets: BUILD_RPATH (absolute paths) and INSTALL_RPATH (relative $ORIGIN paths)
+# tt_set_library_rpath(target)
+#   For: Internal shared libraries (not installed via CPack)
+#   Use when: Library only needs build-time dependency resolution
+#   Sets: BUILD_RPATH only, BUILD_WITH_INSTALL_RPATH=FALSE
+#   Note: Core libraries (tt_metal, tt_stl) use custom RPATH handling instead
 #
-# 2. tt_set_library_rpath() - For simple shared libraries (build-time only)
-#    Use when: Target is a shared library that only needs build-time linking
-#    - Libraries that don't get installed (internal libraries)
-#    - Sets: BUILD_RPATH only (for build-time dependency resolution)
+# tt_set_installable_library_rpath(target)
+#   For: Libraries that support multiple installation layouts
+#   Use when: Library needs wheel, tar artifact, and FHS package RPATH support
+#   Sets: BUILD_WITH_INSTALL_RPATH=TRUE with multi-layout INSTALL_RPATH
+#   Note: Not used by tt_metal/tt_stl due to CMake install() bug workaround
 #
-# 3. tt_set_installable_library_rpath() - For libraries that get installed
-#    Use when: Target is a shared library that will be installed (via CPack or install())
-#    - Main libraries (tt_metal, ttnncpp, ttnn)
-#    - Sets: Both BUILD_RPATH and INSTALL_RPATH (supports multiple installation layouts)
-#
-# Alternative: Global CMAKE_BUILD_RPATH / CMAKE_INSTALL_RPATH
-#    Use when: All targets in a subdirectory need the same RPATH
-#    - Can be overridden by per-target functions like tt_set_runtime_rpath()
-#    - Consider using a wrapper function (like tt-train's tt_train_set_executable_rpath())
-#      to consolidate RPATH logic while still using per-target properties
-#
-# Why different RPATH approaches?
-#   - BUILD_RPATH: Absolute paths for build-time execution and linking (preferred for simple cases)
-#   - INSTALL_RPATH: Relative $ORIGIN paths for tar artifacts and installed binaries
-#   - BUILD_WITH_INSTALL_RPATH=TRUE: Use INSTALL_RPATH during build (for complex multi-layout cases)
+# Wrapper Functions
+# -----------------
+# Subdirectories can create wrapper functions for consistent RPATH handling:
+#   - tt-train/cmake/rpath.cmake: tt_train_set_executable_rpath()
 #
 # =============================================================================
 #
@@ -53,18 +69,28 @@ include(GNUInstallDirs)
 #   )
 #   tt_set_runtime_rpath(my_test)  # Automatically calculates paths
 #
-# Example for simple library:
+# Example for library (internal, not installed):
 #   add_library(my_lib SHARED lib.cpp)
 #   tt_set_library_rpath(my_lib)
 #
-# Example for installable library:
-#   add_library(my_installable_lib SHARED lib.cpp)
-#   tt_set_installable_library_rpath(my_installable_lib)  # Sets BUILD_RPATH for build-time linking
+# -----------------------------------------------------------------------------
+# tt_set_runtime_rpath - Configure RPATH for test executables and tools
+# -----------------------------------------------------------------------------
+# Sets both BUILD_RPATH (for development) and INSTALL_RPATH (for packages).
+# Uses BUILD_WITH_INSTALL_RPATH=FALSE so executables use BUILD_RPATH during
+# development and INSTALL_RPATH only after cmake --install.
+#
+# BUILD_RPATH includes:
+#   - $ORIGIN-relative paths to build/lib (works from any working directory)
+#   - Absolute paths to build directories (fast path for common cases)
+#   - Target file directories for tt_metal and optionally TTNN
+#
+# INSTALL_RPATH includes:
+#   - $ORIGIN-relative paths only (portable for installed packages)
 #
 function(tt_set_runtime_rpath TARGET)
     cmake_parse_arguments(ARG "TTNN" "" "" ${ARGN})
 
-    # Get the target's output directory
     get_target_property(OUTPUT_DIR ${TARGET} RUNTIME_OUTPUT_DIRECTORY)
     if(NOT OUTPUT_DIR)
         message(
@@ -74,23 +100,10 @@ function(tt_set_runtime_rpath TARGET)
         )
     endif()
 
-    # === BUILD_RPATH: Absolute paths for build-time AND tar artifact execution ===
-    # Use CMAKE_BINARY_DIR (top-level build dir) not PROJECT_BINARY_DIR
-    # because subprojects with their own project() would have different PROJECT_BINARY_DIR
-    #
-    # We include BOTH build-tree and source-tree paths because:
-    # - During build: _ttnncpp.so is at build/ttnn/
-    # - In tar artifact: _ttnncpp.so is at ttnn/ttnn/ (copied from source tree)
-    # The linker searches all RPATH entries and uses whichever exists.
-    #
-    # Note: The tar artifact is created WITHOUT cmake --install, so BUILD_RPATH
-    # (not INSTALL_RPATH) is what's embedded in the binaries.
-    # Build-time runpath for executables.
-    #
-    # Important: the dynamic loader interprets non-absolute RUNPATH entries relative to the
-    # *current working directory*, not the binary's location. To make running from arbitrary
-    # working directories reliable (ctest, python harnesses, etc), include $ORIGIN-relative
-    # paths in BUILD_RPATH in addition to absolute paths.
+    # BUILD_RPATH: Multiple path types for maximum compatibility
+    # - $ORIGIN-relative: Works regardless of current working directory
+    # - Absolute paths: Fast path for common development scenarios
+    # - Target directories: Follows actual library locations
     set(BUILD_RPATH_ENTRIES "")
 
     # $ORIGIN-relative paths to build/lib and build/${CMAKE_INSTALL_LIBDIR}
@@ -166,26 +179,20 @@ function(tt_set_runtime_rpath TARGET)
     message(DEBUG "tt_set_runtime_rpath(${TARGET}): INSTALL_RPATH=${INSTALL_RPATH_STRING}")
 endfunction()
 
-# CMake helper for setting BUILD_RPATH on shared libraries
+# -----------------------------------------------------------------------------
+# tt_set_library_rpath - Configure BUILD_RPATH for internal shared libraries
+# -----------------------------------------------------------------------------
+# Sets BUILD_RPATH so libraries can find dependencies during build-time linking.
+# Uses BUILD_WITH_INSTALL_RPATH=FALSE (BUILD_RPATH used during development).
 #
-# This function sets BUILD_RPATH for shared libraries to ensure they can find
-# their dependencies during the build process. This is especially important
-# on systems that use RUNPATH by default (like Fedora) instead of RPATH.
+# Note: Core libraries (tt_metal, tt_stl) use custom RPATH handling with
+# BUILD_WITH_INSTALL_RPATH=TRUE and install(FILES) workaround. See their
+# CMakeLists.txt files for details.
 #
-# Usage:
-#   tt_set_library_rpath(target_name)
-#
-# Requirements:
-#   - Target must be a shared library
-#
-# Why BUILD_RPATH for libraries?
-#   - Libraries need to find other libraries during build-time linking
-#   - Fedora uses RUNPATH by default, which searches LD_LIBRARY_PATH first
-#   - BUILD_RPATH ensures libraries can find each other in build directories
-#
-# Example:
-#   add_library(my_lib SHARED lib.cpp)
-#   tt_set_library_rpath(my_lib)
+# Why needed?
+#   - Fedora uses RUNPATH (searched after LD_LIBRARY_PATH)
+#   - Without BUILD_RPATH, libraries can't find each other during build
+#   - BUILD_RPATH ensures consistent behavior across Ubuntu and Fedora
 #
 function(tt_set_library_rpath TARGET)
     # Set BUILD_RPATH to build/lib (CI/tar layout) and also build/${CMAKE_INSTALL_LIBDIR} when it differs.
@@ -208,30 +215,25 @@ function(tt_set_library_rpath TARGET)
     message(DEBUG "tt_set_library_rpath(${TARGET}): BUILD_RPATH=${_build_rpath_string}")
 endfunction()
 
-# CMake helper for setting RPATH on installable shared libraries
+# -----------------------------------------------------------------------------
+# tt_set_installable_library_rpath - Multi-layout RPATH for installable libraries
+# -----------------------------------------------------------------------------
+# Sets INSTALL_RPATH to support multiple installation layouts (wheel, tar, FHS).
+# Uses BUILD_WITH_INSTALL_RPATH=TRUE so INSTALL_RPATH is embedded at build time.
 #
-# This function sets both BUILD_RPATH (for build-time linking) and INSTALL_RPATH
-# (for multiple installation layouts). It uses BUILD_WITH_INSTALL_RPATH=TRUE so
-# that INSTALL_RPATH is used during build time as well.
+# Supported layouts:
+#   - Python wheel: $ORIGIN/build/lib
+#   - CI tar artifact: $ORIGIN/../../build/lib
+#   - FHS packages (DEB/RPM): $ORIGIN (libs co-located in /usr/lib64)
 #
-# This is for libraries that need complex multi-layout RPATH support like:
-# - Wheel layout: $ORIGIN/build/lib (always 'lib', not CMAKE_INSTALL_LIBDIR, because wheels always use 'lib')
-# - Tar artifact layout: $ORIGIN/../../build/lib (always 'lib' for tar artifacts)
-# - FHS packages: $ORIGIN (all libs co-located, no subdirectory needed)
+# Note: Core libraries (tt_metal, tt_stl) do NOT use this function because
+# they need the install(FILES) workaround for a CMake bug. They manually
+# configure BUILD_WITH_INSTALL_RPATH=TRUE with simpler INSTALL_RPATH.
+# See cmake/packaging.cmake for detailed explanation of the CMake bug.
 #
-# Usage:
-#   tt_set_installable_library_rpath(target_name)
-#
-# Requirements:
-#   - Target must be a shared library that gets installed
-#
-# Why BUILD_WITH_INSTALL_RPATH=TRUE?
-#   - Allows using INSTALL_RPATH during build for complex multi-layout scenarios
-#   - Still sets BUILD_RPATH as backup for systems that need it
-#
-# Example:
-#   add_library(my_installable_lib SHARED lib.cpp)
-#   tt_set_installable_library_rpath(my_installable_lib)
+# When to use this function:
+#   - Libraries that need to work in wheel, tar, AND FHS layouts
+#   - Libraries that can use standard install(TARGETS ... LIBRARY)
 #
 function(tt_set_installable_library_rpath TARGET)
     # Set BUILD_RPATH as backup for build-time linking (important for Fedora RUNPATH)
