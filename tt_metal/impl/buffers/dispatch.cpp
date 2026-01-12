@@ -6,7 +6,6 @@
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
-#include <array>
 #include <optional>
 #include <stack>
 #include <type_traits>
@@ -66,9 +65,9 @@ struct BufferWriteDispatchParams {
 
     BufferWriteDispatchParams() = default;
     BufferWriteDispatchParams(uint32_t src_noc_xy, uint32_t src_addr_32B, bool src_pinned = false) :
-        pinned_src_addr_lo{src_addr_32B}, use_pinned_transfer{src_pinned} {
-        pinned_src_noc_xy = src_noc_xy;
-        pinned_src_noc_xy |= MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 ? 8 : 0;
+        pinned_src_noc_xy{static_cast<uint32_t>(src_noc_xy | (MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 ? 8 : 0))},
+        pinned_src_addr_lo{src_addr_32B},
+        use_pinned_transfer{src_pinned} {
     }
 
     void calculate_issue_wait() {
