@@ -2037,9 +2037,10 @@ void py_module(nb::module_& mod) {
     bind_unary_operation(
         mod,
         ttnn::hardmish,
-        R"doc(Computes the Hard Mish activation function element-wise: :math:`\mathrm{{output\_tensor}}_i = x_i \times \min(\max(x_i + 2.8, 0), 5) / 5`. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2.8, 0), 5)}}{{5}})doc",
         "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(Computes the Hard Mish activation function. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc");
     bind_unary_operation(
         mod,
         ttnn::gez,
@@ -2062,9 +2063,10 @@ void py_module(nb::module_& mod) {
     bind_unary_operation(
         mod,
         ttnn::i1,
-        R"doc(Computes the modified Bessel function of the first kind of order 1 element-wise: :math:`\mathrm{{output\_tensor}}_i = I_1(\mathrm{{input\_tensor}}_i)`. This function is commonly used in physics and engineering, particularly in problems with cylindrical symmetry.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = I_1(\mathrm{{input\_tensor}}_i))doc",
         "[Validated range: -10 to 10]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(Computes the modified Bessel function of the first kind of order 1. This function is commonly used in physics and engineering, particularly in problems with cylindrical symmetry.)doc");
     bind_unary_operation(
         mod,
         ttnn::isfinite,
