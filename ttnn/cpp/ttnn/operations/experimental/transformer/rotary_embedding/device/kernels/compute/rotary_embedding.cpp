@@ -11,6 +11,7 @@
 #include "api/compute/untilize.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -100,18 +101,10 @@ void kernel_main() {
             in1_idx = j;
 #endif
             if (j < half_Wt) {
-                // Multiply half of the rotated input by scalar (-1)
-                reconfig_data_format(rotated_in_cb, scalar_cb);
-                pack_reconfig_data_format(rotated_in_interm_cb);
-                cb_wait_front(rotated_in_cb, onetile);
-                cb_reserve_back(rotated_in_interm_cb, onetile);
-                ACQ();
-                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
-                mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
-                pack_tile(0, rotated_in_interm_cb);
-                REL();
-                cb_push_back(rotated_in_interm_cb, onetile);
-                cb_pop_front(rotated_in_cb, onetile);
+                // Multiply half of the rotated input by scalar (-1) using helper
+                compute_kernel_lib::
+                    mul<compute_kernel_lib::BroadcastDim::SCALAR, compute_kernel_lib::BinaryInputMode::STREAMING>(
+                        rotated_in_cb, scalar_cb, rotated_in_interm_cb, compute_kernel_lib::BinaryTileShape::single());
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin
@@ -127,21 +120,8 @@ void kernel_main() {
             MUL_TILES(in_cb, updated_cos_cb, cos_interm_cb, onetile, in1_idx);
 
             // Add applied sin/cos tensors
-            cb_wait_front(cos_interm_cb, onetile);
-            cb_wait_front(sin_interm_cb, onetile);
-            cb_reserve_back(out_cb, onetile);
-
-            reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
-            pack_reconfig_data_format(cos_interm_cb, out_cb);
-            ACQ();
-            add_tiles_init(cos_interm_cb, sin_interm_cb);
-            add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
-            pack_tile(0, out_cb);
-            REL();
-
-            cb_push_back(out_cb, onetile);
-            cb_pop_front(cos_interm_cb, onetile);
-            cb_pop_front(sin_interm_cb, onetile);
+            compute_kernel_lib::add(
+                cos_interm_cb, sin_interm_cb, out_cb, compute_kernel_lib::BinaryTileShape::single());
         }
     }
 }

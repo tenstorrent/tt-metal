@@ -10,6 +10,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
 /**
  * @file reduce_helpers.hpp
  * @brief Single unified reduce function with automatic dispatch
@@ -127,13 +128,7 @@ struct TileShape {
     static constexpr TileShape col(uint32_t r, uint32_t b = 1) { return {r, 1, b}; }
 };
 
-/**
- * @brief Tag type indicating no accumulation (zero overhead)
- *
- * When this type is passed to reduce(), all accumulation code is
- * eliminated at compile-time via `if constexpr`.
- */
-struct NoAccumulation {};
+// NoAccumulation is defined in common_types.hpp
 
 /**
  * @brief Configuration for accumulation-style reductions
@@ -184,15 +179,7 @@ struct Accumulate {
     constexpr bool is_first() const { return iteration == 0; }
 };
 
-/**
- * @brief Default no-op functor for post_reduce_op parameter
- *
- * When no custom post-reduce operation is needed, this empty functor is used.
- * It compiles away completely due to inlining.
- */
-struct NoOp {
-    ALWI void operator()(uint32_t = 0) const {}
-};
+// NoOp is defined in common_types.hpp
 
 // =============================================================================
 // Helper Functions
@@ -651,6 +638,8 @@ ALWI void reduce(
                 uint32_t chunk_end = (wt + chunk_size < Wt) ? (wt + chunk_size) : Wt;
                 uint32_t current_chunk = chunk_end - wt;
                 uint32_t tiles_in_chunk = Ht * current_chunk;
+
+                // 19 8 + 8 + 3
 
                 // STREAMING_BATCHED: wait for entire chunk upfront
                 if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
