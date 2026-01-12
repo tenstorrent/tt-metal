@@ -41,20 +41,7 @@ constexpr uint32_t slice_C = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Ht = get_compile_time_arg_val(13);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(14);
 
-constexpr uint32_t num_ct_args = 15;
-
-constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
-constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<
-        num_ct_args + ccl_routing_utils::num_line_unicast_args>();
-
-constexpr ccl_routing_utils::line_unicast_route_info_t backward_unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<
-        num_ct_args + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args>();
-constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<
-        num_ct_args + 2 * ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args>();
+constexpr uint32_t ct_idx = 15;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -75,12 +62,6 @@ void kernel_main() {
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
-
-    const auto& unicast_route_info = (direction == 1) ? forward_unicast_route_info : backward_unicast_route_info;
-    const auto& multicast_route_info = (direction == 1) ? forward_multicast_route_info : backward_multicast_route_info;
-
-    constexpr uint32_t ct_idx =
-        num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();

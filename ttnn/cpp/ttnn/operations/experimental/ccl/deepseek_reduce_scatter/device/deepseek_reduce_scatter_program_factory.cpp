@@ -195,26 +195,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         slice_Wt,                       // slice_Wt
     };
 
-    auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
-        tt::tt_fabric::Topology::Ring, sender_device_coord, forward_coord, backward_coord, mesh_device);
-    auto [mcast_forward_args, mcast_backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
-        tt::tt_fabric::Topology::Ring,
-        sender_device_coord,
-        forward_coord,
-        backward_coord,
-        ring_size - 1,
-        ring_size - 1,
-        mesh_device);
-
-    sender_writer_compile_args.insert(
-        sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
-    sender_writer_compile_args.insert(
-        sender_writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
-    sender_writer_compile_args.insert(
-        sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
-    sender_writer_compile_args.insert(
-        sender_writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
-
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_writer_compile_args);
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
