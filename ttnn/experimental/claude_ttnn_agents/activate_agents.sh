@@ -33,6 +33,10 @@ cp -r "$SCRIPT_DIR/scripts/ttnn-operation-scaffolder" "$REPO_ROOT/.claude/script
 chmod +x "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"*.py
 chmod +x "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"*.sh
 
+# Copy logging scripts (used by agents for structured logging)
+echo "Installing logging scripts..."
+cp -r "$SCRIPT_DIR/scripts/logging" "$REPO_ROOT/.claude/scripts/"
+
 # Copy reference documents (used by ttnn-riscv-debugger agent)
 echo "Installing reference documents..."
 cp "$SCRIPT_DIR/references/"*.md "$REPO_ROOT/.claude/references/"
@@ -166,6 +170,7 @@ echo "  - $REPO_ROOT/.claude/agents/ttnn-kernel-writer.md"
 echo "  - $REPO_ROOT/.claude/agents/ttnn-riscv-debugger.md"
 echo "  - $REPO_ROOT/.claude/agents/ttnn-pipeline-analyzer.md"
 echo "  - $REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/ (scripts + templates)"
+echo "  - $REPO_ROOT/.claude/scripts/logging/ (structured logging)"
 echo "  - $REPO_ROOT/.claude/references/ (agent reference docs)"
 echo "  - $REPO_ROOT/.claude/logs/ (agent debug logs)"
 echo ""
