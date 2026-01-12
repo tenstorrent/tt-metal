@@ -1302,14 +1302,14 @@ void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
         auto* args = GetCommonRuntimeArgs(program, reader_kernel_id).data();
         if (operation_attributes.ternary_variant == TernaryVariant::TTS) {
             args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*predicate_buffer, args);
-            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_true_tensor.value().buffer(), args);
+            CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_true_tensor.value().buffer(), args);
         } else if (operation_attributes.ternary_variant == TernaryVariant::TST) {
             args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*predicate_buffer, args);
-            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_false_tensor.value().buffer(), args);
+            CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_false_tensor.value().buffer(), args);
         } else {  // TTT
             args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*predicate_buffer, args);
             args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_true_tensor.value().buffer(), args);
-            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_false_tensor.value().buffer(), args);
+            CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_false_tensor.value().buffer(), args);
         }
 
         // Update common runtime args for writer kernel
