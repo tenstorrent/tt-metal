@@ -105,7 +105,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 50,
-              "cmd": "HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"4x8sp0tp1\"",
+              "cmd": "HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"wh_4x8sp0tp1\"",
               "owner_id": "U08TED0JM9D"
             }, # Samuel Adesoye
             {

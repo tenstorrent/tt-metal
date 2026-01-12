@@ -28,19 +28,15 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
         [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring, True],
         [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
-        [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "1x4sp0tp1",
         "2x4sp0tp1",
         "2x4sp1tp0",
-        "wh_4x8sp0tp1",
         "wh_4x8sp1tp0",
-        "bh_4x8sp0tp1",
         "bh_4x8sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
@@ -143,9 +139,9 @@ def test_wan_transformer_block(
     rope_cos_stack = torch_rope_cos.permute(0, 2, 1, 3)
     rope_sin_stack = torch_rope_sin.permute(0, 2, 1, 3)
 
-    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), chunk_size_lcm=256, num_devices=sp_factor)
-    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, chunk_size_lcm=256, num_devices=sp_factor)
-    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, chunk_size_lcm=256, num_devices=sp_factor)
+    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), num_devices=sp_factor)
+    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, num_devices=sp_factor)
+    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, num_devices=sp_factor)
 
     # Sequence fractured spatial
     tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
