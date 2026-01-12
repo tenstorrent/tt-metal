@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr std::uint32_t cb_id = get_compile_time_arg_val(0);

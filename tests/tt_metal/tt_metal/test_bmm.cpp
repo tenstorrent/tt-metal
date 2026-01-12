@@ -35,6 +35,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -47,7 +48,7 @@ using namespace tt::tt_metal;
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");

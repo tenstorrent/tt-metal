@@ -170,7 +170,6 @@ class MLA1D(AbstractModule):
         Returns:
             Dict containing operator configurations for prefill mode
         """
-
         grid_size = mesh_device.compute_with_storage_grid_size()
 
         # Extract dimensions from HF config
@@ -304,7 +303,7 @@ class MLA1D(AbstractModule):
         wo_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
-            dim=1,
+            dim=2,  # Changed from dim=1 to dim=2 to gather after permute in prefill
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -349,7 +348,6 @@ class MLA1D(AbstractModule):
         Returns:
             Dict containing operator configurations for decode mode
         """
-
         grid_size = mesh_device.compute_with_storage_grid_size()
         num_cores = grid_size.x * grid_size.y
 
@@ -734,6 +732,7 @@ class MLA1D(AbstractModule):
         )
         if caches is None:
             caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
+
         # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
@@ -748,19 +747,14 @@ class MLA1D(AbstractModule):
         caches: tuple[torch.Tensor, ...],
         mesh_device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        def to_device(
-            weight,
-            device,
-            mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
+        return ttnn.as_tensor(
+            torch.concatenate(caches),
             dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ):
-            weight = ttnn.from_torch(weight, device=device, mesh_mapper=mesh_mapper)
-            return ttnn.to_layout(weight, dtype=dtype, layout=layout, memory_config=memory_config)
-
-        caches = torch.concatenate(caches)
-        return to_device(caches, mesh_device, ttnn.ShardTensorToMesh(mesh_device, 0))
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
+        )
 
     @classmethod
     def forward_decode(
@@ -947,7 +941,6 @@ class MLA1D(AbstractModule):
         Returns:
             Output tensor after MLP computation
         """
-
         mesh_shape = cfg["mesh_shape"]
 
         sdpa_dp_factor = mla_tp_factor = mesh_shape[1]
@@ -1053,13 +1046,55 @@ class MLA1D(AbstractModule):
 
         # wkv_b2
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
-        v_out = ttnn.experimental.all_gather_async(
-            v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-        )  # [1, num_heads, seq_len, v_head_dim]
 
-        # wo
-        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads, v_head_dim]
-        v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
-        out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+        # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
+        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
+
+        # Chunk the sequence dimension if needed to avoid OOM/hang in all_gather for large sequences
+        # Strategy: Reshape to 4D (merge chunks into batch dim), gather, then process in chunks
+        SEQ_LEN_CHUNK_SIZE = 8192
+        if seq_len > SEQ_LEN_CHUNK_SIZE:
+            num_heads_local = v_out.shape[2]
+            v_head_dim = v_out.shape[3]
+            # Use ceiling division instead of even_int_div to handle non-multiples of 8192
+            num_chunks = (seq_len + SEQ_LEN_CHUNK_SIZE - 1) // SEQ_LEN_CHUNK_SIZE
+
+            # Pad seq_len to be a multiple of SEQ_LEN_CHUNK_SIZE if needed
+            padded_seq_len = num_chunks * SEQ_LEN_CHUNK_SIZE
+            if seq_len != padded_seq_len:
+                # Pad the sequence dimension (dim=1)
+                v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
+
+            # Reshape to [num_chunks, chunk_size, num_heads_local, v_head_dim] (4D with chunks as batch)
+            v_out = ttnn.reshape(v_out, (num_chunks, SEQ_LEN_CHUNK_SIZE, num_heads_local, v_head_dim))
+
+            # Now all_gather can work on dim=2 (heads dimension) with 4D tensor
+            v_out = ttnn.experimental.all_gather_async(
+                v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+            )  # [num_chunks, chunk_size, num_heads, v_head_dim]
+
+            # Reshape for linear: [num_chunks, chunk_size, num_heads, v_head_dim] -> [num_chunks, 1, chunk_size, hidden_dim]
+            num_heads = v_out.shape[2]
+            v_head_dim = v_out.shape[3]
+            v_out = ttnn.reshape(v_out, (num_chunks, 1, SEQ_LEN_CHUNK_SIZE, num_heads * v_head_dim))
+
+            out = ttnn.linear(v_out, **cfg["wo"])  # [num_chunks, 1, chunk_size, dim]
+
+            # De-chunk: [num_chunks, 1, chunk_size, dim] -> [1, 1, padded_seq_len, dim]
+            output_dim = out.shape[3]
+            out = ttnn.reshape(out, (1, 1, padded_seq_len, output_dim))
+
+            # Trim padding if we added any
+            if seq_len != padded_seq_len:
+                out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, seq_len, output_dim))
+        else:
+            # Non-chunked path for shorter sequences
+            v_out = ttnn.experimental.all_gather_async(
+                v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+            )  # [1, seq_len, num_heads, v_head_dim]
+
+            # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
+            v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
+            out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
 
         return out

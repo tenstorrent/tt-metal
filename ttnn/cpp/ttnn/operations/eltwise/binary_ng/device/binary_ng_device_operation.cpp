@@ -427,8 +427,8 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
 }
 
 bool BinaryNgDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }
@@ -512,7 +512,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    std::optional<ttnn::operations::unary::ScalarVariant> scalar_value,
+    std::optional<ttnn::operations::unary::ScalarVariant> /*scalar_value*/,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;
     DataType dtype_a = input_tensor_a.dtype();

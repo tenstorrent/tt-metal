@@ -14,8 +14,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::unary {
 
 namespace {
-void validate_supported_arch_dtype(
-    tt::ARCH arch, DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
+void validate_supported_arch_dtype(DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_NOT:
@@ -77,10 +76,9 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         output_datatype = preallocated_output_tensor->dtype();
     }
 
-    auto arch = input_tensor.device()->arch();
     auto input_datatype = input_tensor.dtype();
     for (const auto& unary_op : args.op_chain) {
-        validate_supported_arch_dtype(arch, input_datatype, output_datatype, unary_op.type());
+        validate_supported_arch_dtype(input_datatype, output_datatype, unary_op.type());
     }
 
     TT_FATAL(
@@ -173,8 +171,8 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
 }
 
 bool UnaryDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }
