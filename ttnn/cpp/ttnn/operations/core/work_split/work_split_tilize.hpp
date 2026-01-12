@@ -39,7 +39,7 @@ struct BlockSplitWH {
     bool has_cliff_col = false;
     uint32_t full_cores_per_row = 0;
     uint32_t full_cores_per_col = 0;
-    uint32_t single_sblocks_width = 0;
+    uint32_t single_sblock_size = 0;
 };
 
 struct NcoresWH {
@@ -56,7 +56,7 @@ struct NcoresWHsb {
     uint32_t total_blocks_width = 0;
     uint32_t total_blocks_height = 0;
     uint32_t single_block_size = 0;
-    uint32_t single_block_sblocks_width = 0;
+    uint32_t single_sblock_size = 0;
 };
 inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int height, int ref) {
     if (ref <= 0) {
@@ -116,7 +116,12 @@ inline NcoresWHsb compute_ncores_wh_sb(
     // If ncores is smaller than grid_area, return an NcoresWH constructed using these values.
     if (ncores < grid_area) {
         return NcoresWHsb{
-            ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size_limit, 1};
+            ncores,
+            nblocks_per_core,
+            total_blocks_width,
+            total_blocks_height,
+            single_block_size_limit,
+            single_block_size_limit};
     }
     // single_block_size = n * single_sblock_size
     // Conditions: (1) single_sblock_size < single_block_size_limit
@@ -125,7 +130,7 @@ inline NcoresWHsb compute_ncores_wh_sb(
     //             (4) blocks_row_cliff < single_sblock_size_limit
     uint32_t single_block_size = 0;
     uint32_t opt_n = 0;
-    uint32_t opt_total_blocks = 0;
+    uint32_t single_sblock_size = 0;
     for (uint32_t candidate_sblock_size = single_block_size_limit - 1; candidate_sblock_size >= 1;
          --candidate_sblock_size) {
         uint32_t max_n = (width_tiles + candidate_sblock_size - 1) / candidate_sblock_size;
@@ -138,10 +143,10 @@ inline NcoresWHsb compute_ncores_wh_sb(
             uint32_t cliff_nblocks_row = width_tiles - full_cores_per_row * tmp_single_block_size;
             // Select for max total_blocks_size, for tie-break: prefer smaller n
             if (total_blocks_size_sb <= grid_area && cliff_nblocks_row < single_block_size_limit &&
-                (opt_n == 0 || total_blocks_size_sb > opt_total_blocks ||
-                 (total_blocks_size_sb == opt_total_blocks && n < opt_n))) {
+                (opt_n == 0 || total_blocks_size_sb > single_sblock_size ||
+                 (total_blocks_size_sb == single_sblock_size && n < opt_n))) {
                 opt_n = n;
-                opt_total_blocks = total_blocks_size_sb;
+                single_sblock_size = total_blocks_size_sb;
                 single_block_size = tmp_single_block_size;
             }
         }
@@ -156,7 +161,8 @@ inline NcoresWHsb compute_ncores_wh_sb(
     total_blocks_height = tt::div_up(height_tiles, single_block_size);
     total_blocks = total_blocks_width * total_blocks_height;
     ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
-    return NcoresWHsb{ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size, opt_n};
+    return NcoresWHsb{
+        ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size, single_sblock_size};
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
@@ -170,7 +176,7 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     auto grid_cores = corerange_to_cores(grid);
     auto [ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size] =
         compute_ncores_wh(grid_area, nblocks, width_tiles, height_tiles);
-    uint32_t single_sblocks_width = 1;
+    uint32_t single_sblock_size = single_block_size;
     if (single_block_size_limit.has_value() && single_block_size > single_block_size_limit.value()) {
         auto result =
             compute_ncores_wh_sb(grid_area, nblocks, width_tiles, height_tiles, single_block_size_limit.value());
@@ -179,7 +185,7 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         total_blocks_width = result.total_blocks_width;
         total_blocks_height = result.total_blocks_height;
         single_block_size = result.single_block_size;
-        single_sblocks_width = result.single_block_sblocks_width;
+        single_sblock_size = result.single_sblock_size;
     }
     // Sets to hold different core ranges.
     std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
@@ -232,7 +238,7 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         has_cliff_col,
         full_cores_per_row,
         full_cores_per_col,
-        single_sblocks_width};
+        single_sblock_size};
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(

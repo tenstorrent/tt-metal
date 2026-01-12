@@ -65,9 +65,12 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
          has_cliff_col,
          full_cores_per_row,
          full_cores_per_col,
-         single_sblocks_width] =
+         single_sblock_size] =
             ttnn::split_blocks_for_tilize_wh(
                 available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+    if (single_sblock_size > 0 && single_block_size % single_sblock_size) {
+        TT_FATAL(false, "single_block_size is not divided by single_sblock_size");
+    }
 
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
@@ -77,10 +80,10 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
 
     if (!core_range.empty()) {
         create_cb(
-            tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
+            tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_sblock_size, input_cb_data_format);
 
         create_cb(
-            tt::CBIndex::c_16, program, core_range, output_single_tile_size, single_block_size, output_cb_data_format);
+            tt::CBIndex::c_16, program, core_range, output_single_tile_size, single_sblock_size, output_cb_data_format);
     }
     if (has_cliff_col && has_cliff_row) {
         create_cb(
@@ -124,7 +127,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
             program,
             cliff_col_core_range,
             input_single_tile_size,
-            single_block_size,
+            single_sblock_size,
             input_cb_data_format);
 
         create_cb(
@@ -132,7 +135,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
             program,
             cliff_col_core_range,
             output_single_tile_size,
-            single_block_size,
+            single_sblock_size,
             output_cb_data_format);
     }
 
@@ -229,6 +232,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
     uint32_t tile_start_id = 0;
     uint32_t single_block_size_row_arg;
     uint32_t single_block_size_col_arg;
+    uint32_t single_sblock_size_row_arg;
 
     uint32_t total_row_cores = full_cores_per_row;
     if (has_cliff_row) {
@@ -240,18 +244,22 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
         if (has_cliff_col && has_cliff_row && i == ncores - 1) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size_cliff_col;
+            single_sblock_size_row_arg = single_block_size_cliff_row;
 
         } else if (has_cliff_row && i != 0 && ((i + 1) % (full_cores_per_row + 1)) == 0) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size;
+            single_sblock_size_row_arg = single_block_size_cliff_row;
 
         } else if (i < total_row_cores * full_cores_per_col) {
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size;
+            single_sblock_size_row_arg = single_sblock_size;
 
         } else {
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size_cliff_col;
+            single_sblock_size_row_arg = single_sblock_size;
         }
 
         //  reader runtime args
@@ -263,11 +271,16 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
             start_column_id,
             single_block_size_row_arg,
             single_block_size_col_arg,
-        };
+            TILE_WIDTH * a.element_size() * single_sblock_size_row_arg,
+            single_sblock_size_row_arg};
 
         // writer runtime args
         const std::array writer_rt_args = {
-            dst_buffer->address(), tile_start_id, single_block_size_row_arg, single_block_size_col_arg};
+            dst_buffer->address(),
+            tile_start_id,
+            single_block_size_row_arg,
+            single_block_size_col_arg,
+            single_sblock_size_row_arg};
 
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
