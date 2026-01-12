@@ -628,6 +628,7 @@ class ModelArgs:
             {f"{key}_MEMCFG": DRAM_MEMCFG if "WEIGHTS" in key else L1_MEMCFG for key in self.OP_KEYS}
         )
         self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+        self.model_config["USE_MINIMAL_MATMUL_PREFILL"] = True
         # Update memory layouts (Tile, except MLP)
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
@@ -816,23 +817,40 @@ class ModelArgs:
             n_w1_w3 = self.hidden_dim // self.cluster_shape[1]
             # Using dram_shard_grid_width to ensure per_core_N matches DRAM shard width for P100, otherwise matmuls silently give bad PCC
             dram_shard_grid_width = 8 if is_wormhole_b0() else self.dram_grid_size.x  # 7 for P100, 8 for P150
-            self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
-                k=self.dim // self.cluster_shape[0],
-                n=n_w1_w3,
-                grid_size=mlp1_3_grid(seq_len),
-                per_core_N=math.ceil(n_w1_w3 / (self.tile_size * dram_shard_grid_width))
-                if mlp_w_dram_sharded
-                else None,
-            )
-            n_w2 = self.dim
-            self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
-                k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
-                n=n_w2,
-                grid_size=mlp2_grid(seq_len),
-                per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None,
-            )
+            if self.model_config.get("USE_MINIMAL_MATMUL_PREFILL"):
+                self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.minimal_matmul_config(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    core_grid=mlp1_3_grid(seq_len),
+                )
+                n_w2 = self.dim
+                self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.minimal_matmul_config(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    core_grid=mlp2_grid(seq_len),
+                )
+            else:
+                self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
+                    m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                    k=self.dim // self.cluster_shape[0],
+                    n=n_w1_w3,
+                    grid_size=mlp1_3_grid(seq_len),
+                    per_core_N=math.ceil(n_w1_w3 / (self.tile_size * dram_shard_grid_width))
+                    if mlp_w_dram_sharded
+                    else None,
+                )
+                n_w2 = self.dim
+                self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
+                    m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                    k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
+                    n=n_w2,
+                    grid_size=mlp2_grid(seq_len),
+                    per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width))
+                    if mlp_w_dram_sharded
+                    else None,
+                )
             self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
@@ -870,15 +888,23 @@ class ModelArgs:
             )
             num_rows = lambda seq_len: min(seq_len, 1024)
             dram_sharded_wo = not (self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] or self.is_galaxy)
-            self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=num_rows(seq_len),
-                k=k_dim,
-                n=n_dim,
-                grid_size=self.find_prefill_grid(prefill_rows, k_dim // self.tile_size),
-                in0_block_w=1 if self.is_galaxy else None,
-                fuse_batch=seq_len <= 1024,
-                per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
-            )
+            if self.model_config.get("USE_MINIMAL_MATMUL_PREFILL"):
+                self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.minimal_matmul_config(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    core_grid=self.find_prefill_grid(prefill_rows, k_dim // self.tile_size),
+                )
+            else:
+                self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
+                    m=num_rows(seq_len),
+                    k=k_dim,
+                    n=n_dim,
+                    grid_size=self.find_prefill_grid(prefill_rows, k_dim // self.tile_size),
+                    in0_block_w=1 if self.is_galaxy else None,
+                    fuse_batch=seq_len <= 1024,
+                    per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
+                )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
             if self.num_devices == 32:
@@ -917,22 +943,32 @@ class ModelArgs:
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
-            self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
-                in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=max(
-                    1,
-                    8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
-                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(
-                    self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
-                ),  # N / TILE_WIDTH / grid width
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
-            )
+            if self.model_config.get("USE_MINIMAL_MATMUL_PREFILL"):
+                self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: self.minimal_matmul_config(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    core_grid=(8, 8),
+                )
+            else:
+                self.model_config[
+                    "XQKV_PREFILL_PROGCFG"
+                ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                    out_subblock_h=1,  # Must be divisible by per_core_M
+                    out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                    per_core_M=max(
+                        1,
+                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
+                    ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                    per_core_N=math.ceil(
+                        self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
+                    ),  # N / TILE_WIDTH / grid width
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+                )
 
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: self.get_xqkv_prefill_mem_cfg(seq_len)
@@ -2115,6 +2151,19 @@ class ModelArgs:
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
         )
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    def minimal_matmul_config(
+        self, M_block_size, K_block_size, N_block_size, core_grid: Tuple[int, int], subblock_h=2, subblock_w=2
+    ):
+        matmul_config = ttnn.MinimalMatmulConfig(
+            M_block_size=M_block_size,
+            K_block_size=K_block_size,
+            N_block_size=N_block_size,
+            subblock_h=subblock_h,
+            subblock_w=subblock_w,
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_grid),
+        )
+        return matmul_config
 
     def matmul_config(
         self,
