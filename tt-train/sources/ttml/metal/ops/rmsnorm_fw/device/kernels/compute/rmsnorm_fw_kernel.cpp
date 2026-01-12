@@ -10,9 +10,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/rsqrt.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -289,16 +288,16 @@ void MAIN {
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         calculate_sum_x_squared();
 
-        // reduce and sqrt
+        // reduce and rsqrt
         {
             cb_wait_front(cb_rms_before_reduction_intermediate, onetile);
-            cb_reserve_back(cb_rms_after_reduction_intermediate, onetile);
+            cb_reserve_back(cb_inverse_rms_after_reduction_intermediate, onetile);
             tile_regs_acquire();
 
             const uint32_t reduction_register = 0;
             reconfig_data_format(cb_rms_before_reduction_intermediate, cb_scaler);
             reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                cb_rms_before_reduction_intermediate, cb_scaler, cb_rms_after_reduction_intermediate);
+                cb_rms_before_reduction_intermediate, cb_scaler, cb_inverse_rms_after_reduction_intermediate);
             reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
                 cb_rms_before_reduction_intermediate,
                 cb_scaler,
@@ -316,29 +315,29 @@ void MAIN {
             add_binary_tile_init();
             add_binary_tile(reduction_register, eps_register, reduction_register);
 
-            sqrt_tile_init();
-            sqrt_tile(reduction_register);
+            rsqrt_tile_init();
+            rsqrt_tile(reduction_register);
 
             tile_regs_commit();
             tile_regs_wait();
 
-            pack_reconfig_data_format(cb_rms_after_reduction_intermediate);
-            pack_tile(reduction_register, cb_rms_after_reduction_intermediate);
+            pack_reconfig_data_format(cb_inverse_rms_after_reduction_intermediate);
+            pack_tile(reduction_register, cb_inverse_rms_after_reduction_intermediate);
 
             tile_regs_release();
-            cb_push_back(cb_rms_after_reduction_intermediate, onetile);
+            cb_push_back(cb_inverse_rms_after_reduction_intermediate, onetile);
             cb_pop_front(cb_rms_before_reduction_intermediate, onetile);
         }
 
-        // copy tile from cb_rms_after_reduction_intermediate to cb_rms_output
+        // copy tile from cb_inverse_rms_after_reduction_intermediate to cb_rms_output (now contains inv_rms)
         if constexpr (return_rms) {
             const uint32_t temporary_register = 0;
 
-            cb_wait_front(cb_rms_after_reduction_intermediate, onetile);
+            cb_wait_front(cb_inverse_rms_after_reduction_intermediate, onetile);
             tile_regs_acquire();
             cb_reserve_back(cb_rms_output, onetile);
-            copy_tile_init(cb_rms_after_reduction_intermediate);
-            copy_tile(cb_rms_after_reduction_intermediate, /* tile idx */ 0, temporary_register);
+            copy_tile_init(cb_inverse_rms_after_reduction_intermediate);
+            copy_tile(cb_inverse_rms_after_reduction_intermediate, /* tile idx */ 0, temporary_register);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -346,29 +345,6 @@ void MAIN {
             pack_tile(temporary_register, cb_rms_output);
             tile_regs_release();
             cb_push_back(cb_rms_output, onetile);
-        }
-
-        // reciprocal of rms intermediate
-        {
-            const uint32_t temporary_register = 0;
-            cb_wait_front(cb_rms_after_reduction_intermediate, onetile);
-            cb_reserve_back(cb_inverse_rms_after_reduction_intermediate, onetile);
-            tile_regs_acquire();
-
-            copy_tile_init(cb_rms_after_reduction_intermediate);
-            copy_tile(cb_rms_after_reduction_intermediate, /* tile idx */ 0, temporary_register);
-            recip_tile_init();
-            recip_tile(temporary_register);
-
-            tile_regs_wait();
-            tile_regs_commit();
-
-            pack_reconfig_data_format(cb_inverse_rms_after_reduction_intermediate);
-            pack_tile(temporary_register, cb_inverse_rms_after_reduction_intermediate);
-
-            tile_regs_release();
-            cb_push_back(cb_inverse_rms_after_reduction_intermediate, onetile);
-            cb_pop_front(cb_rms_after_reduction_intermediate, onetile);
         }
 
         calculate_input_multiplied_by_gamma_and_divided_by_rms();

@@ -7,7 +7,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reconfig_data_format.h"
@@ -146,16 +145,13 @@ inline void compute_dL_dgamma_components(
 // later stages.
 // ============================================================================
 
-inline void compute_recip_rms_a_bcasted() {
-    // Computes reciprocal of RMS activation (1/rms_a) and broadcasts it across columns.
-    const uint32_t reg_rms_a = 0;
+inline void compute_inv_rms_a_bcasted() {
+    const uint32_t reg_inv_rms_a = 0;
     tile_regs_acquire();
     unary_bcast_init<BroadcastType::COL>(cb_rms_a_idx, cb_recip_rms_a_bcasted_idx);
-    unary_bcast<BroadcastType::COL>(cb_rms_a_idx, /* tile idx */ 0, /* reg tile idx */ reg_rms_a);
-    recip_tile_init();
-    recip_tile(reg_rms_a);
+    unary_bcast<BroadcastType::COL>(cb_rms_a_idx, /* tile idx */ 0, /* reg tile idx */ reg_inv_rms_a);
     tile_regs_commit();
-    pack_and_push(reg_rms_a, cb_recip_rms_a_bcasted_idx);
+    pack_and_push(reg_inv_rms_a, cb_recip_rms_a_bcasted_idx);
 }
 
 #ifdef EVERYTHING_FITS_IN_L1
@@ -324,8 +320,7 @@ inline void MAIN {
     binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_rms_a_idx, onetile);
-        // This value is constant for the whole row, so we can compute it once per row.
-        compute_recip_rms_a_bcasted();
+        compute_inv_rms_a_bcasted();
         cb_wait_front(cb_recip_rms_a_bcasted_idx, onetile);
         // To compute scale we must iterate over all inner dimension.
         compute_scale(row);

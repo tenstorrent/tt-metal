@@ -97,7 +97,7 @@ autograd::TensorPtr rmsnorm_composite(
         none,
         false);  // [B,1,S,1] x. [1] -> [B,1,S,1] (bcast)
 
-    ttnn::Tensor rms_a = ttnn::sqrt(seq_means_of_squares_plus_epsilon);  // [B,1,S,1] -> [B,1,S,1]
+    ttnn::Tensor inv_rms_a = ttnn::rsqrt(seq_means_of_squares_plus_epsilon);  // [B,1,S,1] -> [B,1,S,1]
 
     ttnn::Tensor gamma_times_activations = ttnn::multiply(
         gamma->get_value(),
@@ -109,44 +109,40 @@ autograd::TensorPtr rmsnorm_composite(
         none,
         none,
         false);  // [1,1,1,C] x [B,1,S,C] -> [B,1,S,C]
-    // (bcast)
 
-    ttnn::Tensor out_tensor = ttnn::divide(
+    ttnn::Tensor out_tensor = ttnn::multiply(
         gamma_times_activations,
-        rms_a,
+        inv_rms_a,
         std::nullopt,
         std::nullopt,
         std::nullopt,
         none,
         none,
         none,
-        false,
-        /*fast_and_approximate*/ true);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
+        false);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
 
     auto out = autograd::create_tensor(out_tensor);
 
-    autograd::GradFunction grad = [tensor, gamma, out, rms_a]() {
+    autograd::GradFunction grad = [tensor, gamma, out, inv_rms_a]() {
         auto a = tensor->get_value();  // [B,1,S,C]
         auto g = gamma->get_value();   // [1,1,1,C]
 
-        // c is the number of activations; in the RMS1orm paper they call this
-        // "n". it is renamed here to avoid confusion with 1.
         auto c = static_cast<float>(a.logical_shape()[-1]);
 
         auto dL_dout = out->get_grad();  // Grad w.r.t normalized arctivations, hence [B,1,S,C]
 
         constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
 
-        auto scaled_gain = ttnn::divide(
+        auto scaled_gain = ttnn::multiply(
             g,
-            rms_a,
-            /*dtype*/ std::nullopt,
-            /*memory_config*/ std::nullopt,
-            /*output*/ std::nullopt,
-            /*activations*/ none,
-            /*input_tensor_a_activations*/ none,
-            /*input_tensor_b_activations*/ none,
-            /*use_legacy*/ false);  // [1,1,1,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
+            inv_rms_a,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            none,
+            none,
+            none,
+            false);  // [1,1,1,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
 
         auto gained_dL_dout = ttnn::multiply(
             scaled_gain,
@@ -159,21 +155,6 @@ autograd::TensorPtr rmsnorm_composite(
             none,
             false);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
 
-        // notation:
-        // _ · _ <- usual dot product
-        // _ @ _ <- matrix multiplication
-        // _ *. _ <- Hadamard product/eltwise multiplication with broadcasting
-        // _ /. _ <- eltwise division with broadcasting
-
-        // have a : [B,1,S,C]
-
-        // want to obtain scaled_outer = gained_dL_dout @ ((a@a^T)/n*rms(a)^2)
-
-        // to avoid computing the large outer product matrix explicitly, we
-        // instead compute
-        // scale = (a^T · gained_dL_dout) : [B,1,S,C] x [B,1,S,C] -> [1]
-        // scaled_outer = scale *. a : [1] x [B,1,S,C] -> [B,1,S,C]
-
         auto scale = ttml::ttnn_fixed::sum_over_dim(
             ttnn::multiply(a, gained_dL_dout, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
             3);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C] -> [B,1,S,1]
@@ -181,16 +162,11 @@ autograd::TensorPtr rmsnorm_composite(
         auto scaled_outer = ttnn::multiply(
             scale, a, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,1,S,1] x [B,1,S,C] ->
                                                                                            // [B,1,S,C] (bcast)
+        auto inv_ms_a = ttnn::square(inv_rms_a);                                           // [B,1,S,1] -> [B,1,S,1]
 
-        auto ms_a = ttnn::square(rms_a);  // [B,1,S,1] -> [B,1,S,1]
-
-        auto c_by_ms_a = ttnn::multiply(
-            ms_a, c, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,1,S,1] x [1] ->
-                                                                                          // [B,1,S,1] (bcast)
-
-        auto rhs = ttnn::divide(
-            scaled_outer,
-            c_by_ms_a,
+        auto rhs = ttnn::multiply(
+            ttnn::multiply(scaled_outer, inv_ms_a, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            1.0F / c,
             std::nullopt,
             std::nullopt,
             std::nullopt,
@@ -211,10 +187,9 @@ autograd::TensorPtr rmsnorm_composite(
             false);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]; checked by add_grad
         tensor->add_grad(dL_da);
 
-        // dL_dgamma = (a / rms(a)) * dL_dout -> requires sum over batch due to broadcasting
         auto dL_dg_components = ttnn::multiply(
             dL_dout,
-            ttnn::divide(a, rms_a, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            ttnn::multiply(a, inv_rms_a, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
             std::nullopt,
             std::nullopt,
             std::nullopt,

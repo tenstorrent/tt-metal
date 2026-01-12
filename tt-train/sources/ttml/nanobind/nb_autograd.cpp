@@ -78,7 +78,7 @@ void py_module(nb::module_& m) {
             nb::arg("precision") = PreferredPrecision::HALF,
             "Get underlying tensor value");
         py_tensor.def("get_grad", nb::overload_cast<>(&Tensor::get_grad, nb::const_), "Get gradient");
-        py_tensor.def("get_grad_rw", nb::overload_cast<>(&Tensor::get_grad), "Get/set gradient");
+        py_tensor.def("get_grad", nb::overload_cast<>(&Tensor::get_grad), "Get/set gradient");
         py_tensor.def("get_requires_grad", &Tensor::get_requires_grad, "Get gradient requirement flag");
         py_tensor.def("get_node", &Tensor::get_node, "Get node");
         py_tensor.def("get_shape", &Tensor::get_shape, "Get shape");
