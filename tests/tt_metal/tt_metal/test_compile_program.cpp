@@ -370,43 +370,5 @@ TEST_F(EitherDispatchFixture, CompileProgramWithModifiedProgram) {
     attributes.src_cb_index = attributes.src_cb_index + 1;
     attributes.output_cb_index = attributes.output_cb_index + 1;
     kernel_name_to_hash =
-<<<<<<< HEAD
-        compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_miss_data_movement_miss);
-
-    return pass;
-}
-
-int main() {
-    bool pass = true;
-
-    try {
-        int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
-
-        pass &= test_compile_program_in_loop(device);
-
-        pass &= test_compile_program_after_clean_kernel_binary_directory(device);
-
-        pass &= test_compile_program_with_modified_program(device);
-
-        pass &= CloseDevice(device);
-    } catch (const std::exception& e) {
-        pass = false;
-        // Capture the exception error message
-        log_error(LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
-    }
-
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass, "Error");
-    return 0;
-=======
         compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_miss);
->>>>>>> 898e1239c7f (Migrate legacy tt_metal tests to gtest framework)
 }
