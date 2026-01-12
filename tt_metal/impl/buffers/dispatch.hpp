@@ -10,7 +10,6 @@
 #include <atomic>
 #include <memory>
 #include <variant>
-#include <vector>
 
 #include "buffer.hpp"
 #include "core_coord.hpp"
