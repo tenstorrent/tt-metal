@@ -32,8 +32,11 @@ jobs:
           # Function to count test functions including parametrize expansions
           count_tests() {
             local dir=$1
-            python3 .github/scripts/count_tests.py "$dir"
+            python3 /tmp/count_pytests.py "$dir"
           }
+          
+          # Copy the counting script to /tmp so it's available after checkout
+          cp .github/scripts/utils/count_pytests.py /tmp/count_pytests.py
           
           # Count tests in PR branch
           echo "=== PR branch test counts ==="
@@ -48,6 +51,10 @@ jobs:
           # Checkout base branch
           git fetch origin main
           git checkout origin/main
+          
+          # Copy the counting script back so it's available in main branch
+          mkdir -p .github/scripts/utils
+          cp /tmp/count_pytests.py .github/scripts/utils/count_pytests.py
           
           # Count tests in base branch
           echo "=== Base branch test counts ==="

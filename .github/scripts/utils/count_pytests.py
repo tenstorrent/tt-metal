@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Count test functions including parametrize expansions."""
+"""Counts total number of pytest test cases including parametrize expansions."""
 
 import ast
 import sys
