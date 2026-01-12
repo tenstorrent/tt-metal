@@ -32,7 +32,7 @@ def compute_metrics(pred, target):
 def compare_tensors(tensor1, tensor2, name="tensor", rtol=1e-3, atol=1e-5):
     """Compare two tensors and report differences"""
     if tensor1.shape != tensor2.shape:
-        print(f"  ❌ {name}: Shape mismatch! {tensor1.shape} vs {tensor2.shape}")
+        print(f" {name}: Shape mismatch! {tensor1.shape} vs {tensor2.shape}")
         return False
 
     max_diff = torch.max(torch.abs(tensor1 - tensor2)).item()
@@ -113,9 +113,9 @@ def load_pytorch_model(checkpoint_path, config, device):
 
     if checkpoint_path and os.path.exists(checkpoint_path):
         model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-        print(f"✓ Loaded PyTorch model from {checkpoint_path}")
+        print(f"Loaded PyTorch model from {checkpoint_path}")
     else:
-        print("⚠ Using randomly initialized PyTorch model")
+        print("Using randomly initialized PyTorch model")
 
     model.eval()
     return model
@@ -126,7 +126,7 @@ def load_huggingface_model(model_path, config, device):
     # Try loading from local path or hub
     if os.path.exists(model_path):
         model = PatchTSMixerForPrediction.from_pretrained(model_path).to(device)
-        print(f"✓ Loaded HuggingFace model from {model_path}")
+        print(f"Loaded HuggingFace model from {model_path}")
     else:
         # Create model with matching config
         hf_config = PatchTSMixerConfig(
@@ -283,8 +283,8 @@ def main():
         shuffle=False,
         num_workers=0,
     )
-    print(f"✓ Test dataset: {len(test_dataset)} samples")
-    print(f"✓ Num channels: {num_channels}")
+    print(f"Test dataset: {len(test_dataset)} samples")
+    print(f"Num channels: {num_channels}")
 
     # Model config
     config = {
@@ -317,12 +317,12 @@ def main():
     print("=" * 60)
 
     # Final summary
-    print("\n📊 SUMMARY:")
+    print("\n SUMMARY:")
     if abs(pytorch_metrics["mse"] - hf_metrics["mse"]) < 0.01:
-        print("✓ Both implementations produce similar results")
+        print("Both implementations produce similar results")
     else:
-        print("⚠ Implementations produce different results")
-        print("  This is expected if models have different weights or architecture differences")
+        print("Implementations produce different results")
+        print("This is expected if models have different weights or architecture differences")
 
 
 if __name__ == "__main__":
