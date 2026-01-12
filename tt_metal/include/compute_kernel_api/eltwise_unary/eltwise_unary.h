@@ -34,7 +34,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     PACK((llk_pack_hw_configure_disaggregated<p_pacr::PACK0>(ocb)));
     PACK((llk_pack_init<p_pacr::PACK0>(ocb)));
 
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
     MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE, false /*int32 dest*/>(icb, icb)));
 #endif
 }
@@ -47,14 +47,20 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
  */
 // clang-format on
 ALWI void unary_op_init_common_no_pack(uint32_t icb) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_hw_configure(icb, icb)));
+#endif
 }
 
-ALWI void init_sfpu(uint32_t icb, uint32_t ocb) { unary_op_init_common(icb, ocb); }
+ALWI void init_sfpu(uint32_t icb, uint32_t ocb) {
+#ifndef ARCH_QUASAR
+    unary_op_init_common(icb, ocb);
+#endif
+}
 
 }  // namespace ckernel
