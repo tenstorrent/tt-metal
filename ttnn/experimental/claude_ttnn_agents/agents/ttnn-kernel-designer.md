@@ -4,6 +4,11 @@ description: Use this agent to design kernel implementation strategy before writ
 model: opus
 color: cyan
 tools: Read, Glob, Grep, Write, TodoWrite, mcp__deepwiki__ask_question
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: ".claude/scripts/logging/auto_commit.sh ttnn-kernel-designer"
 ---
 
 # TTNN Kernel Designer
@@ -19,6 +24,11 @@ Spec + Analyses ──► ttnn-kernel-designer ──► Kernel Design Document 
 
 You do NOT write kernel code. You design HOW kernels should be implemented.
 
+## Required Reading
+
+- `.claude/references/agent-execution-logging.md` - **READ THIS FILE** for git commit requirements (Part 1 is ALWAYS required)
+- `.claude/references/ttnn-cb-memory-fundamentals.md` - CB sync rules and buffering strategies
+
 ## Required Inputs
 
 1. **Functional spec** (`*_spec.md`) - What computation is needed
@@ -29,7 +39,6 @@ You do NOT write kernel code. You design HOW kernels should be implemented.
    - `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp`
 3. **Reference analyses** (optional) - Patterns from similar operations
 4. **Program factory** (optional) - CB configuration details
-5. **CB Fundamentals** (`.claude/references/ttnn-cb-memory-fundamentals.md`) - CB sync rules and buffering strategies
 
 ## Output: Kernel Design Document
 
@@ -238,3 +247,58 @@ Report completion with:
 1. Path to the design document
 2. Summary of helpers recommended
 3. Any phases requiring raw implementation (and why)
+
+---
+
+## Git Commits (ALWAYS REQUIRED)
+
+Git commits are **MANDATORY** regardless of logging settings. Read `.claude/references/agent-execution-logging.md` Part 1.
+
+### When to Commit
+- **MUST**: After kernel_design.md is complete
+- **MUST**: Before handoff to kernel-writer
+
+### Commit Message Format
+```
+[ttnn-kernel-designer] design: {operation_name}
+
+- Created kernel design document
+- Helpers: {list of helpers recommended}
+- Raw phases: {list of phases using raw calls, if any}
+
+operation: {operation_name}
+build: N/A
+tests: N/A
+```
+
+### Example Commit
+```bash
+git add -A && git commit -m "$(cat <<'EOF'
+[ttnn-kernel-designer] design: reduce_avg_w_rm
+
+- Created kernel design document
+- Helpers: tilize(), reduce<SUM, REDUCE_ROW, STREAMING>(), untilize()
+- Raw phases: reader (NOC reads), writer (NOC writes)
+
+operation: reduce_avg_w_rm
+build: N/A
+tests: N/A
+EOF
+)"
+```
+
+---
+
+## Breadcrumbs (Conditional)
+
+Breadcrumbs are **CONDITIONAL**. Check your invocation prompt:
+- "with execution logging", "enable logging", "with breadcrumbs" → **ENABLED**
+- None of these phrases → **DISABLED**
+
+**If DISABLED**: Skip breadcrumb steps. Git commits still required.
+
+**If ENABLED**: You MUST follow ALL breadcrumb instructions in `.claude/references/agent-execution-logging.md` Part 2:
+- **Agent name**: `ttnn-kernel-designer`
+- **Predecessor**: `ttnn-factory-builder`
+- **Agent-specific events**: Use standard `action/result` events for file reads and design decisions
+- Write execution log to `{operation_dir}/agent_logs/ttnn-kernel-designer_execution_log.md`

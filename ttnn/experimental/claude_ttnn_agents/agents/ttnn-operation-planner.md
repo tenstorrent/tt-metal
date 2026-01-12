@@ -3,6 +3,11 @@ name: ttnn-operation-planner
 description: Use this agent to design a new TTNN operation. Supports two modes:\n\n**Derivative Mode** (single reference): Design by analyzing how new op differs from one reference operation.\n\n**Hybrid Mode** (multiple references): Design by combining components from multiple reference operations (e.g., reader from op A, compute from op B, writer from op C).\n\n**IMPORTANT FOR CALLER**: Provide PATHs to reference analysis .md files. The agent reads FULL documents using Read tool.\n\nExamples:\n\n<example>\nContext: Derivative mode - variant of existing operation.\nuser: "I want to create a masked_softmax operation. The softmax_analysis.md is at ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_analysis.md."\nassistant: "I'll design masked_softmax based on the softmax reference."\n<Task tool call with single reference path and requirements>\n</example>\n\n<example>\nContext: Hybrid mode - combining components from multiple operations.\nuser: "Create a tilize-compute-untilize template. Use input stage from tilize_analysis.md and output stage from untilize_analysis.md."\nassistant: "I'll design the composite operation using tilize for input and untilize for output."\n<Task tool call with:\n  references:\n    - tilize_analysis.md (role: input_stage)\n    - untilize_analysis.md (role: output_stage)\n  requirements and composition instructions>\n</example>\n\n<example>\nContext: Hybrid mode - sharded input with interleaved output.\nuser: "Create reduction op: sharded input (like layernorm), reduce compute, interleaved output (like untilize)."\nassistant: "I'll design a composite operation combining sharded reading, reduction, and interleaved writing."\n<Task tool call with three references and their roles>\n</example>
 model: opus
 color: green
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: ".claude/scripts/logging/auto_commit.sh ttnn-operation-planner"
 ---
 
 You are an expert TTNN operation architect. Your role is to design new operations by understanding how they differ from existing reference implementations, then producing a functional specification that implementation agents will use.
@@ -404,9 +409,48 @@ Return to the user:
 
 ---
 
-## Execution Logging (Optional)
+## Git Commits (ALWAYS REQUIRED)
 
-If the caller includes **"enable detailed logging"** or **"with execution log"** in the prompt, you MUST create a detailed execution log file alongside your spec output.
+Git commits are **MANDATORY** regardless of logging settings. Read `.claude/references/agent-execution-logging.md` Part 1.
+
+### When to Commit
+- **MUST**: After spec file is complete
+- **MUST**: Before handoff to scaffolder
+
+### Commit Message Format
+```
+[ttnn-operation-planner] spec: {operation_name}
+
+- Created functional specification
+- Mode: {Derivative|Hybrid}
+- References: {list of reference analyses used}
+
+operation: {operation_name}
+build: N/A
+tests: N/A
+```
+
+### Example Commit
+```bash
+git add -A && git commit -m "$(cat <<'EOF'
+[ttnn-operation-planner] spec: reduce_avg_w_rm
+
+- Created functional specification for row-major reduce average
+- Mode: Hybrid
+- References: tilize, reduce_w, untilize analyses
+
+operation: reduce_avg_w_rm
+build: N/A
+tests: N/A
+EOF
+)"
+```
+
+---
+
+## Execution Logging (Conditional)
+
+If the caller includes **"enable detailed logging"**, **"with execution log"**, or **"with breadcrumbs"** in the prompt, you MUST create a detailed execution log file alongside your spec output.
 
 ### Log File Location
 `{new_operation}_planner_execution_log.md` in the same directory as the spec output.

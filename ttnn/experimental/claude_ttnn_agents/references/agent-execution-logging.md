@@ -1,22 +1,184 @@
 # Agent Execution Logging Reference
 
-This document provides consolidated logging instructions for TTNN operation agents. Logging is **OPTIONAL** and should only be enabled when instructed by the main agent.
+This document provides consolidated logging and version control instructions for TTNN operation agents.
 
 ---
 
-## When to Enable Logging
+## Two Independent Systems
 
-Enable logging when the main agent (or user) includes one of these phrases:
-- "with execution logging"
-- "enable logging"
-- "enable detailed logging"
-- "with breadcrumbs"
+| System | When Active | Purpose |
+|--------|-------------|---------|
+| **Git Commits** | **ALWAYS** | Capture actual code state at checkpoints |
+| **Breadcrumbs** | Only if orchestrator enables | Detailed event logging for debugging |
 
-If none of these are present, **skip all logging steps**.
+**Git is ALWAYS required.** Breadcrumbs are conditional.
 
 ---
 
-## Quick Reference
+# PART 1: GIT PROTOCOL (ALWAYS REQUIRED)
+
+Git commits are **MANDATORY** for all agents, regardless of breadcrumb settings. This captures actual code state, not just claims about what was done.
+
+## Why Git is Required
+
+Logs describe intent. Git captures reality. When debugging:
+- Logs might say "CB sync balanced: true" but code has wrong values
+- Git diff shows exactly what values are in the code
+- Git enables rollback, bisect, and attribution
+
+## When to Commit
+
+Commits are required at these points (in order of priority):
+
+### MUST Commit (Required)
+1. **Stage completion**: After each numbered stage passes its tests
+2. **Before handoff**: Before passing work to next agent
+3. **Successful build**: After any `./build_metal.sh` that succeeds
+
+### SHOULD Commit (Strongly Recommended)
+4. **Major decision implemented**: After implementing significant code changes
+5. **After fixing a bug**: When recovering from an error
+6. **Before risky changes**: Create checkpoint before attempting uncertain modifications
+
+## Commit Message Format
+
+Every commit MUST follow this format:
+
+```
+[{agent-name}] {stage-or-phase}: {concise-description}
+
+{bullet-list-of-key-changes}
+
+operation: {operation_name}
+build: {PASSED|SKIPPED|N/A}
+tests: {PASSED|FAILED|SKIPPED}
+```
+
+### Examples
+
+**Stage completion commit:**
+```
+[ttnn-factory-builder] stage 4-6: CB config and stub kernels
+
+- Configured 5 circular buffers (c_0, c_1, c_2, c_3, c_16)
+- Created reader/compute/writer stub kernels
+- Single-core work distribution
+
+operation: reduce_avg_w_rm
+build: PASSED
+tests: stage4=PASS, stage5=PASS, stage6=PASS
+```
+
+**Build fix commit:**
+```
+[ttnn-operation-scaffolder] build-fix: launch_on_device -> launch
+
+- Fixed API call in device_operation.cpp line 116
+- Changed ttnn::device_operation::detail::launch_on_device to ttnn::device_operation::launch
+
+operation: reduce_avg_w_rm
+build: PASSED
+tests: SKIPPED
+```
+
+**Kernel implementation commit:**
+```
+[ttnn-kernel-writer] stage 7: implement tilize+reduce+untilize kernels
+
+- Reader: TensorAccessor for input sticks, generate_reduce_scaler
+- Compute: tilize_helpers, reduce_helpers, untilize_helpers
+- Writer: TensorAccessor for output sticks
+- Fixed CB c_0 config: page_size=tile_size, num_pages=Wt
+
+operation: reduce_avg_w_rm
+build: PASSED
+tests: stage7=9/9 PASS
+```
+
+## Git Commands
+
+### Standard Commit Sequence
+
+```bash
+# 1. Stage all changes
+git add -A
+
+# 2. Create commit with proper format (use heredoc for multiline)
+git commit -m "$(cat <<'EOF'
+[{agent-name}] {stage}: {description}
+
+- Key change 1
+- Key change 2
+
+operation: {op_name}
+build: {status}
+tests: {status}
+EOF
+)"
+```
+
+### Checking What Changed
+
+Before committing, verify your changes:
+```bash
+# See what files changed
+git status
+
+# See actual code changes
+git diff
+
+# See staged changes
+git diff --cached
+```
+
+## File Type Awareness (CRITICAL)
+
+Different file types have different build requirements:
+
+| File Location | Type | Rebuild Required? |
+|---------------|------|-------------------|
+| `device/kernels/**/*.cpp` | Kernel | NO (runtime compile) |
+| `*.cpp` outside kernels/ | Host | **YES** |
+| `*.hpp` | Header | **YES** if included by host code |
+| `*.py` | Python | NO |
+
+**CRITICAL**: If you modify ANY host files (program_factory.cpp, device_operation.cpp, etc.), you MUST:
+1. Run `./build_metal.sh -b Debug`
+2. Verify build succeeds
+3. THEN run tests
+4. THEN commit
+
+Tests against stale builds produce FALSE RESULTS.
+
+## Git Commit Checklist
+
+Before each commit:
+- [ ] All intended changes are staged (`git status`)
+- [ ] Commit message follows format with agent name
+- [ ] If host files modified: build was run and passed
+- [ ] Commit message includes build/test status
+
+---
+
+# PART 2: BREADCRUMBS (CONDITIONAL)
+
+Breadcrumb logging is **CONDITIONAL** based on orchestrator instructions.
+
+## Determining Breadcrumb Status
+
+Check your invocation prompt for these phrases:
+- "with execution logging" → **ENABLED**
+- "enable logging" → **ENABLED**
+- "enable detailed logging" → **ENABLED**
+- "with breadcrumbs" → **ENABLED**
+- None of the above → **DISABLED**
+
+**If ENABLED**: You MUST follow ALL breadcrumb steps below. This is not optional.
+**If DISABLED**: Skip all breadcrumb steps. Do not create breadcrumb files.
+
+---
+
+## Quick Reference (If Breadcrumbs Enabled)
 
 | Script | Purpose | Location |
 |--------|---------|----------|
@@ -26,7 +188,7 @@ If none of these are present, **skip all logging steps**.
 
 ---
 
-## Breadcrumb Initialization
+## Breadcrumb Initialization (If Enabled)
 
 At the **start of execution**, after identifying the operation path:
 
@@ -49,7 +211,7 @@ mkdir -p {operation_path}/agent_logs
 
 ---
 
-## Appending Breadcrumbs
+## Appending Breadcrumbs (If Enabled)
 
 Use this pattern at key decision points:
 
@@ -76,6 +238,7 @@ Before executing an action:
 {"event":"action","type":"build","command":"./build_metal.sh -b Debug"}
 {"event":"action","type":"script_run","script":"generate_files.py","args":["--force"]}
 {"event":"action","type":"test","command":"pytest test_file.py"}
+{"event":"action","type":"git_commit","message":"[agent] stage X: description"}
 ```
 
 ### result
@@ -84,6 +247,7 @@ After an action completes:
 {"event":"result","type":"build","success":true}
 {"event":"result","type":"build","success":false,"error":"missing semicolon","error_type":"build_error"}
 {"event":"result","type":"script_run","script":"generate_files.py","success":true,"output":"Created 12 files"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"abc1234"}
 ```
 
 ### hypothesis
@@ -120,7 +284,7 @@ Issues with input from predecessor agent:
 ### complete
 At end of execution:
 ```json
-{"event":"complete","final_status":"SUCCESS","stages_completed":[1,2,3]}
+{"event":"complete","final_status":"SUCCESS","stages_completed":[1,2,3],"final_commit":"abc1234"}
 ```
 
 ---
@@ -151,12 +315,13 @@ No additional event types beyond common ones. Uses `action/result` with `type":"
 | `correctness_test` | Test case results | `{"event":"correctness_test","test_name":"test_basic","expected":"0.07","actual":"0.07","pass":true}` |
 | `numerical_debug` | Debugging wrong values | `{"event":"numerical_debug","symptom":"values 10x smaller","finding":"scaler format wrong"}` |
 | `design_compliance_summary` | Final compliance check | `{"event":"design_compliance_summary","total_phases":5,"all_compliant":true}` |
+| `host_file_modified` | Track host file changes | `{"event":"host_file_modified","file":"program_factory.cpp","build_required":true}` |
 
 ---
 
-## Finalization: Writing the Execution Log
+## Finalization: Writing the Execution Log (If Breadcrumbs Enabled)
 
-**MANDATORY if logging enabled**: Before reporting completion, write the structured execution log.
+**MANDATORY if breadcrumbs enabled**: Before reporting completion, write the structured execution log.
 
 ### Step 1: Read the Log Template
 ```
@@ -179,6 +344,7 @@ Include ALL sections from the template, with special attention to:
 - **Section 3**: Recovery summary
 - **Section 6**: Handoff notes for next agent
 - **Section 7**: Instruction improvement recommendations
+- **Section 8**: Git commit history for this agent
 
 ---
 
@@ -228,9 +394,14 @@ Include ALL sections from the template, with special attention to:
 |-----------|-------------|-----------|--------|
 | {name} | {shape} | rtol/atol | PASS/FAIL |
 
+**Host Files Modified:**
+| File | Build Required | Build Ran | Build Result |
+|------|----------------|-----------|--------------|
+| {path} | YES/NO | YES/NO | PASS/FAIL/N/A |
+
 ---
 
-## Example Breadcrumb Sequences
+## Example Breadcrumb Sequences (If Enabled)
 
 ### Successful Run (scaffolder)
 ```jsonl
@@ -240,22 +411,30 @@ Include ALL sections from the template, with special attention to:
 {"ts":"...","event":"result","type":"script_run","script":"generate_files.py","success":true}
 {"ts":"...","event":"action","type":"build","command":"./build_metal.sh -b Debug"}
 {"ts":"...","event":"result","type":"build","success":true}
+{"ts":"...","event":"action","type":"git_commit","message":"[ttnn-operation-scaffolder] stage 1-3: scaffolding complete"}
+{"ts":"...","event":"result","type":"git_commit","success":true,"commit_sha":"abc1234"}
 {"ts":"...","event":"test","stage":1,"result":"PASS"}
 {"ts":"...","event":"test","stage":2,"result":"PASS"}
 {"ts":"...","event":"test","stage":3,"result":"PASS"}
-{"ts":"...","event":"complete","final_status":"SUCCESS","stages_completed":[1,2,3]}
+{"ts":"...","event":"complete","final_status":"SUCCESS","stages_completed":[1,2,3],"final_commit":"abc1234"}
 ```
 
 ### Run with Error Recovery (factory-builder)
 ```jsonl
 {"ts":"...","event":"start","agent":"ttnn-factory-builder","operation":"reduce_op"}
 {"ts":"...","event":"cb_config","cb_id":"c_0","page_size":2048,"num_pages":2,"purpose":"input"}
+{"ts":"...","event":"action","type":"build","command":"./build_metal.sh -b Debug"}
+{"ts":"...","event":"result","type":"build","success":true}
+{"ts":"...","event":"action","type":"git_commit","message":"[ttnn-factory-builder] stage 5: initial CB config"}
+{"ts":"...","event":"result","type":"git_commit","success":true,"commit_sha":"def5678"}
 {"ts":"...","event":"tdd_cycle","stage":6,"phase":"GREEN_ATTEMPT","result":"TIMEOUT"}
 {"ts":"...","event":"hang_debug","symptom":"timeout","diagnosis":"CB sync mismatch"}
 {"ts":"...","event":"hypothesis","id":"H1","description":"Compute pops fewer tiles than reader pushes","confidence":"HIGH"}
 {"ts":"...","event":"recovery","hypothesis_id":"H1","action":"Fixed compute to consume all inputs","file":"compute.cpp"}
+{"ts":"...","event":"action","type":"git_commit","message":"[ttnn-factory-builder] fix: CB sync for shape-changing op"}
+{"ts":"...","event":"result","type":"git_commit","success":true,"commit_sha":"ghi9012"}
 {"ts":"...","event":"tdd_cycle","stage":6,"phase":"GREEN","result":"PASS"}
-{"ts":"...","event":"complete","final_status":"SUCCESS","stages_completed":[4,5,6]}
+{"ts":"...","event":"complete","final_status":"SUCCESS","stages_completed":[4,5,6],"final_commit":"ghi9012"}
 ```
 
 ---
@@ -269,10 +448,18 @@ Use these for `input_parse` confidence:
 
 ---
 
-## Checklist Before Completing (if logging enabled)
+## Checklist Before Completing
 
+### Git (ALWAYS Required)
+- [ ] All code changes committed
+- [ ] Commit messages follow format with agent name
+- [ ] If host files modified: build ran before final commit
+- [ ] Final commit SHA recorded
+
+### Breadcrumbs (If Enabled)
 - [ ] Breadcrumbs initialized at start
 - [ ] Key events logged during execution
+- [ ] Git commits logged as events
 - [ ] Breadcrumbs file read before writing log
 - [ ] Log template read and followed
 - [ ] All sections filled in execution log

@@ -7,6 +7,8 @@ hooks:
   Stop:
     - hooks:
         - type: command
+          command: ".claude/scripts/logging/auto_commit.sh ttnn-operation-scaffolder"
+        - type: command
           command: "echo 'LOGGING REMINDER: If logging is enabled, ensure execution log is written before completing.'"
 ---
 
@@ -43,7 +45,14 @@ You orchestrate scripts and use your own LLM capabilities:
 5. Build                 → Run build
 6. Run Stage 1-3 tests   → Verify scaffolding is complete
 7. YOU fix errors        → If build/tests fail (use your LLM capabilities)
+8. Git commit            → Commit with agent name and stage info
 ```
+
+---
+
+## Required Reading
+
+- `.claude/references/agent-execution-logging.md` - **READ THIS FILE** for git commit requirements (Part 1 is ALWAYS required)
 
 ---
 
@@ -608,13 +617,54 @@ The spec file at {actual_operation_path}/{operation_name}_spec.md contains CB re
 
 ---
 
-## Execution Logging (Conditional)
+## Git Commits (ALWAYS REQUIRED)
 
-Logging is **OPTIONAL**. Enable only if the main agent includes "with execution logging", "enable logging", or similar in the prompt.
+Git commits are **MANDATORY** regardless of breadcrumb settings. Read `.claude/references/agent-execution-logging.md` Part 1.
 
-**If logging is NOT enabled**: Skip all logging steps below.
+### When to Commit
+- **MUST**: After successful build
+- **MUST**: After all stage 1-3 tests pass (before handoff)
+- **SHOULD**: After fixing any build error
 
-**If logging IS enabled**: Follow the instructions in `.claude/references/agent-execution-logging.md`:
+### Commit Message Format
+```
+[ttnn-operation-scaffolder] stage 1-3: {concise description}
+
+- {key change 1}
+- {key change 2}
+
+operation: {operation_name}
+build: PASSED
+tests: stage1=PASS, stage2=PASS, stage3=PASS
+```
+
+### Example Commit
+```bash
+git add -A && git commit -m "$(cat <<'EOF'
+[ttnn-operation-scaffolder] stage 1-3: scaffold reduce_avg_w_rm
+
+- Generated 9 implementation files + 3 test files
+- Integrated with CMake and nanobind
+- Fixed launch_on_device -> launch API call
+
+operation: reduce_avg_w_rm
+build: PASSED
+tests: stage1=PASS, stage2=PASS, stage3=PASS
+EOF
+)"
+```
+
+---
+
+## Breadcrumbs (Conditional)
+
+Breadcrumbs are **CONDITIONAL**. Check your invocation prompt:
+- "with execution logging", "enable logging", "with breadcrumbs" → **ENABLED**
+- None of these phrases → **DISABLED**
+
+**If DISABLED**: Skip breadcrumb steps. Git commits still required.
+
+**If ENABLED**: You MUST follow ALL breadcrumb instructions in `.claude/references/agent-execution-logging.md` Part 2:
 - **Agent name**: `ttnn-operation-scaffolder`
 - **Predecessor**: `""` (first in pipeline) or `ttnn-operation-planner`
 - **Agent-specific events**: Uses standard `action/result` with `type: "script_run"` for script executions
