@@ -187,6 +187,9 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
         WriterDataMovementConfig(writer_compile_time_args));
 
     // compute
+    //
+    uint32_t single_sblock_wh = single_block_size * single_block_size / single_sblock_size;
+    uint32_t single_sblock_cliff_col_wh = single_block_size_cliff_col * single_block_size / single_sblock_size;
 
     if (!core_range.empty()) {
         CreateKernel(
@@ -194,7 +197,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             core_range,
             ComputeConfig{
-                .fp32_dest_acc_en = fp32_llk_acc, .compile_args = {single_block_size, single_block_size, third_dim}});
+                .fp32_dest_acc_en = fp32_llk_acc, .compile_args = {single_sblock_wh, single_sblock_size, third_dim}});
     }
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
@@ -222,7 +225,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
-                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
+                .compile_args = {single_sblock_cliff_col_wh, single_sblock_size, third_dim}});
     }
 
     // RUNTIME ARGS
@@ -276,11 +279,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
 
         // writer runtime args
         const std::array writer_rt_args = {
-            dst_buffer->address(),
-            tile_start_id,
-            single_block_size_row_arg,
-            single_block_size_col_arg,
-            single_sblock_size_row_arg};
+            dst_buffer->address(), tile_start_id, single_block_size_row_arg, single_block_size_col_arg};
 
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
