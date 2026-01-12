@@ -532,7 +532,6 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                 }
             } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
                 mem_config_actual = compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
-                ;
                 log_debug(
                     tt::LogOp,
                     "BinaryNgDeviceOperation: Using memory config from input tensor B since it has a larger shard "
