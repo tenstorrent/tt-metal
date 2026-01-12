@@ -67,6 +67,7 @@ class QwenImagePipeline:
         self,
         *,
         mesh_device: ttnn.MeshDevice,
+        checkpoint_name: str = "Qwen/Qwen-Image",
         use_torch_text_encoder: bool = False,
         use_torch_vae_decoder: bool = False,
         parallel_config: DiTParallelConfig,
@@ -76,10 +77,15 @@ class QwenImagePipeline:
         num_links: int,
         height: int = 1024,
         width: int = 1024,
-        is_fsdp: bool = False,
+        is_fsdp: bool = False,  # This only appies to the transformer model.
         dynamic_load_encoder: bool = True,  # Set to true if it wouldn't fit with the transformer given the configuration
         dynamic_load_vae: bool = False,  # Set to true if it wouldn't fit with the transformer given the configuration
     ) -> None:
+        if dynamic_load_encoder or dynamic_load_vae:
+            assert (
+                cache.cache_dir_is_set()
+            ), "Dynamic loading of encoder or vae is enabled but the cache directory (env variable TT_DIT_CACHE_DIR) is not set."
+
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
         self._height = height
@@ -139,7 +145,6 @@ class QwenImagePipeline:
 
         logger.info("loading models...")
 
-        checkpoint_name = "Qwen/Qwen-Image"
         text_encoder_checkpoint_name = "Qwen/Qwen2.5-VL-7B-Instruct"
 
         torch_transformer = diffusers.QwenImageTransformer2DModel.from_pretrained(
@@ -226,6 +231,7 @@ class QwenImagePipeline:
             not dynamic_load_encoder or use_torch_text_encoder
         ):  # Implies we have enough space. VAE comes after denoising, so load all transformers now.
             self._load_transformers(self.encoder_submesh_idx)
+
         # Always load transformers for vae since it comes before VAE
         self._load_transformers(self.vae_submesh_idx)
 
