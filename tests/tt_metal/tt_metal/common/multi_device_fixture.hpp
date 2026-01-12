@@ -247,7 +247,7 @@ protected:
         const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
         const size_t num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
         const size_t requested_devices = 4;  // 1x4 mesh
-        
+
         if (cluster_type == tt::tt_metal::ClusterType::P150_X8 && num_devices > requested_devices) {
             GTEST_SKIP() << fmt::format(
                 "Skipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: "
