@@ -440,8 +440,7 @@ std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::a
         } else {
             // for debugging reasons, I want to report the type that is not managed
             std::ostringstream oss;
-            oss << "[ unsupported type"
-                << " , ";
+            oss << "[ unsupported type" << " , ";
             auto demangled_name = graph_demangle(element.type().name());
             boost::algorithm::replace_all(demangled_name, "__1::", "");
             oss << demangled_name;

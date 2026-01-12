@@ -13,7 +13,7 @@
 namespace ttnn::operations::experimental::ccl::strided_all_gather_async {
 
 StridedAllGatherAsync::program_factory_t StridedAllGatherAsync::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::StridedAllGatherAsyncProgramFactory{};
 }
 

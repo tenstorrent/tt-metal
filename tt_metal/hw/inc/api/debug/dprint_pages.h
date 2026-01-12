@@ -6,6 +6,21 @@
 #pragma once
 #include "api/debug/dprint.h"
 
+#if (                                                            \
+    defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || \
+    (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC != 1)))
+inline void print_cb_details(uint32_t cb_id) {
+    DPRINT << "cb_id " << cb_id << ": { "
+           << "size: " << get_local_cb_interface(cb_id).fifo_size << ", "
+           << "limit: " << get_local_cb_interface(cb_id).fifo_limit << ", "
+           << "page_size: " << get_local_cb_interface(cb_id).fifo_page_size << ", "
+           << "num_pages: " << get_local_cb_interface(cb_id).fifo_num_pages << ", "
+           << "rd_ptr: " << get_local_cb_interface(cb_id).fifo_rd_ptr << ", "
+           << "wr_ptr: " << get_local_cb_interface(cb_id).fifo_wr_ptr << ", "
+           << "wr_tile_ptr: " << get_local_cb_interface(cb_id).fifo_wr_tile_ptr << " }" << ENDL();
+}
+#endif
+
 #if (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)) && defined(DEBUG_PRINT_ENABLED) && \
     !defined(FORCE_DPRINT_OFF)
 

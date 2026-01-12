@@ -449,15 +449,15 @@ void py_module(nb::module_& mod) {
             "Number of entries in the program cache for this device")
         .def(
             "sfpu_eps",
-            [](MeshDevice* device) { return tt::tt_metal::hal::get_eps(); },
+            [](MeshDevice* /*device*/) { return tt::tt_metal::hal::get_eps(); },
             R"doc(Returns machine epsilon value for current architecture.)doc")
         .def(
             "sfpu_nan",
-            [](MeshDevice* device) { return tt::tt_metal::hal::get_nan(); },
+            [](MeshDevice* /*device*/) { return tt::tt_metal::hal::get_nan(); },
             R"doc(Returns NaN value for current architecture.)doc")
         .def(
             "sfpu_inf",
-            [](MeshDevice* device) { return tt::tt_metal::hal::get_inf(); },
+            [](MeshDevice* /*device*/) { return tt::tt_metal::hal::get_inf(); },
             R"doc(Returns Infinity value for current architecture.)doc")
         .def(
             "worker_core_from_logical_core",
@@ -562,8 +562,8 @@ void py_module(nb::module_& mod) {
             })
         .def(
             "__eq__",
-            [](const MeshMapperConfig::Replicate& lhs, const MeshMapperConfig::Replicate& rhs) { return true; })
-        .def("__ne__", [](const MeshMapperConfig::Replicate& lhs, const MeshMapperConfig::Replicate& rhs) {
+            [](const MeshMapperConfig::Replicate& /*lhs*/, const MeshMapperConfig::Replicate& /*rhs*/) { return true; })
+        .def("__ne__", [](const MeshMapperConfig::Replicate& /*lhs*/, const MeshMapperConfig::Replicate& /*rhs*/) {
             return false;
         });
     auto py_mesh_mapper_config = static_cast<nb::class_<MeshMapperConfig>>(mod.attr("MeshMapperConfig"));
@@ -595,7 +595,7 @@ void py_module(nb::module_& mod) {
             [](MeshMapperConfig* t,
                std::optional<mmc_dim_t> row_dim,
                std::optional<mmc_dim_t> col_dim,
-               const std::optional<MeshShape>& mesh_shape_override) {
+               const std::optional<MeshShape>& /*mesh_shape_override*/) {
                 new (t) MeshMapperConfig;
                 t->placements.push_back(
                     row_dim ? MeshMapperConfig::Placement{MeshMapperConfig::Shard{*row_dim}}

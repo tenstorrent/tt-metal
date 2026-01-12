@@ -66,7 +66,7 @@ void MorehGetItemOperation::validate_inputs(
     TT_FATAL(dtype == output_tensor.value().dtype(), "Output tensor must have the same dtype as input tensor!");
 }
 MorehGetItemOperation::program_factory_t MorehGetItemOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto input_layout = input_tensor.layout();
     if (input_layout == Layout::ROW_MAJOR) {
