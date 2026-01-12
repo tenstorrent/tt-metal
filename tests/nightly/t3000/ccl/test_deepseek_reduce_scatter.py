@@ -205,83 +205,43 @@ def run_reduce_scatter_impl(
             ttnn.bfloat16,
             False,
             1,
-        ),  # perf, barrier_with_persistent
-        # (
-        #     [1, 1, 32, 7168],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     False,
-        #     1,
-        # ),  # check, barrier_without_persistent
-        # (
-        #     [3, 1, 41, 512],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     True,
-        #     10,
-        # ),  # perf, no_barrier_with_persistent
-        # (
-        #     [8, 1, 512, 2560],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     False,
-        #     1,
-        # ),  # check, barrier_with_persistent
-        # (
-        #     [4, 1, 1024, 2560],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     True,
-        #     10,
-        # ),  # perf, barrier_without_persistent
-        # (
-        #     [1, 1, 1024, 2560],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     False,
-        #     1,
-        # ),  # check, no_barrier_with_persistent
-        # (
-        #     [1, 1, 352, 2560],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     True,
-        #     10,
-        # ),  # perf, barrier_with_persistent
-        # (
-        #     [2, 1, 2048, 2560],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     False,
-        #     1,
-        # ),  # check, barrier_without_persistent_with_hyperparams
-        # (
-        #     [1, 1, 4096, 2560],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     True,
-        #     10,
-        # ),  # perf, no_barrier_with_persistent_with_hyperparams
+        ),
+        (
+            [1, 1, 32, 512],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+        ),
+        (
+            [1, 1, 32, 1024],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+        ),
+        (
+            [1, 1, 32, 1536],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+        ),
     ],
-    ids=[
-        "one",
-        # "two",
-        # "three",
-        # "four",
-        # "five",
-        # "six",
-        # "seven",
-        # "eight",
-        # "nine",
-    ],
+    # ids=[
+    #     "one",
+    #     "two",
+    #     "three",
+    #     "four",
+    #     "five",
+    #     "six",
+    #     "seven",
+    #     "eight",
+    #     "nine",
+    # ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_rs",
