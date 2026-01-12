@@ -61,7 +61,7 @@ LLK asserts perform runtime validation of low-level kernel operations. Common ch
    - Address mode configurations are valid
    - Unused parameters are not set (defensive programming)
 
-Example Assertions from tt-llk Code
+Examples from tt-llk Code
 ------------------------------------
 
 Here are some representative LLK asserts from the codebase:
@@ -156,14 +156,6 @@ Common failure scenarios:
 - Passing incompatible data formats between operations
 - Using narrow tiles or partial faces where not supported
 - Dimension mismatches in matrix multiplications
-
-Related Tools
--------------
-
-- **Lightweight Kernel Asserts** - For user-written compute kernel assertions
-- **Watcher** - Comprehensive device monitoring and debugging
-- **tt-triage** - Post-mortem analysis tool for hung kernels
-- **Kernel Print** - Debug output from device to host
 
 See Also
 --------
