@@ -589,7 +589,7 @@ on:
         required: true
         type: choice
         options:
-          - N300
+          - N150
           - N300
           - P100a
           - P150b
@@ -598,7 +598,7 @@ on:
           - BH-LLMBox
           - BH-DeskBox
           - BH-LoudBox
-        default: "N300"
+        default: "N150"
       log-level:
         description: "Log level for sweep execution. INFO level may overwhelm runners for long sweeps."
         required: true
@@ -616,7 +616,7 @@ on:
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
     - cron: "0 4 * * *" # This cron schedule runs the workflow at 4:00 AM UTC daily (model traced runs)
 concurrency:
-  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N300' }}-${{ github.event.inputs.sweep_name }}
+  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name }}
 
 jobs:
   display-workflow-options:
@@ -638,7 +638,7 @@ jobs:
           echo "│ Measure E2E Perf:     ${{ github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
           echo "│ Measure Memory:       ${{ github.event.inputs.measure_memory == 'true' && 'true' || 'false' }}"
           echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
-          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N300' }}"
+          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
           echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -669,11 +669,11 @@ jobs:
         include:
           # Entry 1: Manual dispatch with single sweep only
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
-            runner_label: ${{ github.event.inputs['runner-label'] || 'N300' }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
             generate_mode: all
-          # Entry 2: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - N300 for non-CCL modules
+          # Entry 2: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - N150 for non-CCL modules
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
-            runner_label: N300
+            runner_label: N150
             generate_mode: non_ccl
           # Entry 3: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - n300-llmbox for CCL modules only
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
@@ -739,7 +739,7 @@ jobs:
           # Determine which modules to skip based on generate_mode
           SKIP_MODULES_FLAG=""
           if [[ "${{ matrix.generate_mode }}" == "non_ccl" ]]; then
-            # Skip all CCL modules when generating on N300
+            # Skip all CCL modules when generating on N150
             SKIP_MODULES_FLAG="--skip-modules ccl.generality.all_broadcast,ccl.generality.all_gather,ccl.generality.all_reduce,ccl.generality.all_to_all_combine,ccl.generality.all_to_all_dispatch,ccl.generality.all_to_all,ccl.generality.point_to_point,ccl.generality.reduce_scatter"
           elif [[ "${{ matrix.generate_mode }}" == "ccl_only" ]]; then
             # Generate only CCL modules on n300-llmbox by skipping all non-CCL modules
@@ -839,9 +839,9 @@ jobs:
           include_entries = []
 
           wormhole_template = {
-              "test_group_name": "wormhole-N300-sweeps",
+              "test_group_name": "wormhole-n150-sweeps",
               "arch": "wormhole_b0",
-              "runs_on": "tt-ubuntu-2204-N300-stable",
+              "runs_on": "tt-ubuntu-2204-n150-stable",
               "tt_smi_cmd": "tt-smi -r",
           }
 
@@ -899,9 +899,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: ttnn sweep tests ${{ github.event.inputs['arch'] || 'wormhole_b0' }} ${{ github.event.inputs['runner-label'] || 'N300' }}
+          - name: ttnn sweep tests ${{ github.event.inputs['arch'] || 'wormhole_b0' }} ${{ github.event.inputs['runner-label'] || 'N150' }}
             arch: ${{ github.event.inputs['arch'] || 'wormhole_b0' }}
-            runner_label: ${{ github.event.inputs['runner-label'] || 'N300' }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -953,7 +953,7 @@ jobs:
           echo "│ Target Sweep:         ${{ github.event.inputs.sweep_name }}"
           echo "│ Suite Name:           ${{ github.event.inputs.suite_name || 'Default' }}"
           echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
-          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N300' }}"
+          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
           echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
           echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
           echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
