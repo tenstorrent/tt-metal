@@ -28,7 +28,7 @@ def test_speech_t5(device):
         text="What is your favorite condiment? There are so many condiments to choose from, each bringing its unique flavor and texture to enhance different dishes. Do you prefer the classic taste of ketchup, the creamy richness of mayonnaise, the spicy kick of mustard, or perhaps something more exotic like sriracha or hoisin sauce? Maybe you enjoy the tangy zest of salsa or the smooth and savory taste of aioli. Share what your favorite condiment is and why you love it. Does it remind you of a specific dish or meal?",
         return_tensors="pt",
     )
-    inputs["speaker_embeddings"] = torch.randn((1, 512))
+    inputs["speaker_embeddings"] = torch.randn((1, 512), dtype=torch.bfloat16)
     model.eval()  # Disables dropout, batch norm updates
     vocoder.eval()
     register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
