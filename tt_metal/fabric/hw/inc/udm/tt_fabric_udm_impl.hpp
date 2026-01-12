@@ -14,9 +14,6 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "dev_mem_map.h"
 #include <type_traits>
-#ifndef ARCH_WORMHOLE
-#include <atomic>
-#endif
 
 namespace tt::tt_fabric::udm {
 
@@ -29,19 +26,17 @@ static_assert(
 // On Wormhole, this is a no-op
 FORCE_INLINE void acquire_lock(volatile uint32_t* lock) {
 #ifndef ARCH_WORMHOLE
-    auto* atomic_lock = reinterpret_cast<volatile std::atomic<uint32_t>*>(lock);
-    while (std::atomic_exchange(atomic_lock, uint32_t(1)) != 0) {
+    while (__atomic_exchange_n(lock, 1, __ATOMIC_ACQUIRE) != 0) {
         // Spin waiting for lock to become available
     }
 #endif  // ARCH_WORMHOLE
 }
 
-// Release lock using atomic exchange
+// Release lock using atomic store
 // On Wormhole, this is a no-op
 FORCE_INLINE void release_lock(volatile uint32_t* lock) {
 #ifndef ARCH_WORMHOLE
-    auto* atomic_lock = reinterpret_cast<volatile std::atomic<uint32_t>*>(lock);
-    std::atomic_exchange(atomic_lock, uint32_t(0));
+    __atomic_store_n(lock, 0, __ATOMIC_RELEASE);
 #endif  // ARCH_WORMHOLE
 }
 
