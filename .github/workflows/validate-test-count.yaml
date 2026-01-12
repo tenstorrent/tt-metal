@@ -32,27 +32,9 @@ jobs:
           # Function to count test functions including parametrize expansions
           count_tests() {
             local dir=$1
-            find "$dir" -name "test_*.py" -type f -print0 | xargs -0 python3 << 'EOF'
-import ast, sys
-total = 0
-for filepath in sys.argv[1:]:
-    try:
-        with open(filepath) as f:
-            tree = ast.parse(f.read())
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_'):
-                mult = 1
-                for dec in node.decorator_list:
-                    if isinstance(dec, ast.Call) and hasattr(dec.func, 'attr') and dec.func.attr == 'parametrize' and len(dec.args) >= 2:
-                        val = dec.args[1]
-                        if isinstance(val, (ast.List, ast.Tuple)):
-                            mult *= len(val.elts)
-                total += mult
-    except: pass
-print(total)
-EOF
+            python3 .github/scripts/count_tests.py "$dir"
           }
-
+          
           # Count tests in PR branch
           echo "=== PR branch test counts ==="
           declare -A pr_counts
