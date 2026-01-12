@@ -280,6 +280,11 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
         buffer[i] = 0;
     }
 
+    // Early exit for invalid range (all NOOPs)
+    if (range_hops == 0) {
+        return;
+    }
+
     // Last hop in the multicast range (inclusive)
     const uint32_t last_hop = start_hop - 1 + range_hops - 1;
 
