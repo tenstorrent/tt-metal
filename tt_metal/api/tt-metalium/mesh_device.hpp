@@ -76,45 +76,6 @@ class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevic
 private:
     MeshDevice() = default;
 
-    // TODO(#31961): Moved to MeshDeviceImpl, need to wait for deprecation period expiry of local_root_devices, before
-    // this can be removed. My bad.
-    class ScopedDevices {
-    private:
-        std::vector<MaybeRemote<IDevice*>> devices_;
-        std::map<ChipId, IDevice*> opened_local_devices_;
-
-    public:
-        // Constructor acquires physical resources
-        ScopedDevices(
-            size_t l1_small_size,
-            size_t trace_region_size,
-            size_t num_command_queues,
-            size_t worker_l1_size,
-            const DispatchCoreConfig& dispatch_core_config,
-            const MeshDeviceConfig& config);
-        ScopedDevices(
-            const std::vector<MaybeRemote<int>>& all_device_ids,
-            const std::vector<MaybeRemote<int>>& active_device_ids,
-            size_t l1_small_size,
-            size_t trace_region_size,
-            size_t num_command_queues,
-            size_t worker_l1_size,
-            const DispatchCoreConfig& dispatch_core_config);
-
-        // Destructor releases physical resources
-        ~ScopedDevices();
-        ScopedDevices(const ScopedDevices&) = delete;
-        ScopedDevices& operator=(const ScopedDevices&) = delete;
-
-        // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
-        [[deprecated("This function is deprecated. Use opened_local_devices() instead.")]]
-        const std::vector<IDevice*>& local_root_devices() const;
-
-        const std::map<ChipId, IDevice*>& opened_local_devices() const;
-
-        const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
-    };
-
     std::unique_ptr<MeshDeviceImpl> pimpl_;
 
 public:
