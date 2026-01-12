@@ -100,7 +100,7 @@ def check_noc_status(
         message = (
             "Mismatched state: \n"
             + message
-            + "\n. Either the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung."
+            + "\nEither the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung."
         )
 
     log_check_location(location, passed, message)
