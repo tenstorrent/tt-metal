@@ -651,13 +651,27 @@ def get_rope_tensors(
     return rope_setup.get_rot_mats(position_ids)
 
 
+# Mapping of system names to their corresponding mesh shapes
+SYSTEM_NAME_TO_MESH_SHAPE: dict[str, tuple[int, int]] = {
+    "TG": (4, 8),
+    "DUAL": (8, 8),
+    "QUAD": (16, 8),
+    "T3K": (1, 8),
+    "N300": (1, 2),
+    "N150": (1, 1),
+}
+
+
+def get_valid_system_names() -> tuple[str, ...]:
+    return tuple(SYSTEM_NAME_TO_MESH_SHAPE.keys())
+
+
 def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:
-    if system_name == "TG":
-        return ttnn.MeshShape(4, 8)
-    elif system_name == "T3K":
-        return ttnn.MeshShape(1, 8)
-    elif system_name == "DUAL":
-        return ttnn.MeshShape(8, 8)
-    elif system_name == "QUAD":
-        return ttnn.MeshShape(16, 8)
-    raise ValueError(f"Unsupported system name: {system_name}. Supported values are T3K, TG, DUAL, and QUAD.")
+    if system_name not in SYSTEM_NAME_TO_MESH_SHAPE:
+        valid_system_names = get_valid_system_names()
+        raise ValueError(
+            f"Unsupported system name: {system_name}. Supported values are {', '.join(valid_system_names)}."
+        )
+
+    rows, cols = SYSTEM_NAME_TO_MESH_SHAPE[system_name]
+    return ttnn.MeshShape(rows, cols)

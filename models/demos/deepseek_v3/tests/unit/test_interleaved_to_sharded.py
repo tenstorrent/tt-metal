@@ -112,13 +112,14 @@ DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
 ]
 
 
+@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )
 @pytest.mark.parametrize("test_config", DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("enable_trace", [True, False])
-def test_concat_deepseek(mesh_device, test_config, layout, enable_trace):
+def test_interleaved_to_sharded_deepseek(mesh_device, test_config, layout, enable_trace):
     output_mem_config, shape, dtype, input_mem_config = test_config
     torch_input = torch.rand(shape).bfloat16()
 

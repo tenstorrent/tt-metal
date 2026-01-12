@@ -30,6 +30,10 @@ run_python_model_tests_grayskull() {
 }
 
 run_python_model_tests_wormhole_b0() {
+    # DeepSeekV3
+    pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    MESH_DEVICE=AUTO pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
+
     # Falcon tests
     # attn_matmul_from_cache is currently not used in falcon7b
     pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_attn_matmul.py -k "not attn_matmul_from_cache"
