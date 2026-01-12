@@ -251,7 +251,15 @@ protected:
     }
 };
 
-class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {};
+class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {
+protected:
+    void SetUp() override {
+        if (devices_.size() < 8) {
+            GTEST_SKIP() << "Test requires at least 8 devices (2x4 mesh), found " << devices_.size();
+        }
+        Fabric2DUDMModeFixture::SetUp();
+    }
+};
 
 class NightlyFabric2DFixture : public BaseFabricFixture {
 protected:
