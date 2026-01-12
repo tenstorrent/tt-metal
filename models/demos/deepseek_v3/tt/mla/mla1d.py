@@ -44,6 +44,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.tensor_logger import log_tensor
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -771,6 +772,10 @@ class MLA1D(AbstractModule):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
+        x_original: ttnn.Tensor | None = None,
+        x_initial_torch: torch.Tensor | None = None,
+        x_to_torch=None,
+        comp_pcc_and_assert=None,
     ) -> ttnn.Tensor:
         """Forward pass of MLA in decode mode.
 
@@ -780,6 +785,10 @@ class MLA1D(AbstractModule):
             position_idxs: List of position indices for the current batch
             rope_tensors: Dictionary containing RoPE tensors
             page_table: Page table tensor for paged attention
+            x_original: Original x tensor from decoder block to check for modifications (optional)
+            x_initial_torch: Initial x tensor in torch format for PCC checks (optional)
+            x_to_torch: Function to convert ttnn.Tensor to torch.Tensor (optional)
+            comp_pcc_and_assert: Function to compare and assert PCC values (optional)
         Returns:
             Output tensor after MLA computation
 
@@ -802,10 +811,34 @@ class MLA1D(AbstractModule):
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after wq_a linear")
         tt_q = ttnn.experimental.reduce_scatter_minimal_async(
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_decode"])
         )
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after wq_a reduce_scatter")
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_decode"]))
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after wq_a all_gather")
 
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
@@ -837,28 +870,101 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
 
         tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after wq_a all_to_all")
 
         # KVPE Stuff
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after wkv_a linear")
 
         # AG + Reduce b/c sub-tile RS not supported
         tt_kv = ttnn.experimental.all_gather_async(
             tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_decode"])
         )  # [1, num_devices, bsz, kv_lora_rank + qk_rope_head_dim]
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after wkv_a all_gather")
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv, **cfg["wkv_a_r_decode"]
         )  # [1, 1, bsz, kv_lora_rank + qk_rope_head_dim]
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after wkv_a fast_reduce_nc")
 
         tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, bsz, kv_lora_rank])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe slice1")
+
         tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz, kv_lora_rank + qk_rope_head_dim])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe slice2")
         ttnn.deallocate(tt_kv)
 
         # KV Norm
         tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe rmsnorm")
 
         # KV RoPE
         tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, bsz, 1, qk_rope_head_dim]
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe permute0")
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe rope reshard")
         # TODO: Use DP tensors
         # Currently, not using DP tensors because sub-tile RS is not supported
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
@@ -868,21 +974,101 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after rope")
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_out_reshard"])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe to_memory_config")
         tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, 1, bsz, qk_rope_head_dim]
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe permute1")
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe concat")
 
         # FIXME: Reduce-Scatter here!! (tt_kvpe)
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe pad")
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe permute")
         tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(
             tt_kvpe, **ccl.populate_reduce_scatter_runtime_args(cfg["wkv_a_rs_decode"])
         )
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after wkv_a reduce_scatter")
         tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe pad")
         tt_kvpe = tt_kvpe * scale  # Scale the input tensor
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe mul")
 
         tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after kvpe to_memory_config")
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
@@ -894,9 +1080,85 @@ class MLA1D(AbstractModule):
             page_table=page_table,
             mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
         )
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after paged_update_cache")
 
         # FlashMLA
         tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after flash_mla to_memory_config")
+
+        # Synchronize device before logging to ensure all operations are complete
+        if hasattr(tt_q, "device"):
+            ttnn.synchronize_device(tt_q.device())
+
+        # Log all inputs and parameters for paged_flash_multi_latent_attention_decode
+        log_tensor(tt_q, "flash_mla_decode_input", "tt_q")
+        log_tensor(kvpe_cache, "flash_mla_decode_input", "kvpe_cache")
+        log_tensor(page_table, "flash_mla_decode_input", "page_table")
+        log_tensor(position_idxs, "flash_mla_decode_input", "position_idxs")
+
+        # Log configuration parameters from cfg["flash_mla"]
+        def serialize_config_value(value):
+            """Serialize config values, extracting attributes from config objects."""
+            # Handle WormholeComputeKernelConfig
+            if isinstance(value, ttnn.WormholeComputeKernelConfig):
+                return {
+                    "type": "WormholeComputeKernelConfig",
+                    "math_fidelity": str(value.math_fidelity),
+                    "math_approx_mode": value.math_approx_mode,
+                    "fp32_dest_acc_en": value.fp32_dest_acc_en,
+                    "packer_l1_acc": value.packer_l1_acc,
+                }
+            # Handle SDPAProgramConfig
+            elif isinstance(value, ttnn.SDPAProgramConfig):
+                grid_size = value.compute_with_storage_grid_size
+                return {
+                    "type": "SDPAProgramConfig",
+                    "compute_with_storage_grid_size": (grid_size.x, grid_size.y),
+                    "q_chunk_size": value.q_chunk_size,
+                    "k_chunk_size": value.k_chunk_size,
+                    "exp_approx_mode": value.exp_approx_mode,
+                }
+            # Handle MemoryConfig
+            elif isinstance(value, ttnn.MemoryConfig):
+                return {
+                    "type": "MemoryConfig",
+                    "memory_layout": str(value.memory_layout),
+                    "buffer_type": str(value.buffer_type),
+                    "shard_spec": str(value.shard_spec) if value.shard_spec is not None else None,
+                }
+            # Handle other non-serializable objects
+            elif isinstance(value, (dict, list, tuple)):
+                return str(value)
+            elif hasattr(value, "__dict__"):
+                return str(value)
+            else:
+                return value
+
+        flash_mla_config = {}
+        for key, value in cfg["flash_mla"].items():
+            flash_mla_config[key] = serialize_config_value(value)
+
+        log_tensor(
+            tt_q,  # Use tt_q as placeholder tensor for logging config
+            "flash_mla_decode_config",
+            "flash_mla_config",
+            additional_info={"config": flash_mla_config},
+        )
+
         attn_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             tt_q,
             kvpe_cache,
@@ -905,9 +1167,35 @@ class MLA1D(AbstractModule):
             **cfg["flash_mla"],
         )  #  [1, bsz_local, num_heads, kv_lora_rank]
         ttnn.deallocate(tt_q)
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(
+                x_initial_torch, x_to_torch(x_original), "MLA1D: after paged_flash_multi_latent_attention_decode"
+            )
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after flash_mla reshard")
 
         attn_out = ttnn.experimental.all_to_all_async_generic(attn_out, **cfg["flash_mla_a2a_decode"])
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after flash_mla all_to_all")
 
         # wkv_b2
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
@@ -917,10 +1205,26 @@ class MLA1D(AbstractModule):
         v_out = ttnn.experimental.all_gather_async(
             v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
         )  # [1, num_heads, bsz, v_head_dim]
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after wo all_gather")
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
+        if (
+            x_original is not None
+            and x_initial_torch is not None
+            and x_to_torch is not None
+            and comp_pcc_and_assert is not None
+        ):
+            ttnn.synchronize_device(x_original.device())
+            comp_pcc_and_assert(x_initial_torch, x_to_torch(x_original), "MLA1D: after wo linear (final)")
 
         return out
 

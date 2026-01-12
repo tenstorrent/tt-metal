@@ -162,7 +162,17 @@ class DecoderBlock2DBase(DecoderBlockBase):
 
         # MLA forward
         comp_pcc_and_assert(x_initial_torch, x_to_torch(x), "before x_initial_torch vs x")
-        mla_out = MLA2D.forward_decode(mla_norm_out, position_idxs, cfg["mla"], rope_tensors, page_table)
+        mla_out = MLA2D.forward_decode(
+            mla_norm_out,
+            position_idxs,
+            cfg["mla"],
+            rope_tensors,
+            page_table,
+            x_original=x,
+            x_initial_torch=x_initial_torch,
+            x_to_torch=x_to_torch,
+            comp_pcc_and_assert=comp_pcc_and_assert,
+        )
         ttnn.synchronize_device(x.device())
         log_tensor(mla_out, "mla", "mla_out")
         ttnn.deallocate(mla_norm_out)

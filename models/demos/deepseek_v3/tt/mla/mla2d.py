@@ -150,6 +150,10 @@ class MLA2D(MLA1D):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
+        x_original: ttnn.Tensor | None = None,
+        x_initial_torch: torch.Tensor | None = None,
+        x_to_torch=None,
+        comp_pcc_and_assert=None,
     ) -> ttnn.Tensor:
         """Forward pass of MLA in decode mode.
 
@@ -159,6 +163,10 @@ class MLA2D(MLA1D):
             position_idxs: List of position indices for the current batch
             rope_tensors: Dictionary containing RoPE tensors
             page_table: Page table tensor for paged attention
+            x_original: Original x tensor from decoder block to check for modifications (optional)
+            x_initial_torch: Initial x tensor in torch format for PCC checks (optional)
+            x_to_torch: Function to convert ttnn.Tensor to torch.Tensor (optional)
+            comp_pcc_and_assert: Function to compare and assert PCC values (optional)
         Returns:
             Output tensor after MLA computation
 
@@ -170,6 +178,10 @@ class MLA2D(MLA1D):
             cfg=cfg["mla1d"],
             rope_tensors=rope_tensors,
             page_table=page_table,
+            x_original=x_original,
+            x_initial_torch=x_initial_torch,
+            x_to_torch=x_to_torch,
+            comp_pcc_and_assert=comp_pcc_and_assert,
         )
 
     @classmethod

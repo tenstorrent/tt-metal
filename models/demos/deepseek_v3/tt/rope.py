@@ -7,6 +7,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
 from models.demos.deepseek_v3.utils.config_helpers import find_largest_divisor
+from models.demos.deepseek_v3.utils.tensor_logger import log_tensor
 
 
 def get_rot_transformation_mat():
@@ -229,8 +230,13 @@ class RotarySetup:
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, dim]
 
+        log_tensor(cos, "get_rot_mats", "cos_before_transpose")
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
+        log_tensor(cos, "get_rot_mats", "cos_after_transpose")
+
+        log_tensor(sin, "get_rot_mats", "sin_before_transpose")
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
+        log_tensor(sin, "get_rot_mats", "sin_after_transpose")
 
         if self.batch_size_per_row % ttnn.TILE_SIZE != 0:
             cos = cos[:, : self.batch_size_per_row, :, :]
@@ -276,8 +282,13 @@ class RotarySetup:
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, dim]
 
+        log_tensor(cos, "get_rot_mats_from_rot_idxs", "cos_before_transpose")
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
+        log_tensor(cos, "get_rot_mats_from_rot_idxs", "cos_after_transpose")
+
+        log_tensor(sin, "get_rot_mats_from_rot_idxs", "sin_before_transpose")
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
+        log_tensor(sin, "get_rot_mats_from_rot_idxs", "sin_after_transpose")
 
         if self.batch_size_per_row % ttnn.TILE_SIZE != 0:
             cos = cos[:, : self.batch_size_per_row, :, :]
