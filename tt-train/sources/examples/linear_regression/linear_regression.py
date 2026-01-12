@@ -30,7 +30,6 @@ from sklearn.metrics import mean_squared_error, r2_score
 # ---------------------------------------------------------------------------
 # Import TTML (adjust path if needed)
 # ---------------------------------------------------------------------------
-sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
 import ttnn  # noqa: E402
 import ttml  # noqa: E402
 
