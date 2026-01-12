@@ -116,7 +116,7 @@
   sku: wh_llmbox
   owner_id: U06ECNVR0EN # Evan Smal
   team: models
-  timeout: 30
+  timeout: 10
   model-name: unet shallow
 
 - name: t3k_mistral_tests
@@ -158,6 +158,14 @@
   team: models
   timeout: 10
   model-name: gpt-oss
+
+- name: t3k_deepseek_tests
+  cmd: run_t3000_deepseek_tests
+  sku: wh_llmbox
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+  timeout: 10
+  model-name: deepseekv3
 
 - name: t3k_tttv2_modules_tests
   cmd: run_t3000_tttv2_modules_tests

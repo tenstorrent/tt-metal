@@ -26,6 +26,7 @@ on:
           - qwen25_vl
           - gemma3-small
           - dits
+          - deepseek
           - gpt-oss
           - tttv2 modules
   schedule:
