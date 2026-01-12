@@ -1533,6 +1533,11 @@ bool process_cmd(
             stride = process_relay_linear_cmd(cmd_ptr, downstream_data_ptr);
             break;
 
+        case CQ_PREFETCH_CMD_RELAY_LINEAR_H:
+            // DPRINT << "relay_linear_h: " << HEX() << cmd_ptr << DEC() << ENDL();
+            stride = process_relay_linear_h_cmd(cmd_ptr, downstream_data_ptr);
+            break;
+
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             // DPRINT << "relay paged: " << cmd_ptr << ENDL();
             {
