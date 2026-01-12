@@ -341,6 +341,9 @@ def import_tracy_op_logs(
         df = pd.read_csv(tracyOpTimesLog)
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
+    # Ensure name is string type before using .str accessor
+    # (pandas may infer as numeric if all values are null)
+    df["name"] = df["name"].astype(str)
     tt_mask = df["name"].str.contains("TT_DNN|TT_METAL", regex=True, na=False)
     if tt_mask.any():
         tt_df = df[tt_mask]
