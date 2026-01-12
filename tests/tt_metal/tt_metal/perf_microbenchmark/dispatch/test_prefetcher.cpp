@@ -1125,7 +1125,6 @@ public:
             cmd.relay_linear_h.addr = mmio_dram_base + offset;
             cmd.relay_linear_h.length = length;
             cmd.relay_linear_h.pad1 = 0;
-            cmd.relay_linear_h.pad2 = 0;
 
             uint32_t length_words = length / sizeof(uint32_t);
 
