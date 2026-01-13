@@ -80,7 +80,20 @@ def post_process_ops_log_detailed(
         stop = markers[markers == "stop"].index[0]
         df = df.iloc[start + 1 : stop]
     if op_name != "":
-        df = df[df["OP CODE"] == op_name]
+        df_filtered = df[df["OP CODE"] == op_name]
+        if df_filtered.empty:
+            # Try partial match (in case op_name is just the class name without namespace)
+            df_filtered = df[df["OP CODE"].str.endswith(f"::{op_name}", na=False)]
+            if df_filtered.empty:
+                # Show what operation names are actually in the CSV
+                unique_op_codes = df["OP CODE"].unique() if not df.empty else []
+                logger.warning(
+                    f"No operations found matching op_name='{op_name}' in {filename}. "
+                    f"Found {len(unique_op_codes)} unique operation(s): {list(unique_op_codes)[:10]}"
+                )
+            else:
+                logger.info(f"Found {len(df_filtered)} operation(s) matching '{op_name}' (partial match)")
+        df = df_filtered
 
     # group by DEVICE ID
     df = df.groupby("DEVICE ID")
@@ -89,6 +102,38 @@ def post_process_ops_log_detailed(
 
     # Convert list of tuples to list of dataframes
     dfs = [group for _, group in df]
+
+    # Check if dfs is empty (no matching operations found)
+    if not dfs:
+        # Return empty results if no matching operations found
+        results = {}
+        for col in columns:
+            if sum_vals:
+                results[col] = 0.0
+            else:
+                results[col] = []
+            if detailed:
+                results[f"AVG {col}"] = 0.0
+                results[f"MIN {col}"] = 0.0
+                results[f"MAX {col}"] = 0.0
+                results[f"STD {col}"] = 0.0
+        return results
+
+    # Check if the first dataframe is empty
+    if len(dfs[0]) == 0:
+        # Return empty results if no matching operations found
+        results = {}
+        for col in columns:
+            if sum_vals:
+                results[col] = 0.0
+            else:
+                results[col] = []
+            if detailed:
+                results[f"AVG {col}"] = 0.0
+                results[f"MIN {col}"] = 0.0
+                results[f"MAX {col}"] = 0.0
+                results[f"STD {col}"] = 0.0
+        return results
 
     # concatenate the list of df into a single df by interleaving the rows
     df = pd.concat([df.iloc[[i]] for i in range(len(dfs[0])) for df in dfs], ignore_index=True)
