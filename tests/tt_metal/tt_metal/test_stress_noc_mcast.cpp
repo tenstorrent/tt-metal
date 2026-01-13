@@ -51,7 +51,8 @@ const uint32_t N_RANDS = 512;
 }  // namespace
 
 // Stress test for NOC multicast - uses short duration for CI
-TEST_F(EitherDispatchFixture, StressNocMcast) {
+// Uses detail::LaunchProgram which requires slow dispatch mode
+TEST_F(SlowDispatchFixture, StressNocMcast) {
     // Use default test parameters
     uint32_t time_secs = DEFAULT_SECONDS;
     uint32_t tlx = 0;
