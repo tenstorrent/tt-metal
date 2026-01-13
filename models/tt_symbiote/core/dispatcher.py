@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """TTNN operation dispatch system with pluggable dispatchers.
 
 This module provides a configurable dispatcher system that allows users to select
