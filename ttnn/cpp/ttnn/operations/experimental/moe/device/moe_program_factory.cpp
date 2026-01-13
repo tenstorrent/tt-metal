@@ -97,6 +97,9 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
     }
 
+    std::unordered_map<std::string, uint32_t> named_compile_time_args = {
+        {"num_experts", operation_attributes.num_experts}};
+
     // Create kernels for the program
     auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
         program,
@@ -105,7 +108,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_args});
+            .compile_args = compile_args,
+            .named_compile_args = named_compile_time_args});
 
     auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
@@ -114,7 +118,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = compile_args});
+            .compile_args = compile_args,
+            .named_compile_args = named_compile_time_args});
 
     auto compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
@@ -126,7 +131,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .dst_full_sync_en = false,
             .bfp8_pack_precise = true,
             .math_approx_mode = true,
-            .compile_args = compile_args});
+            .compile_args = compile_args,
+            .named_compile_args = named_compile_time_args});
 
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> runtime_args;

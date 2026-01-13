@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import pytest
 import torch
 import ttnn
@@ -26,9 +25,9 @@ def get_accuracy_metrics(torch_output, tt_output):
     }
 
 
-def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
+def run_test_moe(device, M, K, N, E, check_accuracy, dump_outputs):
     logger.info(
-        f"Running test_moe with M={M}, K={K}, N={N}, check_accuracy={check_accuracy}, dump_outputs={dump_outputs}"
+        f"Running test_moe with M={M}, K={K}, N={N}, E={E}, check_accuracy={check_accuracy}, dump_outputs={dump_outputs}"
     )
 
     # We can restrict this to just the cores that are used, replicating it over all cores for now.
@@ -45,9 +44,9 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
 
     if check_accuracy:
         torch_input = torch.randn((M, K), dtype=torch.bfloat16)
-        torch_w0 = torch.randn((K, N), dtype=torch.bfloat16)
-        torch_w1 = torch.randn((K, N), dtype=torch.bfloat16)
-        torch_w2 = torch.randn((N, K), dtype=torch.bfloat16)
+        torch_w0 = torch.randn((E, K, N), dtype=torch.bfloat16)
+        torch_w1 = torch.randn((E, K, N), dtype=torch.bfloat16)
+        torch_w2 = torch.randn((E, N, K), dtype=torch.bfloat16)
 
     # Each core (expert) gets a copy of the original (M, K) input
     input_sharded_mem_config = ttnn.create_sharded_memory_config(
@@ -89,9 +88,9 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
             layout=ttnn.TILE_LAYOUT,
             memory_config=input_sharded_mem_config,
         )
-        tt_weight0 = ttnn.empty((K, N), dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight1 = ttnn.empty((K, N), dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight2 = ttnn.empty((N, K), dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight0 = ttnn.empty((E, K, N), dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight1 = ttnn.empty((E, K, N), dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight2 = ttnn.empty((E, N, K), dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT)
         # Output is sharded (32, 2048) with each core having one tile (32x32)
 
     tt_output = ttnn.empty(
@@ -115,6 +114,7 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
         w1_tensor=tt_weight1,
         w2_tensor=tt_weight2,
         output_tensor=tt_output,
+        num_experts=E,
     )
     tt_output = ttnn.to_torch(tt_output)
 
@@ -137,7 +137,7 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2048): 110.0,
+    (32, 7168, 2048): 102.0,
 }
 
 
@@ -154,17 +154,18 @@ SHAPE2TIME = {
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "M, K, N",
+    "M, K, N, E",
     SHAPE2TIME.keys(),
 )
 @pytest.mark.parametrize("check_accuracy", [True, False], ids=["check_accuracy_True", "check_accuracy_False"])
 @pytest.mark.parametrize("dump_outputs", [True, False], ids=["dump_outputs_True", "dump_outputs_False"])
-def test_moe(device, M, K, N, check_accuracy, dump_outputs):
+def test_moe(device, M, K, N, E, check_accuracy, dump_outputs):
     accuracy_metrics = run_test_moe(
         device,
         M,
         K,
         N,
+        E,
         check_accuracy,
         dump_outputs,
     )
@@ -175,22 +176,18 @@ def test_moe(device, M, K, N, check_accuracy, dump_outputs):
 
 
 @pytest.mark.parametrize(
-    "M, K, N",
+    "M, K, N, E",
     SHAPE2TIME.keys(),
 )
 @pytest.mark.parametrize("check_accuracy", [True, False], ids=["check_accuracy_True", "check_accuracy_False"])
 @pytest.mark.parametrize("dump_outputs", [True, False], ids=["dump_outputs_True", "dump_outputs_False"])
-def test_moe_performance(M, K, N, check_accuracy, dump_outputs):
-    command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[dump_outputs_{dump_outputs}-check_accuracy_{check_accuracy}-M={M}-K={K}-N={N}-dispatch_row]"
+def test_moe_performance(M, K, N, E, check_accuracy, dump_outputs):
+    command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[dump_outputs_{dump_outputs}-check_accuracy_{check_accuracy}-M={M}-K={K}-N={N}-E={E}-dispatch_row]"
     run_device_profiler(command, "ttnn_moe_performance", device_analysis_types=["device_kernel_duration"])
+
     r = post_process_ops_log("ttnn_moe_performance", float_columns=["DEVICE KERNEL DURATION [ns]"])
     duration_us = int(r["DEVICE KERNEL DURATION [ns]"].min()) / 1000.0
     logger.warning(f"Performance: {duration_us} us")
-
-    num_8k_txns = math.ceil(2 * 6 * 224 / 14) + math.ceil(19 * 64 / 14)
-    total_bytes_transferred = num_8k_txns * 8192 * 12
-    realized_bandwidth = total_bytes_transferred / (duration_us * 1000)
-    logger.warning(f"Realized Bandwidth: {realized_bandwidth} GB/s")
 
     bytes_per_tile = 512 + 64
     total_tiles_0_1 = 224 * 64
@@ -198,11 +195,9 @@ def test_moe_performance(M, K, N, check_accuracy, dump_outputs):
     total_tiles_per_core = 2 * total_tiles_0_1 + total_tiles_2
     total_bytes = total_tiles_per_core * bytes_per_tile
     bandwidth = total_bytes / (duration_us * 1000)
-    logger.warning(f"Useful Bandwidth: {bandwidth} GB/s")
+    logger.warning(f"Bandwidth: {bandwidth} GB/s")
 
     assert (
-        duration_us < SHAPE2TIME[(M, K, N)]
-    ), f"Performance {duration_us} us is greater than expected {SHAPE2TIME[(M, K, N)]} us"
         duration_us < SHAPE2TIME[(M, K, N)]
     ), f"Performance {duration_us} us is greater than expected {SHAPE2TIME[(M, K, N)]} us"
 
