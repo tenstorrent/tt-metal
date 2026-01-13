@@ -71,7 +71,7 @@ def run_test_linear_impl(
     if use_persistent_buffers:
         persistent_output_buffers = [
             ttnn.from_torch(
-                torch.zeros(tt_input.shape[0], tt_input.shape[1]),
+                torch_input,
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=input_dtype,
@@ -174,7 +174,14 @@ def run_test_linear(
         bias_input = torch.randn((1, N), dtype=torch_dtype)
 
     # Prepare TT tensors
-    tt_input = ttnn.from_torch(torch_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, 1]),
+    )
+
     tt_weight = ttnn.from_torch(weight_input, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = None
     if use_bias:
