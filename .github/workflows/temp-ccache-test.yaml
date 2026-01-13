@@ -193,8 +193,8 @@ jobs:
           git rev-parse HEAD > /tmp/ttnn_original_commit.txt
           echo ""
           echo "Creating dummy commit to change git hash..."
-          echo "# Dummy change for ccache cross-commit test - $(date)" >> /tmp/dummy_file_for_ccache_test.txt
-          git add /tmp/dummy_file_for_ccache_test.txt
+          echo "# Dummy change for ccache cross-commit test - $(date)" >> dummy_file_for_ccache_test.txt
+          git add dummy_file_for_ccache_test.txt
           git -c user.name="CCache Test" -c user.email="ccache-test@tenstorrent.com" commit -m "[temp] Dummy commit for ccache cross-commit test"
           echo "New commit: $(git rev-parse --short=10 HEAD)"
           echo "Testing if different commit affects ccache keys..."
@@ -672,8 +672,8 @@ jobs:
           git rev-parse HEAD > /tmp/tt_train_original_commit.txt
           echo ""
           echo "Creating dummy commit to change git hash..."
-          echo "# Dummy change for tt-train ccache cross-commit test - $(date)" >> /tmp/dummy_file_for_tt_train_ccache_test.txt
-          git add /tmp/dummy_file_for_tt_train_ccache_test.txt
+          echo "# Dummy change for tt-train ccache cross-commit test - $(date)" >> dummy_file_for_tt_train_ccache_test.txt
+          git add dummy_file_for_tt_train_ccache_test.txt
           git -c user.name="CCache Test" -c user.email="ccache-test@tenstorrent.com" commit -m "[temp] Dummy commit for tt-train ccache cross-commit test"
           echo "New commit: $(git rev-parse --short=10 HEAD)"
           echo "Testing if different commit affects ccache keys..."
