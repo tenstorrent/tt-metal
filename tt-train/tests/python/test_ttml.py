@@ -10,9 +10,11 @@ into the ttml Python package, with Python implementations taking precedence.
 
 import inspect
 import pytest
+import numpy as np
 
 import ttml  # noqa: E402
 import ttml._ttml  # noqa: E402
+import ttnn
 
 
 def test_ttml_module_imported():
@@ -327,3 +329,245 @@ def test_submodule_imported(submodule_name):
         f"Expected ttml.{submodule_name} to import at least one public symbol from "
         f"_ttml.{submodule_name}"
     )
+
+
+class TestCppOptimizersWithPythonModules:
+    """Test that C++ optimizers work with Python module parameter registration."""
+
+    def test_sgd_optimizer_with_python_module(self):
+        """Test SGD optimizer updates parameters registered via Python AbstractModuleBase."""
+        from ttml.modules import AbstractModuleBase, Parameter
+
+        # Define a simple Python module
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                # Create a parameter tensor and register it
+                weight_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
+                weight_tensor = ttml.autograd.Tensor.from_numpy(weight_np)
+                self.weight = Parameter(weight_tensor)
+
+            def __call__(self, x):
+                return ttml.ops.binary.mul(x, self.weight.tensor)
+
+        # Create module and verify parameter registration
+        model = SimpleModule()
+        params = model.parameters()
+        assert len(params) > 0, "Module should have registered parameters"
+        assert any(
+            "weight" in k for k in params.keys()
+        ), "Should have 'weight' parameter"
+
+        # Get initial weight values
+        weight_key = [k for k in params.keys() if "weight" in k][0]
+        weight_before = params[weight_key].to_numpy(ttnn.DataType.FLOAT32).copy()
+
+        # Create C++ SGD optimizer with the Python module's parameters
+        sgd_config = ttml.optimizers.SGDConfig.make(
+            lr=0.1, momentum=0.0, dampening=0.0, weight_decay=0.0, nesterov=False
+        )
+        optimizer = ttml.optimizers.SGD(params, sgd_config)
+
+        # Run a training step
+        model.train()
+        optimizer.zero_grad()
+
+        # Forward pass
+        x_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
+        x = ttml.autograd.Tensor.from_numpy(x_np)
+        output = model(x)
+
+        # Create a simple loss (sum of outputs)
+        target_np = np.zeros((1, 1, 32, 32), dtype=np.float32)
+        target = ttml.autograd.Tensor.from_numpy(target_np)
+        loss = ttml.ops.loss.mse_loss(output, target, ttml.ops.ReduceType.MEAN)
+
+        # Backward pass
+        loss.backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        # Optimizer step
+        optimizer.step()
+
+        # Verify weights changed
+        params_after = model.parameters()
+        weight_after = params_after[weight_key].to_numpy(ttnn.DataType.FLOAT32)
+
+        assert not np.allclose(
+            weight_before, weight_after, atol=1e-6
+        ), "SGD optimizer should have updated the weights"
+
+    def test_adamw_optimizer_with_python_module(self):
+        """Test AdamW optimizer updates parameters registered via Python AbstractModuleBase."""
+        from ttml.modules import AbstractModuleBase, Parameter
+
+        # Define a simple Python module with multiple parameters
+        class TwoLayerModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                w1_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
+                w2_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
+                self.weight1 = Parameter(ttml.autograd.Tensor.from_numpy(w1_np))
+                self.weight2 = Parameter(ttml.autograd.Tensor.from_numpy(w2_np))
+
+            def __call__(self, x):
+                h = ttml.ops.binary.mul(x, self.weight1.tensor)
+                return ttml.ops.binary.mul(h, self.weight2.tensor)
+
+        model = TwoLayerModule()
+        params = model.parameters()
+
+        # Verify both parameters registered
+        assert len(params) >= 2, "Module should have at least 2 parameters"
+        weight_keys = [k for k in params.keys() if "weight" in k]
+        assert len(weight_keys) >= 2, "Should have both weight1 and weight2"
+
+        # Store initial values
+        initial_weights = {
+            k: params[k].to_numpy(ttnn.DataType.FLOAT32).copy() for k in weight_keys
+        }
+
+        # Create C++ AdamW optimizer
+        adamw_config = ttml.optimizers.AdamWConfig.make(
+            lr=0.01, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.01
+        )
+        optimizer = ttml.optimizers.AdamW(params, adamw_config)
+
+        # Training loop
+        model.train()
+        for _ in range(3):
+            optimizer.zero_grad()
+
+            x_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
+            x = ttml.autograd.Tensor.from_numpy(x_np)
+            output = model(x)
+
+            target_np = np.ones((1, 1, 32, 32), dtype=np.float32)
+            target = ttml.autograd.Tensor.from_numpy(target_np)
+            loss = ttml.ops.loss.mse_loss(output, target, ttml.ops.ReduceType.MEAN)
+
+            loss.backward(False)
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+            optimizer.step()
+
+        # Verify all weights changed
+        params_after = model.parameters()
+        for key in weight_keys:
+            weight_after = params_after[key].to_numpy(ttnn.DataType.FLOAT32)
+            assert not np.allclose(
+                initial_weights[key], weight_after, atol=1e-6
+            ), f"AdamW optimizer should have updated {key}"
+
+    def test_optimizer_with_nested_python_modules(self):
+        """Test optimizer works with nested Python modules (submodules)."""
+        from ttml.modules import AbstractModuleBase, Parameter
+
+        class InnerModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                w_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
+                self.inner_weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def __call__(self, x):
+                return ttml.ops.binary.mul(x, self.inner_weight.tensor)
+
+        class OuterModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                w_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
+                self.outer_weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+                self.inner = InnerModule()  # Nested submodule
+
+            def __call__(self, x):
+                x = ttml.ops.binary.mul(x, self.outer_weight.tensor)
+                return self.inner(x)
+
+        model = OuterModule()
+        params = model.parameters()
+
+        # Should have parameters from both outer and inner modules
+        param_names = list(params.keys())
+        assert any(
+            "outer" in k.lower() for k in param_names
+        ), "Should have outer_weight"
+        assert any(
+            "inner" in k.lower() for k in param_names
+        ), "Should have inner_weight"
+
+        # Store initial values
+        initial_weights = {
+            k: params[k].to_numpy(ttnn.DataType.FLOAT32).copy() for k in param_names
+        }
+
+        # Create optimizer and train
+        sgd_config = ttml.optimizers.SGDConfig.make(0.1, 0.0, 0.0, 0.0, False)
+        optimizer = ttml.optimizers.SGD(params, sgd_config)
+
+        model.train()
+        optimizer.zero_grad()
+
+        x = ttml.autograd.Tensor.from_numpy(
+            np.random.randn(1, 1, 32, 32).astype(np.float32)
+        )
+        output = model(x)
+        target = ttml.autograd.Tensor.from_numpy(
+            np.zeros((1, 1, 32, 32), dtype=np.float32)
+        )
+        loss = ttml.ops.loss.mse_loss(output, target, ttml.ops.ReduceType.MEAN)
+        loss.backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+        optimizer.step()
+
+        # Verify all weights (both outer and inner) were updated
+        params_after = model.parameters()
+        for key in param_names:
+            weight_after = params_after[key].to_numpy(ttnn.DataType.FLOAT32)
+            assert not np.allclose(
+                initial_weights[key], weight_after, atol=1e-6
+            ), f"Optimizer should have updated nested parameter {key}"
+
+    def test_optimizer_lr_adjustment(self):
+        """Test that optimizer learning rate can be adjusted via set_lr."""
+        from ttml.modules import AbstractModuleBase, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32)
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def __call__(self, x):
+                return ttml.ops.binary.mul(x, self.weight.tensor)
+
+        model = SimpleModule()
+        params = model.parameters()
+
+        # Create optimizer with initial LR
+        adamw_config = ttml.optimizers.AdamWConfig.make(0.001, 0.9, 0.999, 1e-8, 0.0)
+        optimizer = ttml.optimizers.AdamW(params, adamw_config)
+
+        # Verify initial LR
+        assert abs(optimizer.get_lr() - 0.001) < 1e-6, "Initial LR should be 0.001"
+
+        # Adjust LR
+        optimizer.set_lr(0.01)
+        assert abs(optimizer.get_lr() - 0.01) < 1e-6, "LR should be updated to 0.01"
+
+        # Verify optimizer still works after LR change
+        model.train()
+        optimizer.zero_grad()
+
+        x = ttml.autograd.Tensor.from_numpy(
+            np.random.randn(1, 1, 32, 32).astype(np.float32)
+        )
+        output = model(x)
+        target = ttml.autograd.Tensor.from_numpy(
+            np.zeros((1, 1, 32, 32), dtype=np.float32)
+        )
+        loss = ttml.ops.loss.mse_loss(output, target, ttml.ops.ReduceType.MEAN)
+        loss.backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+        optimizer.step()
+
+        # Should complete without error
+        assert True, "Optimizer should work after LR adjustment"
