@@ -69,9 +69,19 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-      - name: Initial ccache configuration and stats
+      - name: Start from older commit and initial ccache setup
         run: |
-          echo "=== TTNN RUN 1 (original commit): Initial ccache configuration ===="
+          echo "========================================="
+          echo "=== Starting from older commit for natural progression ==="
+          echo "========================================="
+          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          git rev-parse HEAD > /tmp/ttnn_newer_commit.txt  # Save original HEAD first
+          echo "Moving to older commit (HEAD~1) to start test"
+          git checkout HEAD~1
+          echo "Starting from commit: $(git rev-parse --short=10 HEAD)"
+          git rev-parse HEAD > /tmp/ttnn_older_commit.txt
+          echo ""
+          echo "=== TTNN RUN 1 (older commit): Initial ccache configuration ===="
           ccache --show-config | head -40
           echo ""
           echo "=== Redis Remote Storage Configuration ==="
@@ -185,10 +195,9 @@ jobs:
           echo "=== Preparing TTNN RUN 2: Test newer commit with older commit's cache ===="
           echo "========================================="
           echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          echo "Moving to newer commit (HEAD) to test forward cache compatibility"
-          git checkout HEAD@{1}  # Go back to the original HEAD before we switched to HEAD~1
+          echo "Moving to newer commit to test forward cache compatibility"
+          git checkout $(cat /tmp/ttnn_newer_commit.txt)  # Use saved original HEAD
           echo "Now at newer commit: $(git rev-parse --short=10 HEAD)"
-          git rev-parse HEAD > /tmp/ttnn_newer_commit.txt
           echo ""
           echo "Clearing kernel binaries to force recompilation (testing newer commit with older cache)"
           rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
@@ -518,6 +527,7 @@ jobs:
           echo "=== Starting from older commit for natural progression ==="
           echo "========================================="
           echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          git rev-parse HEAD > /tmp/tt_train_newer_commit.txt  # Save original HEAD first
           echo "Moving to older commit (HEAD~1) to start test"
           git checkout HEAD~1
           echo "Starting from commit: $(git rev-parse --short=10 HEAD)"
@@ -658,10 +668,9 @@ jobs:
           echo "=== Preparing tt-train RUN 2: Test newer commit with older commit's cache ==="
           echo "========================================="
           echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          echo "Moving to newer commit (HEAD) to test forward cache compatibility"
-          git checkout HEAD@{1}  # Go back to the original HEAD before we switched to HEAD~1
+          echo "Moving to newer commit to test forward cache compatibility"
+          git checkout $(cat /tmp/tt_train_newer_commit.txt)  # Use saved original HEAD
           echo "Now at newer commit: $(git rev-parse --short=10 HEAD)"
-          git rev-parse HEAD > /tmp/tt_train_newer_commit.txt
           echo ""
           echo "=== RUN 2: ccache configuration ==="
           ccache --show-config | grep -E "(remote_storage|remote_only|cache_dir)" || true
