@@ -114,23 +114,24 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // User specified the cluster-axis. Derive devices based on the current coordinate
     // and the cluster-axis.
     const auto& mesh_view = input_tensor_q.device()->get_view();
-    devices_to_use = (args.all_gather_struct.cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
-                                                                        : mesh_view.get_devices_on_row(coord[0]);
+    devices_to_use = (args.all_gather_operation_attributes.cluster_axis.value() == 0)
+                         ? mesh_view.get_devices_on_column(coord[1])
+                         : mesh_view.get_devices_on_row(coord[0]);
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < args.all_gather_struct.ring_size; ++i) {
+    for (uint32_t i = 0; i < args.all_gather_operation_attributes.ring_size; ++i) {
         if (devices_to_use.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
                 backward_device = devices_to_use.at(i - 1);
-            } else if (args.all_gather_struct.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(args.all_gather_struct.ring_size - 1);
+            } else if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices_to_use.at(args.all_gather_operation_attributes.ring_size - 1);
             }
-            if (i != args.all_gather_struct.ring_size - 1) {
+            if (i != args.all_gather_operation_attributes.ring_size - 1) {
                 forward_device = devices_to_use.at(i + 1);
-            } else if (args.all_gather_struct.topology == ttnn::ccl::Topology::Ring) {
+            } else if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring) {
                 forward_device = devices_to_use.at(0);
             }
         }
@@ -144,21 +145,26 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::optional<detail::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = detail::RingSDPAFusedOpSignaler();
 
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
-        args.all_gather_struct.ring_size, device_index, args.all_gather_struct.topology);
+        args.all_gather_operation_attributes.ring_size, device_index, args.all_gather_operation_attributes.topology);
 
     // This is how ring_joint_sdpa expects the number of forward and backward writes
     uint32_t forward_writes_expected, backward_writes_expected;
-    if (args.all_gather_struct.topology == ttnn::ccl::Topology::Linear) {
+    if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear) {
         forward_writes_expected = num_targets_backward;
         backward_writes_expected = num_targets_forward;
     } else {
-        TT_FATAL(args.all_gather_struct.topology == ttnn::ccl::Topology::Ring, "Topology must be Linear or Ring");
+        TT_FATAL(
+            args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring,
+            "Topology must be Linear or Ring");
         forward_writes_expected = num_targets_forward - 1;
         backward_writes_expected = num_targets_backward - 1;
     }
     // Minimally use matmul fused op signaler
     sdpa_fused_op_signaler->init_all_gather(
-        args.all_gather_struct.ring_size, device_index, forward_writes_expected, backward_writes_expected);
+        args.all_gather_operation_attributes.ring_size,
+        device_index,
+        forward_writes_expected,
+        backward_writes_expected);
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
@@ -405,7 +411,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_struct.ring_size};
+        args.all_gather_operation_attributes.ring_size};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -448,7 +454,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_q_chunks,
         packed_identity_scalar,
         scale_union.u,
-        args.all_gather_struct.ring_size};
+        args.all_gather_operation_attributes.ring_size};
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -472,7 +478,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_struct.ring_size,
+        args.all_gather_operation_attributes.ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
@@ -918,31 +924,26 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         gathered_input_tensor_k,
         gathered_input_tensor_v,
     };
-    auto all_gather_program_with_callbacks = ring_attention_all_gather_async_multi_core_with_workers_helper(
+    auto all_gather_shared_variables = ring_attention_all_gather_async_multi_core_with_workers_helper(
         program,  // Must pass ring_joint_sdpa's program
         all_gather_input_tensors,
         target_device,
         forward_device,
         backward_device,
         all_gather_output_tensors,
-        args.all_gather_struct.dim,
-        args.all_gather_struct.num_links,
-        args.all_gather_struct.ring_size,
+        args.all_gather_operation_attributes.dim,
+        args.all_gather_operation_attributes.num_links,
+        args.all_gather_operation_attributes.ring_size,
         device_index,
-        args.all_gather_struct.topology,
-        args.all_gather_struct.semaphore,
-        args.all_gather_struct.sub_device_id,
+        args.all_gather_operation_attributes.topology,
+        args.all_gather_operation_attributes.semaphore,
+        args.all_gather_operation_attributes.sub_device_id,
         all_gather_fused_op_signaler,
         args.ccl_core_grid_offset);
 
     return cached_program_t{
-        std::move(all_gather_program_with_callbacks.program),
-        {num_cores,
-         grid_size,
-         reader_kernels_id,
-         writer_kernels_id,
-         compute_kernels_id,
-         all_gather_program_with_callbacks.override_runtime_arguments_callback}};
+        std::move(program),
+        {num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id, all_gather_shared_variables}};
 }
 
 void RingJointSDPAProgramFactory::override_runtime_arguments(
@@ -953,15 +954,12 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        if (shared_vars.all_gather_callback.has_value()) {
-            shared_vars.all_gather_callback.value()(
-                &args.all_gather_struct,
-                program,
-                {tensor_args.input_k, tensor_args.input_v},      /*input_tensors*/
-                {},                                              /*optional_input_tensors*/
-                {tensor_args.gathered_k, tensor_args.gathered_v} /*output_tensors*/
-            );
-        }
+        ring_attention_all_gather_async_multicore_with_workers_override_runtime_arguments(
+            shared_vars.all_gather_shared_variables,
+            program,
+            {tensor_args.input_k, tensor_args.input_v},       /*input_tensors*/
+            {tensor_args.gathered_k, tensor_args.gathered_v}, /*output_tensors*/
+            args.all_gather_operation_attributes.semaphore);
 
         // Get addresses for regular tensors
         auto* q_buffer = tensor_args.input_q.buffer();
