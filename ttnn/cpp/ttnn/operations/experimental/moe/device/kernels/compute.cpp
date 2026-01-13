@@ -9,6 +9,8 @@
 
 namespace NAMESPACE {
 void MAIN {
+    constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
+
     // Run-time arguments
     uint32_t argidx = 0;
     const auto core_id = get_arg_val<uint32_t>(argidx++);

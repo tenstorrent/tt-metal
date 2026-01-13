@@ -17,7 +17,8 @@ struct ExecuteMoE {
         const ttnn::Tensor& w0_tensor,
         const ttnn::Tensor& w1_tensor,
         const ttnn::Tensor& w2_tensor,
-        const ttnn::Tensor& output_tensor);
+        const ttnn::Tensor& output_tensor,
+        const uint32_t num_experts);
 };
 
 }  // namespace ttnn::operations::experimental::moe
