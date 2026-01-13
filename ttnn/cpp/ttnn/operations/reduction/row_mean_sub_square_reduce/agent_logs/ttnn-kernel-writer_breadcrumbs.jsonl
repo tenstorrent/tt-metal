@@ -1,0 +1,27 @@
+{"ts":"2026-01-13T13:17:51+00:00","event":"start","agent":"ttnn-kernel-writer","operation":"row_mean_sub_square_reduce","input_files":["kernel_design.md"],"predecessor_agent":"ttnn-kernel-designer"}
+{"event":"input_parse","field":"num_phases","value":"5","confidence":"HIGH","ts":"2026-01-13T13:18:07+00:00"}
+{"event":"input_parse","field":"phase_1_tilize","value":"USE HELPER: compute_kernel_lib::tilize()","confidence":"HIGH","ts":"2026-01-13T13:18:07+00:00"}
+{"event":"input_parse","field":"phase_2_reduce_mean","value":"USE HELPER: compute_kernel_lib::reduce<SUM, REDUCE_ROW, PERSISTENT>()","confidence":"HIGH","ts":"2026-01-13T13:18:07+00:00"}
+{"event":"input_parse","field":"phase_3_sub_square","value":"NO HELPER - raw calls","confidence":"HIGH","ts":"2026-01-13T13:18:08+00:00"}
+{"event":"input_parse","field":"phase_4_reduce_variance","value":"USE HELPER: compute_kernel_lib::reduce<SUM, REDUCE_ROW>()","confidence":"HIGH","ts":"2026-01-13T13:18:08+00:00"}
+{"event":"input_parse","field":"phase_5_untilize","value":"USE HELPER: compute_kernel_lib::untilize<1, cb_out_tiled, cb_rm_out>()","confidence":"HIGH","ts":"2026-01-13T13:18:08+00:00"}
+{"event":"design_compliance","kernel":"reader","phase":"scaler_generation","directive":"RAW CALLS","implementation":"generate_reduce_scaler(cb_scaler, packed_scaler_value)","compliant":true,"ts":"2026-01-13T13:18:26+00:00"}
+{"event":"design_compliance","kernel":"reader","phase":"read_sticks","directive":"RAW CALLS","implementation":"TensorAccessor + noc_async_read + CB push","compliant":true,"ts":"2026-01-13T13:18:26+00:00"}
+{"event":"design_compliance","kernel":"compute","phase":"1_tilize","directive":"USE HELPER","implementation":"compute_kernel_lib::tilize(cb_rm_in, Wt, cb_tilized, 1)","compliant":true,"ts":"2026-01-13T13:18:26+00:00"}
+{"event":"design_compliance","kernel":"compute","phase":"2_reduce_mean","directive":"USE HELPER","implementation":"compute_kernel_lib::reduce<SUM, REDUCE_ROW, PERSISTENT>()","compliant":true,"ts":"2026-01-13T13:18:26+00:00"}
+{"event":"design_compliance","kernel":"compute","phase":"3_sub_square","directive":"NO HELPER - raw calls","implementation":"sub_tiles_bcast_scalar + mul_tiles with manual DST/CB management","compliant":true,"ts":"2026-01-13T13:18:26+00:00"}
+{"event":"design_compliance","kernel":"compute","phase":"4_reduce_variance","directive":"USE HELPER","implementation":"compute_kernel_lib::reduce<SUM, REDUCE_ROW>()","compliant":true,"ts":"2026-01-13T13:18:26+00:00"}
+{"event":"design_compliance","kernel":"compute","phase":"5_untilize","directive":"USE HELPER","implementation":"compute_kernel_lib::untilize<1, cb_out_tiled, cb_rm_out>(1)","compliant":true,"ts":"2026-01-13T13:18:26+00:00"}
+{"event":"design_compliance","kernel":"writer","phase":"write_sticks","directive":"RAW CALLS","implementation":"TensorAccessor + noc_async_write + CB pop","compliant":true,"ts":"2026-01-13T13:18:26+00:00"}
+{"event":"cb_wrapper_check","helper":"compute_kernel_lib::tilize()","has_wrapper_cb_ops":false,"status":"CLEAN","ts":"2026-01-13T13:18:34+00:00"}
+{"event":"cb_wrapper_check","helper":"compute_kernel_lib::reduce<SUM, REDUCE_ROW, PERSISTENT>()","has_wrapper_cb_ops":false,"status":"CLEAN","ts":"2026-01-13T13:18:34+00:00"}
+{"event":"cb_wrapper_check","helper":"compute_kernel_lib::reduce<SUM, REDUCE_ROW>()","has_wrapper_cb_ops":false,"status":"CLEAN","ts":"2026-01-13T13:18:34+00:00"}
+{"event":"cb_wrapper_check","helper":"compute_kernel_lib::untilize<1, cb_out_tiled, cb_rm_out>()","has_wrapper_cb_ops":false,"status":"CLEAN","ts":"2026-01-13T13:18:34+00:00"}
+{"event":"action","type":"test","command":"pytest test_stage7_kernel_correctness.py","ts":"2026-01-13T13:19:50+00:00"}
+{"event":"hypothesis","id":"H1","description":"API signatures changed - compute_kernel_hw_startup takes 2-3 args, mul_tiles takes 5 args including CB IDs, sub_tiles_bcast_scalar_init_short takes 2 CB args","confidence":"HIGH","evidence":"Compile error messages","ts":"2026-01-13T13:20:37+00:00"}
+{"event":"action","type":"fix","description":"Fixed compute kernel to use correct API signatures (compute_kernel_hw_startup 2 args, sub_tiles_bcast_scalar_init_short with CB IDs, square_tile for squaring DST)","ts":"2026-01-13T13:24:29+00:00"}
+{"event":"action","type":"fix","description":"Added include for generate_reduce_scaler.hpp in reader kernel","ts":"2026-01-13T13:25:50+00:00"}
+{"event":"correctness_test","test":"test_basic_correctness_single_tile","result":"FAIL","reason":"Variance mismatch - numerical debugging needed","ts":"2026-01-13T13:29:46+00:00"}
+{"event":"action","type":"fix","description":"Changed sub_tiles_bcast_scalar to sub_bcast_cols to correctly broadcast each rows mean value to all columns of that row (BroadcastType::COL instead of BroadcastType::SCALAR)","ts":"2026-01-13T13:33:43+00:00"}
+{"event":"correctness_test","test":"all_stage7_tests","result":"PASS","count":"12/12","duration":"9.16s","ts":"2026-01-13T13:41:09+00:00"}
+{"event":"design_compliance_summary","total_phases":5,"compliant_phases":5,"deviations":[{"phase":"Phase 3","original":"sub_tiles_bcast_scalar","corrected":"sub_tiles_bcast_cols","reason":"Design doc specified scalar broadcast but operation requires column broadcast to handle per-row means correctly"}],"ts":"2026-01-13T13:41:25+00:00"}
