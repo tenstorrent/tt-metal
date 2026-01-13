@@ -67,11 +67,11 @@ def get_mesh_shape():
 
 
 def get_max_num_links():
-    """Get max num_links: T3K=2, Galaxy=4"""
+    """Get max num_links: T3K=1, Galaxy=4"""
     if is_galaxy():
         return 4
     else:  # T3K
-        return 2
+        return 1
 
 
 # =============================================================================
