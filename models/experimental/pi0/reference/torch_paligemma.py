@@ -45,8 +45,8 @@ class PaliGemmaBackbone:
         self.config = config
         
         # VLM components (handle tied embeddings)
-        self.vlm_embed_tokens = (weights["vlm_language"].get("model.embed_tokens.weight") or 
-                                  weights["vlm_language"].get("lm_head.weight"))
+        embed_tokens = weights["vlm_language"].get("model.embed_tokens.weight")
+        self.vlm_embed_tokens = embed_tokens if embed_tokens is not None else weights["vlm_language"].get("lm_head.weight")
         self.vlm_norm = weights["vlm_language"].get("model.norm.weight")
         
         # Expert components

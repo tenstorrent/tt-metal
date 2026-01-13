@@ -60,9 +60,9 @@ class PaliGemmaBackboneTTNN:
         self.device = device
 
         # Convert embedding to TTNN (use lm_head if embed_tokens not available - tied embeddings)
-        embed_weight = weights["vlm_language"].get("model.embed_tokens.weight") or weights["vlm_language"].get(
-            "lm_head.weight"
-        )
+        embed_weight = weights["vlm_language"].get("model.embed_tokens.weight")
+        if embed_weight is None:
+            embed_weight = weights["vlm_language"].get("lm_head.weight")
         if embed_weight is not None:
             self.vlm_embed_tokens = ttnn.from_torch(
                 embed_weight,
