@@ -35,7 +35,9 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
+    get_block_size,
     get_padded_prefill_len,
+    num_blocks_in_seq,
     preprocess_inputs_prefill,
     sample_host,
 )
@@ -79,7 +81,6 @@ class GPTOSSGenerator(Generator):
         # Each model expected to run the same model, safe to use 1st vocab size
         output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
-
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
@@ -92,7 +93,6 @@ class GPTOSSGenerator(Generator):
             last_token_idx = seq_len - 1
             prefill_seq_len = get_padded_prefill_len(seq_len)
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
-
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
             # Extracting data for the current user
@@ -108,32 +108,25 @@ class GPTOSSGenerator(Generator):
             )
 
             page_table_user = (
-                self._get_prefill_user_page_table(
+                self.get_prefill_page_table(
                     page_table,
                     kv_cache[model_id],
-                    seq_len,
-                    trace_enabled=enable_trace_current_prompt,
-                    prefill_seq_len=prefill_seq_len,
+                    prefill_seq_len,
+                    user_id=(user_id // max_batch_per_mesh_row) * max_batch_per_mesh_row,
                 )
                 if page_table is not None
                 else None
             )
-            new_page_table_user = -1 * torch.ones_like(page_table_user)
-            new_page_table_user[user_id] = page_table_user[user_id]
+            print(f"page_table_user: {page_table_user}")
+            page_table = page_table[1:, :]
 
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
-
-            # Check if 'pixel_values' exists and index it safely
-            if local_kwargs.get("pixel_values", None) is not None:
-                local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
-                if "image_grid_thw" in local_kwargs:
-                    local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
 
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
-                    page_table=new_page_table_user,
-                    user_id=user_id % max_batch_per_mesh_row,
+                    page_table=page_table_user,
+                    user_id=0,
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
@@ -143,8 +136,8 @@ class GPTOSSGenerator(Generator):
             else:
                 logits = self.prefill_forward_single_user_text(
                     prefill_ids,
-                    page_table=new_page_table_user,
-                    user_id=user_id % max_batch_per_mesh_row,
+                    page_table=page_table_user,
+                    user_id=0,
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
@@ -181,6 +174,21 @@ class GPTOSSGenerator(Generator):
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
+
+    def get_prefill_page_table(self, page_table, kv_cache, prefill_len, user_id):
+        # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
+
+        block_size = get_block_size(kv_cache)
+        num_blocks = num_blocks_in_seq(prefill_len, block_size)
+        page_table = page_table[:, :num_blocks]
+        if page_table.shape[1] < num_blocks:
+            # If page table is too short, pad it with -1
+            padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+            page_table = torch.cat([page_table, padding], dim=1)
+        # Pad page table to 32 users
+        padded_page_table = torch.ones(128, page_table.shape[1], dtype=torch.int32) * -1
+        padded_page_table[user_id, :] = page_table[0, :]
+        return padded_page_table
 
 
 def prepare_gpt_oss_generator_args(
