@@ -1,0 +1,28 @@
+#loc1 = loc("p0.1")
+#loc2 = loc("p1.15")
+module @SyncTensorsGraph.19 attributes {mhlo.cross_program_prefetches = [], mhlo.input_output_alias = [], mhlo.is_dynamic = false, mhlo.use_auto_spmd_partitioning = false, ttcore.meshes = #ttcore.meshes<[<"mesh" = 1x1>]>} {
+  ttcore.device_module {
+    builtin.module @SyncTensorsGraph.19 attributes {mhlo.cross_program_prefetches = [], mhlo.input_output_alias = [], mhlo.is_dynamic = false, mhlo.use_auto_spmd_partitioning = false, ttcore.meshes = #ttcore.meshes<[<"mesh" = 1x1>]>} {
+      func.func @main(%arg0: tensor<1xi64> {ttcore.argument_type = #ttcore.argument_type<input>, ttcore.shard_status = #ttcore.shard_status<unsharded>, ttir.name = "args_0"} loc("p0.1"), %arg1: tensor<32x1024x1536xbf16> {ttcore.argument_type = #ttcore.argument_type<parameter>, ttcore.shard_status = #ttcore.shard_status<unsharded>, ttir.name = "l__self___w"} loc("p1.15")) -> (tensor<1x1024x1536xbf16> {ttcore.shard_status = #ttcore.shard_status<unsharded>}) {
+        %0 = "ttir.constant"() <{value = dense<32> : tensor<1xi64>}> : () -> tensor<1xi64> loc(#loc)
+        %1 = "ttir.constant"() <{value = dense<0> : tensor<1xi64>}> : () -> tensor<1xi64> loc(#loc)
+        %2 = "ttir.reshape"(%arg0) <{shape = [1 : i32, 1 : i32, 1 : i32]}> : (tensor<1xi64>) -> tensor<1x1x1xi64> loc(#loc3)
+        %3 = "ttir.reshape"(%2) <{shape = [1 : i32]}> : (tensor<1x1x1xi64>) -> tensor<1xi64> loc(#loc4)
+        %4 = "ttir.lt"(%3, %1) : (tensor<1xi64>, tensor<1xi64>) -> tensor<1xi1> loc(#loc5)
+        %5 = "ttir.add"(%3, %0) : (tensor<1xi64>, tensor<1xi64>) -> tensor<1xi64> loc(#loc6)
+        %6 = "ttir.where"(%4, %5, %3) : (tensor<1xi1>, tensor<1xi64>, tensor<1xi64>) -> tensor<1xi64> loc(#loc7)
+        %7 = "ttir.reshape"(%6) <{shape = [1 : i32, 1 : i32]}> : (tensor<1xi64>) -> tensor<1x1xi64> loc(#loc8)
+        %8 = "ttir.gather"(%arg1, %7) <{collapsed_slice_dims = array<i64: 0>, index_vector_dim = 1 : si64, indices_are_sorted = false, offset_dims = array<i64: 1, 2>, operand_batching_dims = array<i64>, slice_sizes = array<i64: 1, 1024, 1536>, start_index_map = array<i64: 0>, start_indices_batching_dims = array<i64>}> : (tensor<32x1024x1536xbf16>, tensor<1x1xi64>) -> tensor<1x1024x1536xbf16> loc(#loc9)
+        return %8 : tensor<1x1024x1536xbf16> loc(#loc)
+      } loc(#loc)
+    } loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+#loc3 = loc("reshape.2")
+#loc4 = loc("reshape.4")
+#loc5 = loc("compare.11")
+#loc6 = loc("add.8")
+#loc7 = loc("select.12")
+#loc8 = loc("reshape.13")
+#loc9 = loc("gather.17")
