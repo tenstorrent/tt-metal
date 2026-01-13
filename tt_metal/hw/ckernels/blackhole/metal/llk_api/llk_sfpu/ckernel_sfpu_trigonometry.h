@@ -27,7 +27,7 @@ template <bool is_fp32_dest_acc_en>
 static sfpi::vFloat sfpu_tan(sfpi::vFloat x, sfpi::vInt i);
 
 template <>
-sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
+sfpi_inline sfpi::vFloat sfpu_tan<ApproximationMode::Fast>(sfpi::vFloat a, sfpi::vInt i) {
     sfpi::vFloat s = a * a;
 
     // tan(x) for x in [-PI/4, PI/4]
@@ -67,7 +67,7 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
 }
 
 template <>
-sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
+sfpi_inline sfpi::vFloat sfpu_tan<ApproximationMode::Precise>(sfpi::vFloat a, sfpi::vInt i) {
     sfpi::vFloat s = a * a;
 
     // tan(x) for x in [-PI/4, PI/4]
@@ -141,14 +141,14 @@ template <ApproximationMode APPROX_MODE>
 static sfpi::vFloat sfpu_sinpi(sfpi::vFloat x);
 
 template <>
-sfpi_inline sfpi::vFloat sfpu_sinpi<true>(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat sfpu_sinpi<ApproximationMode::Fast>(sfpi::vFloat x) {
     sfpi::vFloat xx = x * x;
 
     return x * ((0x1.29cf02p+1f * xx - 0x1.4954d4p+2f) * xx + 0x1.92149p+1f);
 }
 
 template <>
-sfpi_inline sfpi::vFloat sfpu_sinpi<false>(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat sfpu_sinpi<ApproximationMode::Precise>(sfpi::vFloat x) {
     sfpi::vFloat xx = x * x;
 
     return x *

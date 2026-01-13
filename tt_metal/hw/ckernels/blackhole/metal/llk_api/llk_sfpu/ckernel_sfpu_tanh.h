@@ -168,7 +168,7 @@ inline void tanh_init() {
         _sfpu_load_imm16_(2, imm2);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
-            sigmoid_init<false>();
+            sigmoid_init<ApproximationMode::Precise>();
         } else {
             // Polynomial approximation
             // Store some polynomial coefficients in programmable registers
