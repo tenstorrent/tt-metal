@@ -1086,7 +1086,7 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
                             if (global_ch < out_channels) {
                                 // Get input value from [global_ch, 0, kh, kw]
                                 auto input_idx = tt::tt_metal::compute_flat_indices(
-                                    ttnn::SmallVector<int>{(int)global_ch, 0, (int)kh, (int)kw},
+                                    ttnn::SmallVector<uint32_t>{global_ch, 0, kh, kw},
                                     compute_strides(original_weight_shape));
                                 value = input_buffer[input_idx];
                             }

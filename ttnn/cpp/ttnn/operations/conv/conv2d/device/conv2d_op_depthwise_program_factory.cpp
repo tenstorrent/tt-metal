@@ -27,8 +27,22 @@
 
 namespace ttnn::operations::conv::conv2d::program {
 
+// Structure to hold program and CB handles for depthwise conv
+struct DepthwiseProgramData {
+    tt::tt_metal::Program program;
+    std::function<void(
+        const void* operation,
+        tt::tt_metal::Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors)>
+        override_runtime_arguments_callback;
+    tt::tt_metal::CBHandle raw_in_cb;
+    tt::tt_metal::CBHandle in_reader_indices_cb;
+};
+
 // Forward declare the internal implementation function
-static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise_impl(
+static DepthwiseProgramData multi_core_conv2d_depthwise_impl(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -59,7 +73,7 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
 
 namespace ttnn::operations::conv::conv2d::program {
 
-static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise_impl(
+static DepthwiseProgramData multi_core_conv2d_depthwise_impl(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -258,13 +272,12 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
 
     // Create reader indices CB using the same pattern as pool factory
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices_on_device.device_storage();
-    const uint32_t in_reader_indices_cb_id = next_cb_index++;
     const uint32_t reader_indices_size = top_left_indices[0].size();
     const uint32_t in_reader_indices_cb_pagesize = tt::round_up(reader_indices_size * sizeof(uint16_t), 4);
     constexpr uint32_t in_reader_indices_cb_npages = 1;
 
-    tt::tt_metal::create_cb(
-        in_reader_indices_cb_id,
+    const auto [in_reader_indices_cb_id, in_reader_indices_cb] = tt::tt_metal::create_cb(
+        next_cb_index++,
         program,
         parallel_config.grid,
         in_reader_indices_cb_pagesize,
@@ -742,9 +755,11 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             }
             // NOTE: Output CB is already bound to buffer at creation time, no need to update here
 
-            // Update reader indices circular buffer address
-            auto reader_indices_buffer = reader_indices_on_device.buffer();
-            UpdateDynamicCircularBufferAddress(program, in_reader_indices_cb_id, *reader_indices_buffer);
+            // NOTE: reader_indices CB is bound at creation time and should NOT be updated here
+            // The reader_indices_on_device tensor is captured by value in this lambda, causing it to
+            // reference stale/deallocated L1_SMALL memory when the cached program is reused.
+            // Pool factory also does not update reader_indices CB in override_runtime_arguments.
+            // Removing the stale update fixes L1_SMALL corruption causing hangs in sequential blocks.
 
             // Update bias buffer address in runtime args if bias is present
             if (has_bias && !optional_input_tensors.empty() && optional_input_tensors.at(0).has_value()) {
@@ -759,7 +774,11 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             }
         };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {
+        .program = std::move(program),
+        .override_runtime_arguments_callback = override_runtime_arguments_callback,
+        .raw_in_cb = raw_in_cb,
+        .in_reader_indices_cb = in_reader_indices_cb};
 }
 
 // New infrastructure wrapper methods
@@ -803,7 +822,7 @@ Conv2dDepthwiseProgramFactory::cached_program_t Conv2dDepthwiseProgramFactory::c
     const auto& force_split_reader = operation_attributes.force_split_reader;
 
     // Call the implementation function
-    auto program_with_callbacks = multi_core_conv2d_depthwise_impl(
+    auto program_data = multi_core_conv2d_depthwise_impl(
         program,
         a,
         b,
@@ -830,11 +849,13 @@ Conv2dDepthwiseProgramFactory::cached_program_t Conv2dDepthwiseProgramFactory::c
         config_tensors_in_dram,
         force_split_reader);
 
-    // Create shared variables (simplified for now - can be expanded based on actual needs)
+    // Create shared variables and store CB handles for runtime argument updates
     shared_variables_t shared_vars;
     shared_vars.has_bias = has_bias;
+    shared_vars.cb_raw_in = program_data.raw_in_cb;
+    shared_vars.cb_reader_indices = program_data.in_reader_indices_cb;
 
-    return cached_program_t{std::move(program_with_callbacks.program), std::move(shared_vars)};
+    return cached_program_t{std::move(program_data.program), std::move(shared_vars)};
 }
 
 void Conv2dDepthwiseProgramFactory::override_runtime_arguments(
@@ -842,17 +863,46 @@ void Conv2dDepthwiseProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    // For now, the depthwise implementation's runtime argument handling
-    // is embedded in the program itself via the ProgramWithCallbacks pattern.
-    // In the future, this can be refactored to directly update runtime arguments
-    // similar to how Conv2dShardedProgramFactory does it.
+    auto& program = cached_program.program;
+    auto& shared_vars = cached_program.shared_variables;
 
-    // TODO: Refactor to follow the pattern of directly updating runtime arguments
-    // like Conv2dShardedProgramFactory does
-    (void)cached_program;
-    (void)operation_attributes;
-    (void)tensor_args;
-    (void)output_tensor;
+    const auto& a = tensor_args.a;
+    auto* src_buffer = a.buffer();
+
+    // Update raw input CB address if input is sharded
+    if (a.is_sharded()) {
+        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_raw_in, *src_buffer);
+    }
+
+    // Recreate reader_indices_on_device tensor with fresh buffer
+    const auto& sliding_window_config = operation_attributes.sliding_window_config;
+
+    // Generate the sliding window configuration
+    std::vector<uint32_t> op_trace_metadata =
+        ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
+    std::vector<sliding_window::ShardBoundary> shard_boundaries =
+        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
+
+    const uint32_t stride_w = sliding_window_config.stride_hw.second;
+
+    ttnn::operations::sliding_window::ParallelConfig parallel_config{
+        .grid = a.shard_spec().value().grid,
+        .shard_scheme = a.memory_config().memory_layout(),
+        .shard_orientation = a.shard_spec().value().orientation};
+
+    // Generate fresh top_left_indices and create tensor on device
+    std::vector<std::vector<uint16_t>> top_left_indices =
+        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, stride_w);
+
+    Tensor reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config);
+
+    bool is_block_sharded = (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED);
+    Tensor reader_indices_on_device =
+        sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, is_block_sharded, a.device());
+
+    // Update the reader_indices CB with the fresh buffer
+    auto* reader_indices_buffer = reader_indices_on_device.buffer();
+    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_reader_indices, *reader_indices_buffer);
 }
 
 }  // namespace ttnn::operations::conv::conv2d::program

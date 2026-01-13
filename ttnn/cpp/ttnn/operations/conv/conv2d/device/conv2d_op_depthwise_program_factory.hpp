@@ -19,6 +19,8 @@ struct Conv2dDepthwiseProgramFactory {
         tt::tt_metal::CBHandle cb_weight{};
         tt::tt_metal::CBHandle cb_mul{};
         tt::tt_metal::CBHandle cb_bias{};  // Bias CB handle for depthwise conv with bias
+        tt::tt_metal::CBHandle cb_raw_in{};          // Raw input CB handle
+        tt::tt_metal::CBHandle cb_reader_indices{};  // Reader indices CB handle
         bool has_bias = false;
     };
 

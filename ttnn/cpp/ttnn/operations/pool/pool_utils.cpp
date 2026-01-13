@@ -140,11 +140,10 @@ FactoryParameters get_factory_parameters(
     uint32_t out_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / effective_tile_width_for_output);
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
-    const bool last_tile_is_partial =
-        (in_channels / num_shards_c) % tt::constants::TILE_WIDTH != 0 &&
-        (in_channels / num_shards_c) % tt::constants::TILE_WIDTH <= tt::constants::FACE_WIDTH;
-    const uint32_t max_rows_for_reduction =
-        !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+    // const bool last_tile_is_partial =
+    //     (in_channels / num_shards_c) % tt::constants::TILE_WIDTH != 0 &&
+    //     (in_channels / num_shards_c) % tt::constants::TILE_WIDTH <= tt::constants::FACE_WIDTH;
+    const uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     if (return_indices) {
         TT_FATAL(
