@@ -45,7 +45,7 @@ void kernel_main() {
         // Write 32 sticks to DRAM
         for (uint32_t row = 0; row < TILE_HEIGHT; ++row) {
             uint32_t stick_id = base_stick_id + row;
-            uint64_t noc_addr = d.get_noc_addr(stick_id);
+            uint64_t noc_addr = get_noc_addr(stick_id, d);
             noc_async_write(l1_read_addr, noc_addr, output_stick_size);
             l1_read_addr += output_stick_size;
         }

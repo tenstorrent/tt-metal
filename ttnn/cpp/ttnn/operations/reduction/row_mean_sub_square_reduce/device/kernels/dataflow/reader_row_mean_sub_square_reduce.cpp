@@ -57,7 +57,7 @@ void kernel_main() {
         // Read 32 sticks contiguously into CB
         for (uint32_t j = 0; j < TILE_HEIGHT; ++j) {
             uint32_t stick_id = base_stick_id + j;
-            uint64_t noc_addr = s.get_noc_addr(stick_id);
+            uint64_t noc_addr = get_noc_addr(stick_id, s);
             noc_async_read(noc_addr, l1_write_addr, stick_size);
             l1_write_addr += stick_size;
         }
