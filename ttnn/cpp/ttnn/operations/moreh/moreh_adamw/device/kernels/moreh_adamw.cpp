@@ -159,7 +159,7 @@ void MAIN {
         copy_tile_init_with_dt(tmp_cb_exp_avg_sq);
         copy_tile(tmp_cb_exp_avg_sq, first_tile, dst1);
         binary_max_tile_init();
-        binary_max_tile(dst0, dst1);
+        binary_max_tile(dst0, dst1, dst0);
         tile_regs_commit();
 
         tile_regs_wait();
