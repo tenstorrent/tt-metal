@@ -147,7 +147,7 @@ public:
 
     FORCE_INLINE void advance_remote_receiver_buffer_index() {
         static_cast<DERIVED_T*>(this)->advance_remote_receiver_buffer_index_impl();
-    }    
+    }
 };
 
 // Elastic sender channel implementation (stub for now)
