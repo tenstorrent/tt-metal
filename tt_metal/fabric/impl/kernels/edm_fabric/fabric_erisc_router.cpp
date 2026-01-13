@@ -1269,7 +1269,17 @@ bool any_sender_channels_active(
     return false;
 }
 
-constexpr bool IS_RETRAIN_SYNC_MASTER() { return enable_context_switch; }  // MY_ERISC_ID == 0; }
+/*
+ * In Blackhole, there are typically 2-eriscs running cooperatively to implement the fabric router. They 
+ * execute the sender and receiver traffic flows, respectively (hence they run completely independently).
+ * However, in Blackhole, there is special behaviour that must be accommodated,  specifically around link 
+ * training. During link training, the erisc does not have direct access to a part of the Ethernet subsystem
+ * that needs to be programmed; it is only accessible over the noc. Therefore, to avoid potential noc 
+ * resource conflicts between the non-link-training erisc and the link training erisc (because we don't 
+ * know exactly which nocs they will use), the router implements a coordinated context switch where
+ * the non-link-training erisc will spin idly while the retrain process takes place.
+ */
+constexpr bool IS_RETRAIN_SYNC_MASTER() { return enable_context_switch; }
 void run_routing_without_noc_sync_coordinated_as_master(
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (IS_RETRAIN_SYNC_MASTER()) {
