@@ -906,7 +906,7 @@ This will print the call stacks for all RISC-V processors on all cores.
 --------------------------
 
 Depending on your environment, you may encounter an error running the above command, such as
-``Module 'No module named 'ttexalens'' not found. Please install tt-exalens``, or 
+``Module 'No module named 'ttexalens'' not found. Please install tt-exalens``, or
 ``Debugger version mismatch``.
 If this occurs, you can address it by creating a Python virtual environment and installing dependencies,
 by running the following from the ``tt-metal`` directory:
@@ -918,7 +918,7 @@ by running the following from the ``tt-metal`` directory:
    scripts/install_debugger.sh
    pip install -r tools/triage/requirements.txt
 
-Note that you may need to reenter the virtual environment by re-running ``source python_env/bin/activate`` 
+Note that you may need to reenter the virtual environment by re-running ``source python_env/bin/activate``
 if you open a new terminal later.
 
 
