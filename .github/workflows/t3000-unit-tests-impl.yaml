@@ -6,7 +6,7 @@ on:
       device-type:
         required: true
         type: string
-        description: "Device type: n150, n300, p100, p150, wh-qb, bh-qb, wh-6u, bh-6u"
+        description: "Device type: n150, n300, p100, p150, wh-qb, bh-qb2, wh-6u, bh-6u"
       runner-label:
         required: true
         type: string
@@ -60,8 +60,8 @@ jobs:
             WH-QB)
               tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.2-90b-vision", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b"]'
               ;;
-            BH-QB)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.1-8b", "llama3.2-90b-vision"]'
+            BH-QB2)
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.3-70b", "llama3.2-90b-vision", "qwen3-32b"]'
               ;;
             WH-6U)
               tt_transformers_models='[]'
@@ -127,9 +127,11 @@ jobs:
                 {"name":"vit","test_path":"models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference","test_args":"","timeout":20}
               ]')
               ;;
-            BH-QB)
+            BH-QB2)
               standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30}
+                {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
+                {"name":"flux.1-dev","test_path":"models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py::test_flux1_pipeline","test_args":"-k \"2x2sp0tp1 and dev and encoder_device and not_traced and yes_use_cache\"","timeout":60},
+                {"name":"wan2.2-t2v-a14b","test_path":"models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py::test_pipeline_inference","test_args":"-k \"1x4sp0tp1 and resolution_480p\"","timeout":60}
               ]')
               ;;
             WH-6U)
@@ -150,6 +152,7 @@ jobs:
           declare -A model_paths
           model_paths["llama3.1-8b"]="meta-llama/Llama-3.1-8B-Instruct"
           model_paths["llama3.1-70b"]="meta-llama/Llama-3.1-70B-Instruct"
+          model_paths["llama3.3-70b"]="meta-llama/Llama-3.3-70B-Instruct"
           model_paths["llama3.2-1b"]="meta-llama/Llama-3.2-1B"
           model_paths["llama3.2-3b"]="meta-llama/Llama-3.2-3B"
           model_paths["llama3.2-11b-vision"]="meta-llama/Llama-3.2-11B-Vision"
@@ -220,6 +223,8 @@ jobs:
               }]')
           done
 
+          echo "Generated matrix for device-type: ${{ inputs.device-type }}"
+          echo "Matrix length: $(echo "$matrix" | jq 'length')"
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
 
   run-tests:

@@ -15,7 +15,7 @@ on:
           - p100
           - p150
           - wh-qb
-          - bh-qb
+          - bh-qb2
           - wh-6u
           - bh-6u
       regenerate-ttnn-cache:
@@ -23,6 +23,8 @@ on:
         required: false
         type: boolean
         default: false
+  schedule:
+    - cron: "0 18 * * 0" # every Sunday at 6pm UTC
   workflow_call:
     inputs:
       device:
@@ -121,12 +123,12 @@ jobs:
 
   # BH QuietBox Tests (2xP300)
   bh-quietbox-tests:
-    if: ${{ inputs.device == 'all' || inputs.device == 'bh-qb' }}
+    if: ${{ inputs.device == 'all' || inputs.device == 'bh-qb2' }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
-      device-type: 'BH-QB'
+      device-type: 'BH-QB2'
       runner-label: 'BH-QB-GE'
       arch: 'blackhole'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

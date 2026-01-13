@@ -223,6 +223,8 @@ jobs:
               }]')
           done
 
+          echo "Generated matrix for device-type: ${{ inputs.device-type }}"
+          echo "Matrix length: $(echo "$matrix" | jq 'length')"
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
 
   run-tests:
