@@ -201,7 +201,7 @@ def test_model_inference(
         reference_model = model_args.reference_transformer(load_checkpoint=True)
 
     # Embedding on host
-    embd = reference_model.model.model.embed_tokens
+    embd = model_args.reference_embedding()
 
     generation_start_pos = 0
     generation_length = iterations
