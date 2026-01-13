@@ -77,8 +77,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     const uint32_t num_tiles_to_wait = dst_tiles * cols;
     uint32_t in0_wait_tiles = num_tiles_to_wait;
 
-    reduce_block_max_row_init();
-
     uint32_t row_start_idx = 0;
     for (uint32_t g = 0; g < granularity; g++) {
         cb_wait_front(in0_cb, in0_wait_tiles);
