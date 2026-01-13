@@ -62,6 +62,15 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
     const uint32_t aligned_input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t aligned_output_page_size = output_tensor.buffer()->aligned_page_size();
 
+    const uint32_t input_page_size = input_tensor.buffer()->page_size();
+    const uint32_t output_page_size = output_tensor.buffer()->page_size();
+
+    TT_FATAL(
+        input_page_size == output_page_size,
+        "Input and output page sizes must match for nearest upsample, got input_page_size={} output_page_size={}",
+        input_page_size,
+        output_page_size);
+
     const tt::tt_metal::CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
