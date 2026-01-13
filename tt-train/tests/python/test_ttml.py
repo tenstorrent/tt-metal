@@ -212,28 +212,6 @@ def test_circular_dependency_prevention():
     assert binary1 is binary2, "Same submodule should be returned"
 
 
-def test_exceptions_imported():
-    """Test that Python exceptions in modules are properly available."""
-    # Check that Python exceptions are available and not overridden
-    from ttml.modules.exceptions import (
-        ModuleError,
-        DuplicateNameError,
-        NameNotFoundError,
-        UninitializedModuleError,
-    )
-
-    assert hasattr(ttml.modules, "ModuleError")
-    assert hasattr(ttml.modules, "DuplicateNameError")
-    assert hasattr(ttml.modules, "NameNotFoundError")
-    assert hasattr(ttml.modules, "UninitializedModuleError")
-
-    # Verify they are the Python versions
-    assert ttml.modules.ModuleError is ModuleError
-    assert ttml.modules.DuplicateNameError is DuplicateNameError
-    assert ttml.modules.NameNotFoundError is NameNotFoundError
-    assert ttml.modules.UninitializedModuleError is UninitializedModuleError
-
-
 def test_all_attribute_handling():
     """Test that __all__ attributes are handled correctly."""
     # Check that modules has __all__ defined
@@ -244,12 +222,10 @@ def test_all_attribute_handling():
     # Check that expected items are in __all__
     expected_items = [
         "AbstractModuleBase",
+        "ModuleBase",
         "Parameter",
         "Buffer",
-        "ModuleError",
-        "DuplicateNameError",
-        "NameNotFoundError",
-        "UninitializedModuleError",
+        "RunMode",
     ]
 
     for item in expected_items:

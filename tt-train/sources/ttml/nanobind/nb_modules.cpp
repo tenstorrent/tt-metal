@@ -10,6 +10,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/trampoline.h>
 
 #include <core/ttnn_all_includes.hpp>
 
@@ -30,6 +31,29 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "nb_fwd.hpp"
 #include "nb_util.hpp"
 
+// Trampoline class to enable Python subclassing of ModuleBase
+// Must be outside ttml::nanobind namespace so NB_OVERRIDE macros resolve to ::nanobind
+struct PyModuleBase : ttml::modules::ModuleBase {
+    NB_TRAMPOLINE(ttml::modules::ModuleBase, 2);  // 2 virtual methods to override
+
+    // Make protected methods accessible
+    using ttml::modules::ModuleBase::create_name;
+    using ttml::modules::ModuleBase::override_module;
+    using ttml::modules::ModuleBase::override_tensor;
+    using ttml::modules::ModuleBase::register_module;
+    using ttml::modules::ModuleBase::register_tensor;
+
+    // Override virtual operator() to allow Python implementation
+    ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& tensor) override {
+        NB_OVERRIDE(operator(), tensor);
+    }
+
+    ttml::autograd::TensorPtr operator()(
+        const ttml::autograd::TensorPtr& tensor, const ttml::autograd::TensorPtr& other) override {
+        NB_OVERRIDE(operator(), tensor, other);
+    }
+};
+
 namespace ttml::nanobind::modules {
 using namespace ttml::modules;
 
@@ -37,7 +61,8 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<RunMode>(m);
     ttml::nanobind::util::export_enum<InferenceMode>(m);
 
-    nb::class_<ModuleBase>(m, "ModuleBase");
+    // Enable Python subclassing via PyModuleBase trampoline
+    nb::class_<ModuleBase, PyModuleBase>(m, "ModuleBase");
     nb::class_<LinearLayer, ModuleBase>(m, "LinearLayer");
 }
 
@@ -63,6 +88,33 @@ void py_module(nb::module_& m) {
                 &ModuleBase::operator()),
             nb::arg("tensor"),
             nb::arg("other"));
+
+        // Expose registration methods for Python subclassing
+        py_module_base.def("create_name", &PyModuleBase::create_name, nb::arg("name"), "Set the module's name");
+        py_module_base.def(
+            "register_tensor",
+            &PyModuleBase::register_tensor,
+            nb::arg("tensor"),
+            nb::arg("name"),
+            "Register a tensor parameter");
+        py_module_base.def(
+            "register_module",
+            &PyModuleBase::register_module,
+            nb::arg("module"),
+            nb::arg("name"),
+            "Register a submodule");
+        py_module_base.def(
+            "override_tensor",
+            &PyModuleBase::override_tensor,
+            nb::arg("tensor"),
+            nb::arg("name"),
+            "Override an existing tensor parameter");
+        py_module_base.def(
+            "override_module",
+            &PyModuleBase::override_module,
+            nb::arg("module"),
+            nb::arg("name"),
+            "Override an existing submodule");
     }
 
     {

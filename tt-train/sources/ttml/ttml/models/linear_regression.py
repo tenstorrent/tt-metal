@@ -55,7 +55,7 @@ class LinearRegression(AbstractModuleBase):
         """
         super().__init__()
         # Module name is automatically set to class name ("LinearRegression") by AbstractModuleBase
-        # Can be overridden by calling self._create_name("custom_name") if needed
+        # Can be overridden by calling self.create_name("custom_name") if needed
 
         self.in_features = in_features
         self.out_features = out_features
