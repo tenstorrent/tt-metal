@@ -96,7 +96,7 @@ TensorSpec get_nd_sharding_tensor_spec(
 }  // namespace
 
 class NDShardingTests
-    : public ttnn::TTNNFixtureWithDevice,
+    : public ttnn::TTNNFixtureWithSuiteDevice<NDShardingTests>,
       public ::testing::WithParamInterface<std::tuple<NDShardingParams, BufferType, ShardOrientation>> {};
 
 TEST_P(NDShardingTests, LoopbackTest) {
@@ -211,7 +211,7 @@ TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
     }
 }
 
-class NdShardingOpCompatTests : public ttnn::TTNNFixtureWithDevice,
+class NdShardingOpCompatTests : public ttnn::TTNNFixtureWithSuiteDevice<NdShardingOpCompatTests>,
                                 public ::testing::WithParamInterface<NDShardingOpCompatParams> {};
 
 TEST_P(NdShardingOpCompatTests, TestAdd) {
@@ -298,7 +298,7 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
     EXPECT_TRUE(small_shards_nd_sharding_time_ns < block_2d_sharding_time_ns * 6);
 }
 
-class NDShardingBufferSizeTests : public ttnn::TTNNFixtureWithDevice,
+class NDShardingBufferSizeTests : public ttnn::TTNNFixtureWithSuiteDevice<NDShardingBufferSizeTests>,
                                   public ::testing::WithParamInterface<NDShardingBufferSizeParams> {};
 
 TEST_P(NDShardingBufferSizeTests, TestBufferSize) {

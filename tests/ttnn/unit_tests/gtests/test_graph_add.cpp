@@ -52,7 +52,7 @@ struct AddOpGraphTestParam {
 };
 
 class AddOpGraphTestFixture
-    : public TTNNFixtureWithDevice,
+    : public TTNNFixtureWithSuiteDevice<AddOpGraphTestFixture>,
       public testing::WithParamInterface<std::tuple<AddOpGraphTestParam, tt::tt_metal::IGraphProcessor::RunMode>> {};
 
 TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
