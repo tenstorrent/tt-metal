@@ -16,6 +16,7 @@ void kernel_main() {
     // Run-time arguments
     uint32_t argidx = 0;
     const auto core_id = get_arg_val<uint32_t>(argidx++);
+    const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w0_addr = get_arg_val<uint32_t>(argidx++);
     const auto w1_addr = get_arg_val<uint32_t>(argidx++);
