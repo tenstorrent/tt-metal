@@ -217,9 +217,9 @@ inline void calculate_log1p() {
 template <ApproximationMode APPROX_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log1p_init() {
     if constexpr (!is_fp32_dest_acc_en) {
-        log_init<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
+        log_init<APPROX_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
     } else {
-        _init_reciprocal_</*approximation_mode*/ false, /*legacy_compat*/ false>();
+        _init_reciprocal_</*approx_mode*/ ApproximationMode::Precise, /*legacy_compat*/ false>();
         // Note: Unlike blackhole, _init_reciprocal_ uses 3 programmble constants
     }
 }
