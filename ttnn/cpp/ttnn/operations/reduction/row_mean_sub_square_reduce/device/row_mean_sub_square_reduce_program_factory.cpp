@@ -100,8 +100,8 @@ RowMeanSubSquareReduceProgramFactory::cached_program_t RowMeanSubSquareReducePro
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rm_out_config);
 
     // Stage 6: Create stub kernels
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     // Calculate stick sizes
     uint32_t padded_W = (W + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
