@@ -1,0 +1,65 @@
+{
+  "operation_name": "row_mean_sub_square_reduce",
+  "operation_name_pascal": "RowMeanSubSquareReduce",
+  "category": "reduction",
+  "namespace": "ttnn::operations::reduction::row_mean_sub_square_reduce",
+  "operation_path": "ttnn/cpp/ttnn/operations/reduction/row_mean_sub_square_reduce",
+  "parameters": [
+    {
+      "name": "output_dtype",
+      "cpp_type": "std::optional<DataType>",
+      "py_type": "Optional[ttnn.DataType]",
+      "default": "std::nullopt",
+      "description": "Output data type (defaults to input dtype)"
+    }
+  ],
+  "input_tensors": [
+    {
+      "name": "input_tensor",
+      "cpp_name": "input",
+      "required_rank": 4,
+      "required_dtypes": ["DataType::BFLOAT16"],
+      "required_layout": "Layout::ROW_MAJOR"
+    }
+  ],
+  "validations": [
+    {
+      "condition": "input.logical_shape().rank() == 4",
+      "error_message": "Input tensor must be 4D, got rank {}",
+      "error_args": ["input.logical_shape().rank()"]
+    },
+    {
+      "condition": "input.layout() == Layout::ROW_MAJOR",
+      "error_message": "Input must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "input.dtype() == DataType::BFLOAT16",
+      "error_message": "Input dtype must be BFLOAT16, got {}",
+      "error_args": ["input.dtype()"]
+    },
+    {
+      "condition": "input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Input must be DRAM interleaved",
+      "error_args": []
+    },
+    {
+      "condition": "input.is_allocated()",
+      "error_message": "Input tensor must be on device",
+      "error_args": []
+    },
+    {
+      "condition": "input.logical_shape()[-1] >= 1",
+      "error_message": "Width must be at least 1, got {}",
+      "error_args": ["input.logical_shape()[-1]"]
+    }
+  ],
+  "output_shape": {
+    "formula": "input_shape[:-1] + [32]",
+    "cpp_code": "ttnn::SmallVector<uint32_t> dims(input.logical_shape().cbegin(), input.logical_shape().cend());\n    dims.back() = 32;\n    ttnn::Shape output_shape(dims);",
+    "cpp_code_padded": "ttnn::SmallVector<uint32_t> pdims(input.padded_shape().cbegin(), input.padded_shape().cend());\n    pdims.back() = 32;\n    ttnn::Shape output_padded(pdims);"
+  },
+  "output_dtype": "same_as_input",
+  "output_layout": "Layout::ROW_MAJOR",
+  "docstring": "Computes variance along the width (W) dimension of a 4D tensor.\n\nThis operation computes variance as E[(x - E[x])^2] for each (N, C, H) position.\nThe output has width padded to TILE_WIDTH=32.\n\nArgs:\n    input_tensor: Input tensor in ROW_MAJOR layout with shape [N, C, H, W]\n    memory_config: Memory configuration for output tensor (defaults to input memory config)\n    output_dtype: Output data type (defaults to input dtype)\n\nReturns:\n    Tensor with shape [N, C, H, 32] containing variance values in the first element of each row"
+}

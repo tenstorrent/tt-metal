@@ -75,6 +75,9 @@ target_sources(
         manual_seed/manual_seed.cpp
         manual_seed/device/manual_seed_operation.cpp
         manual_seed/device/manual_seed_program_factory.cpp
+        row_mean_sub_square_reduce/device/row_mean_sub_square_reduce_device_operation.cpp
+        row_mean_sub_square_reduce/device/row_mean_sub_square_reduce_program_factory.cpp
+        row_mean_sub_square_reduce/row_mean_sub_square_reduce.cpp
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})
