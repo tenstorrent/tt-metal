@@ -12,7 +12,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/rsqrt.h"
-#include "models/demos/deepseek_v3_b1/micro_ops/kernel_common/compute_kernel_api/compute_api.hpp"
+#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
 
 template <
     uint32_t input_cb,

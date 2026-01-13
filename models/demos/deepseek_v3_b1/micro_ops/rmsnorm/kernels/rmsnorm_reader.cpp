@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "models/demos/deepseek_v3_b1/micro_ops/kernel_common/dm_utils.hpp"
+#include "../../../kernel_includes/tt_metal/dm_utils.hpp"
 
 void kernel_main() {
     uint32_t arg_idx = 0;
