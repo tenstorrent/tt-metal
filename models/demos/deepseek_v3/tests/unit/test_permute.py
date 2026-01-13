@@ -53,6 +53,10 @@ def test_permute_deepseek(mesh_device, test_config, dtype, enable_trace):
     tt_output_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
     torch_ref = torch.permute(torch_input, perm)
-    for tt_out_tensor in ttnn.get_device_tensors(tt_output_tensors):
+    coords = list(tt_output_tensors.tensor_topology().mesh_coords())
+    view = mesh_device.get_view()
+    for coord, tt_out_tensor in zip(coords, ttnn.get_device_tensors(tt_output_tensors)):
+        if not view.is_local(coord):
+            continue
         torch_out = ttnn.to_torch(tt_out_tensor)
         assert_equal(torch_ref, torch_out)

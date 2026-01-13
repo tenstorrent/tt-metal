@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <string>
 #include <vector>
+#include <atomic>
 #include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
@@ -235,7 +236,7 @@ class RunTimeOptions {
     uint32_t arc_debug_buffer_size = 0;
 
     // Force disables using DMA for reads and writes
-    bool disable_dma_ops = false;
+    std::atomic<bool> disable_dma_ops = false;
 
     // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
@@ -594,8 +595,8 @@ public:
     uint32_t get_arc_debug_buffer_size() const { return arc_debug_buffer_size; }
     void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
-    bool get_disable_dma_ops() const { return disable_dma_ops; }
-    void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
+    bool get_disable_dma_ops() const { return disable_dma_ops.load(std::memory_order_relaxed); }
+    void set_disable_dma_ops(bool disable) { disable_dma_ops.store(disable, std::memory_order_relaxed); }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
 

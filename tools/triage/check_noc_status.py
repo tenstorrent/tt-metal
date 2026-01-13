@@ -8,8 +8,8 @@ Usage:
     check_noc_status.py
 
 Description:
-    This script checks if there are any mismatches between values of number of NOC transactions
-    stored in global variables from risc firmware and NOC status registers.
+    This script checks if there are any mismatches between values of number of NOC transactions stored in global
+    variables from risc firmware and NOC status registers. These values should be in sync when the NoC is idle.
 
 Owner:
     jbaumanTT
@@ -97,7 +97,11 @@ def check_noc_status(
             message += f"    {reg} {var} {reg_val} {var_val}\n"
             passed = False
     if not passed:
-        message = "Mismatched state: \n" + message
+        message = (
+            "Mismatched state: \n"
+            + message
+            + "\nEither the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung."
+        )
 
     log_check_location(location, passed, message)
 
