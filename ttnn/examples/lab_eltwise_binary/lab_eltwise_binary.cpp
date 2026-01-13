@@ -341,7 +341,8 @@ int main() {
             const float expected = static_cast<float>(reference_result[i]);
             const float actual = static_cast<float>(result_vec[i]);
 
-            float relative_error = std::abs(actual - expected) / expected;
+            float relative_error = (expected == 0.0f) ? std::abs(actual) 
+                : std::abs(actual - expected) / expected;
             if (relative_error > RELTOL) {
                 log_error(tt::LogAlways, "Mismatch at index {}: {} vs expected {}", i, actual, expected);
                 log_error(tt::LogAlways, "Expected relative tolerance: {} actual relative error: {}", RELTOL, relative_error);
