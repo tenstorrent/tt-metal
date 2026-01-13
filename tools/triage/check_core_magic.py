@@ -30,6 +30,8 @@ script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
 )
 
+MAILBOX_CORRUPTED_MESSAGE = "Mailbox is likely corrupted, potentially due to NoC writes to an invalid location."
+
 
 class CoreMagicValues:
     """
@@ -156,14 +158,14 @@ def check_core_magic(
             False,
             f"{risc_name}: core_magic_number mismatch! Expected {expected_type} (0x{expected_magic:08X}), "
             f"but found {found_type} firmware at {found_type} mailbox location. "
-            f"Value at expected location: 0x{actual_magic:08X}",
+            f"Value at expected location: 0x{actual_magic:08X}. Triage may have incorrectly identified the firmware type.",
         )
     else:
         log_check_location(
             location,
             False,
             f"{risc_name}: core_magic_number mismatch! Expected {expected_type} (0x{expected_magic:08X}), "
-            f"found unknown value 0x{actual_magic:08X}. Could not identify firmware type at other locations.",
+            f"found unknown value 0x{actual_magic:08X}. Could not identify firmware type at other locations. {MAILBOX_CORRUPTED_MESSAGE}",
         )
 
 
