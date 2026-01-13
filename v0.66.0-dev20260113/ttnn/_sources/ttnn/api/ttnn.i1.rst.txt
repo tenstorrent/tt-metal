@@ -1,0 +1,8 @@
+﻿ttnn.i1
+=======
+
+.. currentmodule:: ttnn
+
+.. _ttnn.i1:
+
+.. autooperation:: ttnn.i1

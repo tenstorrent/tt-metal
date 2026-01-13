@@ -1,0 +1,8 @@
+﻿ttnn.uniform
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.uniform:
+
+.. autooperation:: ttnn.uniform

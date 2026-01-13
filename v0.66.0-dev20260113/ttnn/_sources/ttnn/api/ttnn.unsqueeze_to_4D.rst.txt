@@ -1,0 +1,8 @@
+﻿ttnn.unsqueeze\_to\_4D
+======================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.unsqueeze_to_4D:
+
+.. autooperation:: ttnn.unsqueeze_to_4D
