@@ -33,7 +33,11 @@ def to_torch_auto_compose(tensor: ttnn.Tensor, device: Optional[ttnn.MeshDevice]
         PyTorch tensor with shards composed
     """
     composer = _infer_mesh_composer_from_topology(tensor, device=device)
-    return ttnn.to_torch(tensor, mesh_composer=composer)
+    try:
+        return ttnn.to_torch(tensor, mesh_composer=composer)
+    except Exception as e:
+        logger.error(f"Failed to convert tensor to torch with mesh_composer: {e}")
+        raise
 
 
 def extract_tensor_topology_info(

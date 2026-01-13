@@ -9,7 +9,7 @@ namespace ttnn::operations::experimental::transformer::split_query_key_value_and
 
 SplitFusedQKVAndSplitHeadsDeviceOperation::program_factory_t
 SplitFusedQKVAndSplitHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.is_sharded()) {
         return program::SplitFusedQKVAndSplitHeadsShardedProgramFactory{};
     }

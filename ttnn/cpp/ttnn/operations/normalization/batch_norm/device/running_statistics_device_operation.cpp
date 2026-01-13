@@ -29,7 +29,7 @@ inline void check_tensor_stat(const Tensor& tensor, std::string_view name, std::
 }  // namespace
 
 void RunningStatistics::validate_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& [batch_mean, batch_var, running_mean, running_var] = tensor_args;
 
     // mean (1, C, 1, 1)
@@ -50,7 +50,7 @@ void RunningStatistics::validate_tensors(
 }
 
 RunningStatistics::program_factory_t RunningStatistics::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return RunningStatisticsProgramFactory();
 }
 
