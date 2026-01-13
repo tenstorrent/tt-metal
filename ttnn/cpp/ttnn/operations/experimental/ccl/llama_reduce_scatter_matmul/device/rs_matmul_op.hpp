@@ -13,7 +13,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 #include <optional>
 #include <vector>

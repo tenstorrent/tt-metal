@@ -85,9 +85,7 @@ target_sources(
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
         core/graph/levelized_graph.cpp
-        core/old_infra_device_operation.cpp
         core/reports.cpp
-        core/run_operation.cpp
         core/tensor/flatbuffer/tensor_flatbuffer.cpp
         core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
         core/tensor/host_buffer/functions.cpp
@@ -501,11 +499,9 @@ target_sources(
             api/ttnn/graph/levelized_graph.hpp
             api/ttnn/mesh_device_operation_adapter.hpp
             api/ttnn/mesh_device_operation_utils.hpp
-            api/ttnn/old_infra_device_operation.hpp
             api/ttnn/operation.hpp
             api/ttnn/operation_concepts.hpp
             api/ttnn/reports.hpp
-            api/ttnn/run_operation.hpp
             api/ttnn/tensor/host_buffer/functions.hpp
             api/ttnn/tensor/layout/alignment.hpp
             api/ttnn/tensor/layout/layout.hpp

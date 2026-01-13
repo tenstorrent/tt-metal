@@ -129,9 +129,6 @@ auto get_operation_name(const typename device_operation_t::operation_attributes_
     if constexpr (is_mesh_device_operation_adapter_v<device_operation_t>) {
         // For MeshAdapter operations, we recurse to get the name of the underlying device operation
         return get_operation_name<typename device_operation_t::device_operation_t>(operation_attributes);
-    } else if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
-        // TODO: remove this if statement once OldInfraDeviceOperation is removed
-        return device_operation_t::get_type_name(operation_attributes);
     } else {
         return tt::stl::get_type_name<device_operation_t>();
     }
