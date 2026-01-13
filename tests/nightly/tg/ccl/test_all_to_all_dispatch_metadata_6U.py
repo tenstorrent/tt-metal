@@ -33,7 +33,7 @@ def run_all_to_all_dispatch_metadata_test(
     num_iters,
     warmup_iters,
     trace_mode,
-    num_links=3,
+    num_links=4,
     scheme="random",
     use_regular_grid=False,
     input_grid=None,
@@ -66,6 +66,7 @@ def run_all_to_all_dispatch_metadata_test(
     )
 
     expert_indices_tensors = []
+    expert_scores_tensors = []
     expert_mapping_tensors = []
     input_tensors = []
     output_tensors = []
@@ -121,6 +122,17 @@ def run_all_to_all_dispatch_metadata_test(
             mesh_mapper=mesh_mapper,
         )
 
+        # Create expert scores tensor (same shape as expert_indices, but bfloat16)
+        expert_scores = torch.rand(expert_indices.shape, dtype=torch.float32).to(tt_to_torch_dtype(dtype))
+        tt_expert_scores = ttnn.from_torch(
+            expert_scores,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=input_memory_config,
+            mesh_mapper=mesh_mapper,
+        )
+
         tt_expert_mapping = ttnn.from_torch(
             expert_mapping,
             device=mesh_device,
@@ -151,10 +163,12 @@ def run_all_to_all_dispatch_metadata_test(
         if iter == 0:
             logger.info(f"tt_input shape: {tt_input.shape}")
             logger.info(f"tt_expert_indices shape: {tt_expert_indices.shape}")
+            logger.info(f"tt_expert_scores shape: {tt_expert_scores.shape}")
             logger.info(f"tt_expert_mapping shape: {tt_expert_mapping.shape}")
 
         input_tensors.append(tt_input)
         expert_indices_tensors.append(tt_expert_indices)
+        expert_scores_tensors.append(tt_expert_scores)
         expert_mapping_tensors.append(tt_expert_mapping)
         output_tensors.append(tt_output_tensor)
         metadata_tensors.append(tt_metadata_tensor)
@@ -194,6 +208,7 @@ def run_all_to_all_dispatch_metadata_test(
             output_tensor, metadata_tensor = ttnn.experimental.all_to_all_dispatch_metadata(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
+                expert_scores_tensors[buffer_index],
                 expert_mapping_tensors[buffer_index],
                 cluster_axis=cluster_axis,
                 num_links=num_links,

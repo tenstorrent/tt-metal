@@ -36,6 +36,7 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
         Args:
             input_tensor (ttnn.Tensor): The input tensor containing the tokens to dispatch. The tensor is expected to be [B, S, 1, H] per device, sharded along either the batch dimension or the sequence dimension, such that the global shape is either [B*D[A], S, 1, H] or [B, S*D[A], 1, H]. Each row is a token. The tensor is expected to be in Row Major, Interleaved format. It is duplicated on the non-cluster axis.
             expert_indices_tensor (ttnn.Tensor): The expert indices tensor containing the ranking of the experts for each token. The tensor is expected to be [B, S, 1, K] per device, sharded identically to the input_tensor. Each value in the row is an expert index, which corresponds to a row index in the expert mapping tensor. This tensor only contains the expert ranking for the tokens local to that device. The tensor is expected to be in Row Major, Interleaved format. It is duplicated on the non-cluster axis.
+            expert_scores_tensor (ttnn.Tensor): The expert scores tensor containing the scores for each selected expert for each token. The tensor is expected to be [B, S, 1, K] per device, sharded identically to the expert_indices_tensor. Each value in the row is a score corresponding to the expert at the same position in the expert_indices_tensor. The tensor is expected to be in bfloat16, Row Major, Interleaved format. It is duplicated on the non-cluster axis.
             expert_mapping_tensor (ttnn.Tensor): The one-hot encoded expert to device mapping tensor containing the location of the experts among each device and each mesh. The tensor is expected to be [1, 1, E, D] per device, fully replicated across all devices. Each row corresponds to an expert, and the value in each corresponding column is 1 if the expert is on the device, 0 otherwise. The tensor is expected to be in Row Major, Interleaved format. This tensor is expected to be the same across all devices.
 
         Keyword Args:
@@ -57,6 +58,7 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             >>> output_tensor, metadata_tensor = ttnn.experimental.all_to_all_dispatch_metadata(
                             input_tensor,
                             expert_indices_tensor,
+                            expert_scores_tensor,
                             expert_mapping_tensor,
                             cluster_axis=cluster_axis,
                             num_links=num_links,
@@ -75,6 +77,7 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& expert_indices_tensor,
+               const ttnn::Tensor& expert_scores_tensor,
                const ttnn::Tensor& expert_mapping_tensor,
                const std::optional<uint32_t> output_concat_dim,
                const std::optional<uint32_t> cluster_axis,
@@ -86,6 +89,7 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                 return self(
                     input_tensor,
                     expert_indices_tensor,
+                    expert_scores_tensor,
                     expert_mapping_tensor,
                     cluster_axis,
                     output_tensors,
@@ -97,6 +101,7 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
+            nb::arg("expert_scores_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("output_concat_dim") = 1,

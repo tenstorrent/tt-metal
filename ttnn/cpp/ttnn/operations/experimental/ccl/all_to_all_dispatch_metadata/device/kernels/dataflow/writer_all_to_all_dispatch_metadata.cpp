@@ -91,15 +91,23 @@ void kernel_main() {
     constexpr uint32_t write_page_by_page = get_compile_time_arg_val(35);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
-    constexpr auto input_args = TensorAccessorArgs<37>();
+    // scores tensor compile time args
+    constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(37);
+    constexpr uint32_t scores_pages = get_compile_time_arg_val(38);
+    constexpr uint32_t scores_page_size = get_compile_time_arg_val(39);
+    constexpr uint32_t aligned_scores_page_size = get_compile_time_arg_val(40);
+
+    constexpr auto input_args = TensorAccessorArgs<41>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto mapping_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
+    constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
+    constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -187,6 +195,7 @@ void kernel_main() {
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
         uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
         cb_wait_front(indices_tensor_cb_id, 1);
+        cb_wait_front(scores_tensor_cb_id, 1);
         cb_wait_front(input_tensor_cb_id, 1);
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
         uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
@@ -248,6 +257,7 @@ void kernel_main() {
             }
         }
         cb_pop_front(indices_tensor_cb_id, 1);
+        cb_pop_front(scores_tensor_cb_id, 1);
         cb_pop_front(input_tensor_cb_id, 1);
     }
     if (needs_barrier) {

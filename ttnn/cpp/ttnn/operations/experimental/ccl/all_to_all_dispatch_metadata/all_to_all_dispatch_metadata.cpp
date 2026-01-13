@@ -17,6 +17,7 @@ namespace ttnn::operations::experimental::ccl {
 std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchMetadata::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
+    const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
@@ -35,8 +36,8 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchMetadata::invoke(
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t output_concat_dim_ = output_concat_dim.value_or(1);
 
-    const auto [cb_sizes, cb_page_sizes] =
-        detail::get_cb_sizes(input_tensor, expert_indices_tensor, expert_mapping_tensor, num_links_, axis);
+    const auto [cb_sizes, cb_page_sizes] = detail::get_cb_sizes(
+        input_tensor, expert_indices_tensor, expert_scores_tensor, expert_mapping_tensor, num_links_, axis);
 
     AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl =
         AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType::FullPacket;
@@ -66,6 +67,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchMetadata::invoke(
             AllToAllDispatchMetadataDeviceOperation::tensor_args_t{
                 .input_tensor = input_tensor,
                 .expert_indices_tensor = expert_indices_tensor,
+                .expert_scores_tensor = expert_scores_tensor,
                 .expert_mapping_tensor = expert_mapping_tensor,
                 .optional_output_tensors = optional_output_tensors});
 
@@ -92,6 +94,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchMetadata::invoke(
     return ttnn::prim::all_to_all_dispatch_metadata(
         input_tensor,
         expert_indices_tensor,
+        expert_scores_tensor,
         expert_mapping_tensor,
         axis,
         optional_output_tensors,

@@ -15,6 +15,7 @@ struct ExecuteAllToAllDispatchMetadata {
     static std::array<ttnn::Tensor, 2> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_indices_tensor,
+        const ttnn::Tensor& expert_scores_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis = std::nullopt,
         const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors = std::nullopt,

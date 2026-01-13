@@ -40,9 +40,16 @@ void kernel_main() {
     constexpr bool write_page_by_page = get_compile_time_arg_val(35);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
-    constexpr auto input_args = TensorAccessorArgs<37>();
+    // scores tensor compile time args
+    constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(37);
+    constexpr uint32_t scores_pages = get_compile_time_arg_val(38);
+    constexpr uint32_t scores_page_size = get_compile_time_arg_val(39);
+    constexpr uint32_t aligned_scores_page_size = get_compile_time_arg_val(40);
+
+    constexpr auto input_args = TensorAccessorArgs<41>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto mapping_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
+    constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
+    constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
@@ -59,6 +66,7 @@ void kernel_main() {
     uint32_t rt_ags = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_ags++);
+    uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_ags++);
@@ -69,6 +77,7 @@ void kernel_main() {
 
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
+    const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address, scores_page_size);
     const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
 
@@ -83,19 +92,25 @@ void kernel_main() {
     cb_push_back(mapping_tensor_cb_id, mapping_pages);
 
     ASSERT(indices_pages == input_pages);
-    // read the input tokens and the selected experts for each token
+    ASSERT(scores_pages == indices_pages);
+    // read the input tokens, selected experts, and scores for each token
     for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
         cb_reserve_back(indices_tensor_cb_id, 1);
+        cb_reserve_back(scores_tensor_cb_id, 1);
         cb_reserve_back(input_tensor_cb_id, 1);
 
         uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
         noc_async_read_page(i, indices_addr_gen, l1_write_addr);
+
+        l1_write_addr = get_write_ptr(scores_tensor_cb_id);
+        noc_async_read_page(i, scores_addr_gen, l1_write_addr);
 
         l1_write_addr = get_write_ptr(input_tensor_cb_id);
         noc_async_read_page(i, input_addr_gen, l1_write_addr);
 
         noc_async_read_barrier();
         cb_push_back(indices_tensor_cb_id, 1);
+        cb_push_back(scores_tensor_cb_id, 1);
         cb_push_back(input_tensor_cb_id, 1);
     }
 

@@ -22,9 +22,10 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
 
-std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
+std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& indices_tensor,
+    const ttnn::Tensor& scores_tensor,
     const ttnn::Tensor& mapping_tensor,
     uint32_t num_links,
     std::optional<uint32_t> axis);
@@ -54,6 +55,7 @@ struct AllToAllDispatchMetadataDeviceOperation {
     struct tensor_args_t {
         const Tensor input_tensor;
         const Tensor expert_indices_tensor;
+        const Tensor expert_scores_tensor;
         const Tensor expert_mapping_tensor;
         const std::optional<std::array<Tensor, 2>> optional_output_tensors;
     };
@@ -121,6 +123,7 @@ ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::te
 all_to_all_dispatch_metadata(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
+    const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,

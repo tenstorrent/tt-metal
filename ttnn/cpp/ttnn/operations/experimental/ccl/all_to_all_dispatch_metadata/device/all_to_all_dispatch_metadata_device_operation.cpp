@@ -23,13 +23,25 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
+    auto scores_tensor = tensor_args.expert_scores_tensor;
 
     TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
     TT_FATAL(indices_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Indices tensor must be in row major layout");
+    TT_FATAL(scores_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Scores tensor must be in row major layout");
 
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
-    TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
+    TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint16");
+    TT_FATAL(scores_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Scores tensor must be bfloat16");
     TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Output memory config must not be sharded");
+
+    // Validate scores tensor has same shape as indices tensor
+    auto indices_shape = indices_tensor.tensor_spec().logical_shape();
+    auto scores_shape = scores_tensor.tensor_spec().logical_shape();
+    TT_FATAL(
+        indices_shape == scores_shape,
+        "Scores tensor shape {} must match indices tensor shape {}",
+        scores_shape,
+        indices_shape);
 
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
@@ -58,7 +70,6 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(operation_attributes.num_links > 0, "Number of links must be greater than 0");
 
     auto input_shape = input_tensor.tensor_spec().logical_shape();
-    auto indices_shape = indices_tensor.tensor_spec().logical_shape();
     TT_FATAL(
         input_shape.rank() == 4 && (input_shape.rank() == indices_shape.rank()),
         "Input and indices tensor must have the same number of dimensions");
@@ -167,6 +178,7 @@ ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::te
 all_to_all_dispatch_metadata(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
+    const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
@@ -189,6 +201,7 @@ all_to_all_dispatch_metadata(
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,
+            .expert_scores_tensor = expert_scores_tensor,
             .expert_mapping_tensor = expert_mapping_tensor,
             .optional_output_tensors = optional_output_tensors});
 }
