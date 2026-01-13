@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Module replacement utilities for converting PyTorch modules to TTNN."""
 
 from typing import Dict, Optional, Set, Union
