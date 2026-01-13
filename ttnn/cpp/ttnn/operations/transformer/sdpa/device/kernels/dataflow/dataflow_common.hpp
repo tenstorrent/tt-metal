@@ -827,19 +827,19 @@ void write_block(
     const uint32_t out_chunk_tiles,
     const uint32_t rows,
     const uint32_t cols,
-    const uint32_t cb_id_in,
+    const uint32_t out_tile_id,
     const uint32_t tile_bytes,
     const uint32_t barrier_threshold) {
     uint32_t barrier_count = 0;
-    uint32_t cb_id = cb_id_in;
+    uint32_t tile_id = out_tile_id;
 
     cb_wait_front(cb_out, out_chunk_tiles);
 
     uint32_t l1_read_addr = get_read_ptr(cb_out);
     for (uint32_t row = 0; row < rows; ++row) {
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_write_page(cb_id, out_writer, l1_read_addr);
-            ++cb_id;
+            noc_async_write_tile(tile_id, out_writer, l1_read_addr);
+            ++tile_id;
             l1_read_addr += tile_bytes;
 
             if (++barrier_count == barrier_threshold) {
