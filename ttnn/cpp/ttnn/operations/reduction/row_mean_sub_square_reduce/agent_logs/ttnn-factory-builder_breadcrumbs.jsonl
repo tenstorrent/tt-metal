@@ -22,3 +22,6 @@
 {"event":"result","type":"build","success":true,"ts":"2026-01-13T12:46:57+00:00"}
 {"event":"tdd_cycle","stage":6,"phase":"GREEN_ATTEMPT","notes":"Testing stub kernel compilation and execution","ts":"2026-01-13T12:46:57+00:00"}
 {"event":"hang_debug","symptom":"test_timeout","diagnosis":"CB sync mismatch - c_0 and c_16 page_size configured as tile_size but used as stick buffers","resolution_needed":"Reconfigure c_0/c_16 page_size to match stick_size for row-major data","ts":"2026-01-13T12:50:44+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-factory-builder] stages 4-6: CB config, stub kernels (partial)","ts":"2026-01-13T12:51:25+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"413dea9260","ts":"2026-01-13T12:51:25+00:00"}
+{"event":"complete","final_status":"PARTIAL","stages_completed":[4,5],"stage6_status":"PARTIAL_CB_SYNC_ISSUE","final_commit":"413dea9260","ts":"2026-01-13T12:51:25+00:00"}
