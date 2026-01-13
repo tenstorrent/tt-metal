@@ -367,7 +367,7 @@ void kernel_main() {
                             if (q_start_idx >= window_low_idx && q_end_idx <= window_high_idx &&
                                 k_start_idx >= window_low_idx && k_end_idx <= window_high_idx) {
                                 if (zero_tile_idx == -1) {
-                                    fill_tile_zeros<mask_tile_bytes>(cb_mask_in, in_mask_tile_id, false);
+                                    fill_tile_zeros<mask_tile_bytes, false>(cb_mask_in, in_mask_tile_id);
                                 } else {
                                     copy_tile<mask_tile_bytes>(
                                         noc_write_addr_base, mask_write_ptr_base, zero_tile_idx, in_mask_tile_id);
