@@ -317,10 +317,10 @@ def _golden_function_isclose(input_tensor_a, input_tensor_b, *args, rtol=1e-05, 
 ttnn.attach_golden_function(ttnn.isclose, golden_function=_golden_function_isclose)
 
 
-def _golden_function_div(input_tensor_a, input_tensor_b, round_mode=None, *args, **kwargs):
+def _golden_function_div(input_tensor_a, input_tensor_b, rounding_mode=None, *args, **kwargs):
     import torch
 
-    return torch.div(input_tensor_a, input_tensor_b, rounding_mode=round_mode)
+    return torch.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode)
 
 
 ttnn.attach_golden_function(ttnn.div, golden_function=_golden_function_div)

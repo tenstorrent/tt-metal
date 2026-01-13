@@ -25,7 +25,7 @@ mem_configs = [
 
 
 @pytest.mark.parametrize("fast_and_approximate_mode", [False])
-@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -46,14 +46,14 @@ class TestUnary_Div:
     def test_run_unary_div(
         self,
         fast_and_approximate_mode,
-        round_mode,
+        rounding_mode,
         input_shapes,
         scalar,
         dst_mem_config,
         device,
     ):
         if is_grayskull():
-            if round_mode in ["trunc", "floor"]:
+            if rounding_mode in ["trunc", "floor"]:
                 pytest.skip("does not work for Grayskull -skipping")
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16)
@@ -62,7 +62,7 @@ class TestUnary_Div:
         test_args.update(
             {
                 "fast_and_approximate_mode": fast_and_approximate_mode,
-                "round_mode": round_mode,
+                "rounding_mode": rounding_mode,
                 "scalar": scalar,
             }
         )
