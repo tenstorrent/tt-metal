@@ -1522,6 +1522,29 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
 
         // Return mesh_graph if mapping is successful
         if (mapping_result.success) {
+            // Check if the final mesh size doesn't match the number of physical chips
+            size_t final_mesh_size = mesh_shape.mesh_size();
+            if (final_mesh_size < total_number_of_chips) {
+                // Format mesh shape as "2x4" style string
+                std::string mesh_shape_str;
+                for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+                    if (i > 0) {
+                        mesh_shape_str += "x";
+                    }
+                    mesh_shape_str += std::to_string(mesh_shape[i]);
+                }
+
+                log_warning(
+                    tt::LogFabric,
+                    "TopologyMapper auto-discovery: Downgrading to mesh shape {} ({} total nodes) for {} physical "
+                    "chips. "
+                    "Some physical chips may not be used. This may indicate connectivity issues, topology mismatches, "
+                    "or insufficient fabric links between chips. Verify your physical chip connectivity and ensure "
+                    "that the fabric links are correctly configured.",
+                    mesh_shape_str,
+                    final_mesh_size,
+                    total_number_of_chips);
+            }
             return mesh_graph;
         }
     }
