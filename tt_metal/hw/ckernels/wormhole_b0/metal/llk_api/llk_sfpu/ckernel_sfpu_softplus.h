@@ -15,6 +15,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// To be removed and added later
 enum ImplMode : uint32_t {
     IMPL_MODE_FAST = 0,      // the fastest version of the op, may not be accurate
     IMPL_MODE_ACCURATE = 1,  // this implementation focuses on accuracy
