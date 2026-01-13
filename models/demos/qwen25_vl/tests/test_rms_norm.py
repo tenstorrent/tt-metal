@@ -57,7 +57,7 @@ def test_rms_norm_inference(
     tt_ccl = TT_CCL(mesh_device)
     tt_inner_norm = RMSNorm(
         device=mesh_device,
-        dim=model_args.dim,
+        dim=model_args.vision_dim,
         eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
         state_dict=state_dict,
         state_dict_prefix="",
@@ -69,7 +69,7 @@ def test_rms_norm_inference(
     # Wrap it in DistributedNorm
     tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl=tt_ccl, TG=model_args.is_galaxy)
 
-    input = torch.rand(1, 1, max_seq_len, model_args.dim)
+    input = torch.rand(1, 1, max_seq_len, model_args.vision_dim)
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
