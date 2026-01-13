@@ -51,7 +51,7 @@ def multi_scale_deformable_attn(
         sampling_grid_l_ = sampling_grids[:, :, :, level].transpose(1, 2).flatten(0, 1)
         # bs*num_heads, embed_dims, num_queries, num_points
         sampling_value_l_ = F.grid_sample(
-            value_l_, sampling_grid_l_, mode="nearest", padding_mode="zeros", align_corners=False
+            value_l_, sampling_grid_l_, mode="bilinear", padding_mode="zeros", align_corners=False
         )
         sampling_value_list.append(sampling_value_l_)
 
@@ -110,7 +110,6 @@ class MSDeformableAttention(nn.Module):
     def forward(
         self,
         query: torch.Tensor,
-        key: Optional[torch.Tensor] = None,
         value: Optional[torch.Tensor] = None,
         identity: Optional[torch.Tensor] = None,
         query_pos: Optional[torch.Tensor] = None,
@@ -124,8 +123,7 @@ class MSDeformableAttention(nn.Module):
 
         Args:
             query: [bs, num_queries, embed_dims] Query features
-            key: [bs, num_keys, embed_dims] Key features (optional, defaults to query)
-            value: [bs, num_keys, embed_dims] Value features (optional, defaults to key)
+            value: [bs, num_keys, embed_dims] Value features (optional, defaults to query)
             identity: [bs, num_queries, embed_dims] Identity for residual connection
             query_pos: [bs, num_queries, embed_dims] Query positional encoding
             key_padding_mask: [bs, num_keys] Padding mask for keys
