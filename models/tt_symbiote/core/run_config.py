@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 import torch
 from torch.utils._pytree import tree_map
+from tracy import signpost
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
@@ -468,6 +469,7 @@ class NormalRun:
         DispatchManager.record_timing(
             "TTNN", self.module_name, self.__class__.__name__ + "_move_weights_to_device", {}, end - begin
         )
+        signpost(f"{self.module_name.replace('.', '_')}", f"{self.__class__.__name__}")
         begin = time.time()
         result = self.forward(*func_args, **func_kwargs)
         result = tree_map(wrap_to_torch_ttnn_tensor, result)
