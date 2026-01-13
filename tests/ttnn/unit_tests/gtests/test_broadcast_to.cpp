@@ -36,8 +36,6 @@ TEST_P(Broadcast_toFixture, Broadcast_to) {
     auto output_tensor = ttnn::experimental::broadcast_to(input_tensor, output_shape, memory_config, output);
     const auto expected_tensor = ttnn::full(output_shape, 1, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     TT_FATAL(ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
-
-    ttnn::close_device(device);
 }
 
 // Spatial dimension broadcasts (H and W)

@@ -47,7 +47,6 @@ TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
         TT_FATAL(
             ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
     }
-    ttnn::close_device(device);
 }
 
 INSTANTIATE_TEST_SUITE_P(
