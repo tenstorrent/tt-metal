@@ -46,8 +46,8 @@ class PrefetcherCoreConfig:
 
     # Receiver core column ranges (start_col, end_col exclusive)
     RECEIVER_COLS = {
-        "blackhole": {"left": (1, 6), "right": (8, 12)},
-        "wormhole": {"left": (1, 3), "right": (5, 8)},
+        "blackhole": {"left": (1, 7), "right": (8, 11)},
+        "wormhole": {"left": (1, 4), "right": (5, 7)},
     }
 
     def __post_init__(self):
@@ -159,7 +159,7 @@ class PrefetcherCoreConfig:
 
 
 ### Helper class to manage subdevices for the Prefetcher
-# The class PrefetcherSubDevice provides an interface for creating subdevices
+# The class PrefetcherSubDevice provides an interface for creating subdevices is only managed by the prefetcher module
 class PrefetcherSubDevice:
     def __init__(self, mesh_device):
         self.mesh_device = mesh_device
@@ -197,28 +197,29 @@ class Prefetcher(LightweightModule):
         self.worker_sub_device_id = None
         self.global_cb_size = 0
         self.num_receiver_cores = self.get_optimal_receiver_cores()
-        self.max_num_receiver_cores = 4 if is_blackhole() else 2
 
         # Max tensor block size is the largest block size of a tensor in bytes (1 block = tensor volume / (tile size * tile size) // (num_receiver_cores * num_reader_cores))
         self.max_tensor_block_size = 0
         self.ring_size = self.num_receiver_cores * self.mesh_device.dram_grid_size().x
-        assert (
-            self.num_receiver_cores <= self.max_num_receiver_cores
-        ), f"Number of receiver cores {self.num_receiver_cores} is greater than the maximum number of receiver cores {self.max_num_receiver_cores}"
         self.width_cores = self.mesh_device.compute_with_storage_grid_size().x
         self.height_cores = self.mesh_device.compute_with_storage_grid_size().y
-        # Only ring size of 24 has been tested on WH
 
-        ### Prefetcher HardCoded Core Ranges
+        ### Core Config
+        self.core_config = PrefetcherCoreConfig(
+            num_receiver_cores=self.num_receiver_cores, mesh_device=self.mesh_device
+        )
+
+        ### Prefetcher Hardcoded Core Ranges
         self.all_core_range_set = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.width_cores - 1, self.height_cores - 1))]
         )
 
+        # Remaining worker core ranges for the worker sub device
+        left_range = self.core_config._receiver_cols["left"]
+        right_range = self.core_config._receiver_cols["right"]
         self.all_worker_cores_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(10, 9)),
-            ]
+            [ttnn.CoreRange(ttnn.CoreCoord(left_range[0], 0), ttnn.CoreCoord(left_range[1] - 1, 9))]
+            + [ttnn.CoreRange(ttnn.CoreCoord(right_range[0], 0), ttnn.CoreCoord(right_range[1] - 1, 9))]
         )
 
         ### Prefetched Tensors
@@ -230,10 +231,9 @@ class Prefetcher(LightweightModule):
         ### Core Ranges
         self.sender_cores = None
         self.receiver_cores = None
-        self.all_cores = None
         self.mode = "prefill"
 
-    # Todo: add a note to that weights are prefetched in the order of the construction of the module
+    # NOTE: DRAM prefetched weights are prefetched in the order of the construction of the module
     def register_callback(self, callback: Callable[[], None]):
         self.callbacks.append(callback)
 
@@ -279,9 +279,8 @@ class Prefetcher(LightweightModule):
 
         # Get the sender and receiver cores
         # Create a single config instance to ensure consistent state
-        core_config = PrefetcherCoreConfig(num_receiver_cores=self.num_receiver_cores, mesh_device=self.mesh_device)
-        self.sender_cores = core_config.sender_cores
-        self.receiver_cores = core_config.receiver_cores
+        self.sender_cores = self.core_config.sender_cores
+        self.receiver_cores = self.core_config.receiver_cores
 
         self.sender_receiver_mapping = list(
             zip(
@@ -304,7 +303,6 @@ class Prefetcher(LightweightModule):
         logger.info("=" * 50)
         logger.info("[Prefetcher Initialization]")
         logger.info(f"  Mode: {mode}")
-        logger.info(f"  All cores: {self.all_cores}")
         logger.info(f"  Sender cores: {self.sender_cores(active=True)}")
         logger.info(f"  Receiver cores: {self.receiver_cores(sender_active=None, receiver_active=True)}")
         logger.info(f"  Number of receiver cores: {self.num_receiver_cores}")
@@ -350,6 +348,11 @@ class Prefetcher(LightweightModule):
             raise ValueError(
                 f"Tensor volume ({tensor.volume()}) must be divisible by num_receiver_cores * num_reader_cores ({self.num_receiver_cores * self.width_cores}) for prefetcher."
             )
+        if not tensor.is_sharded() or tensor.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            raise ValueError(
+                f"Tensor must be DRAM sharded for prefetcher. Got sharded={tensor.is_sharded()}, "
+                f"buffer_type={tensor.memory_config().buffer_type}"
+            )
         self.max_tensor_block_size = max(
             (math.ceil(tensor.volume() / (ttnn.TILE_SIZE * ttnn.TILE_SIZE)) // (self.ring_size))
             * bytes_in_tile[tensor.dtype],
@@ -358,7 +361,7 @@ class Prefetcher(LightweightModule):
         self.prefetched_tensors.append(tensor)
         self.prefetched_tensor_addr.append(tensor.buffer_address())
         logger.info(
-            f"Inserted tensor {tensor.shape} into prefetcher, total number of tensors: {len(self.prefetched_tensor_addr)}"
+            f"Inserted tensor of shape {tensor.shape} into prefetcher, total number of tensors in prefetcher queue: {len(self.prefetched_tensor_addr)}"
         )
 
     def prefetch(self):
@@ -367,6 +370,9 @@ class Prefetcher(LightweightModule):
         The tensors are prefetched in the order of the registration of the callbacks
         NOTE: This only needs to be called if a callback is registered for inserting tensors
         """
+        assert (
+            len(self.callbacks) > 0
+        ), "No tensors insertion callbacks have been inserted into the prefetcher queue. Cannot prefetch an empty queue"
         for callback in self.callbacks:
             callback()
 
@@ -374,9 +380,9 @@ class Prefetcher(LightweightModule):
         """
         Start prefetching weights into global CB with dram_prefetcher op
         """
-        # Create global cb buffer if it was not
+        # Create global cb buffer if it was not yet created.
         if self.global_cb is None:
-            self.global_cb_size = self.max_tensor_block_size  # Double buffered weights
+            self.global_cb_size = self.max_tensor_block_size
             self.global_cb = ttnn.create_global_circular_buffer(
                 self.mesh_device,
                 self.sender_receiver_mapping,
@@ -387,7 +393,7 @@ class Prefetcher(LightweightModule):
         if self.prefetched_tt_addr_tensor is None:
             self.prefetched_tt_addr_tensor = self.create_address_tensor()
 
-        # Run prefetcher op
+        # Run prefetcher op (prefetcher op will start asynchronously prefetching weights until prefetcher.stop() is called)
         self.garbage = ttnn.dram_prefetcher(
             self.prefetched_tensors[: self.num_tensors] + [self.prefetched_tt_addr_tensor],
             num_layers=self.num_layers,
