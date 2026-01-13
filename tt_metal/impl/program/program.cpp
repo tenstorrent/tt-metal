@@ -1615,8 +1615,8 @@ std::shared_ptr<Buffer> ProgramImpl::get_kernels_buffer(IDevice* device) const n
     return nullptr;
 }
 
-void detail::ProgramImpl::set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer) {
-    kernels_buffer_.insert({buffer->device()->id(), buffer});
+void detail::ProgramImpl::set_kernels_bin_buffer(ChipId device_id, const std::shared_ptr<Buffer>& buffer) {
+    kernels_buffer_.insert({device_id, buffer});
 }
 
 std::unordered_map<uint64_t, ProgramCommandSequence>&

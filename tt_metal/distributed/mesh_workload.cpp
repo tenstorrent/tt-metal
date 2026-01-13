@@ -194,7 +194,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq, const MeshCoordi
                 BufferType::DRAM,
                 std::nullopt,
                 false);
-            program.impl().set_kernels_bin_buffer(buffer_view);
+            program.impl().set_kernels_bin_buffer(mesh_device->id(), buffer_view);
         }
     }
     set_program_binary_status(mesh_device->id(), ProgramBinaryStatus::InFlight);

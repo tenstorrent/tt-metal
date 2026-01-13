@@ -246,7 +246,7 @@ public:
     void set_last_used_command_queue_for_testing(CommandQueue* queue);
     CommandQueue* get_last_used_command_queue() const;
 
-    void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
+    void set_kernels_bin_buffer(ChipId device_id, const std::shared_ptr<Buffer>& buffer);
 
     void populate_dispatch_data(IDevice* device);
 
