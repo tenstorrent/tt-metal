@@ -23,7 +23,7 @@ on:
           - P100
           - config-t3000
           - BH-LoudBox
-          - topology-6u-wormhole_b0
+          - topology-6u
         description: "Runner Type Label"
       commit-range:
         required: true
