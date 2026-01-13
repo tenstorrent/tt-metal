@@ -27,7 +27,7 @@ def get_attention_mappings():
         from transformers.integrations import use_kernelized_func
         from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeAttention as OriginalGlm4MoeAttention
         from transformers.models.glm4_moe.modeling_glm4_moe import apply_rotary_pos_emb
-    except:
+    except Exception as e:
         return {}
 
     @use_kernelized_func(apply_rotary_pos_emb)
@@ -119,7 +119,7 @@ def get_router_mapping():
         from ttnn.model_preprocessing import preprocess_linear_weight
 
         from models.tt_symbiote.core.module import TTNNModule, deallocate_weights_after
-    except:
+    except Exception as e:
         return {}
 
     class TTNNGlm4MoeTopkRouter(TTNNModule):
@@ -162,7 +162,7 @@ def get_naive_moe_mapping():
 
         from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
         from models.tt_symbiote.core.module import TTNNModule
-    except:
+    except Exception as e:
         return {}
     return {}
 
