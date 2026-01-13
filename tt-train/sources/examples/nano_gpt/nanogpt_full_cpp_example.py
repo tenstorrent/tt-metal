@@ -593,6 +593,43 @@ def save_checkpoint(
     return checkpoint_path
 
 
+def find_latest_checkpoint(base_path: str) -> Optional[str]:
+    """Find the latest checkpoint file matching the base path pattern.
+
+    Searches for files matching {base_path}_step_*.pkl and {base_path}_final.pkl,
+    returning the one with the highest step number.
+
+    Args:
+        base_path: Base path for checkpoints (e.g., "checkpoints/nano_gpt")
+
+    Returns:
+        Path to the latest checkpoint, or None if no checkpoints found.
+    """
+    import glob
+    import re
+
+    # Look for step checkpoints and final checkpoint
+    pattern = f"{base_path}_step_*.pkl"
+    step_files = glob.glob(pattern)
+
+    final_path = f"{base_path}_final.pkl"
+    if os.path.exists(final_path):
+        step_files.append(final_path)
+
+    if not step_files:
+        return None
+
+    # Extract step numbers and find the maximum
+    def get_step(path: str) -> int:
+        if path.endswith("_final.pkl"):
+            return float("inf")  # Final checkpoint is always "latest"
+        match = re.search(r"_step_(\d+)\.pkl$", path)
+        return int(match.group(1)) if match else -1
+
+    latest = max(step_files, key=get_step)
+    return latest
+
+
 def load_model_from_checkpoint(
     checkpoint_path: str,
 ) -> Tuple[NanoGPT, CharTokenizer, ModelConfig, TrainingConfig, int]:
@@ -666,42 +703,9 @@ def load_model_from_checkpoint(
             numpy_bfloat16, layout=layout, new_type=ttnn.DataType.BFLOAT16
         )
 
-        # Update the parameter in the model
-        # Parameter names use "/" separator and include model name prefix (e.g., "NanoGPT/block_0/attention/qkv")
-        parts = name.split("/")
-
-        # Skip the first part if it's the model name
-        if len(parts) > 1 and parts[0] == model.get_name():
-            parts = parts[1:]
-
-        # Navigate to the correct module and update the parameter
-        if len(parts) == 1:
-            # Direct parameter of the model (e.g., "lm_head_weight")
-            param_name = parts[0]
-            if hasattr(model, param_name):
-                param = getattr(model, param_name)
-                if isinstance(param, Parameter):
-                    # Update the tensor inside the existing Parameter (preserves weight tying)
-                    param.tensor = restored_tensor
-                else:
-                    setattr(model, param_name, Parameter(restored_tensor))
-            else:
-                setattr(model, param_name, Parameter(restored_tensor))
-        else:
-            # Nested parameter (e.g., "block_0/attention/qkv" -> ["block_0", "attention", "qkv"])
-            module = model
-            for part in parts[:-1]:
-                module = getattr(module, part)
-            param_name = parts[-1]
-            if hasattr(module, param_name):
-                param = getattr(module, param_name)
-                if isinstance(param, Parameter):
-                    # Update the tensor inside the existing Parameter
-                    param.tensor = restored_tensor
-                else:
-                    setattr(module, param_name, Parameter(restored_tensor))
-            else:
-                setattr(module, param_name, Parameter(restored_tensor))
+        # Update the parameter using assign() - works with both C++ and Python modules
+        # The model_params dict contains references to the actual parameter tensors
+        model_params[name].assign(restored_tensor)
 
         print(f"    Loaded: {name} (shape: {numpy_array.shape})")
 
@@ -801,6 +805,17 @@ def main():
         type=str,
         default="",
         help="Path to load model for inference (required if --prompt is provided)",
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default="",
+        help="Path to checkpoint to resume from (auto-detects latest if not specified)",
+    )
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Start fresh training, ignoring any existing checkpoints",
     )
 
     args = parser.parse_args()
@@ -989,34 +1004,71 @@ def main():
         print(f"   - Dataset size: {len(dataset)} samples")
         print(f"   - Sequence length: {sequence_length}")
 
-        print("\n2. Creating model...")
-        # Round vocab size to tile boundary (matching C++ behavior)
-        model_config.vocab_size = round_up_to_tile(model_config.vocab_size, 32)
+        # Check if resuming from checkpoint (auto-resume by default)
+        start_step = 0
+        resume_path = None
 
-        # Create model config (map aligned names to NanoGPTConfig fields)
-        nanogpt_config = NanoGPTConfig(
-            vocab_size=model_config.vocab_size,
-            block_size=model_config.max_sequence_length,
-            n_embd=model_config.embedding_dim,
-            n_layer=model_config.num_blocks,
-            n_head=model_config.num_heads,
-            dropout=model_config.dropout_prob,
-            bias=model_config.bias,
-        )
+        if not args.fresh:
+            # Auto-detect or use specified checkpoint
+            if args.resume:
+                resume_path = args.resume
+            else:
+                # Try to find the latest checkpoint
+                resume_path = find_latest_checkpoint(checkpoint_save_path)
+                if resume_path:
+                    print(f"\n   Found existing checkpoint: {resume_path}")
 
-        # Create model
-        model = create_nanogpt(nanogpt_config)
+        if resume_path:
+            print(f"\n2. Resuming from checkpoint: {resume_path}")
+            try:
+                (
+                    model,
+                    loaded_tokenizer,
+                    model_config,
+                    _,  # training_config from checkpoint (we use CLI config instead)
+                    start_step,
+                ) = load_model_from_checkpoint(resume_path)
+                # Use tokenizer from checkpoint to ensure vocab consistency
+                tokenizer = loaded_tokenizer
+                sequence_length = model_config.max_sequence_length
+                print(f"   - Resumed from step {start_step}")
+                print(
+                    f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
+                )
+            except Exception as e:
+                print(f"Error loading checkpoint: {e}")
+                print("Starting fresh training instead...")
+                resume_path = None  # Fall through to create new model
 
-        # Count parameters
-        total_params = sum(
-            p.tensor.to_numpy(ttnn.DataType.FLOAT32).size
-            for p in model.parameters().values()
-            if isinstance(p, Parameter) and hasattr(p, "tensor")
-        )
-        print(
-            f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
-        )
-        print(f"   - Total parameters: {total_params:,}")
+        if not resume_path:
+            print("\n2. Creating model...")
+            # Round vocab size to tile boundary (matching C++ behavior)
+            model_config.vocab_size = round_up_to_tile(model_config.vocab_size, 32)
+
+            # Create model config (map aligned names to NanoGPTConfig fields)
+            nanogpt_config = NanoGPTConfig(
+                vocab_size=model_config.vocab_size,
+                block_size=model_config.max_sequence_length,
+                n_embd=model_config.embedding_dim,
+                n_layer=model_config.num_blocks,
+                n_head=model_config.num_heads,
+                dropout=model_config.dropout_prob,
+                bias=model_config.bias,
+            )
+
+            # Create model
+            model = create_nanogpt(nanogpt_config)
+
+            # Count parameters
+            total_params = sum(
+                p.tensor.to_numpy(ttnn.DataType.FLOAT32).size
+                for p in model.parameters().values()
+                if isinstance(p, Parameter) and hasattr(p, "tensor")
+            )
+            print(
+                f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
+            )
+            print(f"   - Total parameters: {total_params:,}")
 
     # Check if we're in inference mode
     if args.prompt:
@@ -1096,8 +1148,9 @@ def main():
     else:
         print("\n6. Training...")
         print()
+        remaining_steps = training_config.max_steps - start_step
         print(
-            f"Starting training for {training_config.max_steps} steps (starting from step 0)..."
+            f"Training for {remaining_steps} steps (step {start_step} to {training_config.max_steps})..."
         )
         print(f"  - Batch size: {training_config.batch_size}")
         print(f"  - Sequence length: {sequence_length}")
@@ -1121,7 +1174,7 @@ def main():
         gradient_accumulator = GradientAccumulator(
             training_config.gradient_accumulation_steps
         )
-        global_step = 0
+        global_step = start_step
 
         # Training loop (matching C++ structure)
         start_time = time.time()
