@@ -12,9 +12,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out0 = 2;
 
-    DPRINT << "Dst addr: " << dst_addr << "\n";
-    DPRINT << "Mt: " << Mt << ", Nt: " << Nt << "\n";
-
     // Create the address generator for the output buffer. Due to us sharing buffer and circular buffer
     // configuration parameters (e.g. same data type and same page size) in the host code, we can grab
     // the same parameters from the circular buffer as we would from the DRAM buffer.

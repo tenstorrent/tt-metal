@@ -40,6 +40,12 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
+// This programming example demonstrates how to use fabric to communicate between two devices in a 1D mesh.
+// Each device has a semaphore that is incremented by the other device via fabric communication.
+// The kernel waits for the semaphore to be incremented before proceeding.
+// This programming example is for a N300 device with two devices in a 1D mesh.
+// If you have more than one device, run export TT_VISIBLE_DEVICES="0" to make sure only one device is visible.
+
 using ttnn::distributed::MeshMapperConfig;
 tt::tt_metal::distributed::MeshWorkload get_workload(
     const ttnn::Tensor& inputA, tt::tt_metal::GlobalSemaphore& semaphore);
@@ -48,11 +54,13 @@ int main() {
     int M = 1024;
     int N = 128;
 
-    // Mesh Shape for N300. If you have more than one device, run export TT_VISIBLE_DEVICES="0" to make sure only one
-    // device is visible.
+    // Mesh Shape for N300.
     auto mesh_shape = tt::tt_metal::distributed::MeshShape({1, 2});
+
     // Enable fabric for kernels in a 1D Mesh. Fabric is disabled by default.
+    // This must be done before creating the mesh device.
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+
     auto mesh_device =
         tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(mesh_shape));
     auto& command_queue = mesh_device->mesh_command_queue();
@@ -78,7 +86,9 @@ int main() {
 
     const auto available_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, mesh_device->get_sub_device_ids().at(0));
-    // Create a semaphore that is shared across all devices in the mesh.
+
+    // Create a global semaphore that is shared across all devices in the mesh.
+    // Regular semaphores are belong to a program, which is local to a device.
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), available_cores, 0);
 
     try {
@@ -92,6 +102,7 @@ int main() {
 
 tt::tt_metal::distributed::MeshWorkload get_workload(
     const ttnn::Tensor& inputA, tt::tt_metal::GlobalSemaphore& semaphore) {
+    // Workload is the mesh equivalent of a program. It contains programs for each device in the mesh.
     auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     const uint32_t link = 0;
     auto* mesh_device = inputA.device();
@@ -115,6 +126,7 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
             forward_coord,
             backward_coord);
 
+        // Each device needs it's own program instance.
         auto program = tt::tt_metal::CreateProgram();
         auto reader_kernel = tt::tt_metal::CreateKernel(
             program,
@@ -147,6 +159,7 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
         }
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel, tt::tt_metal::CoreRange{core, core}, reader_rt_args);
 
+        // Add the program to the workload for the given mesh coordinate.
         mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(coord), std::move(program));
         device_id++;
     }

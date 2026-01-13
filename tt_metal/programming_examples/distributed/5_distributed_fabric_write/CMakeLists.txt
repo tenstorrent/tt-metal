@@ -12,12 +12,15 @@ target_sources(
     PRIVATE
         fabric_write.cpp
 )
-if(NOT TARGET TT::Metalium)
-    find_package(TT-Metalium REQUIRED)
-endif()
 target_link_libraries(
     fabric_write
     PRIVATE
         TT::Metalium
         TTNN::CPP
+)
+set_target_properties(
+    fabric_write
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/distributed
 )

@@ -35,6 +35,19 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+// This programming example demonstrates a simple multi-chip matrix multiplication using fabric communication.
+// This example uses two devices, with one Tensix core per device, with inputs & outputs in DRAM.
+
+// The two input matrices of shape [M, K] and [K, N] are split across two devices in a 1D mesh.
+// InputA is divided sharded along the M dimension and InputB is sharded along the N dimension.
+// The output matrix of shape [M, N] is also sharded along the M dimension.
+// As each device has the entire N dimension of the output, InputB needs to be shared between the devices via fabric.
+
+// Each device has a semaphore that is incremented by the other device via fabric communication.
+// The kernel waits for the semaphore to be incremented before proceeding.
+// This programming example is for a N300 device with two devices in a 1D mesh.
+// If you have more than one device, run export TT_VISIBLE_DEVICES="0" to make sure only one device is visible.
+
 using ttnn::distributed::MeshMapperConfig;
 tt::tt_metal::distributed::MeshWorkload get_workload(
     const ttnn::Tensor& inputA,
@@ -48,9 +61,8 @@ int main() {
     int N = 128;
     int K = 512;
 
-    // Mesh Shape for N300. If you have more than one device, run export TT_VISIBLE_DEVICES="0" to make sure only one
-    // device is visible.
     auto mesh_shape = tt::tt_metal::distributed::MeshShape({1, 2});
+
     // Enable fabric for kernels in a 1D Mesh. Fabric is disabled by default.
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     auto mesh_device =
@@ -90,7 +102,7 @@ int main() {
     inputA = ttnn::distributed::distribute_tensor(inputA, *inputA_mesh_mapper, *mesh_device);
     inputA = ttnn::to_layout(inputA, tt::tt_metal::Layout::TILE);
 
-    // Split inputB along K dimension across the mesh devices.
+    // Split inputB along N dimension across the mesh devices.
     auto inputB_mesh_mapper = ttnn::distributed::create_mesh_mapper(
         *mesh_device,
         MeshMapperConfig{
@@ -101,6 +113,7 @@ int main() {
     inputB = ttnn::distributed::distribute_tensor(inputB, *inputB_mesh_mapper, *mesh_device);
     inputB = ttnn::to_layout(inputB, tt::tt_metal::Layout::TILE);
 
+    // output tensor is split along the M dimension.
     auto output = tt::tt_metal::create_device_tensor(
         tt::tt_metal::TensorSpec{
             tt::tt_metal::Shape({M / 2, N}),  // Shape per device, as we shard M across devices.
@@ -109,21 +122,37 @@ int main() {
 
         },
         mesh_device.get());
+
     log_info(tt::LogOp, "\n Input A= {}\n Input B= {}\n", ttnn::to_string(inputA), ttnn::to_string(inputB));
+
     const auto available_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, mesh_device->get_sub_device_ids().at(0));
+
     // Create a semaphore that is shared across all devices in the mesh.
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), available_cores, 0);
+
     try {
         auto workload = get_workload(inputA, inputB, output, semaphore);
         tt::tt_metal::distributed::EnqueueMeshWorkload(command_queue, workload, true);
     } catch (const std::exception& e) {
         log_error(tt::LogAlways, "Exception during workload execution: {}", e.what());
     }
+
+    // Aggregate the output tensor from the mesh devices back to a single tensor.
+    // The output tensor is sharded along M dimension across the mesh.
+    // We aggregate it back to a single tensor by combining along the M dimension.
     output = ttnn::distributed::aggregate_tensor(
         output,
         ttnn::distributed::MeshToTensor::create(
-            *mesh_device, tt::tt_metal::distributed::MeshComposerConfig{.dims = {-1, 0}}));
+            *mesh_device,
+            tt::tt_metal::distributed::MeshComposerConfig{
+                .dims = {-1, 0}
+                // Each value in dims corresponds to a dimension of mesh shape.
+                // Mesh Shape is [1, 2] for N300.
+                // For the first dimension of the mesh, we don't aggregate, so -1.
+                // For the second dimension of the mesh, we aggregate along dimension 0 (M dimension of the tensor).
+            }));
+
     log_info(tt::LogAlways, "\n Output = {}", ttnn::to_string(output));
     mesh_device->close();
 }
@@ -141,15 +170,16 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     log_info(
         tt::LogAlways,
-        " InputA shape: {}, InputB shape: {}, Output shape: {} \n Fabric Max Size : {} bytes",
+        " InputA shape: {}, InputB shape: {}, Output shape: {}",
         inputA_shape,
         inputB_shape,
-        output_shape,
-        fabric_max_packet_size);
+        output_shape);
 
     int M = inputA_shape[0];
     int K = inputA_shape[1];
     int N = inputB_shape[1];
+
+    // output_N is N * 2 because inputB is sharded along N dimension across two devices.
     int output_N = output_shape[1];
 
     int M_tiles = M / tt::constants::TILE_HEIGHT;
@@ -158,6 +188,9 @@ tt::tt_metal::distributed::MeshWorkload get_workload(
     int outN_tiles = output_N / tt::constants::TILE_WIDTH;
 
     uint32_t tile_size_bytes = tt::tile_size(datatype_to_dataformat_converter(inputA.dtype()));
+
+    // The current code sends the entire tile in one fabric packet.
+    // So we need to make sure that tile size is less than fabric max payload size.
     TT_FATAL(
         tile_size_bytes <= fabric_max_packet_size,
         "Tile size {} bytes exceeds fabric max payload size {} bytes",
