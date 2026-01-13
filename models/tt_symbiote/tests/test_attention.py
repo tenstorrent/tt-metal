@@ -1,4 +1,4 @@
-"""Test NHWC Conv"""
+"""Tests self-attention with TTNN acceleration."""
 
 import pytest
 import torch
