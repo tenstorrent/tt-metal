@@ -2294,6 +2294,15 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
             tt_cxy_pair(physical_chip_id, core_coord),
             tt_metal::MetalContext::instance().hal().get_dev_addr(
                 tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS));
+
+        // Initialize fabric connection sync region (lock=0, initialized=0, connection_storage zeroed)
+        tt::tt_fabric::fabric_connection_sync_t sync_init = {};
+        cluster.write_core(
+            &sync_init,
+            sizeof(sync_init),
+            tt_cxy_pair(physical_chip_id, core_coord),
+            tt_metal::MetalContext::instance().hal().get_dev_addr(
+                tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::FABRIC_CONNECTION_LOCK));
     }
 }
 

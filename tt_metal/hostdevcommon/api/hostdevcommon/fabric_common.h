@@ -491,6 +491,22 @@ struct fabric_routing_l1_info_t {
     routing_l1_info_t routing_info;
 };
 
+// Fabric connection synchronization region in L1
+// Used for multi-RISC synchronization when opening fabric connections
+// Memory layout: [lock(4) | initialized(4) | connection_object(128) | padding(8)] = 144 bytes
+struct fabric_connection_sync_t {
+    uint32_t lock;         // Spinlock for mutual exclusion (0 = unlocked, 1 = locked)
+    uint32_t initialized;  // Flag indicating if fabric connection has been initialized (0 = not initialized, 1 =
+                           // initialized)
+    // Connection object storage follows at offset 8 (accessed via address calculation)
+};
+static_assert(sizeof(fabric_connection_sync_t) == 8, "fabric_connection_sync_t must be 8 bytes");
+
+// Offset to connection object storage within the sync region
+static constexpr uint32_t FABRIC_CONNECTION_OBJECT_OFFSET = 8;
+// Size reserved for WorkerToFabricEdmSender object (verified by static_assert in tt_fabric_udm_impl.hpp)
+static constexpr uint32_t FABRIC_CONNECTION_OBJECT_SIZE = 128;
+
 }  // namespace tt::tt_fabric
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
