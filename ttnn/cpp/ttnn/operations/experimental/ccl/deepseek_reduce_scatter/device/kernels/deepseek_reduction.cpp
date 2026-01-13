@@ -28,9 +28,9 @@ void MAIN {
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;
 
-        if (!direction) {
-            tiles_read += tile_granularity;
-        }
+        // if (!direction) {
+        //     tiles_read += tile_granularity;
+        // }
 
         while (tiles_read < tiles_to_read) {
             cb_wait_front(input_cb_id, tile_granularity);
@@ -47,10 +47,10 @@ void MAIN {
             cb_push_back(output_cb, tile_granularity);
             tiles_read += tile_granularity;
 
-            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-            if (tiles_remaining_to_read > 0) {
-                tiles_read += tile_granularity;
-            }
+            // uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+            // if (tiles_remaining_to_read > 0) {
+            //     tiles_read += tile_granularity;
+            // }
         }
     }
 }

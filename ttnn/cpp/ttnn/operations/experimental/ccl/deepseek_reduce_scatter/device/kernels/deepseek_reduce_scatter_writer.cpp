@@ -141,16 +141,16 @@ void kernel_main() {
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
 
-            if (!direction) {
-                for (uint32_t k = 0; k < tile_granularity; ++k) {
-                    intermediate_pages_read_in_row++;
-                    if (intermediate_pages_read_in_row == slice_Wt) {
-                        intermediate_row_offset += input_tensor_Wt;
-                        intermediate_pages_read_in_row -= slice_Wt;
-                    }
-                }
-                tiles_read += tile_granularity;
-            }
+            // if (!direction) {
+            //     for (uint32_t k = 0; k < tile_granularity; ++k) {
+            //         intermediate_pages_read_in_row++;
+            //         if (intermediate_pages_read_in_row == slice_Wt) {
+            //             intermediate_row_offset += input_tensor_Wt;
+            //             intermediate_pages_read_in_row -= slice_Wt;
+            //         }
+            //     }
+            //     tiles_read += tile_granularity;
+            // }
 
             while (tiles_read < tiles_to_read) {
                 cb_wait_front(cb_output_id, tile_granularity);
@@ -196,17 +196,17 @@ void kernel_main() {
                     unicast_sem_inc_route_id,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_addr_in_pkt, 0});
 
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                if (tiles_remaining_to_read > 0) {
-                    for (uint32_t k = 0; k < tile_granularity; ++k) {
-                        intermediate_pages_read_in_row++;
-                        if (intermediate_pages_read_in_row == slice_Wt) {
-                            intermediate_row_offset += input_tensor_Wt;
-                            intermediate_pages_read_in_row -= slice_Wt;
-                        }
-                    }
-                    tiles_read += tile_granularity;
-                }
+                // uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                // if (tiles_remaining_to_read > 0) {
+                //     for (uint32_t k = 0; k < tile_granularity; ++k) {
+                //         intermediate_pages_read_in_row++;
+                //         if (intermediate_pages_read_in_row == slice_Wt) {
+                //             intermediate_row_offset += input_tensor_Wt;
+                //             intermediate_pages_read_in_row -= slice_Wt;
+                //         }
+                //     }
+                //     tiles_read += tile_granularity;
+                // }
             }
 
             noc_async_writes_flushed();
@@ -214,9 +214,9 @@ void kernel_main() {
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
 
-            if (!direction) {
-                tiles_read += tile_granularity;
-            }
+            // if (!direction) {
+            //     tiles_read += tile_granularity;
+            // }
 
             while (tiles_read < tiles_to_read) {
                 cb_wait_front(cb_output_id, tile_granularity);
@@ -231,10 +231,10 @@ void kernel_main() {
                 noc_async_write_barrier();
                 cb_pop_front(cb_output_id, tile_granularity);
 
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                if (tiles_remaining_to_read > 0) {
-                    tiles_read += tile_granularity;
-                }
+                // uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                // if (tiles_remaining_to_read > 0) {
+                //     tiles_read += tile_granularity;
+                // }
             }
         }
 

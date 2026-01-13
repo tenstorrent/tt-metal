@@ -26,7 +26,7 @@ void kernel_main() {
     uint32_t input_tensor_address = get_arg_val<uint32_t>(arg_idx++);
     uint32_t intermediate_tensor_address = get_arg_val<uint32_t>(arg_idx++);
     size_t op_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    const bool direction = get_arg_val<uint32_t>(arg_idx++);
+    const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
@@ -64,19 +64,19 @@ void kernel_main() {
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;
 
-        if (!direction) {
-            for (uint32_t k = 0; k < tile_granularity; ++k) {
-                input_pages_read_in_row++;
-                if (input_pages_read_in_row == slice_Wt) {
-                    input_row_offset += input_tensor_Wt;
-                    input_pages_read_in_row -= slice_Wt;
-                }
-            }
-            tiles_read += tile_granularity;
+        // if (!direction) {
+        //     for (uint32_t k = 0; k < tile_granularity; ++k) {
+        //         input_pages_read_in_row++;
+        //         if (input_pages_read_in_row == slice_Wt) {
+        //             input_row_offset += input_tensor_Wt;
+        //             input_pages_read_in_row -= slice_Wt;
+        //         }
+        //     }
+        //     tiles_read += tile_granularity;
 
-            intermediate_pages_read_in_row = input_pages_read_in_row;
-            intermediate_row_offset = input_row_offset;
-        }
+        //     intermediate_pages_read_in_row = input_pages_read_in_row;
+        //     intermediate_row_offset = input_row_offset;
+        // }
 
         while (tiles_read < tiles_to_read) {
             if (do_reduce) {
@@ -126,20 +126,20 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_in0, tile_granularity);
 
-            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-            if (tiles_remaining_to_read > 0) {
-                for (uint32_t k = 0; k < tile_granularity; ++k) {
-                    input_pages_read_in_row++;
-                    if (input_pages_read_in_row == slice_Wt) {
-                        input_row_offset += input_tensor_Wt;
-                        input_pages_read_in_row -= slice_Wt;
-                    }
-                }
-                tiles_read += tile_granularity;
+            // uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+            // if (tiles_remaining_to_read > 0) {
+            //     for (uint32_t k = 0; k < tile_granularity; ++k) {
+            //         input_pages_read_in_row++;
+            //         if (input_pages_read_in_row == slice_Wt) {
+            //             input_row_offset += input_tensor_Wt;
+            //             input_pages_read_in_row -= slice_Wt;
+            //         }
+            //     }
+            //     tiles_read += tile_granularity;
 
-                intermediate_pages_read_in_row = input_pages_read_in_row;
-                intermediate_row_offset = input_row_offset;
-            }
+            //     intermediate_pages_read_in_row = input_pages_read_in_row;
+            //     intermediate_row_offset = input_row_offset;
+            // }
         }
 
         // Next slice idx
