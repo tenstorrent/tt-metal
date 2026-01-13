@@ -82,8 +82,8 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    uint32_t block_size = 1;
-    uint32_t writer_block_size = 1;
+    uint32_t block_size = get_dest_reg_count(operation_attributes.compute_kernel_config);
+    uint32_t output_tiles_per_row = 2;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -95,8 +95,9 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
     auto a_addr = a.buffer()->address();
     auto dst_addr = output.buffer()->address();
 
-    const uint32_t in0_tiles = 2;
-    const uint32_t out0_tiles = 2;
+    constexpr uint32_t double_buffer = 2;
+    const uint32_t in0_tiles = block_size * double_buffer;
+    const uint32_t out0_tiles = output_tiles_per_row * double_buffer;
 
     auto
         [num_cores,
@@ -113,7 +114,7 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
     };
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)writer_block_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tiles_per_row};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> compute_defines;
@@ -132,7 +133,7 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {Wt, W};
+    std::vector<uint32_t> compute_args = {Wt, W, block_size};
 
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/device/kernels/compute/"
@@ -156,7 +157,7 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     auto cb_out0_config =
-        tt::tt_metal::CircularBufferConfig(in0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
+        tt::tt_metal::CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out0_config);
 
@@ -186,13 +187,13 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
         }
 
         uint32_t in_tile_offset = curr_row * Wt;
-        uint32_t out_tile_offset = curr_row * out0_tiles;
+        uint32_t out_tile_offset = curr_row * output_tiles_per_row;
 
         tt::tt_metal::SetRuntimeArgs(
             program, reader_kernels_id, core, {a_addr, num_tile_rows_per_core, Wt, in_tile_offset, packed_winv_value});
         tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
         tt::tt_metal::SetRuntimeArgs(
-            program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core * out0_tiles, out_tile_offset});
+            program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core, out_tile_offset});
         curr_row += num_tile_rows_per_core;
     }
 

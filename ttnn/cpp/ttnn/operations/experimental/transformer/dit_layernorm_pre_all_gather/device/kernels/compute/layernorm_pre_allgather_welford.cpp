@@ -29,6 +29,7 @@ void MAIN {
     namespace kutil = norm::kernel_util;
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t W = get_compile_time_arg_val(1);
+    constexpr uint32_t block_size = get_compile_time_arg_val(2);
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
@@ -53,17 +54,22 @@ void MAIN {
         transpose_wh_init(cb_inp, cb_x2);
         welford_init();
 
-        for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
-            cb_wait_front(cb_inp, 1);
-            transpose_wh_tile(cb_inp, 0, dst0);
-            welford_update<W>(dst0, start_N, *p_reciprocals);
-            start_N += 32;
-            cb_pop_front(cb_inp, 1);
+        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
+            cb_wait_front(cb_inp, block_size);
+            uint32_t r;
+            for (r = 0; r < block_size && wt + r < Wt - 1; r++) {
+                transpose_wh_tile(cb_inp, r, dst0);
+                welford_update<W>(dst0, start_N, *p_reciprocals);
+                start_N += 32;
+            }
+            if (wt + r == Wt - 1) {
+                // This block contains the last tile
+                transpose_wh_tile(cb_inp, r, dst0);
+                welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
+            }
+            cb_pop_front(cb_inp, block_size);
         }
-        cb_wait_front(cb_inp, 1);
-        transpose_wh_tile(cb_inp, 0, dst0);
-        welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
-        cb_pop_front(cb_inp, 1);
+
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
 
         cb_reserve_back(cb_x2, 2);

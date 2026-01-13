@@ -24,7 +24,7 @@ void kernel_main() {
 
     const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
 
-    constexpr uint32_t blk = get_compile_time_arg_val(0);
+    constexpr uint32_t input_block_size = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
     uint32_t scaler = get_arg_val<uint32_t>(4);
     generate_reduce_scaler(cb_reduce, scaler);
@@ -34,16 +34,16 @@ void kernel_main() {
     uint32_t inp_tile_idx = tile_offset;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+        for (uint32_t wt = 0; wt < Wt; wt += input_block_size) {
+            cb_reserve_back(cb_inp, input_block_size);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
-            for (uint32_t r = 0; r < blk; r++) {
-                cb_reserve_back(cb_inp, 1);
+            for (uint32_t r = 0; r < input_block_size && wt + r < Wt; r++) {
                 noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
                 inp_wr_ptr += src0_tile_bytes;
                 inp_tile_idx++;
-                noc_async_read_barrier();
-                cb_push_back(cb_inp, 1);
             }
+            noc_async_read_barrier();
+            cb_push_back(cb_inp, input_block_size);
         }
     }
 }
