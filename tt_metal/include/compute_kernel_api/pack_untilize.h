@@ -221,8 +221,8 @@ ALWI void pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
-    PACK((llk_pack_init(ocb)));
     PACK((llk_init_packer_dest_offset_registers<false>()));
+    PACK((llk_pack_init(ocb)));
 
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_untilize_uninit(ocb)));

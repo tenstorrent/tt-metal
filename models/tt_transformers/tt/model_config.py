@@ -596,7 +596,7 @@ class ModelArgs:
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
         if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
-            self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"
+            self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.device_name == "N300"
         ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
@@ -918,13 +918,17 @@ class ModelArgs:
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=max(
-                    1,
-                    8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
+                per_core_M=7
+                if self.device_name == "P100"
+                else (
+                    max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
+                        1,
+                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
+                    )
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
                     self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
@@ -1345,6 +1349,10 @@ class ModelArgs:
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
+        assert (
+            self.capped_warmup_seq_len > 0 and (self.capped_warmup_seq_len & (self.capped_warmup_seq_len - 1)) == 0
+        ), f"capped_warmup_seq_len must be a power of 2, but got {self.capped_warmup_seq_len}"
+
         DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
@@ -1353,6 +1361,10 @@ class ModelArgs:
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+
+        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
+            max_seq_len_to_warmup = self.capped_warmup_seq_len
+
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
             max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )

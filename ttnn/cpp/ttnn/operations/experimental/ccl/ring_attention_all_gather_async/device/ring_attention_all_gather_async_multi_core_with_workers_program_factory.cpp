@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-///
-#include <algorithm>
 
+#include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
+#include "ring_attention_all_gather_async_device_operation_types.hpp"
+#include <algorithm>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -19,9 +19,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
-
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
-
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 #include <sstream>
@@ -30,57 +28,136 @@
 #include <optional>
 
 namespace ttnn {
+namespace operations::experimental::ccl::ring_attention_all_gather_async {
 
-using namespace ccl;
-
-tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers(
-    const std::vector<Tensor>& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    std::vector<Tensor>& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::cached_program_shared_variable_t
+RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program{};
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
+    log_debug(tt::LogOp, "DEBUG: create_program_at is called");
+    auto* mesh_device = tensor_args.input_tensor[0].device();
+    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : mesh_device;
+    std::vector<IDevice*> devices_to_use = {};
+    // User specified the cluster-axis. Derive devices based on the current coordinate
+    // and the cluster-axis.
+    const auto& mesh_view = mesh_device->get_view();
+    devices_to_use = (operation_attributes.cluster_axis.value() == 0)
+                         ? mesh_view.get_devices_on_column(mesh_coordinate[1])
+                         : mesh_view.get_devices_on_row(mesh_coordinate[0]);
 
-    return ring_attention_all_gather_async_multi_core_with_workers_helper(
-        program,
-        input_tensor,
-        target_device,
-        forward_device,
-        backward_device,
-        output_tensor,
-        dim,
-        num_links,
-        ring_size,
-        ring_index,
-        topology,
-        semaphore,
-        sub_device_id,
-        empty_fused_op_signaler);
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    uint32_t device_index = 0;  // Initialize device index
+    for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
+        if (devices_to_use.at(i) == target_device) {
+            device_index = i;
+            if (i != 0) {
+                backward_device = devices_to_use.at(i - 1);
+            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices_to_use.at(operation_attributes.ring_size - 1);
+            }
+            if (i != operation_attributes.ring_size - 1) {
+                forward_device = devices_to_use.at(i + 1);
+            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices_to_use.at(0);
+            }
+        }
+    }
+    auto
+        [worker_sender_reader_forward_kernel_id,
+         worker_sender_writer_forward_kernel_id,
+         worker_sender_reader_backward_kernel_id,
+         worker_sender_writer_backward_kernel_id,
+         sender_worker_cores,
+         num_inputs,
+         reader_sender_rt_offset,
+         writer_sender_rt_offset,
+         num_links] =
+            ring_attention_all_gather_async_multi_core_with_workers_helper(
+                program,
+                tensor_args.input_tensor,
+                target_device,
+                forward_device,
+                backward_device,
+                tensor_return_value,
+                operation_attributes.dim,
+                operation_attributes.num_links,
+                operation_attributes.ring_size,
+                device_index,
+                operation_attributes.topology,
+                operation_attributes.semaphore,
+                operation_attributes.sub_device_id,
+                empty_fused_op_signaler);
+
+    shared_variables_t shared_variables{
+        .worker_sender_reader_forward_kernel_id = worker_sender_reader_forward_kernel_id,
+        .worker_sender_writer_forward_kernel_id = worker_sender_writer_forward_kernel_id,
+        .worker_sender_reader_backward_kernel_id = worker_sender_reader_backward_kernel_id,
+        .worker_sender_writer_backward_kernel_id = worker_sender_writer_backward_kernel_id,
+        .sender_worker_cores = sender_worker_cores,
+        .num_inputs = num_inputs,
+        .reader_sender_rt_offset = reader_sender_rt_offset,
+        .writer_sender_rt_offset = writer_sender_rt_offset,
+        .num_links = num_links,
+    };
+
+    return {std::move(program), std::move(shared_variables)};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers_helper(
+RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::cached_mesh_workload_t
+RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_mesh_workload(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+    }
+    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
+}
+
+void RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    for (auto& [coordinate_range, program] : cached_program.workload.get_programs()) {
+        auto& shared_variables = cached_program.shared_variables.at(coordinate_range);
+        const auto& input_tensors = tensor_args.input_tensor;
+        const auto& output_tensors = tensor_return_value;
+        const auto& semaphore = operation_attributes.semaphore;
+
+        ring_attention_all_gather_async_multicore_with_workers_override_runtime_arguments(
+            shared_variables, program, input_tensors, output_tensors, semaphore);
+    }
+}
+
+}  // namespace operations::experimental::ccl::ring_attention_all_gather_async
+
+RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables
+ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const std::vector<Tensor>& input_tensor,
     IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     std::vector<Tensor>& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
+    int32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
     auto* mesh_device = input_tensor[0].device();
     [[maybe_unused]] const bool is_first_chip = ring_index == 0;
@@ -95,9 +172,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     /* All gather fusion */
     const bool fuse_op = fused_op_signaler.has_value();
 
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_backward;
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_backward;
 
     if (fuse_op) {
         fused_op_signaler_sender_workers = fused_op_signaler.value();
@@ -110,15 +187,15 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     const std::vector<Tensor>& output_tensors = output_tensor;
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
-        ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
-    if (topology == ccl::Topology::Ring && ring_index % 2 == 0) {
+        ttnn::ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
+    if (topology == ttnn::ccl::Topology::Ring && ring_index % 2 == 0) {
         std::swap(num_targets_forward, num_targets_backward);
     }
     // Get worker cores
     // 2 sender (forward/backward, each with a reader/writer)
     uint32_t num_senders_per_link = 2;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_senders_per_link, mesh_device, sub_device_id, core_grid_offset);
+        ttnn::ccl::choose_worker_cores(num_links, num_senders_per_link, mesh_device, sub_device_id, core_grid_offset);
 
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
@@ -183,7 +260,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     // KERNEL CREATION
     // Forward Direction
     // Reader
-    auto sender_reader_forward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    auto sender_reader_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_reader_forward_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
         sender_forward_cb_index,          // cb_forward_id
@@ -216,7 +293,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         sender_reader_forward_kernel_config);
 
     // Writer
-    auto sender_writer_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    auto sender_writer_forward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     sender_writer_forward_kernel_config.compile_args = {
         ring_index,                               // my_chip_id
         reserved_packet_header_forward_CB_index,  // reserved_packet_header_cb_id
@@ -249,7 +326,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 
     // Backward Direction
     // Reader
-    auto sender_reader_backward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    auto sender_reader_backward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_reader_backward_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
         sender_backward_cb_index,         // cb_backward_id
@@ -282,7 +359,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         sender_reader_backward_kernel_config);
 
     // Writer
-    auto sender_writer_backward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    auto sender_writer_backward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     sender_writer_backward_kernel_config.compile_args = {
         ring_index,                                // my_chip_id
         reserved_packet_header_backward_CB_index,  // reserved_packet_header_cb_id
@@ -484,69 +561,80 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             program, worker_sender_writer_backward_kernel_id, sender_worker_cores[link * 2], writer_backward_rt_args);
     }
 
-    auto override_runtime_arguments_callback =
-        [worker_sender_reader_forward_kernel_id,
-         worker_sender_writer_forward_kernel_id,
-         worker_sender_reader_backward_kernel_id,
-         worker_sender_writer_backward_kernel_id,
-         sender_worker_cores,
-         num_inputs,
-         reader_sender_rt_offset,
-         writer_sender_rt_offset,
-         num_links](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
-            const std::vector<Tensor>& output_tensors) {
-            const auto& semaphore = static_cast<const RingAttentionAllGatherAsync*>(operation)->semaphore;
-            // update senders
-            auto& worker_reader_sender_forward_runtime_args_by_core =
-                GetRuntimeArgs(program, worker_sender_reader_forward_kernel_id);
-            auto& worker_writer_sender_forward_runtime_args_by_core =
-                GetRuntimeArgs(program, worker_sender_writer_forward_kernel_id);
-            auto& worker_reader_sender_backward_runtime_args_by_core =
-                GetRuntimeArgs(program, worker_sender_reader_backward_kernel_id);
-            auto& worker_writer_sender_backward_runtime_args_by_core =
-                GetRuntimeArgs(program, worker_sender_writer_backward_kernel_id);
+    return {
+        worker_sender_reader_forward_kernel_id,
+        worker_sender_writer_forward_kernel_id,
+        worker_sender_reader_backward_kernel_id,
+        worker_sender_writer_backward_kernel_id,
+        sender_worker_cores,
+        num_inputs,
+        reader_sender_rt_offset,
+        writer_sender_rt_offset,
+        num_links};
+}
 
-            for (int link = 0; link < num_links; link++) {
-                auto& worker_reader_sender_forward_runtime_args =
-                    worker_reader_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
-                                                                     [sender_worker_cores[1 + (link * 2)].y];
-                auto& worker_reader_sender_backward_runtime_args =
-                    worker_reader_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
-                                                                      [sender_worker_cores[0 + (link * 2)].y];
-                auto& worker_writer_sender_forward_runtime_args =
-                    worker_writer_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
-                                                                     [sender_worker_cores[1 + (link * 2)].y];
-                auto& worker_writer_sender_backward_runtime_args =
-                    worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
-                                                                      [sender_worker_cores[0 + (link * 2)].y];
+void ring_attention_all_gather_async_multicore_with_workers_override_runtime_arguments(
+    const RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables& shared_variables,
+    Program& program,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<Tensor>& output_tensors,
+    const std::vector<GlobalSemaphore>& semaphore) {
+    // Extract shared variables
+    const auto& worker_sender_reader_forward_kernel_id = shared_variables.worker_sender_reader_forward_kernel_id;
+    const auto& worker_sender_writer_forward_kernel_id = shared_variables.worker_sender_writer_forward_kernel_id;
+    const auto& worker_sender_reader_backward_kernel_id = shared_variables.worker_sender_reader_backward_kernel_id;
+    const auto& worker_sender_writer_backward_kernel_id = shared_variables.worker_sender_writer_backward_kernel_id;
+    const auto& sender_worker_cores = shared_variables.sender_worker_cores;
+    const auto& num_inputs = shared_variables.num_inputs;
+    const auto& reader_sender_rt_offset = shared_variables.reader_sender_rt_offset;
+    const auto& writer_sender_rt_offset = shared_variables.writer_sender_rt_offset;
+    const auto& num_links = shared_variables.num_links;
 
-                worker_reader_sender_forward_runtime_args[9] = semaphore.at(1).address();
-                worker_reader_sender_backward_runtime_args[9] = semaphore.at(0).address();
-                worker_writer_sender_forward_runtime_args[11] = semaphore.at(1).address();
-                worker_writer_sender_backward_runtime_args[11] = semaphore.at(0).address();
-                for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                    // sender reader
-                    worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + input_idx] =
-                        input_tensors[input_idx].buffer()->address();
-                    worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + num_inputs + input_idx] =
-                        output_tensors[input_idx].buffer()->address();
-                    worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + input_idx] =
-                        input_tensors[input_idx].buffer()->address();
-                    worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + num_inputs + input_idx] =
-                        output_tensors[input_idx].buffer()->address();
-                    // sender writer
-                    worker_writer_sender_forward_runtime_args[writer_sender_rt_offset + input_idx] =
-                        output_tensors[input_idx].buffer()->address();
-                    worker_writer_sender_backward_runtime_args[writer_sender_rt_offset + input_idx] =
-                        output_tensors[input_idx].buffer()->address();
-                }
-            }
-        };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    // update senders
+    auto& worker_reader_sender_forward_runtime_args_by_core =
+        GetRuntimeArgs(program, worker_sender_reader_forward_kernel_id);
+    auto& worker_writer_sender_forward_runtime_args_by_core =
+        GetRuntimeArgs(program, worker_sender_writer_forward_kernel_id);
+    auto& worker_reader_sender_backward_runtime_args_by_core =
+        GetRuntimeArgs(program, worker_sender_reader_backward_kernel_id);
+    auto& worker_writer_sender_backward_runtime_args_by_core =
+        GetRuntimeArgs(program, worker_sender_writer_backward_kernel_id);
+
+    for (int link = 0; link < num_links; link++) {
+        auto& worker_reader_sender_forward_runtime_args =
+            worker_reader_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
+                                                             [sender_worker_cores[1 + (link * 2)].y];
+        auto& worker_reader_sender_backward_runtime_args =
+            worker_reader_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
+                                                              [sender_worker_cores[0 + (link * 2)].y];
+        auto& worker_writer_sender_forward_runtime_args =
+            worker_writer_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
+                                                             [sender_worker_cores[1 + (link * 2)].y];
+        auto& worker_writer_sender_backward_runtime_args =
+            worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
+                                                              [sender_worker_cores[0 + (link * 2)].y];
+
+        worker_reader_sender_forward_runtime_args[9] = semaphore.at(1).address();
+        worker_reader_sender_backward_runtime_args[9] = semaphore.at(0).address();
+        worker_writer_sender_forward_runtime_args[11] = semaphore.at(1).address();
+        worker_writer_sender_backward_runtime_args[11] = semaphore.at(0).address();
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            // sender reader
+            worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + input_idx] =
+                input_tensors[input_idx].buffer()->address();
+            worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + num_inputs + input_idx] =
+                output_tensors[input_idx].buffer()->address();
+            worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + input_idx] =
+                input_tensors[input_idx].buffer()->address();
+            worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + num_inputs + input_idx] =
+                output_tensors[input_idx].buffer()->address();
+            // sender writer
+            worker_writer_sender_forward_runtime_args[writer_sender_rt_offset + input_idx] =
+                output_tensors[input_idx].buffer()->address();
+            worker_writer_sender_backward_runtime_args[writer_sender_rt_offset + input_idx] =
+                output_tensors[input_idx].buffer()->address();
+        }
+    }
 }
 
 }  // namespace ttnn
