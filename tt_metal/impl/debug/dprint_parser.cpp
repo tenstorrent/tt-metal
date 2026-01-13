@@ -12,7 +12,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <enchantum/scoped.hpp>
-#include "impl/data_format/blockfloat_common.hpp"
+#include <tt-metalium/blockfloat_common.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "fmt/base.h"
