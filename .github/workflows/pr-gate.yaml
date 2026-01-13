@@ -78,6 +78,7 @@ jobs:
       version: "22.04"
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: ${{ inputs.build-type || 'ASanCoverage' }}
+      build-wheel: true
       publish-artifact: false
       skip-tt-train: true
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
@@ -143,6 +144,29 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       upload-coverage: false
+
+  ttnn-pytest-smoke-tests:
+    needs: [ asan-build, find-changed-files ]
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150-viommu",
+        ]
+    uses: ./.github/workflows/pytest-smoke.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.asan-build.outputs.wheel-artifact-name }}
+      runner: ${{ matrix.platform }}
+      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
 
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -410,13 +434,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, build-tt-train, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync, build-docs]
+    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, ttnn-pytest-smoke-tests, build, build-tt-train, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync, build-docs]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build, build-tt-train"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, ttnn-pytest-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
