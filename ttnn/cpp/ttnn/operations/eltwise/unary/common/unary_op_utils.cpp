@@ -387,14 +387,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("unary_le_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
 
         case UnaryOpType::SOFTPLUS: {
-            TT_ASSERT(params.size() == 3, "Expected softplus to take 3 parameters");
+            TT_ASSERT(params.size() == 2, "Expected softplus to take 2 parameters");
             float param1 = params[1];
-            uint32_t impl_mode = static_cast<uint32_t>(params[2]);
             return {
-                fmt::format("softplus_tile_init<{}>();", impl_mode),
+                "softplus_tile_init();",
                 fmt::format(
-                    "softplus_tile<{}>({}, {:#x}u, {:#x}u, {:#x}u);",
-                    impl_mode,
+                    "softplus_tile({}, {:#x}u, {:#x}u, {:#x}u);",
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0),  // Pass reciprocal to avoid doing it on device

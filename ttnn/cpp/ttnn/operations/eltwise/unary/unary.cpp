@@ -301,14 +301,10 @@ Tensor Softplus::invoke(
     const Tensor& input,
     const float beta,
     const float threshold,
-    const uint32_t impl_mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        input,
-        {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold, static_cast<float>(impl_mode)}}},
-        memory_config,
-        optional_output_tensor);
+        input, {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config, optional_output_tensor);
 }
 
 // tanh[x] = (exp[2x] - 1) / (exp[2x] + 1)

@@ -116,7 +116,6 @@ struct Softplus {
         const Tensor& input,
         float beta,
         float threshold,
-        uint32_t impl_mode = 0,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
