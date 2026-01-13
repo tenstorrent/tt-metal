@@ -375,6 +375,7 @@ scripts/ttexalens_ref.txt @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @te
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+docs/source/tt-metalium/* @bbradelTT @pavlejosipovic @aczajkowskiTT @ntarafdar @tenstorrent/codeowner-bypass
 docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @aczajkowskiTT @tenstorrent/codeowner-bypass
 docs/source/tt-metalium/tt_metal/apis/kernel_apis* @bbradelTT @pavlejosipovic @aczajkowskiTT @ntarafdar @tenstorrent/codeowner-bypass
 docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @abhullar-tt @rtawfik01 @vvukomanovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
