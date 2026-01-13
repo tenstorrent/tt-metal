@@ -22,13 +22,13 @@ struct PostAllGatherWelfordProgramFactory {
     static cached_program_t create(
         const PostAllGatherOperationAttributes& operation_attributes,
         const PostAllGatherTensorArgs& tensor_args,
-        PostAllGatherTensorReturnValue& output);
+        Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const PostAllGatherOperationAttributes& operation_attributes,
         const PostAllGatherTensorArgs& tensor_args,
-        PostAllGatherTensorReturnValue& output);
+        Tensor& output);
 };
 
 }  // namespace ttnn::operations::experimental::transformer::dit_layernorm::program

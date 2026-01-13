@@ -17,8 +17,8 @@ namespace ttnn::operations::experimental::transformer::dit_layernorm {
 struct PreAllGatherDeviceOperation {
     using operation_attributes_t = PreAllGatherOperationAttributes;
     using tensor_args_t = PreAllGatherTensorArgs;
-    using spec_return_value_t = PreAllGatherSpecReturnValue;
-    using tensor_return_value_t = PreAllGatherTensorReturnValue;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::PreAllGatherWelfordProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

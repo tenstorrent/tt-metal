@@ -17,8 +17,8 @@ namespace ttnn::operations::experimental::transformer::dit_layernorm {
 struct PostAllGatherDeviceOperation {
     using operation_attributes_t = PostAllGatherOperationAttributes;
     using tensor_args_t = PostAllGatherTensorArgs;
-    using spec_return_value_t = PostAllGatherSpecReturnValue;
-    using tensor_return_value_t = PostAllGatherTensorReturnValue;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::PostAllGatherWelfordProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
