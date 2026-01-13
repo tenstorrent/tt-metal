@@ -212,7 +212,7 @@ class MLP(LightweightModule):
             input_tensor_a_activations=[self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
-            fast_and_approximate_mode=True,
+            fast_and_approximate_mode=False,
         )
 
         if mode == "decode" and not TG:

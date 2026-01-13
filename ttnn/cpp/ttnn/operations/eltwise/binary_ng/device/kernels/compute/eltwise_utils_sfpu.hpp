@@ -12,6 +12,9 @@
 #define PREPROCESS_1(op, cb_pre, cb_post, cb_out, per_core_block_size) \
     do {                                                               \
         using namespace ckernel;                                       \
+                                                                       \
+        pack_reconfig_data_format(/*old*/ cb_out, /*new*/ cb_post);    \
+                                                                       \
         cb_wait_front(cb_pre, per_core_block_size);                    \
         cb_reserve_back(cb_post, per_core_block_size);                 \
                                                                        \
@@ -32,4 +35,5 @@
         cb_pop_front(cb_pre, per_core_block_size);                     \
         cb_push_back(cb_post, per_core_block_size);                    \
                                                                        \
+        pack_reconfig_data_format(/*old*/ cb_post, /*new*/ cb_out);    \
     } while (0)
