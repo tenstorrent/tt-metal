@@ -490,6 +490,20 @@ def test_bilinear_multi_core(
             32,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
+        (
+            1,
+            128,
+            13,
+            13,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+                }
+            ),
+            3,
+            128,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
     ),
 )
 @pytest.mark.parametrize("run_twice", [False])
@@ -511,7 +525,7 @@ def test_nearest_upsample_with_uneven_input_shards(
         pytest.skip("Not enough cores for specified core grid")
 
     assert (
-        shard_height * core_grid.num_cores() > height
+        shard_height * core_grid.num_cores() > batch_size * height * width
     ), "Expected all test cases in this test suite to contain uneven shards (i.e. physical size > logical size)"
     if shard_strategy == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
         assert shard_width == channels, "Shard width must match number of input channels when height sharding"
