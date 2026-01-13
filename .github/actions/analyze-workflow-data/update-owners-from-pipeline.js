@@ -385,7 +385,6 @@ function updateOwnersJson(ownersPath, pipelineReorgDir) {
   fs.writeFileSync(ownersPath, newContent, 'utf8');
 
   // Write back to file
-  fs.writeFileSync(ownersPath, newContent, 'utf8');
   console.log(`Successfully updated ${ownersPath} with ${newEntries.length} new entries`);
 }
 
