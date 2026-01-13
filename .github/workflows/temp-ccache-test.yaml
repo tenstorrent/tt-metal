@@ -199,6 +199,22 @@ jobs:
           echo "New commit: $(git rev-parse --short=10 HEAD)"
           echo "Testing if different commit affects ccache keys..."
 
+      - name: Build after dummy commit
+        run: |
+          echo "=========================================="
+          echo "=== Building project after dummy commit ===="
+          echo "=========================================="
+          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          echo "Building to test if commit affects build cache..."
+          echo ""
+          echo "=== Build ccache stats before build ===="
+          ccache -s
+          echo ""
+          ./build_metal.sh --build-all
+          echo ""
+          echo "=== Build ccache stats after build ===="
+          ccache -s
+
       - name: Clear kernel caches for Run 2
         run: |
           echo ""
@@ -677,6 +693,22 @@ jobs:
           git -c user.name="CCache Test" -c user.email="ccache-test@tenstorrent.com" commit -m "[temp] Dummy commit for tt-train ccache cross-commit test"
           echo "New commit: $(git rev-parse --short=10 HEAD)"
           echo "Testing if different commit affects ccache keys..."
+
+      - name: Build after dummy commit
+        run: |
+          echo "=========================================="
+          echo "=== Building project after dummy commit ===="
+          echo "=========================================="
+          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          echo "Building to test if commit affects build cache..."
+          echo ""
+          echo "=== Build ccache stats before build ===="
+          ccache -s
+          echo ""
+          ./build_metal.sh --build-all
+          echo ""
+          echo "=== Build ccache stats after build ===="
+          ccache -s
 
       - name: Clear kernel caches for Run 2
         run: |
