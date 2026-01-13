@@ -194,31 +194,10 @@ struct ChannelCounter {
 
 /*
  * Tracks receiver channel pointers (from sender side)
-
-template <uint8_t RECEIVER_NUM_BUFFERS>
-struct OutboundReceiverChannelPointers {
-    uint32_t num_free_slots;
-    BufferIndex remote_receiver_buffer_index;
-    size_t cached_next_buffer_slot_addr;
-
-    FORCE_INLINE void init() {
-        this->num_free_slots = RECEIVER_NUM_BUFFERS;
-        this->remote_receiver_buffer_index = BufferIndex{0};
-        this->cached_next_buffer_slot_addr = 0;
-    }
-
-    FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
-
-    FORCE_INLINE void advance_remote_receiver_buffer_index() {
-        remote_receiver_buffer_index =
-            BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
-    }
-};
-*/
+ */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct OutboundReceiverChannelPointers {
     uint32_t slot_size_bytes;
-    uint32_t total_buffer_size;
     uint32_t remote_receiver_channel_address_base;
     uint32_t remote_receiver_channel_address_ptr;
     uint32_t remote_receiver_channel_address_last;
@@ -226,7 +205,6 @@ struct OutboundReceiverChannelPointers {
     
     FORCE_INLINE void init() {
         this->slot_size_bytes = 0U;
-        this->total_buffer_size = RECEIVER_NUM_BUFFERS * slot_size_bytes;
         this->remote_receiver_channel_address_base = 0U;        
         this->remote_receiver_channel_address_ptr = 0U;
         this->remote_receiver_channel_address_last = 0U;
@@ -235,7 +213,6 @@ struct OutboundReceiverChannelPointers {
 
     FORCE_INLINE void init(uint32_t const remote_receiver_buffer_address, uint32_t const slot_size_bytes) {
         this->slot_size_bytes = slot_size_bytes;
-        this->total_buffer_size = RECEIVER_NUM_BUFFERS * slot_size_bytes;
         this->remote_receiver_channel_address_base = remote_receiver_buffer_address;
         this->remote_receiver_channel_address_ptr = remote_receiver_buffer_address;
         this->remote_receiver_channel_address_last = remote_receiver_buffer_address + ((RECEIVER_NUM_BUFFERS - 1U) * slot_size_bytes);
@@ -247,7 +224,7 @@ struct OutboundReceiverChannelPointers {
     FORCE_INLINE void advance_remote_receiver_buffer_pointer() {
         bool const is_last_buffer = remote_receiver_channel_address_ptr == remote_receiver_channel_address_last;
         remote_receiver_channel_address_ptr += slot_size_bytes;
-        if(is_last_buffer) { // [[unlikely]] {
+        if(is_last_buffer) {
             remote_receiver_channel_address_ptr = remote_receiver_channel_address_base;
         }
     }
