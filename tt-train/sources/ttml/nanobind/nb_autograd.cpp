@@ -194,7 +194,6 @@ void py_module(nb::module_& m) {
     {
         auto py_autocast_tensor = static_cast<nb::class_<AutocastTensor>>(m.attr("AutocastTensor"));
         py_autocast_tensor.def(nb::init<>());
-        // py_autocast_tensor.def(nb::init<tt::tt_metal::Tensor&>());
         py_autocast_tensor.def(nb::init<const AutocastTensor&>());
         py_autocast_tensor.def(nb::init<AutocastTensor&&>());
         py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor, nb::arg("tensor"), "Set underlying Tensor");

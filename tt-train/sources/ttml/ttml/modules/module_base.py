@@ -15,26 +15,21 @@ class AbstractModuleBase(CppModuleBase):
     def __init__(self) -> None:
         super().__init__()
         object.__setattr__(self, "_buffers", {})
-        object.__setattr__(self, "_registered", set())
         self.create_name(self.__class__.__name__)
 
     def __setattr__(self, name: str, value: Any) -> None:
         object.__setattr__(self, name, value)
 
         # Skip if not initialized yet
-        if "_registered" not in self.__dict__:
+        if "_buffers" not in self.__dict__:
             return
 
         # Auto-register modules
         if isinstance(value, CppModuleBase):
             try:
                 self.register_module(value, name)
-            except Exception:
-                try:
-                    self.override_module(value, name)
-                except Exception:
-                    pass
-            self._registered.add(name)
+            except RuntimeError:
+                self.override_module(value, name)
             return
 
         # Auto-register tensors
@@ -43,7 +38,6 @@ class AbstractModuleBase(CppModuleBase):
             tensor = value.tensor
         elif isinstance(value, Buffer):
             self._buffers[name] = value.tensor
-            self._registered.add(name)
             return
         elif hasattr(value, "get_value"):
             tensor = value
@@ -51,15 +45,10 @@ class AbstractModuleBase(CppModuleBase):
         if tensor is not None:
             try:
                 self.register_tensor(tensor, name)
-            except Exception:
-                try:
-                    self.override_tensor(tensor, name)
-                except Exception:
-                    pass
-            self._registered.add(name)
+            except RuntimeError:
+                self.override_tensor(tensor, name)
 
     def __delattr__(self, name: str) -> None:
-        self._registered.discard(name)
         self._buffers.pop(name, None)
         object.__delattr__(self, name)
 
@@ -72,8 +61,7 @@ class AbstractModuleBase(CppModuleBase):
     def named_modules(self, prefix: str = "") -> Iterator[Tuple[str, Any]]:
         """Yield (name, module) pairs."""
         yield (prefix or "", self)
-        for name in self._registered:
-            attr = getattr(self, name, None)
+        for name, attr in self.__dict__.items():
             if isinstance(attr, CppModuleBase):
                 child = f"{prefix}.{name}" if prefix else name
                 if isinstance(attr, AbstractModuleBase):
@@ -83,8 +71,7 @@ class AbstractModuleBase(CppModuleBase):
 
     def named_children(self) -> Iterator[Tuple[str, Any]]:
         """Yield (name, module) pairs for direct children."""
-        for name in self._registered:
-            attr = getattr(self, name, None)
+        for name, attr in self.__dict__.items():
             if isinstance(attr, CppModuleBase):
                 yield (name, attr)
 
@@ -92,8 +79,7 @@ class AbstractModuleBase(CppModuleBase):
         """Yield (name, buffer) pairs."""
         for name, buf in self._buffers.items():
             yield (f"{prefix}.{name}" if prefix else name, buf)
-        for name in self._registered:
-            attr = getattr(self, name, None)
+        for name, attr in self.__dict__.items():
             if isinstance(attr, AbstractModuleBase):
                 yield from attr.named_buffers(f"{prefix}.{name}" if prefix else name)
 
