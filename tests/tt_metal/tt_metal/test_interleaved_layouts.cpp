@@ -65,7 +65,7 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(tt_metal::ID
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
+        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size / sizeof(bfloat16), false);
 
         tt_metal::InterleavedBufferConfig sticks_config{
             .device = device,
@@ -182,7 +182,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(tt_metal:
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
+        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size / sizeof(bfloat16), false);
 
         tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
@@ -324,7 +324,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(tt_metal:
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
+        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size / sizeof(bfloat16), false);
 
         tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
