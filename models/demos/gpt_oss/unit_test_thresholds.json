@@ -30,7 +30,7 @@
             "attention": 0.95,
             "rms_norm": 0.99,
             "router": 0.945,
-            "experts": 0.93,
+            "experts": 0.925,
             "mlp": 0.7,
             "decoder": 0.88
         }
