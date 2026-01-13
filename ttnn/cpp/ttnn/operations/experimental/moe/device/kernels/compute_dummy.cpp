@@ -7,6 +7,8 @@
 
 namespace NAMESPACE {
 void MAIN {
+    constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
+
     // Run-time arguments
     uint32_t argidx = 0;
     const auto core_id = get_arg_val<uint32_t>(argidx++);
@@ -50,45 +52,47 @@ void MAIN {
     uint32_t w1_tile_id = w1_tile_id_start;
     uint32_t w2_tile_id = w2_tile_id_start;
 
-    // Read W0 and W1 from CB into registers
-    for (uint32_t i = 0; i < num_w0_w1_tiles_w; ++i) {
-        for (uint32_t j = 0; j < num_w0_w1_tiles_h; ++j) {
-            cb_wait_front(cb_r2c_w0, 1);
-            cb_pop_front(cb_r2c_w0, 1);
+    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        // Read W0 and W1 from CB into registers
+        for (uint32_t i = 0; i < num_w0_w1_tiles_w; ++i) {
+            for (uint32_t j = 0; j < num_w0_w1_tiles_h; ++j) {
+                cb_wait_front(cb_r2c_w0, 1);
+                cb_pop_front(cb_r2c_w0, 1);
 
-            cb_wait_front(cb_r2c_w1, 1);
-            cb_pop_front(cb_r2c_w1, 1);
+                cb_wait_front(cb_r2c_w1, 1);
+                cb_pop_front(cb_r2c_w1, 1);
+            }
         }
-    }
 
-    // Write to cb_c2w_elt
-    for (uint32_t i = 0; i < num_elt_tiles; ++i) {
-        cb_reserve_back(cb_c2w_elt, 1);
-        cb_push_back(cb_c2w_elt, 1);
-    }
+        // Write to cb_c2w_elt
+        for (uint32_t i = 0; i < num_elt_tiles; ++i) {
+            cb_reserve_back(cb_c2w_elt, 1);
+            cb_push_back(cb_c2w_elt, 1);
+        }
 
-    // Read W2 from DRAM into CB
-    for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {
-        cb_wait_front(cb_r2c_in2, 1);
-        cb_pop_front(cb_r2c_in2, 1);
+        // Read W2 from DRAM into CB
+        for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {
+            cb_wait_front(cb_r2c_in2, 1);
+            cb_pop_front(cb_r2c_in2, 1);
 
-        for (uint32_t j = 0; j < num_w2_tiles_w; ++j) {
+            for (uint32_t j = 0; j < num_w2_tiles_w; ++j) {
+                cb_wait_front(cb_r2c_w2, 1);
+                cb_pop_front(cb_r2c_w2, 1);
+            }
+        }
+
+        // Pop out excess tiles
+        const uint32_t excess_tiles = 14 - ((num_w2_tiles_h * num_w2_tiles_w) % 14);
+        for (uint32_t i = 0; i < excess_tiles; ++i) {
             cb_wait_front(cb_r2c_w2, 1);
             cb_pop_front(cb_r2c_w2, 1);
         }
-    }
 
-    // Pop out excess tiles
-    const uint32_t excess_tiles = 14 - ((num_w2_tiles_h * num_w2_tiles_w) % 14);
-    for (uint32_t i = 0; i < excess_tiles; ++i) {
-        cb_wait_front(cb_r2c_w2, 1);
-        cb_pop_front(cb_r2c_w2, 1);
-    }
-
-    // Write to cb_c2w_mm2
-    for (uint32_t i = 0; i < num_mm2_tiles; ++i) {
-        cb_reserve_back(cb_c2w_mm2, 1);
-        cb_push_back(cb_c2w_mm2, 1);
+        // Write to cb_c2w_mm2
+        for (uint32_t i = 0; i < num_mm2_tiles; ++i) {
+            cb_reserve_back(cb_c2w_mm2, 1);
+            cb_push_back(cb_c2w_mm2, 1);
+        }
     }
 }
 }  // namespace NAMESPACE

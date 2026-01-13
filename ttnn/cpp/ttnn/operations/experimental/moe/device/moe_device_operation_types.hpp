@@ -9,7 +9,9 @@
 
 namespace ttnn::operations::experimental::moe {
 
-struct operation_attributes_t {};
+struct operation_attributes_t {
+    uint32_t num_experts{};
+};
 
 struct tensor_args_t {
     const Tensor& input_tensor;

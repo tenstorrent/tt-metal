@@ -38,10 +38,9 @@ std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tenso
     const Tensor& w1_tensor,
     const Tensor& w2_tensor,
     const Tensor& output_tensor,
-    MathFidelity math_fidelity,
-    bool fp32_dest_acc_en) {
+    const uint32_t num_experts) {
     return {
-        operation_attributes_t{},
+        operation_attributes_t{.num_experts = num_experts},
         tensor_args_t{
             .input_tensor = input_tensor,
             .w0_tensor = w0_tensor,
