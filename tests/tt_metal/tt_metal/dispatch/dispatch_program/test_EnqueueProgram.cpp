@@ -341,7 +341,11 @@ bool test_dummy_EnqueueProgram_with_sems(
     distributed::MeshWorkload& workload,
     const DummyProgramConfig& program_config,
     const vector<vector<uint32_t>>& expected_semaphore_vals) {
-    TT_ASSERT(program_config.cr_set.size() == expected_semaphore_vals.size());
+    TT_FATAL(
+        program_config.cr_set.size() == expected_semaphore_vals.size(),
+        "cr_set size {} must match expected_semaphore_vals size {}",
+        program_config.cr_set.size(),
+        expected_semaphore_vals.size());
 
     bool are_all_semaphore_values_correct = true;
 
@@ -353,7 +357,11 @@ bool test_dummy_EnqueueProgram_with_sems(
     uint32_t expected_semaphore_vals_idx = 0;
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
-        TT_ASSERT(expected_semaphore_vals_for_core.size() == program_config.num_sems);
+        TT_FATAL(
+            expected_semaphore_vals_for_core.size() == program_config.num_sems,
+            "expected_semaphore_vals_for_core size {} must match num_sems {}",
+            expected_semaphore_vals_for_core.size(),
+            program_config.num_sems);
         expected_semaphore_vals_idx++;
         for (const CoreCoord& core_coord : core_range) {
             vector<uint32_t> semaphore_vals;
@@ -845,7 +853,8 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorI
         case HalProgrammableCoreType::TENSIX:
             switch (processor_class) {
                 case HalProcessorClassType::DM:
-                    TT_ASSERT(0 <= processor_id && processor_id < 2);
+                    TT_FATAL(
+                        0 <= processor_id && processor_id < 2, "processor_id {} must be 0 or 1 for DM", processor_id);
                     unique_args_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1) +
                                        processor_id * 256 * sizeof(uint32_t);
                     common_args_addr = unique_args_addr + (3 + processor_id) * 256 * sizeof(uint32_t);

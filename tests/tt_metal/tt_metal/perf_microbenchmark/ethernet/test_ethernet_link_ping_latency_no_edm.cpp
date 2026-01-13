@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cassert>
 #include <fmt/base.h>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
@@ -198,7 +197,7 @@ int main(int argc, char** argv) {
     // argv[1]: num_samples
     // argv[2]: sample_page_size
     // argv[3]: max_channels_per_direction
-    assert(argc >= 4);
+    TT_FATAL(argc >= 4, "Usage: {} <num_sample_counts> <sample_page_size> <max_channels_per_direction>", argv[0]);
     std::size_t arg_idx = 1;
     std::size_t num_sample_counts = std::stoi(argv[arg_idx++]);
     log_trace(tt::LogTest, "num_sample_counts: {}", std::stoi(argv[arg_idx]));

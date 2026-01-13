@@ -245,7 +245,7 @@ int main(int argc, char** argv) {
             default: {
                 src_mem = "FROM_PCIE";
                 vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
-                TT_ASSERT(!pcie_cores.empty());
+                TT_FATAL(!pcie_cores.empty(), "No PCIe cores found");
                 noc_addr_x = pcie_cores[0].x;
                 noc_addr_y = pcie_cores[0].y;
                 noc_mem_addr = dev_pcie_base + pcie_offset;
@@ -253,7 +253,11 @@ int main(int argc, char** argv) {
             case 1: {
                 src_mem = "FROM_DRAM";
                 vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
-                TT_ASSERT(dram_cores.size() > dram_channel_g);
+                TT_FATAL(
+                    dram_cores.size() > dram_channel_g,
+                    "DRAM channel {} not available, only {} channels found",
+                    dram_channel_g,
+                    dram_cores.size());
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;
             } break;

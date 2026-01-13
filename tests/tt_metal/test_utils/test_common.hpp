@@ -8,7 +8,6 @@
 #include <string>
 #include <algorithm>
 #include <filesystem>
-#include <cassert>
 #include <map>
 #include <optional>
 #include <vector>
