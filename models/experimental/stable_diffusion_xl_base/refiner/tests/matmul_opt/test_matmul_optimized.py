@@ -225,8 +225,8 @@ def test_RESNET_LINEAR2_4096x384x768(device):
     )
 
     grid_size = (8, 8)
-    per_core_M = (4096 // 32) // grid_size[0]  # = 32 / 8 = 4
-    per_core_N = (768 // 32) // grid_size[1]  # = 24 / 8 = 3
+    per_core_M = (4096 // 32) // grid_size[0]
+    per_core_N = (768 // 32) // grid_size[1]
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
         in0_block_w=3,

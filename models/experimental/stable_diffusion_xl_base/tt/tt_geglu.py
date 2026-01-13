@@ -6,6 +6,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 
 import tracy
 
@@ -13,6 +14,8 @@ import tracy
 class TtGEGLU(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config):
         super().__init__()
+
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
 
         self.device = device
         weights = state_dict[f"{module_path}.proj.weight"]
@@ -29,7 +32,6 @@ class TtGEGLU(LightweightModule):
 
         self.program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split")
         self.program_config_gelu = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split.gelu")
-        assert self.program_config_gelu is not None, "Program config for GELU linear is None"
         assert (
             self.program_config_gelu.fused_activation.op_type == ttnn.UnaryOpType.GELU
         ), "GELU isn't fused in program config for GELU linear"
@@ -40,7 +42,7 @@ class TtGEGLU(LightweightModule):
 
     def forward(self, input_tensor):
         # TODO: self.program_config is not None is used to differentiate base and refiner; remove this with refiner matmul optimizations
-        if self.program_config is not None:
+        if not self.is_refiner:
             if input_tensor.shape[2] == 4096:
                 # due to block sharded mm constraints, if we block shard the input tensor, we can only run it on 56 cores
                 # hence using L1 memory config instead
