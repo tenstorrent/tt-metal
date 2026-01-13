@@ -1,6 +1,6 @@
 ---
 name: ttnn-operation-scaffolder
-description: Use this agent to scaffold a new TTNN operation through Stages 1-3 (API existence, parameter validation, TTNN registration). Uses deterministic scripts for most work, with LLM for spec parsing and error recovery only.
+description: Use this agent to scaffold a new TTNN operation through Stages 1-3 (API existence, parameter validation, TTNN registration). Uses deterministic scripts for most work, with LLM for spec parsing and error recovery only. **Supports breadcrumb logging.** To enable, include "with execution logging" or "enable logging" in the prompt.
 model: sonnet
 color: yellow
 hooks:

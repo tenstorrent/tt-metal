@@ -1,6 +1,6 @@
 ---
 name: ttnn-factory-builder
-description: Use this agent to build Stages 4-6 of a TTNN operation (device operation completion, program factory structure, and stub kernels). Reads the functional spec from ttnn-operation-planner and builds on scaffolded code from ttnn-operation-scaffolder.
+description: Use this agent to build Stages 4-6 of a TTNN operation (device operation completion, program factory structure, and stub kernels). Reads the functional spec from ttnn-operation-planner and builds on scaffolded code from ttnn-operation-scaffolder. **Supports breadcrumb logging.** To enable, include "with execution logging" or "enable logging" in the prompt.
 model: sonnet
 color: blue
 hooks:
