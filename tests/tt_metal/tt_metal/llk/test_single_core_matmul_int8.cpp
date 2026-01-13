@@ -58,8 +58,8 @@ std::vector<int8_t> generate_uniform_int8(size_t num_elements, int8_t min, int8_
 }
 
 void convert_to_sign_mag(std::vector<int8_t>& vec) {
-    for (int i = 0; i < vec.size(); i++) {
-        int8_t temp = vec[i];
+    for (signed char & i : vec) {
+        int8_t temp = i;
         if (temp < 0) {
             if (temp == -128) {
                 temp = -127;
