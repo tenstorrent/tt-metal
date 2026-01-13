@@ -2139,17 +2139,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 if (did_something) {
                     did_nothing_count = 0;
                 } else {
-                    if (did_nothing_count++ > SWITCH_INTERVAL) {
-                        did_nothing_count = 0;
-
-                        run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
-                    }
-                }
-            } else {
-                if (did_nothing_count++ > SWITCH_INTERVAL) {
-                    did_nothing_count = 0;
                     run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                 }
+            } else {
+                run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
             }
         } else {
             run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
