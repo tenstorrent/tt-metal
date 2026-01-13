@@ -1825,15 +1825,12 @@ void sdpa_ring(
     const uint32_t out_num_blocks,
     const uint32_t global_q_start,
     const uint32_t global_q_end,
-    const uint32_t q_num_chunks,
     const uint32_t iter_k_chunk_start,
     const uint32_t iter_k_chunk_end,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
-    const uint32_t mask_chunk_0,
-    const uint32_t mask_chunk_1,
     const uint32_t ring_iter,
     const uint32_t ring_id,
     const uint32_t num_local_k_chunks,
@@ -1894,17 +1891,17 @@ void sdpa_ring(
         out_num_blocks,
         global_q_start,  // iter_q_start
         global_q_end,    // iter_q_end
-        q_num_chunks,
-        0,  // local_q_start (not used)
-        0,  // chunked_q_chunk_offset (not used)
+        0,               // q_num_chunks (not used)
+        0,               // local_q_start (not used)
+        0,               // chunked_q_chunk_offset (not used)
         iter_k_chunk_start,
         iter_k_chunk_end,
         q_chunk_tiles,
         k_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
-        mask_chunk_0,
-        mask_chunk_1,
+        0,  // mask_chunk_0 (not used)
+        0,  // mask_chunk_1 (not used)
         ring_iter,
         ring_id,
         num_local_k_chunks,

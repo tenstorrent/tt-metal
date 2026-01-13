@@ -174,6 +174,7 @@ void kernel_main() {
                 read_prev_output_and_lse(
                     is_joint_q ? joint_out_generator : out_generator,
                     lse_writer,
+                    lse_tile_logical,
                     nb,
                     nq,
                     Sq_chunk_t,
@@ -190,6 +191,7 @@ void kernel_main() {
             write_output_and_lse(
                 is_joint_q ? joint_out_generator : out_generator,
                 lse_writer,
+                lse_tile_logical,
                 nb,
                 nq,
                 Sq_chunk_t,

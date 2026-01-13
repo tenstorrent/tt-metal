@@ -955,9 +955,9 @@ void generate_mask(
     }
 }
 
-template <typename WriterType, typename TensorAccessorType>
+template <typename ReaderType, typename TensorAccessorType>
 void read_prev_output_and_lse(
-    const CatAddrGenerator<WriterType, WriterType>& cat_out_generator,
+    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
     const TensorAccessorType& lse_writer,
     const TensorTileShape& lse_tile_logical,
     const uint32_t nb,
@@ -985,9 +985,9 @@ void read_prev_output_and_lse(
     cb_push_back(cb_lse_in, Sq_chunk_t);
 }
 
-template <typename WriterType, typename TensorAccessorType>
+template <typename ReaderType, typename TensorAccessorType>
 void write_output_and_lse(
-    const CatAddrGenerator<WriterType, WriterType>& cat_out_generator,
+    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
     const TensorAccessorType& lse_writer,
     const TensorTileShape& lse_tile_logical,
     const uint32_t nb,
