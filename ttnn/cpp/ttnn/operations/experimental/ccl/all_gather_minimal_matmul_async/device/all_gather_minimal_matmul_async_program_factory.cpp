@@ -26,11 +26,12 @@ void override_program_parameters(
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-    auto in0_addr = input_tensors.at(0).buffer()->address();
+    auto in0_addr = output_tensors.at(0).buffer()->address();
     auto in1_addr = input_tensors.at(1).buffer()->address();
-    auto output_addr = output_tensors.at(0).buffer()->address();
+    auto output_addr = output_tensors.at(1).buffer()->address();
     auto in2_addr =
         optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
+    auto in3_addr = input_tensors.at(0).buffer()->address();
     auto& in0_sender_backward_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_backward_kernels_id);
     auto& in0_sender_forward_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_forward_kernels_id);
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
@@ -46,11 +47,13 @@ void override_program_parameters(
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = output_addr;
             in0_sender_args[2] = in2_addr;
+            in0_sender_args[3] = in3_addr;
         } else if (in1_idx == override_variables.in0_backward_core) {
             auto& in0_sender_args = in0_sender_forward_runtime_args[core.x][core.y];
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = output_addr;
             in0_sender_args[2] = in2_addr;
+            in0_sender_args[3] = in3_addr;
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
             in0_receiver_args[1] = output_addr;
@@ -214,14 +217,15 @@ static inline void append_accessors(
     const Tensor& main_tensor,
     const Tensor& output_tensor,
     const std::optional<const Tensor>& bias_tensor,
-    const std::optional<const Tensor>& ag_input_tensor = std::nullopt) {
+    const Tensor& ag_input_tensor,
+    bool is_injector_core = false) {
     tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
     if (bias_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(args);
     }
-    if (ag_input_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*ag_input_tensor.value().buffer()).append_to(args);
+    if (is_injector_core) {
+        tt::tt_metal::TensorAccessorArgs(*ag_input_tensor.buffer()).append_to(args);
     }
 }
 
@@ -328,7 +332,7 @@ all_gather_minimal_matmul_async_factory_helper(
     /**
      * Determine dataformats, compute kernel config
      */
-    auto in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    auto in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(ag_output_tensor.dtype());
     auto in0_tile_size = tt::tile_size(in0_data_format);
     auto in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(weight_tensor.dtype());
     auto in1_tile_size = tt::tile_size(in1_data_format);
@@ -360,11 +364,11 @@ all_gather_minimal_matmul_async_factory_helper(
      * subblocks. The in0 and in1 blocks are accordingly subdivided on M and N.
      */
 
-    auto in0_tensor_shape = input_tensor.padded_shape();
+    auto in0_tensor_shape = ag_output_tensor.padded_shape();
     auto in1_tensor_shape = weight_tensor.padded_shape();
     // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M
     uint32_t K = in0_tensor_shape[-1];
-    uint32_t M = input_tensor.physical_volume() / K;
+    uint32_t M = ag_output_tensor.physical_volume() / K;
     uint32_t N = in1_tensor_shape[-1];
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
@@ -566,11 +570,16 @@ all_gather_minimal_matmul_async_factory_helper(
     }
     in0_injector_defines = defines;
     in0_injector_defines["USE_MUX"] = "1";
+    in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
 
-    uint32_t in0_addr = input_tensor.buffer()->address();
+    uint32_t in0_addr = ag_output_tensor.buffer()->address();
     uint32_t in1_addr = weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = mm_output_tensor.buffer()->address();
+    uint32_t in3_addr = input_tensor.buffer()->address();
+    auto in3_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    auto in3_tile_size = tt::tile_size(in3_data_format);
+
     /**
      * Create kernels
      */
@@ -603,13 +612,15 @@ all_gather_minimal_matmul_async_factory_helper(
         false,  // is_injector_core_forward
         ring_size,
         ring_index,
+        in3_tile_size,
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         in0_sender_backward_compile_time_args);
-    append_accessors(in0_sender_backward_compile_time_args, input_tensor, mm_output_tensor, bias_tensor);
+    append_accessors(
+        in0_sender_backward_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
     auto in0_sender_backward_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
@@ -645,13 +656,15 @@ all_gather_minimal_matmul_async_factory_helper(
         true,   // is_injector_core_forward
         ring_size,
         ring_index,
+        in3_tile_size,
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         in0_sender_forward_compile_time_args);
-    append_accessors(in0_sender_forward_compile_time_args, input_tensor, mm_output_tensor, bias_tensor);
+    append_accessors(
+        in0_sender_forward_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
     auto in0_sender_forward_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
@@ -687,8 +700,10 @@ all_gather_minimal_matmul_async_factory_helper(
         false,  // is_injector_core
         ring_size,
         ring_index,
+        in3_tile_size,
     };
-    append_accessors(in0_receiver_compile_time_args, input_tensor, mm_output_tensor, bias_tensor);
+    append_accessors(
+        in0_receiver_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, false);
 
     auto in0_receiver_kernels_id = CreateKernel(
         program,
@@ -720,7 +735,7 @@ all_gather_minimal_matmul_async_factory_helper(
         ring_size,
         ring_index,
     };
-    append_accessors(in1_sender_compile_time_args, weight_tensor, mm_output_tensor, bias_tensor);
+    append_accessors(in1_sender_compile_time_args, weight_tensor, mm_output_tensor, bias_tensor, input_tensor, false);
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/"
@@ -752,7 +767,7 @@ all_gather_minimal_matmul_async_factory_helper(
         ring_size,
         ring_index,
     };
-    append_accessors(in1_receiver_compile_time_args, weight_tensor, mm_output_tensor, bias_tensor);
+    append_accessors(in1_receiver_compile_time_args, weight_tensor, mm_output_tensor, bias_tensor, input_tensor, false);
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/"
@@ -907,6 +922,7 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_addr,
             out_addr,
             in2_addr,
+            in3_addr,
             is_in0_sink,
             (std::uint32_t)in0_backward_next_core_physical.x,  // in0_dest_noc_x
             (std::uint32_t)in0_backward_next_core_physical.y,  // in0_dest_noc_y
