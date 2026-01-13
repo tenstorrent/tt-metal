@@ -94,12 +94,12 @@ jobs:
             if [ "$MEMBERSHIP_HTTP_CODE" = "401" ]; then
               echo "❌ CRITICAL: ORG_READ_GITHUB_TOKEN is invalid or expired (HTTP 401)"
               echo "The token must be regenerated with 'read:org' scope and updated in repository secrets."
-              
+
               # Verify token is completely invalid by testing against a basic endpoint
               TOKEN_TEST_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                      -H "Accept: application/vnd.github.v3+json" \
                                      "https://api.github.com/user")
-              
+
               if [ "$TOKEN_TEST_CODE" = "401" ]; then
                 echo "Token validation failed (HTTP 401). Token is invalid, expired, or revoked."
                 # Fail the workflow to force attention to the token issue
@@ -116,9 +116,10 @@ jobs:
               RATE_LIMIT_INFO=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                      -H "Accept: application/vnd.github.v3+json" \
                                      "https://api.github.com/rate_limit")
-              
+
               CORE_REMAINING=$(echo "$RATE_LIMIT_INFO" | jq -r '.resources.core.remaining // -1' 2>/dev/null)
-              
+
+
               if [ "$CORE_REMAINING" = "0" ]; then
                 RESET_TIME=$(echo "$RATE_LIMIT_INFO" | jq -r '.resources.core.reset // ""' 2>/dev/null)
                 echo "⚠️  WARNING: GitHub API rate limit exceeded (HTTP 403)"
