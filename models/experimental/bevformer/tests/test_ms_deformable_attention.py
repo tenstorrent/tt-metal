@@ -21,27 +21,17 @@ from models.experimental.bevformer.tt.model_preprocessing import (
 
 from loguru import logger
 
+from models.experimental.bevformer.tests.test_configs.ms_deformable_attention_test_config import (
+    MODEL_PARAMS,
+    SPATIAL_SHAPES,
+    MODEL_PARAM_NAMES,
+    SPATIAL_SHAPES_PARAM_NAME,
+    DEFAULT_THRESHOLDS,
+)
 
-@pytest.mark.parametrize(
-    "batch_size, num_query, embed_dims, num_levels, num_points_per_anchor, num_anchors, num_heads",
-    [
-        (1, 900, 256, 4, 2, 4, 4),
-        # (1, 1200, 256, 4, 2, 4, 4),
-        # (1, 100 * 100, 256, 4, 2, 4, 4),
-        # (1, 200 * 200, 256, 4, 2, 4, 4),
-    ],
-)
-@pytest.mark.parametrize(
-    "spatial_shapes",
-    [
-        [[200, 113], [100, 57], [50, 29], [25, 15]],  # nuScenes, input size 1600x900
-        # [[160, 90], [80, 45], [40, 23], [20, 12]],  # nuScenes, input size 1280x720
-        # [[28, 28], [14, 14], [7, 7], [4, 4]],  # VAD specific, input size 224x224
-        # [[16, 16], [8, 8], [4, 4], [2, 2]],  # VAD specific, input size 128x128
-        # [[100, 75], [50, 38], [25, 19], [13, 10]],  # CARLA, input size 1280x960
-        # [[120, 80], [60, 40], [30, 20], [15, 10]],  # Waymo, input size 960x640
-    ],
-)
+
+@pytest.mark.parametrize(MODEL_PARAM_NAMES, MODEL_PARAMS)
+@pytest.mark.parametrize(SPATIAL_SHAPES_PARAM_NAME, SPATIAL_SHAPES)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_ms_deformable_attention_forward(
@@ -63,7 +53,6 @@ def test_ms_deformable_attention_forward(
     total_key_length = [h * w for h, w in spatial_shapes.tolist()]
 
     query = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
-    key = torch.randn(batch_size, sum(total_key_length), embed_dims, dtype=torch.float32)
     value = torch.randn(batch_size, sum(total_key_length), embed_dims, dtype=torch.float32)
 
     reference_points = torch.rand(batch_size, num_query, num_levels, 2, dtype=torch.float32)
@@ -99,17 +88,19 @@ def test_ms_deformable_attention_forward(
 
     ref_model_output = ref_model(
         query,
-        key,
         value,
         reference_points=reference_points,
         spatial_shapes=spatial_shapes,
     )
 
+    tt_query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_value = ttnn.from_torch(value, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_reference_points = ttnn.from_torch(reference_points, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
     tt_model_output = tt_model(
-        query=query,
-        key=key,
-        value=value,
-        reference_points=reference_points,
+        query=tt_query,
+        value=tt_value,
+        reference_points=tt_reference_points,
         spatial_shapes=spatial_shapes,
     )
     tt_model_output = ttnn.to_torch(tt_model_output)
@@ -131,11 +122,8 @@ def test_ms_deformable_attention_forward(
     passed, results = check_with_tolerances(
         ref_model_output,
         tt_model_output,
-        pcc_threshold=0.999,
-        abs_error_threshold=0.02,
-        rel_error_threshold=0.2,
-        max_error_ratio=0.15,
         tensor_name="ms_deformable_attention_output",
+        **DEFAULT_THRESHOLDS,
     )
 
     # Assert that the comprehensive check passes

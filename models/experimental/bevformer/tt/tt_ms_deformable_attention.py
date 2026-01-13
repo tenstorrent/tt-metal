@@ -44,8 +44,7 @@ def multi_scale_deformable_attn_ttnn(
     bs, _, num_heads, head_dim = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
 
-    if use_signpost:
-        signpost(header="MSDA Start")
+    logger.info("MSDA Start")
 
     # Split value into a list of tensors for each level
     value_list = ttnn.split(value, [H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
@@ -69,13 +68,10 @@ def multi_scale_deformable_attn_ttnn(
         )  # [bs, num_heads, num_queries, num_points, 2]
         sampling_grid_l_ = ttnn.reshape(sampling_grid_l_, (bs * num_heads, num_queries * num_points, 1, 2))
 
-        logger.debug(f"Level {level}: grid shape {sampling_grid_l_.shape}, value_l shape {value_l_.shape}")
-
         # Perform bilinear sampling
         # Input: (bs*num_heads, H_, W_, head_dim), Grid: (bs*num_heads, num_queries*num_points, 1, 2)
         # Output: (bs*num_heads, num_queries*num_points, 1, head_dim)
         sampling_value_l_ = ttnn.grid_sample(value_l_, sampling_grid_l_)
-        logger.debug(f"Raw sampled shape: {sampling_value_l_.shape}")
 
         # (bs*num_heads, num_queries*num_points, 1, head_dim) -> (bs*num_heads, head_dim, num_queries, num_points)
         sampling_value_l_ = ttnn.squeeze(
@@ -85,7 +81,6 @@ def multi_scale_deformable_attn_ttnn(
         sampling_value_l_ = ttnn.permute(
             sampling_value_l_, (0, 3, 1, 2)
         )  # (bs*num_heads, head_dim, num_queries, num_points)
-        logger.debug(f"Reshaped sampled shape: {sampling_value_l_.shape}")
 
         sampling_value_list.append(sampling_value_l_)
 
@@ -108,8 +103,7 @@ def multi_scale_deformable_attn_ttnn(
     output = ttnn.reshape(output, (bs, num_heads * head_dim, num_queries))
     output = ttnn.permute(output, (0, 2, 1))  # [bs, num_queries, num_heads * head_dim]
 
-    if use_signpost:
-        signpost(header="MSDA End")
+    logger.info("MSDA End")
 
     return output
 
@@ -139,7 +133,6 @@ class TTMSDeformableAttention:
     def forward(
         self,
         query,  # ttnn tensor or torch.Tensor
-        key=None,  # Optional ttnn tensor
         value=None,  # Optional ttnn tensor
         identity=None,  # Optional ttnn tensor
         query_pos=None,  # Optional ttnn tensor
@@ -153,8 +146,7 @@ class TTMSDeformableAttention:
 
         Args:
             query: [bs, num_queries, embed_dims] Query features
-            key: [bs, num_keys, embed_dims] Key features (optional, defaults to query)
-            value: [bs, num_keys, embed_dims] Value features (optional, defaults to key)
+            value: [bs, num_keys, embed_dims] Value features (optional, defaults to query)
             identity: [bs, num_queries, embed_dims] Identity for residual connection
             query_pos: [bs, num_queries, embed_dims] Query positional encoding
             key_padding_mask: [bs, num_keys] Padding mask for keys
@@ -164,39 +156,21 @@ class TTMSDeformableAttention:
         Returns:
             output: [bs, num_queries, embed_dims]
         """
-        # Convert torch tensors to ttnn tensors first
-        if isinstance(query, torch.Tensor):
-            query = ttnn.from_torch(query, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-        if key is not None and isinstance(key, torch.Tensor):
-            key = ttnn.from_torch(key, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-        if value is not None and isinstance(value, torch.Tensor):
-            value = ttnn.from_torch(value, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-        if identity is not None and isinstance(identity, torch.Tensor):
-            identity = ttnn.from_torch(identity, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-        if reference_points is not None and isinstance(reference_points, torch.Tensor):
-            reference_points = ttnn.from_torch(
-                reference_points, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
-            )
 
         # Handle input defaults
         if value is None:
-            value = query if key is None else key
-        if key is None:
-            key = query
+            value = query
         if identity is None:
             identity = query
 
         # Add query positional encoding
         if query_pos is not None:
-            if isinstance(query_pos, torch.Tensor):
-                query_pos = ttnn.from_torch(query_pos, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
             query = ttnn.add(query, query_pos)
 
         if use_signpost:
-            signpost(header="TT MS Deformable Attn Module Start")
-
-        if use_signpost:
-            signpost(header="MSDA Tensor Conversion Complete")
+            signpost(
+                header=f"TT MS Deformable Attn Module Start, num of queries: {query.shape[1]}, num of keys: {spatial_shapes.prod(dim=1).sum()}"
+            )
 
         # Handle batch_first format
         if not self.batch_first:
@@ -216,8 +190,7 @@ class TTMSDeformableAttention:
         total_keys = spatial_shapes.prod(dim=1).sum()
         assert total_keys == num_keys, f"Inconsistent keys: {total_keys} != {num_keys}"
 
-        if use_signpost:
-            signpost(header="MSDA Value Projection Start")
+        logger.info("MSDA Value Projection Start")
 
         # Project value and reshape to multi-head format
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
@@ -231,8 +204,7 @@ class TTMSDeformableAttention:
 
         value = ttnn.reshape(value, (bs, num_keys, self.num_heads, self.head_dim))
 
-        if use_signpost:
-            signpost(header="MSDA Sampling Offset Generation")
+        logger.info("MSDA Sampling Offset Generation")
 
         # Generate sampling offsets
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
@@ -243,8 +215,7 @@ class TTMSDeformableAttention:
             sampling_offsets, (bs * num_queries * self.num_heads, self.num_levels, self.num_points, 2)
         )
 
-        if use_signpost:
-            signpost(header="MSDA Attention Weight Generation")
+        logger.info("MSDA Attention Weight Generation")
 
         # Generate attention weights
         attention_weights = ttnn.linear(
@@ -259,8 +230,7 @@ class TTMSDeformableAttention:
             attention_weights, (bs, num_queries, self.num_heads, self.num_levels, self.num_points)
         )
 
-        if use_signpost:
-            signpost(header="MSDA Sampling Location Calculation")
+        logger.info("MSDA Sampling Location Calculation")
 
         # Handle different reference point formats
         if reference_points.shape[-1] == 2:
@@ -312,16 +282,14 @@ class TTMSDeformableAttention:
             device=self.device,
         )
 
-        if use_signpost:
-            signpost(header="MSDA Core Attention Complete")
+        logger.info("MSDA Core Attention Complete")
 
         # Apply output projection
         if hasattr(self.params, "output_proj"):
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
             output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
 
-        if use_signpost:
-            signpost(header="MSDA Adding Residual")
+        logger.info("MSDA Adding Residual")
 
         # Add residual connection
         output = ttnn.add(output, identity)
