@@ -144,7 +144,7 @@ void kernel_main() {
             num_tiles_to_read_this_core * tensor0_page_size);
         if constexpr (dynamic_alternate) {
             // Alternate the packet header distance for better balancing
-            ROUTING_FIELDS_TYPE::swap_volatile(&pkt_hdr_forward->routing_fields, &pkt_hdr_backward->routing_fields);
+            std::swap(pkt_hdr_forward, pkt_hdr_backward);
         }
 
         cb_pop_front(cb0_id, num_tiles_to_read_this_core);
