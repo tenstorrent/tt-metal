@@ -76,6 +76,10 @@ protected:
 //
 template <typename Derived>
 class TTNNFixtureWithSuiteDevice : public TTNNFixtureBase {
+    friend Derived;
+
+    TTNNFixtureWithSuiteDevice() = default;
+
 protected:
     static tt::tt_metal::distributed::MeshDevice* device_;
     static std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
