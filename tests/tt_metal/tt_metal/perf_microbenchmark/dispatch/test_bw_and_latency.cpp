@@ -11,7 +11,7 @@
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <cstdint>
 #include <exception>
@@ -503,8 +503,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
-    } else {
-        log_fatal(LogTest, "Test Failed\n");
-        return 1;
     }
+    log_fatal(LogTest, "Test Failed\n");
+    return 1;
 }

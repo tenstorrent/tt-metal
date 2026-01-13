@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core_descriptor.hpp>
 #include <device.hpp>
-#include <dispatch_core_common.hpp>
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include <host_api.hpp>
 #include <profiler.hpp>
 #include <mesh_workload.hpp>
@@ -43,7 +43,7 @@
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_device.hpp"
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_paths.hpp"
@@ -69,7 +69,11 @@ namespace tt::tt_metal {
 
 namespace detail {
 
-void setControlBuffer(distributed::MeshDevice* mesh_device, IDevice* device, std::vector<uint32_t>& control_buffer, bool force_slow_dispatch = false) {
+void setControlBuffer(
+    distributed::MeshDevice* mesh_device,
+    IDevice* device,
+    std::vector<uint32_t>& control_buffer,
+    bool force_slow_dispatch = false) {
 #if defined(TRACY_ENABLE)
     if (!getDeviceProfilerState()) {
         return;
@@ -771,7 +775,7 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
     std::vector<CoreCoord> dispatch_cores;
     for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
         const CoreCoord virtual_dispatch_core =
-            device->virtual_core_from_logical_core(core, dispatch_core_config.get_core_type());
+            device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
         dispatch_cores.push_back(virtual_dispatch_core);
     }
 
@@ -969,7 +973,7 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
         for (const CoreCoord& core :
              tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
             const CoreCoord curr_core =
-                device->virtual_core_from_logical_core(core, dispatch_core_config.get_core_type());
+                device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
             virtual_cores.push_back(curr_core);
         }
     }
@@ -978,9 +982,7 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
 }
 
 void ReadDeviceProfilerResults(
-    IDevice* device,
-    ProfilerReadState state,
-    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    IDevice* device, ProfilerReadState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -1006,14 +1008,14 @@ void ReadDeviceProfilerResults(
     try {
         mesh_device = device->get_mesh_device().get();
     } catch (const std::exception&) {
-        log_info(
-            tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
+        log_info(tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
     }
     if (useFastDispatch(mesh_device, device)) {
         if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
             ZoneScopedN("Skipping! Last FD dispatch is done");
             return;
-        } else if (state == ProfilerReadState::LAST_FD_READ) {
+        }
+        if (state == ProfilerReadState::LAST_FD_READ) {
             profiler.setLastFDReadAsDone();
         }
     }
@@ -1110,7 +1112,8 @@ void ReadMeshDeviceProfilerResults(
             if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
                 ZoneScopedN("Skipping! Last FD dispatch is done");
                 return;
-            } else if (state == ProfilerReadState::LAST_FD_READ) {
+            }
+            if (state == ProfilerReadState::LAST_FD_READ) {
                 profiler.setLastFDReadAsDone();
             }
         }

@@ -13,11 +13,11 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return program::TypecastShardedProgramFactory{};
-    } else if (args.sub_core_grids.has_value()) {
-        return program::TypecastSubgridProgramFactory{};
-    } else {
-        return program::TypecastProgramFactory{};
     }
+    if (args.sub_core_grids.has_value()) {
+        return program::TypecastSubgridProgramFactory{};
+    }
+    return program::TypecastProgramFactory{};
 }
 
 void TypecastDeviceOperation::validate_on_program_cache_hit(
@@ -122,8 +122,8 @@ tt::stl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
 }
 
 bool TypecastDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }

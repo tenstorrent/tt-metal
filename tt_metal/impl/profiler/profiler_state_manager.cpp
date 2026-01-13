@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
 #include <cstdint>
 #include <thread>
 #include <vector>
@@ -119,11 +120,9 @@ uint32_t ProfilerStateManager::calculate_optimal_num_threads_for_device_profiler
         // If hardware_concurrency() is unable to determine the number of threads supported by the CPU, or the
         // number of device profilers is greater than the max number of threads, return 2
         return 2;
-    } else {
-        // Otherwise, return min(8, number of threads available / number of device profilers)
-        // Empirically, 8 threads per device profiler seems to result in optimal performance
-        return std::min(8U, static_cast<uint32_t>(num_threads_available / this->device_profiler_map.size()));
-    }
+    }  // Otherwise, return min(8, number of threads available / number of device profilers)
+    // Empirically, 8 threads per device profiler seems to result in optimal performance
+    return std::min(8U, static_cast<uint32_t>(num_threads_available / this->device_profiler_map.size()));
 }
 
 void ProfilerStateManager::mark_trace_begin(ChipId device_id, uint32_t trace_id) {
@@ -157,8 +156,8 @@ void ProfilerStateManager::add_runtime_id_to_trace(ChipId device_id, uint32_t tr
 void ProfilerStateManager::start_debug_dump_thread(
     std::vector<IDevice*> active_devices, std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map) {
     TT_ASSERT(!this->debug_dump_thread.joinable());
-    const auto interval = std::chrono::seconds(
-        MetalContext::instance().rtoptions().get_experimental_device_debug_dump_interval_seconds());
+    // Faster polling to unblock cores quickly at the expensive of more NoC PCIe traffic
+    constexpr auto interval = std::chrono::milliseconds(500);
 
     this->debug_dump_thread = std::thread([this,
                                            active_devices = std::move(active_devices),

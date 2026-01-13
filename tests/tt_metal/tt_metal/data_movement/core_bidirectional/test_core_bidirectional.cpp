@@ -180,14 +180,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
         device, test_config.master_core_coord, l1_base_read_address, bytes_per_transaction, packed_requestor_output);
 
     // Compare output with golden vector
-    bool pcc;
-    pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_sender_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-    pcc &= is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_requestor_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal;
+    is_equal = (packed_sender_output == packed_golden);
+    is_equal &= (packed_requestor_output == packed_golden);
 
-    if (!pcc) {
-        log_error(tt::LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(tt::LogTest, "Equality Check failed");
         log_info(tt::LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
         log_info(tt::LogTest, "Sender output vector");
@@ -197,7 +195,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
         return false;
     }
 
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(

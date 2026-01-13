@@ -375,10 +375,17 @@ class Model:
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def prepare_inputs_prefill_trace(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_inputs_prefill_trace(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
+    ):
         """Prepare inputs on host so we later send them to device"""
         host_inputs = self.prepare_inputs_prefill(
-            tokens, start_pos=start_pos, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+            tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            trace_enabled=True,
+            last_token_idx=last_token_idx,
         )
         return host_inputs
 
@@ -390,7 +397,9 @@ class Model:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
         return tokens_embd, tt_page_table, tt_chunk_page_table
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
+    def prepare_inputs_prefill(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+    ):
         """Prepare inputs for prefill mode"""
         # Embed the tokens
         if tokens.dim() == 2:

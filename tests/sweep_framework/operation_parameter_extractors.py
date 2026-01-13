@@ -1873,6 +1873,42 @@ class OperationParameterExtractors:
 
         return transformed_configs
 
+    @staticmethod
+    def _extract_split_query_key_value_and_split_heads_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for split_query_key_value_and_split_heads operation
+
+        Extracts from JSON:
+        - arg1: CoreCoord (compute_with_storage_grid_size) - unsupported type, try to extract from string
+        - arg3: num_heads (integer)
+        """
+        try:
+            params = {}
+            for arg in config:
+                if not isinstance(arg, dict):
+                    continue
+
+                # Extract num_heads from arg3
+                if "arg3" in arg:
+                    num_heads_val = arg["arg3"]
+                    if isinstance(num_heads_val, (int, str)) and num_heads_val != "nullopt":
+                        try:
+                            params["num_heads"] = int(num_heads_val)
+                        except (ValueError, TypeError):
+                            pass
+
+                # Extract CoreCoord from arg1 (kv_input_height)
+                # This is often represented as "[ unsupported type , std::reference_wrapper<tt::xy_pair const>]"
+                # We cannot reliably extract it from this format, so we'll skip it
+                # The sweep test will need to calculate a default grid based on num_heads if not provided
+
+            return params if params else None
+        except Exception as e:
+            import traceback
+
+            print(f"Error extracting split_query_key_value_and_split_heads parameters: {e}")
+            traceback.print_exc()
+            return None
+
 
 # Register the built-in extractors
 OperationParameterExtractors.register_extractor(
@@ -2029,6 +2065,20 @@ OperationParameterExtractors.register_extractor(
 OperationParameterExtractors.register_extractor(
     "ttnn::upsample",
     extract_func=OperationParameterExtractors._extract_upsample_parameters,
+)
+
+# Register split_query_key_value_and_split_heads extractor
+OperationParameterExtractors.register_extractor(
+    "split_query_key_value_and_split_heads",
+    extract_func=OperationParameterExtractors._extract_split_query_key_value_and_split_heads_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "experimental::split_query_key_value_and_split_heads",
+    extract_func=OperationParameterExtractors._extract_split_query_key_value_and_split_heads_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::experimental::split_query_key_value_and_split_heads",
+    extract_func=OperationParameterExtractors._extract_split_query_key_value_and_split_heads_parameters,
 )
 
 
@@ -2206,6 +2256,17 @@ def _extract_rms_norm_pre_all_gather_parameters(config: List) -> Optional[Dict]:
                     break
             params["output_memory_config"] = output_memory_config or tensor_config.memory_config
 
+            # Extract program_config from arg4 (LayerNormShardedMultiCoreProgramConfig)
+            program_config = None
+            for arg in config:
+                if isinstance(arg, dict) and "arg4" in arg:
+                    arg4 = arg["arg4"]
+                    if isinstance(arg4, dict) and "LayerNormShardedMultiCoreProgramConfig" in arg4:
+                        program_config = arg4["LayerNormShardedMultiCoreProgramConfig"]
+                        break
+            if program_config:
+                params["program_config"] = program_config
+
         return params if params else None
     except Exception:
         return None
@@ -2262,6 +2323,10 @@ def _transform_rms_norm_pre_all_gather_parameters(
                 transformed_config["input_a_memory_config"] = parse_memory_config(input_a_mem_config, input_a_shape)
                 transformed_config["input_b_memory_config"] = parse_memory_config(input_b_mem_config, input_b_shape)
                 transformed_config["output_memory_config"] = parse_memory_config(output_mem_config, input_a_shape)
+
+            # Pass through program_config if present
+            if "program_config" in config:
+                transformed_config["program_config"] = config["program_config"]
 
             transformed_configs.append(transformed_config)
 
@@ -3466,9 +3531,40 @@ def _extract_group_norm_parameters(config: List) -> Optional[Dict]:
         return None
 
 
+def _extract_repeat_parameters(config: List) -> Optional[Dict]:
+    """
+    Extract repeat vector (arg1) from ttnn::repeat configuration.
+
+    For repeat operation:
+    - arg0 is the input tensor (handled by standard tensor_config extraction as 'shape')
+    - arg1 is the repetition vector (extracted here as 'repeat_shape')
+
+    The loader will use 'repeat_shape' for the sweep test 'shape' parameter.
+    """
+    try:
+        import ast
+
+        for arg in config:
+            if isinstance(arg, dict) and "arg1" in arg:
+                repeat_vec = arg["arg1"]
+                # arg1 can be either a list or a string representation of a list
+                if isinstance(repeat_vec, str):
+                    repeat_vec = ast.literal_eval(repeat_vec)
+                if isinstance(repeat_vec, list):
+                    # Use 'repeat_shape' to avoid overwriting input tensor shape
+                    return {"repeat_shape": repeat_vec}
+        return None
+    except Exception:
+        return None
+
+
 # Register group_norm extractor
 OperationParameterExtractors.register_extractor("group_norm", extract_func=_extract_group_norm_parameters)
 OperationParameterExtractors.register_extractor("ttnn::group_norm", extract_func=_extract_group_norm_parameters)
+
+# Register repeat extractor
+OperationParameterExtractors.register_extractor("repeat", extract_func=_extract_repeat_parameters)
+OperationParameterExtractors.register_extractor("ttnn::repeat", extract_func=_extract_repeat_parameters)
 
 # Register permute extractor
 OperationParameterExtractors.register_extractor(

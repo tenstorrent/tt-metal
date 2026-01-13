@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -21,8 +21,10 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa {
 
+using namespace experimental::ccl;
+
 RingJointSDPADeviceOperation::program_factory_t RingJointSDPADeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::RingJointSDPAProgramFactory{};
 }
 
@@ -34,8 +36,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
-    const auto& input_tensor_k = tensor_args.input_k;
-    const auto& input_tensor_v = tensor_args.input_v;
 
     const auto& joint_tensor_q = tensor_args.joint_q;
     const auto& joint_tensor_k = tensor_args.joint_k;
@@ -51,16 +51,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_tensor_q,
         joint_tensor_k,
         joint_tensor_v};
-    const std::vector<Tensor> ring_gather_input_tensors = {
-        input_tensor_k,
-        input_tensor_v,
-    };
-    const std::vector<std::optional<Tensor>> ring_gather_output_tensors = {
-        gathered_input_tensor_k,
-        gathered_input_tensor_v,
-    };
 
-    args.all_gather_struct.validate_with_output_tensors(ring_gather_input_tensors, ring_gather_output_tensors);
+    ring_attention_all_gather_async::RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
+        args.all_gather_operation_attributes, args.all_gather_tensor_args);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -211,15 +204,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH);
 
     TT_FATAL(
-        N_local % q_chunk_size == 0,
-        "Local sequence length must be divisible by q_chunk_size. Got N_local: {}, q_chunk_size: {}",
+        N_local % tt::constants::TILE_HEIGHT == 0,
+        "Local sequence length must be divisible by TILE_HEIGHT. Got N_local: {}, TILE_HEIGHT: {}",
         N_local,
-        q_chunk_size);
-    TT_FATAL(
-        N_local % k_chunk_size == 0,
-        "Local sequence length must be divisible by k_chunk_size. Got N_local: {}, k_chunk_size: {}",
-        N_local,
-        k_chunk_size);
+        tt::constants::TILE_HEIGHT);
 
     // Validate padding: Only the sequence dimension may be padded
     auto validate_padding = [](const Tensor& tensor) {
@@ -285,8 +273,8 @@ tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
-        args.all_gather_struct.compute_program_hash(
-            {tensor_args.input_k, tensor_args.input_v}) /*all_gather input tensors*/
+        ring_attention_all_gather_async::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
+            args.all_gather_operation_attributes, args.all_gather_tensor_args) /*all_gather input tensors*/
     );
 }
 
@@ -342,16 +330,19 @@ ring_joint_scaled_dot_product_attention(
         rank - 1,
         dim);
 
-    auto all_gather_struct = ttnn::RingAttentionAllGatherAsync{
-        {},
-        gather_dim,
-        num_links,
-        num_devices,
-        input_tensor_k.memory_config(),
-        topology,
-        multi_device_global_semaphore,
-        subdevice_id,
-        cluster_axis};
+    auto all_gather_operation_attributes =
+        operations::experimental::ccl::ring_attention_all_gather_async::operation_attributes_t{
+            {},
+            gather_dim,
+            num_links,
+            num_devices,
+            input_tensor_k.memory_config(),
+            topology,
+            multi_device_global_semaphore,
+            subdevice_id,
+            cluster_axis};
+    auto all_gather_tensor_args = operations::experimental::ccl::ring_attention_all_gather_async::tensor_args_t{
+        {input_tensor_k, input_tensor_v}, {persistent_output_buffer_k, persistent_output_buffer_v}};
 
     auto operation_attributes = OperationType::operation_attributes_t(
         joint_strategy,
@@ -361,7 +352,8 @@ ring_joint_scaled_dot_product_attention(
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         std::move(program_config),
         kernel_config_val,
-        std::move(all_gather_struct),
+        std::move(all_gather_operation_attributes),
+        std::move(all_gather_tensor_args),
         ccl_core_grid_offset);
 
     auto tensor_args = OperationType::tensor_args_t{
