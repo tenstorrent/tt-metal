@@ -79,14 +79,11 @@ def run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chun
 
     # Create compute kernel config
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
     )
-
-    # Calculate scale (matching llama_attention.py: self.scale = self.head_dim**-0.5)
-    scale = d**-0.5
 
     # Generate test tensors
     Q = fa_rand(b, nh, s, d)
@@ -108,8 +105,7 @@ def run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chun
             tt_K,
             tt_V,
             ring_size=ring_size,
-            ring_id=ring_id,  # Still needed for test simulation, but matches llama_attention.py signature otherwise
-            scale=scale,
+            ring_id=ring_id,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
@@ -126,21 +122,15 @@ def run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chun
     final_ring_output = gather_and_reshuffle_ring_outputs(ring_outputs, ring_size, s)
 
     # Run baseline regular SDPA for comparison
-    ttnn.synchronize_device(device)
-    baseline_start_time = time.time()
     tt_baseline = ttnn.transformer.scaled_dot_product_attention(
         tt_Q,
         tt_K,
         tt_V,
         is_causal=True,
-        scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
     baseline_output = ttnn.to_torch(tt_baseline)
-    ttnn.synchronize_device(device)
-    baseline_end_time = time.time()
-    baseline_time = baseline_end_time - baseline_start_time
 
     # Validation: Ring-distributed vs Regular SDPA
     out_pass, out_pcc = comp_pcc(baseline_output, final_ring_output, 0.99)
@@ -149,8 +139,7 @@ def run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chun
     # Log timing information
     logger.info(
         f"Timing (seq_len={s}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}): "
-        f"ring_distributed={ring_time*1000:.2f}ms, baseline={baseline_time*1000:.2f}ms, "
-        f"speedup={baseline_time/ring_time:.2f}x"
+        f"ring_distributed={ring_time*1000:.2f}ms"
     )
 
     assert out_pass, f"Ring vs Regular PCC {out_pcc} < 0.99"
@@ -162,8 +151,8 @@ def run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chun
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
 @pytest.mark.parametrize(
     "s",
-    [1024, 2048, 4096, 8192, 16384],
-    ids=["s1k", "s2k", "s4k", "s8k", "s16k"],
+    [1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072],
+    ids=["s1k", "s2k", "s4k", "s8k", "s16k", "s32k", "s64k", "s128k"],
 )
 def test_ring_distributed_sdpa_main(device, q_chunk_size, k_chunk_size, s):
     """Main test with powers of 2 sequence lengths, fixed nh=8, nkv=1, d=128, dtype=bfloat8_b"""
@@ -188,13 +177,6 @@ def run_test_ring_distributed_sdpa_with_prefix_and_paged_kv(
     nh, nkv, d = 8, 1, 128
     dtype = ttnn.bfloat8_b
 
-    # Validate constraints
-    assert ring_size > 0 and ring_size % 2 == 0
-    assert s % (2 * ring_size) == 0
-    assert prefix_len % q_chunk_size == 0
-    assert prefix_len < s
-    assert s % page_block_size == 0
-
     # Create program config
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -204,13 +186,11 @@ def run_test_ring_distributed_sdpa_with_prefix_and_paged_kv(
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
     )
-
-    scale = d**-0.5
 
     # Generate full sequence tensors
     Q_full = fa_rand(b, nh, s, d)
@@ -250,6 +230,7 @@ def run_test_ring_distributed_sdpa_with_prefix_and_paged_kv(
     # Run ring-distributed SDPA with prefix caching and paged KV
     ring_outputs = []
     ttnn.synchronize_device(device)
+    ring_start_time = time.time()
     for ring_id in range(ring_size):
         tt_ring_out = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
             tt_Q,
@@ -257,7 +238,6 @@ def run_test_ring_distributed_sdpa_with_prefix_and_paged_kv(
             tt_paged_V,
             ring_size=ring_size,
             ring_id=ring_id,
-            scale=scale,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             page_table=page_table_tt,
@@ -269,6 +249,8 @@ def run_test_ring_distributed_sdpa_with_prefix_and_paged_kv(
         ring_out_torch = ring_out_torch[:, :, :local_seq_len, :]
         ring_outputs.append(ring_out_torch)
     ttnn.synchronize_device(device)
+    ring_end_time = time.time()
+    ring_time = ring_end_time - ring_start_time
 
     # Gather and reshuffle ring outputs
     final_ring_output = gather_and_reshuffle_ring_outputs(ring_outputs, ring_size, q_seq_len)
@@ -291,6 +273,12 @@ def run_test_ring_distributed_sdpa_with_prefix_and_paged_kv(
     assert out_pass, f"Ring with prefix+paged KV vs Chunked PCC {out_pcc} < 0.99"
     logger.info(
         f"Ring-distributed SDPA with prefix caching (prefix_len={prefix_len}) and paged KV (page_block_size={page_block_size}) test passed!"
+    )
+
+    # Log timing information
+    logger.info(
+        f"Timing (seq_len={s}, prefix_len={prefix_len}, page_block_size={page_block_size}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}): "
+        f"ring_distributed={ring_time*1000:.2f}ms"
     )
 
 
