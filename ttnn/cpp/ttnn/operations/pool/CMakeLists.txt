@@ -43,6 +43,7 @@ target_sources(
         grid_sample/grid_sample_prepare_grid.cpp
         pool_utils.cpp
         upsample/device//upsample_bilinear_program_factory_multicore.cpp
+        upsample/device/upsample_common.cpp
         upsample/device/upsample_device_operation.cpp
         upsample/device/upsample_program_factory_multicore_sharded.cpp
         upsample/device/upsample_program_factory_multicore_interleaved.cpp
