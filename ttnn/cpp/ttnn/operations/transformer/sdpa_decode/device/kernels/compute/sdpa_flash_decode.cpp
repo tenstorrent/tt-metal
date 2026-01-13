@@ -310,16 +310,17 @@ void MAIN {
 
                 /* QK += MASK */
                 if (!add_mask_fusion) {
-                    bool apply_mask = false;
                     if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode
-                        apply_mask = (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk);
-                    } else if constexpr (use_attention_mask) {
-                        apply_mask = true;
-                    }
-                    if (apply_mask) {
-                        reconfig_data_format(cb_qk_im, cb_mask_in);
-                        add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                        if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                        }
+                    } else {
+                        if constexpr (use_attention_mask) {
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                        }
                     }
 
                     // Apply sliding window mask to the first chunk (only on the core that processes it)
@@ -429,9 +430,15 @@ void MAIN {
                 }
 
                 if (k_chunk < k_chunk_end - 1 || do_reduce) {
-                    // Swap CB handles to prepare for next iteration
-                    std::swap(cb_prev_sum, cb_cur_sum);
-                    std::swap(cb_prev_max, cb_cur_max);
+                    // Move intermediate sum and max values to appropriate ping pong buffers
+                    reconfig_data_format(cb_cur_max, cb_cur_max);
+                    pack_reconfig_data_format(cb_prev_max);
+
+                    // PREV_MAX <- CUR_MAX
+                    move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
+
+                    // PREV_SUM <- CUR_SUM
+                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 } else {
                     // Write results OUT_ACC, CUR_MAX, CUR_SUM to designated
                     // Write o, m, l into cb_out
