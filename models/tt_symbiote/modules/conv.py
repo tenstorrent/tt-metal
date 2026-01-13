@@ -130,6 +130,8 @@ class NHWCConvBNActivationPytorch(nn.Module):
 class TTNNConv2dNHWC(TTNNModule):
     """TTNN-accelerated Conv layer."""
 
+    CACHED_TTCNN = {}
+
     def __init__(
         self,
         in_channels,
@@ -208,22 +210,42 @@ class TTNNConv2dNHWC(TTNNModule):
             assert len(input_shape) == 1, f"Only single input shape is supported. Got {input_shape}."
             batch_size, input_height, input_width, _ = input_shape[0]
             reshape_output = self.model_config[self.module_name].get("reshape_output", reshape_output)
-        config = Conv2dConfiguration(
-            input_height=input_height,
-            input_width=input_width,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            batch_size=batch_size,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            groups=self.groups,
-            dilation=self.dilation,
-            weight=self.tt_weight,
-            bias=self.tt_bias,
-            slice_strategy=self.slice_config,
+
+        hash = (
+            input_height,
+            input_width,
+            self.in_channels,
+            self.out_channels,
+            batch_size,
+            self.kernel_size,
+            self.stride,
+            self.padding,
+            self.groups,
+            self.dilation,
+            self.tt_weight,
+            self.tt_bias,
+            self.slice_config,
         )
-        layer = TtConv2d(config, input_tensor.device())
+        if hash in TTNNConv2dNHWC.CACHED_TTCNN:
+            layer = TTNNConv2dNHWC.CACHED_TTCNN[hash]
+        else:
+            config = Conv2dConfiguration(
+                input_height=input_height,
+                input_width=input_width,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                batch_size=batch_size,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                groups=self.groups,
+                dilation=self.dilation,
+                weight=self.tt_weight,
+                bias=self.tt_bias,
+                slice_strategy=self.slice_config,
+            )
+            layer = TtConv2d(config, input_tensor.device())
+            TTNNConv2dNHWC.CACHED_TTCNN[hash] = layer
         if reshape_output:
             out, h_w = layer(input_tensor, return_output_dim=reshape_output)
             out = self.reshape(out, [batch_size, h_w[0], h_w[1], -1])
