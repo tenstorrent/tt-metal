@@ -27,12 +27,6 @@ void kernel_main() {
     // add within the kernel: writing the same data to intermediate tensors
     DPRINT << "Start of writer 2 kernel\n";
 
-    // Reset handoff semaphore at very start of kernel for cached program reuse
-    // This must happen BEFORE any work to avoid race with Reader2
-    // Handoff semaphore is at runtime arg index 8
-    const uint32_t reader2_to_writer2_handoff_sem_early = get_semaphore(get_arg_val<uint32_t>(8));
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader2_to_writer2_handoff_sem_early), 0);
-
     constexpr uint32_t fabric_ct_idx = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_l = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_s = get_compile_time_arg_val(2);
@@ -150,14 +144,6 @@ void kernel_main() {
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
     DPRINT << "after wait for fabric endpoint ready\n";
-
-    // Wait for Reader2 to disconnect from mux before connecting
-    DPRINT << "waiting for reader2 handoff semaphore\n";
-    volatile tt_l1_ptr uint32_t* handoff_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader2_to_writer2_handoff_sem);
-    noc_semaphore_wait(handoff_sem_ptr, 1);
-    noc_semaphore_set(handoff_sem_ptr, 0);
-    DPRINT << "after waiting for reader2 handoff semaphore\n";
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
 

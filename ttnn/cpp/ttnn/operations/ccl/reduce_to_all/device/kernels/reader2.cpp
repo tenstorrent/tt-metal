@@ -158,12 +158,6 @@ void kernel_main() {
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     DPRINT << "after fabric_client_disconnect\n";
 
-    // Signal Writer2 that Reader2 has disconnected from mux
-    volatile tt_l1_ptr uint32_t* handoff_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader2_to_writer2_handoff_sem);
-    noc_semaphore_set(handoff_sem_ptr, 1);
-    DPRINT << "signaled handoff semaphore for writer2\n";
-
     cb_reserve_back(packet_cb_id, 1);
     DPRINT << "after sending barrier sem \n";
 

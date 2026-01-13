@@ -96,7 +96,6 @@ void kernel_main() {
     uint32_t final_dst_addr_m = get_arg_val<uint32_t>(arg_idx++);
     // Handoff semaphore for Writer1→Reader1 mux channel coordination
     uint32_t writer_to_reader_handoff_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    DPRINT << "writer1 handoff_sem addr: " << writer_to_reader_handoff_sem << "\n";
 
     const uint8_t dst_num_hops = 1;
 
@@ -189,11 +188,6 @@ void kernel_main() {
     // Disconnect from mux to allow Reader1 to use the same channel
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     DPRINT << "after fabric_client_disconnect\n";
-
-    // Signal Reader1 that we have released the mux channel
-    auto* handoff_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_to_reader_handoff_sem);
-    noc_semaphore_set(handoff_sem_ptr, 1);
-    DPRINT << "signaled handoff semaphore for reader1\n";
 
     // Writer1 uses forward mux - signal the forward mux termination master (Reader2)
     // Writer1 never is the termination master for forward mux, so just signal
