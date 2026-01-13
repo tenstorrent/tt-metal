@@ -274,7 +274,7 @@ enum class CoordinatedEriscContextSwitchState : uint32_t {
 };
 
 // In case underlying type for the enum class is changed later
-typedef std::underlying_type_t<CoordinatedEriscContextSwitchState> CoordinatedEriscCtxType;
+using CoordinatedEriscCtxType = std::underlying_type_t<CoordinatedEriscContextSwitchState> ;
 
 template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
 using SenderEthChannel = StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>;
