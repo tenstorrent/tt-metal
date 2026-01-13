@@ -26,9 +26,12 @@ inline void add_nops() {
             :
             : "i"(num_nops));
     } else {
-        for (int i = 0; i < num_nops; i++) {
-            TTI_NOP;
-        }
+        asm volatile(
+            ".rept %0\n\t"
+            ".ttinsn %1\n\t"
+            ".endr\n\t"
+            :
+            : "i"(num_nops), "i"(TT_OP_NOP));
     }
 }
 
