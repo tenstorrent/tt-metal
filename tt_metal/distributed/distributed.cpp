@@ -90,8 +90,12 @@ void EnqueueMeshWorkloadWithOffset(
                 }
                 num_program_devices++;
                 auto translated_coord = coord.translate(offset, false);
-                if (all_submesh_devices.contains(mesh_device->get_device(translated_coord)->id())) {
-                    num_program_devices_in_submeshes++;
+                TT_FATAL(
+                    all_submesh_devices.contains(mesh_device->get_device(translated_coord)->id()),
+                    "Program targets device {} (translated from {}) which is not contained in any submesh",
+                    translated_coord,
+                    coord);
+                num_program_devices_in_submeshes++;
                 }
             }
         }
