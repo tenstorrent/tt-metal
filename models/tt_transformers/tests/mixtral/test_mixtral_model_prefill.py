@@ -10,24 +10,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.t3000.mixtral8x7b.reference.model import Transformer
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn_prefill
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py
-
-
-def convert2ref(state_dict):
-    out = {}
-    for key, value in state_dict.items():
-        if "block_sparse_moe" in key:
-            new_key = key.replace("block_sparse_moe", "feed_forward")
-            out[new_key] = value
-        elif "feed_forward" not in key:  # ensure we don’t duplicate/overwrite
-            out[key] = value
-    return out
 
 
 @torch.no_grad()
@@ -185,35 +172,19 @@ def test_model_inference(
     # Load Reference Model
     if run_ref_pt:
         logger.info("Loading reference model...")
-        state_dict_prefix = model_args.get_state_dict_prefix("", None)
-        reference_model = Transformer(args=model_args)
-        reference_state_dict = {
-            k[len(state_dict_prefix) :]: v
-            for k, v in state_dict.items()
-            if (
-                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-                or any(
-                    [
-                        f"{state_dict_prefix}{name}" in k
-                        for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-                    ]
-                )
-            )
-        }
-        reference_model.load_state_dict(convert2ref(model_args.load_state_dict()))
-        reference_model.eval()
-        embd = model_args.reference_embedding()
-        embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
+        reference_model = model_args.reference_transformer(load_checkpoint=True)
         logger.info("Finished loading reference model.")
+
+    # Embedding on host
+    if run_ref_pt:
+        embd = reference_model.model.model.embed_tokens
 
     # Select the first token from the prompt for initial decoding
     encoded_prompt_tensor = torch.tensor(encoded_prompt)  # [:,0]
     tt_prefill_input = encoded_prompt_tensor.unsqueeze(0)
-    pt_prefill_ref_input = embd(encoded_prompt_tensor).view(batch_size, seq_len, -1)
-    decode_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
-        pt_prefill_ref_input,
-        tt_model.mesh_device,
-    )
+    if run_ref_pt:
+        pt_prefill_ref_input = embd(encoded_prompt_tensor).view(batch_size, seq_len, -1)
+
     prompt_lens = [seq_len]
     start_pos = 0
     # Run TT model
@@ -229,9 +200,9 @@ def test_model_inference(
     if run_ref_pt:
         # Run reference model
         logger.info(f"Running reference model...")
-        positions = torch.LongTensor(range(seq_len))
-        ref_output = reference_model(pt_prefill_ref_input, positions, attn_mask_torch).detach().float()
-        ref_output = ref_output[:, -1:, :]
+
+        logits = reference_model.forward(pt_prefill_ref_input, start_pos)
+        ref_output = logits[:, -1:, :].detach().float()
         logger.info(f"Finished running reference model.")
 
         # Measure PCC if also running reference model
@@ -246,13 +217,12 @@ def test_model_inference(
         # Compare KV caches
         if cache_pcc:
             for i in range(model_args.n_layers):
+                # Access KV cache from HF model wrapper (returns lists, one per layer)
+                cache_k_layer = reference_model.cache_k[i]  # [batch_size, seq, n_kv_heads, head_dim]
+                cache_v_layer = reference_model.cache_v[i]  # [batch_size, seq, n_kv_heads, head_dim]
                 pytorch_layer_present = [
-                    reference_model.layers[i]
-                    .attention.cache_k.clone()
-                    .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                    reference_model.layers[i]
-                    .attention.cache_v.clone()
-                    .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                    cache_k_layer.permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                    cache_v_layer.permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
                 ]
 
                 tt_layer_present = []
