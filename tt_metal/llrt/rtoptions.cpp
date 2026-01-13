@@ -809,8 +809,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: nullopt (uses profiler default)
         // Usage: export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=500
         case EnvVarID::TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT: {
-            // Only set the program support count if device profiler is also enabled
-            if (this->profiler_enabled && value) {
+            if (value) {
                 this->profiler_program_support_count = std::stoi(value);
             }
             break;
@@ -827,8 +826,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (dump to files)
         // Usage: export TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1
         case EnvVarID::TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES: {
-            // Only disable dumping to files if device profiler is also enabled
-            if (this->profiler_enabled && is_env_enabled(value)) {
+            if (is_env_enabled(value)) {
                 this->profiler_disable_dump_to_files = true;
             }
             break;
@@ -852,9 +850,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // dump mode disabled) Usage: export TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1
         case EnvVarID::TT_METAL_DEVICE_DEBUG_DUMP_ENABLED: {
             if (is_env_enabled(value)) {
-                this->profiler_enabled = true;
-                this->profiler_noc_events_enabled = true;
-                this->experimental_device_debug_dump_enabled = true;
+                this->set_experimental_device_debug_dump_enabled(true);
             }
             break;
         }
@@ -1629,6 +1625,18 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
     tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
     dispatch_core_config.set_dispatch_core_type(this->dispatch_core_type);
     return dispatch_core_config;
+}
+
+void RunTimeOptions::set_experimental_device_debug_dump_enabled(bool enabled) {
+    if (enabled) {
+        profiler_enabled = true;
+        profiler_noc_events_enabled = true;
+        experimental_device_debug_dump_enabled = true;
+    } else {
+        profiler_enabled = false;
+        profiler_noc_events_enabled = false;
+        experimental_device_debug_dump_enabled = false;
+    }
 }
 
 }  // namespace tt::llrt

@@ -886,10 +886,31 @@ void ReadDeviceProfilerResultsInternal(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
     ProfilerReadState state,
-    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    const std::optional<ProfilerOptionalMetadata>& metadata,
+    bool include_l1) {
     // Note: This function bypasses the getDeviceDebugDumpEnabled() check
     // It is intended only for use by ProfilerStateManager during cleanup
-    ReadDeviceProfilerResultsImpl(mesh_device, device, virtual_cores, state, metadata);
+#if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
+
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+        MetalContext::instance().profiler_state_manager();
+    auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
+    TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
+    DeviceProfiler& profiler = profiler_it->second;
+
+    TT_FATAL(
+        !MetalContext::instance().dprint_server(), "Debug print server is running, cannot read device profiler data");
+
+    if (include_l1 || MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+        profiler.readResults(
+            mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else {
+        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+    }
+#endif
 }
 
 bool dumpDeviceProfilerDataMidRun(const ProfilerReadState state) {
