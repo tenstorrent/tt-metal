@@ -113,9 +113,8 @@ int main(int argc, char* argv[]) {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
-    uint32_t prev_noc_index = 1;
-    uint32_t prev_noc_mode = DM_DEDICATED_NOC;
-    noc_local_state_init(prev_noc_index);
+    brisc_noc_id_and_mode_t prev_brisc_noc_id_and_mode = { .brisc_noc_id = 1, .brisc_noc_mode = DM_DEDICATED_NOC };
+    noc_local_state_init(1 - prev_brisc_noc_id_and_mode.brisc_noc_id);
 
     signal_ncrisc_completion();
 
@@ -141,15 +140,12 @@ int main(int argc, char* argv[]) {
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
         uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
         setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
-        uint32_t noc_index = 1 - launch_msg->kernel_config.brisc_noc_id;
-        uint32_t noc_mode = launch_msg->kernel_config.brisc_noc_mode;
-        if (noc_mode == DM_DEDICATED_NOC) {
-            if (prev_noc_index != noc_index || prev_noc_mode != noc_mode) {
-                noc_local_state_init(noc_index);
-            }
+
+        brisc_noc_id_and_mode_t brisc_noc_id_and_mode{.brisc_noc_id_and_mode = launch_msg->kernel_config.brisc_noc_id_and_mode.brisc_noc_id_and_mode};
+        if (brisc_noc_id_and_mode.brisc_noc_id_and_mode != prev_brisc_noc_id_and_mode && brisc_noc_id_and_mode.brisc_noc_mode == DM_DEDICATED_NOC) {
+          noc_local_state_init(1 - brisc_noc_id_and_mode.brisc_noc_id);
         }
-        prev_noc_index = noc_index;
-        prev_noc_mode = noc_mode;
+        prev_brisc_noc_id_and_mode = brisc_noc_id_and_mode;
 
 #if defined(ARCH_WORMHOLE)
         l1_to_ncrisc_iram_copy_wait();

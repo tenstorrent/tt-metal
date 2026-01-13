@@ -940,14 +940,14 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             dev_msgs::DISPATCH_MODE_HOST);
     }
 
-    if (launch_msg_.kernel_config().brisc_noc_id() == 0 || launch_msg_.kernel_config().brisc_noc_id() == 1) {
-        fprintf(reader_.f, "%d", launch_msg_.kernel_config().brisc_noc_id());
+    if (launch_msg_.kernel_config().brisc_noc_id_and_mode().brisc_noc_id() == 0 || launch_msg_.kernel_config().brisc_noc_id_and_mode().brisc_noc_id() == 1) {
+        fprintf(reader_.f, "%d", launch_msg_.kernel_config().brisc_noc_id_and_mode().brisc_noc_id());
     } else {
         LogRunningKernels();
         TT_THROW(
             "Watcher data corruption, unexpected brisc noc_id on core {}: {} (expected 0 or 1)",
             virtual_coord_.str(),
-            launch_msg_.kernel_config().brisc_noc_id());
+            launch_msg_.kernel_config().brisc_noc_id_and_mode().brisc_noc_id());
     }
     if (mbox_data_.go_message_index() < dev_msgs::go_message_num_entries) {
         DumpRunState(mbox_data_.go_messages()[mbox_data_.go_message_index()].signal());

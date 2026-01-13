@@ -131,6 +131,13 @@ struct rta_offset_t {
 enum dispatch_enable_flags : uint8_t {
     DISPATCH_ENABLE_FLAG_PRELOAD = 1 << 7,
 };
+union brisc_noc_id_and_mode_t {
+    struct {
+        uint8_t brisc_noc_id;
+        uint8_t brisc_noc_mode;
+    };
+    uint16_t brisc_noc_id_and_mode;
+};
 
 struct kernel_config_msg_t {
     // Ring buffer of kernel configuration data
@@ -144,8 +151,7 @@ struct kernel_config_msg_t {
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t local_cb_mask;
 
-    volatile uint8_t brisc_noc_id;
-    volatile uint8_t brisc_noc_mode;
+    volatile brisc_noc_id_and_mode_t brisc_noc_id_and_mode;
     volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
     // 32 bit program/launch_msg_id used by the performance profiler

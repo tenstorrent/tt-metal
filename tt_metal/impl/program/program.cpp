@@ -418,7 +418,7 @@ KernelGroup::KernelGroup(
     this->core_ranges = this->core_ranges.merge(new_ranges);
 
     auto kernel_config = this->launch_msg.view().kernel_config();
-    kernel_config.brisc_noc_mode() = NOC_MODE::DM_DEDICATED_NOC;
+    kernel_config.brisc_noc_id_and_mode().brisc_noc_mode() = NOC_MODE::DM_DEDICATED_NOC;
 
     // Slow dispatch uses fixed addresses for the kernel config, configured here statically
     // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
@@ -459,11 +459,11 @@ KernelGroup::KernelGroup(
                             ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
                             noc_modes.insert(arg.noc_mode);
                             // Use brisc's noc if brisc specifies a noc
-                            kernel_config.brisc_noc_id() = arg.noc;
+                            kernel_config.brisc_noc_id_and_mode().brisc_noc_id() = arg.noc;
                             // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
                             // DM_DEDICATED_NOC
                             if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                                kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
+                                kernel_config.brisc_noc_id_and_mode().brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
                             }
                         } else if (
                             class_id ==
@@ -472,11 +472,11 @@ KernelGroup::KernelGroup(
                             // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                             // If both brisc and ncrisc set the noc, then this is safe due to prior correctness
                             // validation
-                            kernel_config.brisc_noc_id() = 1 - arg.noc;
+                            kernel_config.brisc_noc_id_and_mode().brisc_noc_id() = 1 - arg.noc;
                             // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
                             // DM_DEDICATED_NOC
                             if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                                kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
+                                kernel_config.brisc_noc_id_and_mode().brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
                             }
                         }
                     }

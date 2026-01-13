@@ -155,7 +155,7 @@ int main() {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
-            noc_index = launch_msg_address->kernel_config.brisc_noc_id;
+            brisc_noc_id_and_mode_t brisc_noc_id_and_mode{.brisc_noc_id_and_mode = launch_msg_address->kernel_config.brisc_noc_id_and_mode.brisc_noc_id_and_mode};
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 

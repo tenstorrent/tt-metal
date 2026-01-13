@@ -33,7 +33,7 @@
 
 // clang-format on
 
-uint8_t noc_index;
+brisc_noc_id_and_mode_t prev_brisc_noc_id_and_mode = { .brisc_noc_id = 0, .brisc_noc_mode = DM_DEDICATED_NOC };
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
@@ -350,7 +350,6 @@ int main() {
     noc_worker_logical_to_virtual_map_init(MEM_LOGICAL_TO_VIRTUAL_SCRATCH);
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
-    noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
@@ -368,10 +367,10 @@ int main() {
     // Initialize the NoCs to a safe state
     // This ensures if we send any noc txns without running a kernel setup are valid
     // ex. Immediately after starting, we send a RUN_MSG_RESET_READ_PTR signal
-    uint8_t noc_mode;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-    noc_local_state_init(noc_index);
+    noc_local_state_init(prev_brisc_noc_id_and_mode.brisc_noc_id);
     trigger_sync_register_init();
+    uint8_t cmd_buf = BRISC_AT_CMD_BUF;
 
     DeviceProfilerInit();
     while (1) {
@@ -438,31 +437,28 @@ int main() {
                 RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
             run_triscs(enables);
-            uint32_t prev_noc_index = noc_index;
 
-            noc_index = launch_msg_address->kernel_config.brisc_noc_id;
-            noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
+            brisc_noc_id_and_mode_t brisc_noc_id_and_mode{.brisc_noc_id_and_mode = launch_msg_address->kernel_config.brisc_noc_id_and_mode.brisc_noc_id_and_mode};
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            // re-initialize the NoCs
-            uint8_t cmd_buf;
-            if (noc_mode == DM_DEDICATED_NOC) {
-                if (prev_noc_mode != noc_mode) {
-                    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-                }
-                if (prev_noc_index != noc_index || prev_noc_mode != noc_mode) {
+            if (brisc_noc_id_and_mode.brisc_noc_id_and_mode != prev_brisc_noc_id_and_mode.brisc_noc_id_and_mode) {
+                // re-initialize the NoCs
+                if (brisc_noc_id_and_mode.brisc_noc_mode == DM_DEDICATED_NOC) {
+                    if (prev_brisc_noc_id_and_mode.brisc_noc_mode != brisc_noc_id_and_mode.brisc_noc_mode) {
+                        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                    }
                     noc_local_state_init(noc_index);
+                    cmd_buf = BRISC_AT_CMD_BUF;
+                } else {
+                    if (prev_brisc_noc_id_and_mode.brisc_noc_mode != brisc_noc_id_and_mode.brisc_noc_mode) {
+                        dynamic_noc_init();
+                    }
+                    dynamic_noc_local_state_init();
+                    cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
                 }
-                cmd_buf = BRISC_AT_CMD_BUF;
-            } else {
-                if (prev_noc_mode != noc_mode) {
-                    dynamic_noc_init();
-                }
-                dynamic_noc_local_state_init();
-                cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
             }
-            prev_noc_mode = noc_mode;
+            prev_brisc_noc_id_and_mode = brisc_noc_id_and_mode;
 
             uint32_t tt_l1_ptr* cb_l1_base =
                 (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
@@ -478,21 +474,14 @@ int main() {
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                 experimental::setup_remote_cb_interfaces<true>(
-                    cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
+                    cb_l1_base, end_cb_index, brisc_noc_id_and_mode.brisc_noc_id, brisc_noc_id_and_mode.brisc_noc_mode, true, cmd_buf);
+                barrier_remote_cb_interface_setup(brisc_noc_id_and_mode.brisc_noc_id, brisc_noc_id_and_mode.brisc_noc_mode, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                 record_stack_usage(stack_free);
             } else {
-#if defined(PROFILE_KERNEL)
-                // This was not initialized in the kernel
-                // Currently FW does not issue a barrier except when using profiler
-                if (noc_mode == DM_DEDICATED_NOC) {
-                    noc_local_state_init(noc_index);
-                }
-#endif
                 // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
                 // So have brisc setup remote cb interfaces even when brisc is not in use
                 if (launch_msg_address->kernel_config.enables) {
@@ -500,8 +489,8 @@ int main() {
                         (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(
-                        cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                    barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
+                        cb_l1_base, end_cb_index, brisc_noc_id_and_mode.brisc_noc_id, brisc_noc_id_and_mode.brisc_noc_mode, true, cmd_buf);
+                    barrier_remote_cb_interface_setup(brisc_noc_id_and_mode.brisc_noc_id, brisc_noc_id_and_mode.brisc_noc_mode, end_cb_index);
                 }
                 start_ncrisc_kernel_run(enables);
                 wait_for_go_message();
@@ -530,9 +519,11 @@ int main() {
             }
 
 #if defined(PROFILE_KERNEL)
-            if (noc_mode == DM_DYNAMIC_NOC) {
+            if (brisc_noc_id_and_mode.brisc_noc_mode == DM_DYNAMIC_NOC) {
                 // re-init for profiler to able to run barrier in dedicated noc mode
-                noc_local_state_init(noc_index);
+                noc_local_state_init(brisc_noc_id_and_mode.brisc_noc_id);
+                brisc_noc_id_and_mode.brisc_noc_mode = DM_DEDICATED_NOC;
+                cmd_buf = BRISC_AT_CMD_BUF;
             }
 #endif
 
