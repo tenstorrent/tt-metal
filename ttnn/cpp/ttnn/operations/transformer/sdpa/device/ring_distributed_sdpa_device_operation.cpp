@@ -92,6 +92,10 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     const auto Sq = q_shape[2];
     const auto DH = q_shape[3];
     const auto Sk = k_shape[2];
+    const auto q_chunk_size =
+        operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
+    const auto k_chunk_size =
+        operation_attributes.program_config ? operation_attributes.program_config->k_chunk_size : 32;
 
     // Validate chunk_start_idx and page_table
     bool is_chunked = operation_attributes.chunk_start_idx.has_value();
@@ -220,10 +224,6 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.ring_size);
 
     // Chunk size compatibility
-    const auto q_chunk_size =
-        operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
-    const auto k_chunk_size =
-        operation_attributes.program_config ? operation_attributes.program_config->k_chunk_size : 32;
     TT_FATAL(
         q_chunk_size % tt::constants::TILE_WIDTH == 0,
         "q_chunk_size must be divisible by TILE_WIDTH. Got q_chunk_size: {}, TILE_WIDTH: {}",
