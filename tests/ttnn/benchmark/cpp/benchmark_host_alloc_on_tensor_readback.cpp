@@ -27,7 +27,7 @@ void BM_host_alloc_on_tensor_readback(benchmark::State& state) {
         device);
 
     // Note we are reading garbage data from the device, but it is not important for this benchmark.
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto host_tensor = device_tensor.cpu(/*blocking=*/true);
         benchmark::DoNotOptimize(host_tensor);
     }
