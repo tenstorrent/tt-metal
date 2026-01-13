@@ -1174,32 +1174,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         ct_args.push_back(this->sender_channel_connection_liveness_check_disable_array[i]);
     }
 
-    std::ostringstream oss;
-    oss << "[";
-    for (size_t idx = 0; idx < num_sender_channels; idx++) {
-        oss << this->sender_channel_connection_liveness_check_disable_array[idx];
-        if (idx != num_sender_channels - 1) {
-            oss << ", ";
-        }
-    }
-    oss << "]";
-    log_debug(
-        LogFabric,
-        "Fabric Node Mesh {}, Chip {}, Channel({}): Sender Channel Live: {}",
-        local_fabric_node_id.mesh_id.get(),
-        local_fabric_node_id.chip_id,
-        my_eth_channel_,
-        oss.str());
-
-    log_debug(
-        LogFabric,
-        "Fabric Node Mesh {}, Chip {}, Channel({}): Number of Sender Channels: {} Number of Receiver Channels: {}",
-        local_fabric_node_id.mesh_id.get(),
-        local_fabric_node_id.chip_id,
-        my_eth_channel_,
-        num_sender_channels,
-        num_receiver_channels);
-
     for (size_t i = 0; i < num_sender_channels; i++) {
         ct_args.push_back(this->sender_channel_is_traffic_injection_channel_array.at(i));
     }
