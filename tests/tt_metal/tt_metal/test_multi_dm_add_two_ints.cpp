@@ -52,45 +52,45 @@ int main() {
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         core,
         experimental::QuasarDataMovementConfig{
-            .num_processors_per_cluster = 8, .compile_args = {MEM_L1_UNCACHED_BASE}});
+            .num_processors_per_cluster = 5, .compile_args = {MEM_L1_UNCACHED_BASE}});
 
-    // KernelHandle kernel_1 = experimental::CreateKernel(
-    //     program,
-    //     "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
-    //     core,
-    //     experimental::QuasarDataMovementConfig{
-    //         .num_processors_per_cluster = 1, .compile_args = {MEM_L1_UNCACHED_BASE + 4}});
+    KernelHandle kernel_1 = experimental::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
+        core,
+        experimental::QuasarDataMovementConfig{
+            .num_processors_per_cluster = 3, .compile_args = {MEM_L1_UNCACHED_BASE + sizeof(int)}});
 
     SetRuntimeArgs(program, kernel_0, core, {100, 200});
-    // SetRuntimeArgs(program, kernel_1, core, {300, 400});
+    SetRuntimeArgs(program, kernel_1, core, {300, 400});
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    std::vector<uint32_t> kernel_0_result{0};
+    std::vector<uint32_t> result{0, 0};
     // std::vector<uint32_t> kernel_1_result{0};
     tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], core, MEM_L1_UNCACHED_BASE, sizeof(int), kernel_0_result);
+        mesh_device->get_devices()[0], core, MEM_L1_UNCACHED_BASE, sizeof(int) * 2, result);
     // tt_metal::detail::ReadFromDeviceL1(
     //     mesh_device->get_devices()[0], core, MEM_L1_UNCACHED_BASE + 4, sizeof(int), kernel_1_result);
 
     mesh_device->close();
 
-    // if (kernel_0_result[0] == 300 && kernel_1_result[0] == 700) {
-    //     std::cout << "Test passed!" << std::endl;
-    //     return 0;
-    // } else if (kernel_0_result[0] != 300) {
-    //     std::cout << "Test failed! Got the value " << kernel_0_result[0] << " instead of " << 300 << std::endl;
-    //     return 1;
-    // } else if (kernel_1_result[0] != 700) {
-    //     std::cout << "Test failed! Got the value " << kernel_1_result[0] << " instead of " << 700 << std::endl;
-    //     return 1;
-    // }
-    if (kernel_0_result[0] == 300) {
+    if (result[0] == 300 && result[1] == 700) {
         std::cout << "Test passed!" << std::endl;
         return 0;
-    } else {
-        std::cout << "Test failed! Got the value " << kernel_0_result[0] << " instead of " << 300 << std::endl;
+    } else if (result[0] != 300) {
+        std::cout << "Test failed! Got the value " << result[0] << " instead of " << 300 << std::endl;
+        return 1;
+    } else if (result[1] != 700) {
+        std::cout << "Test failed! Got the value " << result[1] << " instead of " << 700 << std::endl;
         return 1;
     }
+    // if (result[0] == 300 && result[1] == 700) {
+    //     std::cout << "Test passed!" << std::endl;
+    //     return 0;
+    // } else {
+    //     std::cout << "Test failed! Got the value " << kernel_0_result[0] << " instead of " << 300 << std::endl;
+    //     return 1;
+    // }
 }
