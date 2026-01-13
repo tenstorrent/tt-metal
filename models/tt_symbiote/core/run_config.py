@@ -479,6 +479,69 @@ class NormalRun:
         return result
 
 
+class LightweightRun(NormalRun):
+    @staticmethod
+    def to_torch(self):
+        """Convert to PyTorch tensor."""
+
+        def _to_torch(self):
+            is_mesh_device = self.ttnn_tensor.device().__class__.__name__ == "MeshDevice"
+            is_mesh_device = is_mesh_device and self.ttnn_tensor.device().get_num_devices() != 1
+            if is_mesh_device:
+                result = to_torch_auto_compose(self.ttnn_tensor, device=self.ttnn_tensor.device())
+            else:
+                result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
+            return result
+
+        result = self.elem
+        if self.ttnn_tensor is not None and self.elem is None:
+            result = _to_torch(self)
+        assert result is not None, "Both ttnn_tensor and elem are None. This should not happen."
+        if result.device.type == "meta" and self.ttnn_tensor is not None:
+            result = _to_torch(self)
+        self.elem = result if self.elem is None else self.elem
+        return self.elem
+
+    @staticmethod
+    def to_ttnn(self):
+        """Convert to TTNN tensor, creating if necessary."""
+        if self.ttnn_tensor is not None:
+            return self.ttnn_tensor
+        assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
+        # convert elem to ttnn tensor here
+        is_mesh_device = self.device.__class__.__name__ == "MeshDevice"
+        if self.ttnn_distributed_config is None and is_mesh_device:
+            self.__dict__["distributed_config"] = DistributedTensorConfig(
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)
+            )
+        if self.elem.device.type == "meta":
+            raise RuntimeError(
+                "Cannot convert META tensor to TTNN tensor. Please ensure the tensor is on a real device before conversion."
+            )
+        if self.elem.dtype not in TORCH_TO_TTNN:
+            raise RuntimeError(f"Unsupported dtype {self.elem.dtype} for conversion to TTNN tensor.")
+        self.ttnn_tensor = ttnn.from_torch(
+            self.elem.cpu(),
+            dtype=torch_dtype_to_ttnn_dtype(self.elem.dtype),
+            mesh_mapper=self.ttnn_distributed_config.mesh_mapper if self.ttnn_distributed_config else None,
+            layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
+        )
+        return self.ttnn_tensor
+
+    @staticmethod
+    def module_run(self, *args, **kwds):
+        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
+        assert self.device is not None, "Device must be set for TTNN module execution."
+        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+        func_args = tree_map(transform, args)
+        func_kwargs = tree_map(transform, kwds)
+        self.preprocess_weights()
+        self.move_weights_to_device()
+        result = self.forward(*func_args, **func_kwargs)
+        result = tree_map(wrap_to_torch_ttnn_tensor, result)
+        return result
+
+
 class NormalRunWithFallback(NormalRun):
     @staticmethod
     def torch_dispatch(cls, func, types, args=(), kwargs=None):
@@ -697,6 +760,7 @@ class CPU(NormalRun):
 
 # Add at module level
 _RUN_MODE_REGISTRY = {
+    "LIGHTWEIGHT": LightweightRun,
     "NORMAL": NormalRun,
     "NORMAL_WITH_FALLBACK": NormalRunWithFallback,
     "SEL": SELRun,
