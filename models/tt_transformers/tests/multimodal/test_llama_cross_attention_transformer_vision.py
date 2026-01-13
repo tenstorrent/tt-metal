@@ -33,7 +33,6 @@ class CrossAttentionTransformerVisionModel(MllamaPreTrainedModel):
         self.hidden_size = config.text_config.hidden_size
         self.max_num_tiles = config.vision_config.max_num_tiles
         self.vision_output_dim = config.vision_config.vision_output_dim
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
 
         self.vision_model = MllamaVisionModel(config.vision_config)
         self.multi_modal_projector = nn.Linear(
@@ -51,16 +50,7 @@ class CrossAttentionTransformerVisionModel(MllamaPreTrainedModel):
         aspect_ratio_ids: Optional[torch.Tensor] = None,
         aspect_ratio_mask: Optional[torch.Tensor] = None,
         cross_attention_states: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
     ) -> torch.Tensor:
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
         if pixel_values is not None and cross_attention_states is not None:
             raise ValueError("`pixel_values` and `cross_attention_states` cannot be provided simultaneously")
 
@@ -116,11 +106,10 @@ def test_vision_transformer_inference(mesh_device, reset_seeds):
     config.vision_config._attn_implementation = "sdpa"
     reference_model1 = CrossAttentionTransformerVisionModel(config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
+    # Because the custom class CrossAttentionTransformerVisionModel wraps the vision_model and multi_modal_projector the following prefixes need to be added so the weight can be loaded correctly on the comutational graph.
     partial_state_dict = load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.vision_model.")
-
     prefix = "vision_model."
     partial_state_dict = {f"{prefix}{key}": value for key, value in partial_state_dict.items()}
-
     partial_state_dict1 = load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.multi_modal_projector.")
     prefix = "multi_modal_projector."
     partial_state_dict.update({f"{prefix}{key}": value for key, value in partial_state_dict1.items()})
