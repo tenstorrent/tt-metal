@@ -162,14 +162,14 @@ PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgram
 
     auto reader_kernels_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_distributed/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/dataflow/"
         "reader_layernorm_postallgather_dit.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     auto writer_kernels_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_distributed/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/dataflow/"
         "writer_layernorm_postallgather_dit.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -177,7 +177,7 @@ PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgram
     std::vector<uint32_t> compute_args = {Wt, W, block_size, num_devices, gamma.has_value(), beta.has_value()};
 
     const auto* compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_distributed/device/kernels/compute/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/"
         "layernorm_post_allgather_welford.cpp";
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = math_fidelity,
