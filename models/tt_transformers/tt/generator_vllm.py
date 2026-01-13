@@ -414,7 +414,15 @@ class LlamaForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        result = super().decode_forward_text(*args, **kwargs)
+        # Handle backward compatibility: decode_forward_text now returns list of tuples
+        # [(tt_logits, tt_log_probs), ...] when read_from_device=False.
+        # Older vLLM versions expect just the logits tensor, not tuples.
+        read_from_device = kwargs.get("read_from_device", True)
+        if not read_from_device and isinstance(result, list) and len(result) > 0:
+            if isinstance(result[0], tuple):
+                result = [item[0] for item in result]
+        return result
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -462,7 +470,13 @@ class QwenForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        result = super().decode_forward_text(*args, **kwargs)
+        # Handle backward compatibility for tuple returns
+        read_from_device = kwargs.get("read_from_device", True)
+        if not read_from_device and isinstance(result, list) and len(result) > 0:
+            if isinstance(result[0], tuple):
+                result = [item[0] for item in result]
+        return result
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -510,7 +524,13 @@ class MistralForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        result = super().decode_forward_text(*args, **kwargs)
+        # Handle backward compatibility for tuple returns
+        read_from_device = kwargs.get("read_from_device", True)
+        if not read_from_device and isinstance(result, list) and len(result) > 0:
+            if isinstance(result[0], tuple):
+                result = [item[0] for item in result]
+        return result
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -648,7 +668,13 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        result = super().decode_forward_text(*args, **kwargs)
+        # Handle backward compatibility for tuple returns
+        read_from_device = kwargs.get("read_from_device", True)
+        if not read_from_device and isinstance(result, list) and len(result) > 0:
+            if isinstance(result[0], tuple):
+                result = [item[0] for item in result]
+        return result
 
 
 class GptOssForCausalLM(Generator):
@@ -709,7 +735,13 @@ class GptOssForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        result = super().decode_forward_text(*args, **kwargs)
+        # Handle backward compatibility for tuple returns
+        read_from_device = kwargs.get("read_from_device", True)
+        if not read_from_device and isinstance(result, list) and len(result) > 0:
+            if isinstance(result[0], tuple):
+                result = [item[0] for item in result]
+        return result
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
