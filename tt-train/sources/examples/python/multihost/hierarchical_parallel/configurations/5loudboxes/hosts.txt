@@ -1,4 +1,4 @@
-metal-wh-01.closetbox.tenstorrent.com slots=1
+metal-wh-16.closetbox.tenstorrent.com slots=1
 metal-wh-03.closetbox.tenstorrent.com slots=1
 metal-wh-04.closetbox.tenstorrent.com slots=1
 metal-wh-05.closetbox.tenstorrent.com slots=1
