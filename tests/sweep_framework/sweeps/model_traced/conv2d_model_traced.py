@@ -2,13 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
-import torch
-
 from tests.sweep_framework.sweep_utils.conv2d_common import (
     run_conv2d_short_sweep,
     run_conv1d_short_sweep,
 )
+import ttnn
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -43,16 +41,58 @@ if model_traced_params:
 def run(
     input_specs,
     is_conv1d=False,
+    compute_config=None,
+    dtype=None,
     config_tensors_in_dram=False,
     *,
     device,
     **kwargs,
 ) -> list:
-    # Call the short sweep function
+    # Parse compute_kernel_config from dict to ttnn object
+    parsed_compute_config = None
+    if compute_config and isinstance(compute_config, dict):
+        math_fidelity_str = compute_config.get("math_fidelity", "HiFi4")
+        math_fidelity_map = {
+            "HiFi4": ttnn.MathFidelity.HiFi4,
+            "HiFi3": ttnn.MathFidelity.HiFi3,
+            "HiFi2": ttnn.MathFidelity.HiFi2,
+            "LoFi": ttnn.MathFidelity.LoFi,
+        }
+        math_fidelity = math_fidelity_map.get(math_fidelity_str, ttnn.MathFidelity.HiFi4)
+        fp32_dest_acc_en = bool(compute_config.get("fp32_dest_acc_en", 0))
+        packer_l1_acc = bool(compute_config.get("packer_l1_acc", 0))
+
+        parsed_compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=math_fidelity,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=packer_l1_acc,
+        )
+
+    # Parse output_dtype from string to ttnn dtype
+    parsed_dtype = None
+    if dtype and isinstance(dtype, str):
+        dtype_map = {
+            "bfloat16": ttnn.bfloat16,
+            "bfloat8_b": ttnn.bfloat8_b,
+            "float32": ttnn.float32,
+            "uint16": ttnn.uint16,
+            "uint32": ttnn.uint32,
+            "int32": ttnn.int32,
+        }
+        parsed_dtype = dtype_map.get(dtype, ttnn.bfloat16)
+
+    # Call the short sweep function with parsed ttnn objects
     if is_conv1d:
         result = run_conv1d_short_sweep(input_specs, device)
     else:
-        result = run_conv2d_short_sweep(input_specs, device, config_tensors_in_dram=config_tensors_in_dram)
+        result = run_conv2d_short_sweep(
+            input_specs,
+            device,
+            config_tensors_in_dram=config_tensors_in_dram,
+            output_dtype=parsed_dtype,
+            compute_config=parsed_compute_config,
+        )
 
     # Convert short_sweep format [pcc_bool, pcc_value, e2e_perf, output_tensor, expected_tensor]
     # to model_traced format [pcc_tuple, e2e_perf]

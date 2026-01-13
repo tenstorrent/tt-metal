@@ -28,7 +28,6 @@ import sys
 import os
 import subprocess
 import json
-import tempfile
 import argparse
 from datetime import datetime
 
@@ -157,6 +156,8 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                         pass
 
                     # STEP 3: Apply regex fixes for common C++ formatting issues
+                    # Fix unquoted storage_type value: "storage_type":StorageType::DEVICE -> "storage_type":"StorageType::DEVICE"
+                    fixed_json_str = re.sub(r'"storage_type"\s*:\s*(\w+::\w+)', r'"storage_type":"\1"', fixed_json_str)
                     # Fix patterns like "tile_shape":"{32, 32}" -> "tile_shape":[32, 32]
                     fixed_json_str = re.sub(r':\s*"\{(\d+),\s*(\d+)\}"', r":[\1, \2]", fixed_json_str)
                     # Fix patterns like "compute_grid":8,8 -> "compute_grid":[8,8]
@@ -190,6 +191,62 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
     elif isinstance(obj, list):
         # Create new list to avoid circular refs
         return [fix_unparsed_elements_standalone(item, depth + 1, max_depth) for item in obj]
+    else:
+        return obj
+
+
+def extract_tensor_metadata(obj, depth=0, max_depth=50):
+    """
+    Extract layout and storage_type from UnparsedElement strings and add them as proper fields.
+    Handles format in element_info: "layout\":\"Layout::TILE\",\"storage_type\":StorageType::DEVICE
+    """
+    import re
+    import json as json_module
+
+    if depth >= max_depth:
+        return obj
+
+    if isinstance(obj, dict):
+        # Check if this is an UnparsedElement with tensor metadata
+        if "UnparsedElement" in obj:
+            unparsed_data = obj["UnparsedElement"]
+            element_info = unparsed_data.get("element_info", "")
+
+            if isinstance(element_info, str) and ("layout" in element_info or "storage_type" in element_info):
+                # Extract layout and storage_type from the element_info string
+                layout_match = re.search(r'"layout"\s*:\s*\\"(Layout::\w+)\\"', element_info)
+                storage_type_match = re.search(r'"storage_type"\s*:\s*(\w+::\w+)', element_info)
+
+                if layout_match or storage_type_match:
+                    # Try to fix and parse the element_info
+                    fixed_info = element_info
+
+                    # Fix the unquoted storage_type value
+                    if storage_type_match:
+                        storage_type_val = storage_type_match.group(1)
+                        # Add quotes around the storage_type value
+                        fixed_info = re.sub(
+                            r'"storage_type"\s*:\s*' + re.escape(storage_type_val),
+                            f'"storage_type":"\\"{storage_type_val}\\"',
+                            fixed_info,
+                        )
+
+                    try:
+                        # Try parsing the fixed JSON
+                        parsed = json_module.loads(fixed_info)
+                        # If parsing succeeded, return the parsed version
+                        return extract_tensor_metadata(parsed, depth + 1, max_depth)
+                    except (json_module.JSONDecodeError, ValueError):
+                        # If parsing still fails, extract metadata manually
+                        pass
+
+        # Recursively process all dict values
+        result = {}
+        for k, v in obj.items():
+            result[k] = extract_tensor_metadata(v, depth + 1, max_depth)
+        return result
+    elif isinstance(obj, list):
+        return [extract_tensor_metadata(item, depth + 1, max_depth) for item in obj]
     else:
         return obj
 
@@ -291,8 +348,6 @@ def create_tracing_plugin(output_dir):
     Returns:
         str: Path to the created plugin file
     """
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     plugin_content = '''
 import pytest
@@ -1670,6 +1725,9 @@ Argument Handling (Three Modes):
 
                 # Fix all unparsed elements in one pass
                 master_data = fix_unparsed_elements_standalone(master_data)
+
+                # Extract tensor metadata (layout and storage_type)
+                master_data = extract_tensor_metadata(master_data)
 
                 unparsed_after = has_unparsed(master_data)
 
