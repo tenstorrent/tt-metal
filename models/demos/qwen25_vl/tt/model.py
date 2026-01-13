@@ -181,7 +181,7 @@ class DropInVisionTransformer(torch.nn.Module):
         self.debug = debug
 
         state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
-        state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
+        state_dict = convert_hf_to_meta(state_dict, model_args.vision_head_dim)
         state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
         state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
