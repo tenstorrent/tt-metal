@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Debug dispatcher with verbose logging for TTNN operations.
 
 This dispatcher wraps the default dispatcher and adds detailed logging

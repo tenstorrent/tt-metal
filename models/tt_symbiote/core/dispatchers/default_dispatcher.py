@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """TTNN operation dispatch handlers and mapping."""
 
 from typing import Any, Optional, Tuple

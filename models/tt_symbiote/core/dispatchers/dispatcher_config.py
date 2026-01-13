@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Configuration system for TTNN dispatchers.
 
 This module provides a pluggable dispatcher system similar to run_config.py,

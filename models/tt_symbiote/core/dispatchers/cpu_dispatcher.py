@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """CPU dispatcher for all TTNN operations.
 
 This dispatcher executes all operations on the CPU without any special optimizations.
