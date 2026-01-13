@@ -788,6 +788,36 @@ static std::vector<Tensor> pool2d_DRAM(
             dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "HEIGHT" : "WIDTH");
     }
 
+    // If automatic determination resulted in num_slices=1, use L1 path for efficiency
+    if (dram_slice_config.num_slices == 1) {
+        printf("[Pool2D DRAM] num_slices=1, falling back to L1 path for efficiency\n");
+        if (deallocate_input) {
+            input_tensor_on_device.deallocate(true);
+        }
+        return pool2d_L1(
+            input_tensor,
+            pool_type,
+            batch_size,
+            input_h,
+            input_w,
+            channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation_,
+            ceil_mode,
+            count_include_pad,
+            divisor_override,
+            memory_config,
+            applied_shard_scheme,
+            compute_kernel_config,
+            false, /* deallocate_input - already done above if needed */
+            reallocate_halo_output,
+            return_indices,
+            dtype,
+            output_layout);
+    }
+
     printf("[Pool2D DRAM] About to run sliced op with num_slices=%u\n", dram_slice_config.num_slices);
     TT_FATAL(dram_slice_config.num_slices > 0, "Number of slices must be greater than zero for DRAM slicing.");
     ttnn::operations::op_slicing::run_sliced_op(
