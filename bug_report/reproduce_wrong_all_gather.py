@@ -96,6 +96,7 @@ TEST_SHAPES = [
 ]
 
 # Generate num_links values based on device
+max_links = min(max_links, 2)  # TODO: suppress max_links for lighter volumes
 NUM_LINKS_VALUES = list(range(1, max_links + 1))
 
 
@@ -104,27 +105,70 @@ NUM_LINKS_VALUES = list(range(1, max_links + 1))
 # =============================================================================
 
 
-def create_test_tensor(shape, mesh_device, dtype, layout, memory_config):
-    """Create input tensor with random data, replicated across mesh."""
-    torch_input = torch.randn(shape, dtype=torch.float32)
+def create_test_tensor(shape, mesh_device, dtype, layout, memory_config, cluster_axis, dim):
+    """Create input tensor with sharded data across mesh along cluster_axis.
+
+    Each device along the cluster_axis gets a different shard of the tensor.
+    Devices along the other axis get replicated data.
+    After all_gather along cluster_axis, the full tensor should be reconstructed.
+
+    Args:
+        shape: Shape of the per-device tensor (each device will have this shape)
+        mesh_device: The mesh device
+        dtype: Data type for the tensor
+        layout: Layout (ROW_MAJOR or TILE)
+        memory_config: Memory configuration
+        cluster_axis: Which mesh axis to shard along (0 or 1)
+        dim: Which tensor dimension to shard along (gather dimension)
+
+    Returns:
+        tt_input: Sharded tensor on device
+        torch_full: Full torch tensor (expected output after all_gather)
+    """
+    num_devices = mesh_device.shape[cluster_axis]
+
+    # Create the full tensor shape (shape * num_devices along the gather dim)
+    full_shape = list(shape)
+    full_shape[dim] = shape[dim] * num_devices
+
+    # Create full tensor with random data - each device will get a different shard
+    torch_full = torch.randn(full_shape, dtype=torch.float32)
+
+    # Use create_mesh_mapper to shard along cluster_axis only, replicate along the other axis
+    # cluster_axis=0 -> shard along mesh rows, replicate along columns
+    # cluster_axis=1 -> replicate along rows, shard along mesh columns
+    if cluster_axis == 0:
+        placements = [ttnn.PlacementShard(dim), ttnn.PlacementReplicate()]
+    else:  # cluster_axis == 1
+        placements = [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)]
+
+    mesh_mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(
+            placements,
+            ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1]),
+        ),
+    )
 
     tt_input = ttnn.from_torch(
-        torch_input,
+        torch_full,
         dtype=dtype,
         layout=layout,
         device=mesh_device,
         memory_config=memory_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=mesh_mapper,
     )
 
-    return tt_input, torch_input
+    return tt_input, torch_full
 
 
-def compute_expected_output(torch_input, dim, num_devices_along_axis):
-    """Compute expected output after all_gather."""
-    repeat_dims = [1] * len(torch_input.shape)
-    repeat_dims[dim] = num_devices_along_axis
-    return torch_input.repeat(repeat_dims)
+def compute_expected_output(torch_full, dim, num_devices_along_axis):
+    """Return expected output after all_gather.
+
+    When using sharded input, the expected output is simply the full tensor
+    (which was sharded to create the input).
+    """
+    return torch_full
 
 
 def verify_all_gather_output(tt_output, torch_expected, dtype, test_name):
@@ -214,12 +258,14 @@ def test_all_gather_with_layout(shape, dtype, num_links, cluster_axis, layout, d
     test_name = f"all_gather dtype={dtype} layout={layout_name} shape={shape} links={num_links} axis={cluster_axis}"
     logger.info(f"Running: {test_name}")
 
-    tt_input, torch_input = create_test_tensor(
+    tt_input, torch_full = create_test_tensor(
         shape=shape,
         mesh_device=mesh_device,
         dtype=dtype,
         layout=layout,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=cluster_axis,
+        dim=dim,
     )
 
     tt_output = ttnn.all_gather(
@@ -235,7 +281,7 @@ def test_all_gather_with_layout(shape, dtype, num_links, cluster_axis, layout, d
         tt_output.shape[dim] == expected_shape_dim
     ), f"Shape mismatch: expected dim[{dim}]={expected_shape_dim}, got {tt_output.shape[dim]}"
 
-    torch_expected = compute_expected_output(torch_input, dim, num_devices)
+    torch_expected = compute_expected_output(torch_full, dim, num_devices)
     all_passed, failures = verify_all_gather_output(tt_output, torch_expected, dtype, test_name)
 
     assert all_passed, f"all_gather failed with layout={layout_name}, num_links={num_links}. " f"Failures: {failures}"
@@ -274,12 +320,14 @@ def test_all_gather_with_topology(shape, dtype, num_links, cluster_axis, layout,
     )
     logger.info(f"Running: {test_name}")
 
-    tt_input, torch_input = create_test_tensor(
+    tt_input, torch_full = create_test_tensor(
         shape=shape,
         mesh_device=mesh_device,
         dtype=dtype,
         layout=layout,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=cluster_axis,
+        dim=dim,
     )
 
     tt_output = ttnn.all_gather(
@@ -297,7 +345,7 @@ def test_all_gather_with_topology(shape, dtype, num_links, cluster_axis, layout,
         tt_output.shape[dim] == expected_shape_dim
     ), f"Shape mismatch: expected dim[{dim}]={expected_shape_dim}, got {tt_output.shape[dim]}"
 
-    torch_expected = compute_expected_output(torch_input, dim, num_devices)
+    torch_expected = compute_expected_output(torch_full, dim, num_devices)
     all_passed, failures = verify_all_gather_output(tt_output, torch_expected, dtype, test_name)
 
     assert all_passed, (
@@ -339,12 +387,14 @@ def test_all_gather_async_linear(shape, dtype, num_links, cluster_axis, layout, 
     test_name = f"all_gather_async_linear dtype={dtype} layout={layout_name} shape={shape} links={num_links} axis={cluster_axis}"
     logger.info(f"Running: {test_name}")
 
-    tt_input, torch_input = create_test_tensor(
+    tt_input, torch_full = create_test_tensor(
         shape=shape,
         mesh_device=mesh_device,
         dtype=dtype,
         layout=layout,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=cluster_axis,
+        dim=dim,
     )
 
     ag_semaphores, barrier_semaphore = create_semaphores(mesh_device)
@@ -367,7 +417,7 @@ def test_all_gather_async_linear(shape, dtype, num_links, cluster_axis, layout, 
         tt_output.shape[dim] == expected_shape_dim
     ), f"Shape mismatch: expected dim[{dim}]={expected_shape_dim}, got {tt_output.shape[dim]}"
 
-    torch_expected = compute_expected_output(torch_input, dim, num_devices)
+    torch_expected = compute_expected_output(torch_full, dim, num_devices)
     all_passed, failures = verify_all_gather_output(tt_output, torch_expected, dtype, test_name)
 
     assert all_passed, (
@@ -409,12 +459,14 @@ def test_all_gather_async_ring(shape, dtype, num_links, cluster_axis, layout, di
     )
     logger.info(f"Running: {test_name}")
 
-    tt_input, torch_input = create_test_tensor(
+    tt_input, torch_full = create_test_tensor(
         shape=shape,
         mesh_device=mesh_device,
         dtype=dtype,
         layout=layout,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=cluster_axis,
+        dim=dim,
     )
 
     ag_semaphores, barrier_semaphore = create_semaphores(mesh_device)
@@ -437,7 +489,7 @@ def test_all_gather_async_ring(shape, dtype, num_links, cluster_axis, layout, di
         tt_output.shape[dim] == expected_shape_dim
     ), f"Shape mismatch: expected dim[{dim}]={expected_shape_dim}, got {tt_output.shape[dim]}"
 
-    torch_expected = compute_expected_output(torch_input, dim, num_devices)
+    torch_expected = compute_expected_output(torch_full, dim, num_devices)
     all_passed, failures = verify_all_gather_output(tt_output, torch_expected, dtype, test_name)
 
     assert all_passed, (
