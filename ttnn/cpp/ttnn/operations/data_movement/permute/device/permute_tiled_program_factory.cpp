@@ -260,7 +260,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    const std::optional<float> pad_value = operation_attributes.pad_value;
+    const float pad_value = operation_attributes.pad_value;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
@@ -331,7 +331,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     uint32_t output_H = input_shape[dims[rank - 2]];
     uint32_t element_size = input_tensor.element_size();
 
-    bool needs_padding = (output_H % tile_shape[1] != 0) && pad_value.has_value();
+    bool needs_padding = (output_H % tile_shape[1] != 0);
     if (needs_padding) {
         tt::tt_metal::CircularBufferConfig cb_src1_config =
             tt::tt_metal::CircularBufferConfig(face_shape[1] * element_size, {{padding_cb_index, cb_data_format}})
@@ -349,19 +349,15 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     }
     uint32_t padding_val_packed = 0;
     uint32_t num_writes = 0;
-    if (pad_value.has_value()) {
-        if (output_H % tile_shape[1] != 0) {
-            uint32_t num_packed_values = sizeof(uint32_t) / element_size;
-            num_writes = face_shape[1] / num_packed_values;
-            if (input_tensor.dtype() == DataType::BFLOAT16) {
-                padding_val_packed =
-                    pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
-            } else if (num_packed_values == 2) {
-                padding_val_packed =
-                    static_cast<uint32_t>(pad_value.value()) | (static_cast<uint32_t>(pad_value.value()) << 16);
-            } else {
-                padding_val_packed = std::bit_cast<uint32_t>(pad_value.value());
-            }
+    if (output_H % tile_shape[1] != 0) {
+        uint32_t num_packed_values = sizeof(uint32_t) / element_size;
+        num_writes = face_shape[1] / num_packed_values;
+        if (input_tensor.dtype() == DataType::BFLOAT16) {
+            padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+        } else if (num_packed_values == 2) {
+            padding_val_packed = static_cast<uint32_t>(pad_value) | (static_cast<uint32_t>(pad_value) << 16);
+        } else {
+            padding_val_packed = std::bit_cast<uint32_t>(pad_value);
         }
     }
 
@@ -557,7 +553,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     using namespace tt;
     using namespace tt::tt_metal;
-    const std::optional<float> pad_value = operation_attributes.pad_value;
+    const float pad_value = operation_attributes.pad_value;
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.logical_shape();
@@ -619,11 +615,10 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     uint32_t xw_blocks = padded_xw_volume / (tile_shape[0] * tile_shape[1]);
 
-    bool needs_x_padding = (x % tile_shape[1] != 0) && pad_value.has_value();
+    bool needs_x_padding = (x % tile_shape[1] != 0);
     bool needs_y_padding =
-        (y % tile_shape[0] != 0) &&
-        pad_value.has_value();  // if H is not moved, we could just keep existing implicit padding instead of
-                                // re-padding, but it complicates logic, may be worth investigating in the future
+        (y % tile_shape[0] != 0);  // if H is not moved, we could just keep existing implicit padding instead of
+                                   // re-padding, but it complicates logic, may be worth investigating in the future
     bool needs_padding = needs_x_padding or needs_y_padding;
 
     uint32_t padding_val_packed = 0;
@@ -636,13 +631,11 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         num_writes = face_shape[1] / num_packed_values;
 
         if (input_tensor.dtype() == DataType::BFLOAT16) {
-            padding_val_packed =
-                pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
+            padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
         } else if (num_packed_values == 2) {
-            padding_val_packed =
-                static_cast<uint32_t>(pad_value.value()) | (static_cast<uint32_t>(pad_value.value()) << 16);
+            padding_val_packed = static_cast<uint32_t>(pad_value) | (static_cast<uint32_t>(pad_value) << 16);
         } else {
-            padding_val_packed = std::bit_cast<uint32_t>(pad_value.value());
+            padding_val_packed = std::bit_cast<uint32_t>(pad_value);
         }
     }
 
