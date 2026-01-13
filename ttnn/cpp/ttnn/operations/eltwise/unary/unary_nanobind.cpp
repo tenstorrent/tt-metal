@@ -2533,10 +2533,10 @@ void py_module(nb::module_& mod) {
         ttnn::rdiv,
         "value",
         "denominator that is considered as numerator, which should be a non-zero float value",
-        "round_mode",
+        "rounding_mode",
         "rounding_mode value",
         "None",
-        R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using round_mode.
+        R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using rounding_mode.
 
         Input tensor must have BFLOAT16 data type.
 

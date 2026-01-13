@@ -4046,14 +4046,14 @@ def test_binary_inplace_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, n
     ),
 )
 @pytest.mark.parametrize(
-    "round_mode",
+    "rounding_mode",
     [
         "trunc",
         "floor",
         None,
     ],
 )
-def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw, round_mode, device):
+def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw, rounding_mode, device):
     torch.manual_seed(10)
     shape = [nb, nc, nh, nw]
     inp_a = torch.rand(*shape).to(dtype_pt)
@@ -4078,7 +4078,7 @@ def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw
     out_tt = ttnn.div(
         a,
         b,
-        round_mode=round_mode,
+        rounding_mode=rounding_mode,
         sub_core_grids=ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
@@ -4088,13 +4088,13 @@ def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw
     )
     out = ttnn.to_torch(out_tt)
     golden_fn = ttnn.get_golden_function(ttnn.div)
-    expected = golden_fn(inp_a, inp_b, round_mode=round_mode)
+    expected = golden_fn(inp_a, inp_b, rounding_mode=rounding_mode)
     assert_with_pcc(out, expected)
 
     out_tt = ttnn.div(
         a,
         2.0,
-        round_mode=round_mode,
+        rounding_mode=rounding_mode,
         sub_core_grids=ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
@@ -4104,7 +4104,7 @@ def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw
     )
     out = ttnn.to_torch(out_tt)
     golden_fn = ttnn.get_golden_function(ttnn.div)
-    expected = golden_fn(inp_a, 2.0, round_mode=round_mode)
+    expected = golden_fn(inp_a, 2.0, rounding_mode=rounding_mode)
     assert_with_pcc(out, expected)
 
 

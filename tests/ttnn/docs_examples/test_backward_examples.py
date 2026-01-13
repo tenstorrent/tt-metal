@@ -183,7 +183,7 @@ def test_rdiv_bw(device):
     scalar = 0.5
 
     # Call the rdiv_bw function with scalar and round mode
-    output = ttnn.rdiv_bw(grad_tensor, input_tensor, scalar, round_mode=None)
+    output = ttnn.rdiv_bw(grad_tensor, input_tensor, scalar, rounding_mode=None)
     logger.info(f"Reverse Division Backward: {output}")
 
 

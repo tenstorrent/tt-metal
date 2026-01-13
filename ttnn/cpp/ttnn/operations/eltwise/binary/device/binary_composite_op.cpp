@@ -191,7 +191,7 @@ Tensor ExecuteDiv::invoke(
     const Tensor& input,
     float value,
     bool fast_and_approximate_mode,
-    const std::optional<std::string>& round_mode,
+    const std::optional<std::string>& rounding_mode,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor,
@@ -200,7 +200,7 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    const auto has_legacy_only_args = round_mode.has_value();
+    const auto has_legacy_only_args = rounding_mode.has_value();
     const bool is_int32 = input.dtype() == DataType::INT32;
 
     if (is_int32) {
@@ -211,7 +211,7 @@ Tensor ExecuteDiv::invoke(
             fast_and_approximate_mode);
         // fast_and_approximate_mode is not supported for integer division yet.
 
-        if (round_mode == "floor") {
+        if (rounding_mode == "floor") {
             return BinaryOperation<BinaryOpType::DIV_FLOOR>::invoke(
                 input,
                 value,
@@ -224,7 +224,7 @@ Tensor ExecuteDiv::invoke(
                 std::nullopt,
                 sub_core_grids);
         }
-        if (round_mode == "trunc") {
+        if (rounding_mode == "trunc") {
             return BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
                 input,
                 value,
@@ -237,10 +237,10 @@ Tensor ExecuteDiv::invoke(
                 std::nullopt,
                 sub_core_grids);
         }
-        // round_mode = None
+        // rounding_mode = None
         TT_FATAL(
             (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
-            "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
+            "Incorrect output_dtype value for Integer Division(rounding_mode=None) ; valid input values are None or "
             "ttnn.float32");
         return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
             input,
@@ -260,7 +260,7 @@ Tensor ExecuteDiv::invoke(
                      : (has_legacy_only_args ||
                         binary::is_legacy_only(
                             input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
-        TT_FATAL(!has_legacy_only_args, "round_mode is not valid when use_legacy parameter is false");
+        TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
 
         return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
             input,
@@ -277,7 +277,7 @@ Tensor ExecuteDiv::invoke(
     }
 
     TT_FATAL(
-        (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
+        (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     if (output_tensor.has_value()) {
         ttnn::divide(
@@ -307,9 +307,9 @@ Tensor ExecuteDiv::invoke(
             sub_core_grids);
     }
 
-    if (round_mode == "trunc") {
+    if (rounding_mode == "trunc") {
         ttnn::trunc(output_tensor.value(), output_mem_config, output_tensor, sub_core_grids);
-    } else if (round_mode == "floor") {
+    } else if (rounding_mode == "floor") {
         ttnn::floor(output_tensor.value(), output_mem_config, output_tensor, sub_core_grids);
     }
     return output_tensor.value();
@@ -319,7 +319,7 @@ Tensor ExecuteDiv::invoke(
     const Tensor& input_a,
     const Tensor& input_b,
     bool fast_and_approximate_mode,
-    const std::optional<std::string>& round_mode,
+    const std::optional<std::string>& rounding_mode,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor,
@@ -331,8 +331,8 @@ Tensor ExecuteDiv::invoke(
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    // Only force legacy mode if round_mode is set and inputs are not of INT32 dtype
-    const auto has_legacy_only_args = (round_mode.has_value() && !is_int32);
+    // Only force legacy mode if rounding_mode is set and inputs are not of INT32 dtype
+    const auto has_legacy_only_args = (rounding_mode.has_value() && !is_int32);
 
     if (is_int32) {
         TT_FATAL(
@@ -342,7 +342,7 @@ Tensor ExecuteDiv::invoke(
             fast_and_approximate_mode);
         // fast_and_approximate_mode is not supported for integer division yet.
 
-        if (round_mode == "floor") {
+        if (rounding_mode == "floor") {
             return BinaryOperation<BinaryOpType::DIV_FLOOR>::invoke(
                 input_a,
                 input_b,
@@ -355,7 +355,7 @@ Tensor ExecuteDiv::invoke(
                 std::nullopt,
                 sub_core_grids);
         }
-        if (round_mode == "trunc") {
+        if (rounding_mode == "trunc") {
             return BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
                 input_a,
                 input_b,
@@ -368,10 +368,10 @@ Tensor ExecuteDiv::invoke(
                 std::nullopt,
                 sub_core_grids);
         }
-        // round_mode = None
+        // rounding_mode = None
         TT_FATAL(
             (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
-            "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
+            "Incorrect output_dtype value for Integer Division(rounding_mode=None) ; valid input values are None or "
             "ttnn.float32");
         return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
             input_a,
@@ -391,7 +391,7 @@ Tensor ExecuteDiv::invoke(
                      : (has_legacy_only_args ||
                         binary::is_legacy_only(
                             input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
-        TT_FATAL(!has_legacy_only_args, "round_mode is not valid when use_legacy parameter is false");
+        TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
 
         return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
             input_a,
@@ -408,7 +408,7 @@ Tensor ExecuteDiv::invoke(
     }
 
     TT_FATAL(
-        (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
+        (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     Tensor result;
@@ -444,9 +444,9 @@ Tensor ExecuteDiv::invoke(
             sub_core_grids);
     }
 
-    if (round_mode == "trunc") {
+    if (rounding_mode == "trunc") {
         result = ttnn::trunc(result, output_mem_config, output_tensor, sub_core_grids);
-    } else if (round_mode == "floor") {
+    } else if (rounding_mode == "floor") {
         result = ttnn::floor(result, output_mem_config, output_tensor, sub_core_grids);
     }
 
