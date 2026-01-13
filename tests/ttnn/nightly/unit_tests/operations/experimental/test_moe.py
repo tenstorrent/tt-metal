@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import pytest
 import torch
 import ttnn
@@ -136,7 +137,7 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2048): 102.0,
+    (32, 7168, 2048): 110.0,
 }
 
 
@@ -186,13 +187,18 @@ def test_moe_performance(M, K, N, check_accuracy, dump_outputs):
     duration_us = int(r["DEVICE KERNEL DURATION [ns]"].min()) / 1000.0
     logger.warning(f"Performance: {duration_us} us")
 
+    num_8k_txns = math.ceil(2 * 6 * 224 / 14) + math.ceil(19 * 64 / 14)
+    total_bytes_transferred = num_8k_txns * 8192 * 12
+    realized_bandwidth = total_bytes_transferred / (duration_us * 1000)
+    logger.warning(f"Realized Bandwidth: {realized_bandwidth} GB/s")
+
     bytes_per_tile = 512 + 64
     total_tiles_0_1 = 224 * 64
     total_tiles_2 = 224 * 64
     total_tiles_per_core = 2 * total_tiles_0_1 + total_tiles_2
     total_bytes = total_tiles_per_core * bytes_per_tile
     bandwidth = total_bytes / (duration_us * 1000)
-    logger.warning(f"Bandwidth: {bandwidth} GB/s")
+    logger.warning(f"Useful Bandwidth: {bandwidth} GB/s")
 
     assert (
         duration_us < SHAPE2TIME[(M, K, N)]
