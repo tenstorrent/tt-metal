@@ -8,13 +8,13 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 namespace ttnn::operations::reduction::row_mean_sub_square_reduce::program {
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Stub implementation - Stages 5-6 implementation
 RowMeanSubSquareReduceProgramFactory::cached_program_t RowMeanSubSquareReduceProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -39,6 +39,9 @@ RowMeanSubSquareReduceProgramFactory::cached_program_t RowMeanSubSquareReducePro
     // Tile dimensions
     uint32_t Ht = (H + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
     uint32_t Wt = (W + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+
+    // Calculate padded width (must be multiple of TILE_WIDTH=32)
+    uint32_t padded_W = Wt * tt::constants::TILE_WIDTH;
 
     // Work distribution: parallelize over tile-rows
     uint32_t num_tile_rows = N * C * Ht;
@@ -99,20 +102,25 @@ RowMeanSubSquareReduceProgramFactory::cached_program_t RowMeanSubSquareReducePro
             .set_page_size(cb_rm_out_idx, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rm_out_config);
 
-    // Stage 6: Create stub kernels
+    // Prepare kernel arguments
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
 
     // Calculate stick sizes
-    uint32_t padded_W = (W + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
     uint32_t input_stick_size = padded_W * input.element_size();
     uint32_t output_stick_size = tt::constants::TILE_WIDTH * output.element_size();  // Output width is always 32
 
-    // Compile-time args for reader
-    std::vector<uint32_t> reader_compile_time_args = {input_stick_size};
+    // Calculate scaler value: 1/W packed as two bfloat16 in uint32
+    // Use padded_W for the scaler since that's what we're actually reducing
+    float scaler_value = 1.0f / static_cast<float>(padded_W);
+    bfloat16 scaler_bf16 = bfloat16(scaler_value);
+    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({scaler_bf16, scaler_bf16});
+
+    // Compile-time args for reader: stick_size, Wt, packed_scaler_value, TensorAccessorArgs
+    std::vector<uint32_t> reader_compile_time_args = {input_stick_size, Wt, packed_scaler_value};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
-    // Compile-time args for writer
+    // Compile-time args for writer: output_stick_size, TensorAccessorArgs
     std::vector<uint32_t> writer_compile_time_args = {output_stick_size};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
@@ -133,23 +141,29 @@ RowMeanSubSquareReduceProgramFactory::cached_program_t RowMeanSubSquareReducePro
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Create compute kernel with per-core-group args
-    // For stub: compute processes sticks (num_rows_per_core * TILE_HEIGHT sticks)
-    std::vector<uint32_t> compute_args_group_1 = {num_rows_per_core_group_1 * tt::constants::TILE_HEIGHT};
+    // Compile args: Wt, num_rows_per_core
+    std::vector<uint32_t> compute_args_group_1 = {Wt, num_rows_per_core_group_1};
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/row_mean_sub_square_reduce/device/kernels/compute/"
         "row_mean_sub_square_reduce_compute.cpp",
         core_group_1,
-        tt::tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_args_group_1});
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,  // Enable FP32 accumulation for better precision
+            .compile_args = compute_args_group_1});
 
     if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_args_group_2 = {num_rows_per_core_group_2 * tt::constants::TILE_HEIGHT};
+        std::vector<uint32_t> compute_args_group_2 = {Wt, num_rows_per_core_group_2};
         tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/row_mean_sub_square_reduce/device/kernels/compute/"
             "row_mean_sub_square_reduce_compute.cpp",
             core_group_2,
-            tt::tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_args_group_2});
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = MathFidelity::HiFi4,
+                .fp32_dest_acc_en = true,
+                .compile_args = compute_args_group_2});
     }
 
     // Build cores vector for shared_variables
@@ -165,16 +179,15 @@ RowMeanSubSquareReduceProgramFactory::cached_program_t RowMeanSubSquareReducePro
         uint32_t num_rows_this_core =
             (i < core_group_1.num_cores()) ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
 
-        uint32_t num_sticks_this_core = num_rows_this_core * tt::constants::TILE_HEIGHT;
-        uint32_t start_stick_id = tile_rows_processed * tt::constants::TILE_HEIGHT;
+        uint32_t start_tile_row = tile_rows_processed;
 
-        // Reader runtime args: src_addr, num_sticks, start_stick_id
+        // Reader runtime args: src_addr, num_tile_rows, start_tile_row
         tt::tt_metal::SetRuntimeArgs(
-            program, reader_kernel_id, core, {src_buffer->address(), num_sticks_this_core, start_stick_id});
+            program, reader_kernel_id, core, {src_buffer->address(), num_rows_this_core, start_tile_row});
 
-        // Writer runtime args: dst_addr, num_sticks, start_stick_id
+        // Writer runtime args: dst_addr, num_tile_rows, start_tile_row
         tt::tt_metal::SetRuntimeArgs(
-            program, writer_kernel_id, core, {dst_buffer->address(), num_sticks_this_core, start_stick_id});
+            program, writer_kernel_id, core, {dst_buffer->address(), num_rows_this_core, start_tile_row});
 
         tile_rows_processed += num_rows_this_core;
     }
