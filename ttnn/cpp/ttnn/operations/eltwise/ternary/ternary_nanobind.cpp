@@ -390,7 +390,10 @@ void py_module(nb::module_& mod) {
     bind_ternary_composite_float(
         mod,
         ttnn::addcdiv,
-        R"doc(Computes Addcdiv on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Multiplies :attr:`input_tensor_b` by a scalar, divides the result
+        element-wise by :attr:`input_tensor_c`, and adds it to
+        :attr:`input_tensor_a`.
+        Returns a tensor with the same layout as :attr:`input_tensor_a`.)doc");
 
     bind_ternary_where(
         mod,

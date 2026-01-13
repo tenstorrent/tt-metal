@@ -10,6 +10,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     data_gen_with_val,
     compare_pcc,
 )
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
 @pytest.mark.parametrize(
@@ -54,6 +55,131 @@ def test_ternary_addcdiv_ttnn(input_shapes, value, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+def create_full_range_tensor(input_shape, dtype, value_ranges):
+    """Create a tensor with values spanning multiple ranges."""
+    num_elements = torch.prod(torch.tensor(input_shape)).item()
+
+    num_ranges = len(value_ranges)
+    elements_per_range = num_elements // num_ranges
+    remainder = num_elements % num_ranges
+
+    segments = []
+    for i, (low, high) in enumerate(value_ranges):
+        range_elements = elements_per_range + (1 if i < remainder else 0)
+
+        segment = torch.linspace(low, high, steps=range_elements, dtype=dtype)
+        segments.append(segment)
+
+    in_data = torch.cat(segments)
+    in_data = in_data.reshape(input_shape)
+    return in_data
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 2, 32, 128])),),
+)
+@pytest.mark.parametrize("value", [1.0, 2.75, 5.0, -10.0])
+def test_ternary_addcdiv_float32_full_range(input_shapes, value, device):
+    """Test addcdiv with float32 covering a wide range of input values."""
+    # Maximum range capped at [-1e15, 1e15]
+    value_ranges_a = [
+        (-100, 100),
+        (-300, 300),
+        (-750, 500),
+        (-1000, 1000),
+        (-1e4, 1e4),
+        (-1e5, 1e5),
+        (-1e7, 1e7),
+        (-1e10, 1e10),
+        (-1e15, 1e15),
+        (1e8, 1e10),  # large positive input
+        (1e12, 1e15),  # very large positive input
+        (-1e10, -1e8),  # large negative input
+        (-1e15, -1e12),  # very large negative input
+        (-1e-5, 1e-5),  # small input
+        (-1e-10, 1e-10),  # very small input
+    ]
+
+    value_ranges_b = [
+        (-250, 250),
+        (-750, 750),
+        (-500, 1000),
+        (-5e3, 5e3),
+        (-5e4, 5e4),
+        (-1e6, 1e6),
+        (-1e8, 1e8),
+        (-1e10, 1e10),
+        (-1e15, 1e15),
+        (1.5e7, 1e9),  # large positive input
+        (1e12, 1e15),  # very large positive input
+        (-1e9, -1e7),  # large negative input
+        (-1e15, -1e12),  # very large negative input
+        (-1e-5, 1e-5),  # small input
+        (-1e-10, 1e-10),  # very small input
+        (-1e8, 1e8),  # mixed range
+    ]
+
+    value_ranges_c = [
+        (-250, 250),
+        (-750, 750),
+        (-500, 1000),
+        (-5e3, 5e3),
+        (-5e4, 5e4),
+        (-1e6, 1e6),
+        (-1e8, 1e8),
+        (-1e10, 1e10),
+        (-1e15, 1e15),
+        (1.5e7, 1e9),  # large positive input
+        (1e12, 1e15),  # very large positive input
+        (-1e9, -1e7),  # large negative input
+        (-1e15, -1e12),  # very large negative input
+        (-1e-5, 1e-5),  # small input
+        (-1e-10, 1e-10),  # very small input
+        (-1e8, 1e8),  # mixed range
+    ]
+
+    torch_input_tensor_a = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.float32, value_ranges=value_ranges_a
+    )
+    torch_input_tensor_b = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.float32, value_ranges=value_ranges_b
+    )
+    torch_input_tensor_c = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.float32, value_ranges=value_ranges_c
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.addcdiv)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, torch_input_tensor_c, value=value)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_c = ttnn.from_torch(
+        torch_input_tensor_c,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.addcdiv(input_tensor_a, input_tensor_b, input_tensor_c, value=value)
+    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=32, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
