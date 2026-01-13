@@ -45,10 +45,6 @@ def prepare_data(yaml_config):
     use_bpe = training_config.get("tokenizer_type", "char") == "bpe"
     tokenizer_path = training_config.get("tokenizer_path", "")
 
-    ctok = None
-    vocab_size = None
-    encode = None
-    decode_fn = None
     if use_bpe:
         assert tokenizer_path, "tokenizer_path is required when use_bpe is true"
         tokenizer_path = os.path.join(

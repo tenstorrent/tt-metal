@@ -56,7 +56,6 @@ def train(
     model,
     optim,
     train_ids: np.ndarray,
-    val_ids: np.ndarray,
     use_ddp: bool = False,
     use_tp: bool = False,
 ):
@@ -67,7 +66,6 @@ def train(
         model: Model to train
         optim: Optimizer
         train_ids: Training data token IDs
-        val_ids: Validation data token IDs
         use_ddp: Whether to use distributed data parallel
         use_tp: Whether to use tensor parallel
 
@@ -80,7 +78,7 @@ def train(
     causal_mask = build_causal_mask(cfg.seq_len)
     tt_mask = ttml.autograd.Tensor.from_numpy(
         causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-    )  # [1,1,T,T], float32
+    )  # [1,1,T,T], bfloat16
 
     # Create composer for distributed tensors if using DDP
     composer = None
