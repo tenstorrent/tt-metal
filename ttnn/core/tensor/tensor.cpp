@@ -497,7 +497,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     return output;
 }
 
-void memcpy(
+void copy_tensor_to_host_from_device(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
@@ -518,7 +518,7 @@ void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& reg
     ZoneScoped;
     auto* mesh_device = src.device();
     TT_FATAL(mesh_device, "Tensor must be on device");
-    memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
+    copy_tensor_to_host_from_device(mesh_device->mesh_command_queue(), dst, src, region, blocking);
 }
 
 void memcpy(
@@ -548,7 +548,7 @@ void memcpy(
 
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
         auto dst_buffer = host_buffer::get_host_buffer(dst);
-        memcpy(queue, dst_buffer.view_bytes().data(), src, region);
+        copy_tensor_to_host_from_device(queue, dst_buffer.view_bytes().data(), src, region);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
         auto src_buffer = host_buffer::get_host_buffer(src);
         memcpy(queue, dst, src_buffer.view_bytes().data(), region);
