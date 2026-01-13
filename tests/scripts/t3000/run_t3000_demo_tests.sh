@@ -145,7 +145,8 @@ run_t3000_qwen3_tests() {
   qwen32b=Qwen/Qwen3-32B
   tt_cache_qwen32b=$TT_CACHE_HOME/$qwen32b
 
-  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 || fail+=$?
+  # Run Qwen3.32B with max_seq_len 32k
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest models/tt_transformers/demo/simple_text_demo.py --max_seq_len 32768 --timeout 1800 || fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
