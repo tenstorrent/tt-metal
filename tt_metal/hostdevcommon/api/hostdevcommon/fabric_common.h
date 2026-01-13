@@ -500,7 +500,7 @@ struct routing_l1_info_t {
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
 
     // Union overlaps 1D and 2D routing tables at same offset
-    union {
+    union __attribute__((packed)) {
         intra_mesh_routing_path_t<1, false> routing_path_table_1d;  // 1024 bytes
         intra_mesh_routing_path_t<2, true> routing_path_table_2d;   // 1024 bytes
     };
@@ -541,7 +541,7 @@ struct fabric_routing_l1_info_t {
 
 #if defined(COMPILE_FOR_ERISC)
 #define ROUTING_PATH_BASE_1D (MEM_AERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
-#define ROUTING_PATH_BASE_2D (ROUTING_PATH_BASE_1D + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D)
+#define ROUTING_PATH_BASE_2D (MEM_AERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
 #define ROUTING_TABLE_BASE (MEM_AERISC_ROUTING_TABLE_BASE)
 #define EXIT_NODE_TABLE_BASE (ROUTING_PATH_BASE_2D + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D)
 #elif defined(COMPILE_FOR_IDLE_ERISC)

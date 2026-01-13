@@ -116,19 +116,19 @@
 
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_COUNTER_BASE + MEM_FABRIC_COUNTER_L1_SIZE)
-#define MEM_ROUTING_TABLE_SIZE 2544  // With union: base(484) + union(1024) + exit(1024) + pad(12) [+256B]
+#define MEM_ROUTING_TABLE_SIZE 2544  // struct layout: base(484) + union(1024) + exit(1024) + pad(12)
 #define MEM_OFFSET_OF_ROUTING_PATHS 484
 #define MEM_ROUTING_TABLE_PADDING 12
 
-#define ROUTING_PATH_SIZE_1D 1024  // Was 256 (64 chips × 16 bytes)
+#define ROUTING_PATH_SIZE_1D 1024  // 64 chips × 16 bytes
 // 2D uncompressed size is too large to fit in L1 memory
 #define COMPRESSED_ROUTING_PATH_SIZE_1D 0     // sizeof(intra_mesh_routing_path_t<1, true>)
-#define COMPRESSED_ROUTING_PATH_SIZE_2D 1024  // sizeof(intra_mesh_routing_path_t<2, true>) - uint32_t
-// Union optimization: 1D and 2D routing tables share the same offset
+#define COMPRESSED_ROUTING_PATH_SIZE_2D 1024  // sizeof(intra_mesh_routing_path_t<2, true>)
+// Union: 1D and 2D routing tables share the same offset
 #define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
-#define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE  // offset 484
-#define MEM_TENSIX_ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE  // SAME offset 484!
-#define MEM_TENSIX_ROUTING_PATH_SIZE 1024                             // max(1024, 1024) - both equal!
+#define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE  // 484
+#define MEM_TENSIX_ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE  // 484
+#define MEM_TENSIX_ROUTING_PATH_SIZE 1024                             // max(1024, 1024)
 
 #define MEM_TENSIX_EXIT_NODE_TABLE_BASE (MEM_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
 #define MEM_EXIT_NODE_TABLE_SIZE 1024  // sizeof(exit_node_table_t)
@@ -140,7 +140,7 @@
 #define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 400  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
 
 // Packet header pool sizing constants
-#define PACKET_HEADER_MAX_SIZE 144                               // Was 112 (128B + 16B UDM overhead)
+#define PACKET_HEADER_MAX_SIZE 144                               // sizeof(UDMHybridMeshPacketHeader)
 #define NUM_PACKET_HEADERS (4 * 2 * MaxDMProcessorsPerCoreType)  // (EAST, WEST, NORTH, SOUTH) * convention * (DM0, DM1)
 
 // Packet header pool for fabric networking
@@ -190,8 +190,8 @@
 #define MEM_TRISC1_STACK_MIN_SIZE 192
 #define MEM_TRISC2_STACK_MIN_SIZE 256
 #define MEM_IERISC_STACK_MIN_SIZE 128
-#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D 1024
-#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D 1024
+#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
+#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D COMPRESSED_ROUTING_PATH_SIZE_2D
 
 /////////////
 // IERISC memory map
@@ -213,8 +213,7 @@
 #define MEM_IERISC_ROUTING_TABLE_BASE ((MEM_IERISC_FIRMWARE_END + 31) & ~31)
 
 #define MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D (MEM_IERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
-#define MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D \
-    (MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D)
+#define MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D (MEM_IERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
 #define MEM_IERISC_FABRIC_ROUTING_PATH_END \
     (MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D)
 
