@@ -389,6 +389,15 @@ bool link_unhealthy(const std::vector<LinkStatus>& link_stats) {
     // - Uncorrected codewords are detected but no retrains were issued
     // - Uncorrected codewords are increasing
     // - A data mismatch is detected
+    auto arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
+    if (arch == tt::ARCH::BLACKHOLE) {
+        // BH systems support real-time link retraining/recovery. As such its considered normal for link retrain
+        // counts to be increasing.
+        // CRC Errors are not considered a valid metric for BH systems.
+        // Link health for BH is solely based on data mismatches.
+        return data_mismatch_;
+    }
+    // For WH systems, use the extensive link health check.
     return retrain_count_increasing_ || crc_error_reported_ ||
            (zero_retrain_count_ && uncorrected_codewords_detected_) || uncorrected_codewords_increasing_ ||
            data_mismatch_;
