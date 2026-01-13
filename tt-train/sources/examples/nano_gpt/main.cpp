@@ -111,6 +111,7 @@ struct TrainingConfig {
     std::string tokenizer_type = "char";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
+    bool print_model_summary = false;
     std::optional<std::string> lora_config_path;
 };
 
@@ -137,6 +138,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
+    config.print_model_summary = training_config["print_model_summary"].as<bool>(config.print_model_summary);
 
     auto lora_config_node = training_config["lora_config"];
     if (lora_config_node) {
@@ -732,7 +734,9 @@ int main(int argc, char **argv) {
         model = std::make_shared<ttml::models::LoraModel>(model, *lora_config, model->get_name() + "_lora");
     }
 
-    print_model_summary(model, device_config.enable_tp);
+    if (training_config.print_model_summary) {
+        print_model_summary(model, device_config.enable_tp);
+    }
 
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 

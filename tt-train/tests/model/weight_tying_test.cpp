@@ -38,11 +38,15 @@ public:
     }
 
     ttml::autograd::TensorPtr get_fc1_weight() {
-        return dynamic_cast<ttml::modules::LinearLayer*>(m_fc1.get())->get_weight();
+        auto* linear = dynamic_cast<ttml::modules::LinearLayer*>(m_fc1.get());
+        TT_ASSERT(linear != nullptr, "m_fc1 is not a LinearLayer");
+        return linear->get_weight();
     }
 
     ttml::autograd::TensorPtr get_fc2_weight() {
-        return dynamic_cast<ttml::modules::LinearLayer*>(m_fc2.get())->get_weight();
+        auto* linear = dynamic_cast<ttml::modules::LinearLayer*>(m_fc2.get());
+        TT_ASSERT(linear != nullptr, "m_fc2 is not a LinearLayer");
+        return linear->get_weight();
     }
 };
 
