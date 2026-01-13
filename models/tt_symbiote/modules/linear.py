@@ -139,8 +139,7 @@ class TTNNLinearGelu(TTNNModule):
     def from_torch(cls, linear: nn.Linear):
         new_intermediate = TTNNViTIntermediate()
         new_intermediate._fallback_torch_layer = PytorchLinearGelu(
-            hidden_size=linear.in_features,
-            intermediate_size=linear.out_features,
+            dense=linear,
         )
         new_intermediate.dense = TTNNLinear.from_torch(linear)
         return new_intermediate
