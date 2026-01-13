@@ -73,7 +73,7 @@ jobs:
 
           # Determine runs-on labels based on runner type
 
-          if [[ "$RUNNER_LABEL" == *"topology-6u"* ]] || [[ "$RUNNER_LABEL" == "BH-LoudBox" ]]; then
+          if [[ "$RUNNER_LABEL" == "topology-6u" ]] || [[ "$RUNNER_LABEL" == "BH-LoudBox" ]]; then
             # Galaxy/topology-6u runners and BH-LoudBox require bare-metal (not cloud-virtual-machine)
             RUNS_ON='["'$RUNNER_LABEL'", "in-service", "bare-metal"]'
           elif [[ "$RUNNER_LABEL" =~ ^(N150|N300|P150|P100|config-t3000)$ ]]; then
@@ -87,7 +87,7 @@ jobs:
           fi
 
           # Determine architecture name based on runner type
-          if [[ "$RUNNER_LABEL" =~ ^(N150|N300|config-t3000)$ ]] || [[ "$RUNNER_LABEL" == *"wormhole_b0"* ]]; then
+          if [[ "$RUNNER_LABEL" =~ ^(N150|N300|config-t3000|topology-6u)$ ]] || [[ "$RUNNER_LABEL" == *"wormhole_b0"* ]]; then
             ARCH_NAME="wormhole_b0"
           else
             ARCH_NAME="blackhole"
