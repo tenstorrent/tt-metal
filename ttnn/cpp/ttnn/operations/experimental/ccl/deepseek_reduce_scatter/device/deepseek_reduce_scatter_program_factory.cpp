@@ -203,26 +203,13 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             auto core = *((worker_core_iter++)->begin());
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
-            // TODO: (GR) Will need to be updated once we move to 4 links
-            // HARDCODE version
-            uint32_t per_worker_tile_granularity = 4;
-            uint32_t start_tiles_read = ((link * num_directions_per_link) + direction) * per_worker_tile_granularity;
-            uint32_t start_tiles_to_read = start_tiles_read + per_worker_tile_granularity;
-            start_tiles_to_read = std::min(start_tiles_to_read, output_tensor_num_pages);
-            /*
-             * NOTE
-             * - need to create kernels even if worker not processing tiles
-             * - required for pre and post op barrier/sync
-             * - min so that we don't try to process non-existent tiles
-             */
-
             // DO NOT ALTERNATE DIRECTIONS version
             // will break for certain tensors since processing in batches of 2 tiles (scatter_write)
-            // uint32_t num_workers = num_directions_per_link * num_links;
-            // uint32_t tiles_per_worker = tt::div_up(output_tensor_num_pages, num_workers);
-            // uint32_t start_tiles_read = tiles_per_worker * ((link * num_directions_per_link) + direction);
-            // uint32_t start_tiles_to_read = tiles_per_worker * ((link * num_directions_per_link) + direction + 1);
-            // start_tiles_to_read = std::min(start_tiles_to_read, output_tensor_num_pages);
+            uint32_t num_workers = num_directions_per_link * num_links;
+            uint32_t tiles_per_worker = tt::div_up(output_tensor_num_pages, num_workers);
+            uint32_t start_tiles_read = tiles_per_worker * ((link * num_directions_per_link) + direction);
+            uint32_t start_tiles_to_read = tiles_per_worker * ((link * num_directions_per_link) + direction + 1);
+            start_tiles_to_read = std::min(start_tiles_to_read, output_tensor_num_pages);
             /*
              * NOTE
              * - need to create kernels even if worker not processing tiles
