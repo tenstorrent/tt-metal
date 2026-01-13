@@ -17,7 +17,7 @@ Software Stack Overview
 TT-Metalium sits at the foundation of Tenstorrent's software stack:
 
 - **TT-Forge / TT-MLIR**: High-level compilation frameworks for deploying neural networks (see https://github.com/tenstorrent/tt-forge-fe)
-- **TTNN**: Library of kernels implementing common Machine Learning operations (see :doc:`TTNN documentation <../../ttnn/index>`)
+- **TTNN**: Library of kernels implementing common Machine Learning operations (see https://docs.tenstorrent.com/tt-metal/latest/ttnn/)
 - **TT-Metalium**: Low-level programming interface for Tensix hardware ⬅ This guide
 - **TT-LLK (Low Level Kernels)**: Hardware-specific kernel implementations
 
@@ -125,7 +125,7 @@ Next Steps
 ----------
 
 **For ML Developers**
-    Use the higher-level :doc:`TT-NN <../../ttnn/ttnn/get_started>` API for model development and deployment. TT-NN builds on TT-Metalium but provides PyTorch-like operations and automatic kernel selection.
+    Use the higher-level `TT-NN <https://docs.tenstorrent.com/tt-metal/latest/ttnn/>`_ API for model development and deployment. TT-NN builds on TT-Metalium but provides PyTorch-like operations and automatic kernel selection.
 
 **For Understanding the Architecture**
     Read the comprehensive `Metalium Architecture Guide <https://github.com/tenstorrent/tt-metal/blob/main/METALIUM_GUIDE.md>`_ for deep dives into hardware architecture, NoC topology, and advanced programming patterns.
