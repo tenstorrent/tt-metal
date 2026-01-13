@@ -35,23 +35,23 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Create CBs for the program
     // CBs used in the MOE operation
     /*
-        ---------------------------------------------------------------------------
-        |     Name      |   CB Index    |   Dtype    | Tiles/CB |  Total size (B) |
-        ---------------------------------------------------------------------------
-        | cb_r2c_w0     | CBIndex::c_0  | bfp4_b     |    28    |      16128      |
-        | cb_s2c_in     | CBIndex::c_1  | bfp8_b     |    224   |      243712     |
-        | cb_c2c_mm0    | CBIndex::c_2  | bfp8_b     |    1     |      576        |
-        | cb_c2c_mm1    | CBIndex::c_3  | bfp8_b     |    1     |      576        |
-        | cb_c2w_elt    | CBIndex::c_4  | bfp8_b     |    1     |      576        |
-        | cb_r2c_in2    | CBIndex::c_5  | bfp8_b     |    1     |      576        |
-        | cb_c2w_out    | CBIndex::c_6  | bfp8_b     |    19    |      20672      |
+        ----------------------------------------------------------------------------
+        |     Name       |   CB Index    |   Dtype    | Tiles/CB |  Total size (B) |
+        ----------------------------------------------------------------------------
+        | cb_r2c_w0      | CBIndex::c_0  | bfp4_b     |    14*2  |      16128      |
+        | cb_s2c_in(sh)  | CBIndex::c_1  | bf16       |    224*2 |      917504     |
+        | cb_c2c_mm0     | CBIndex::c_2  | bfp8_b     |    1     |      576        |
+        | cb_c2c_mm1     | CBIndex::c_3  | bfp8_b     |    1     |      576        |
+        | cb_c2w_elt     | CBIndex::c_4  | bfp8_b     |    1     |      576        |
+        | cb_r2c_in2     | CBIndex::c_5  | bfp8_b     |    1     |      576        |
+        | cb_c2w_out(sh) | CBIndex::c_6  | bf16       |    1*2  |       4096       |
         ---------------------------------------------------------------------------
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2w_out are handled separately as they are sharded CBs
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t>> cb_specs = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 28},
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 14 * 2},
         {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Bfp8_b, 1},
         {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Bfp8_b, 1},
         {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Bfp8_b, 1},
@@ -73,8 +73,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb, Buffer*
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t, tt::tt_metal::Buffer*>>
         sharded_cb_specs = {
-            {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Bfp8_b, 224, tensor_args.input_tensor.buffer()},
-            {"cb_c2w_out", tt::CBIndex::c_6, tt::DataFormat::Bfp8_b, 1, tensor_args.output_tensor.buffer()}};
+            {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Float16_b, 224 * 2, tensor_args.input_tensor.buffer()},
+            {"cb_c2w_out", tt::CBIndex::c_6, tt::DataFormat::Float16_b, 1 * 2, tensor_args.output_tensor.buffer()}};
 
     for (const auto& [name, index, data_format, tiles_per_cb, p_buffer] : sharded_cb_specs) {
         const uint32_t bytes_per_tile = tt::tile_size(data_format);
@@ -98,7 +98,9 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     }
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
-        {"num_experts", operation_attributes.num_experts}};
+        {"num_experts", operation_attributes.num_experts},
+        {"layer_id", operation_attributes.layer_id},
+    };
 
     // Create kernels for the program
     auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
@@ -142,10 +144,10 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         runtime_args.push_back(tensor->buffer()->address());
     }
 
-    std::vector<uint32_t> vcs;
+    std::vector<uint32_t> vchannels;
     uint32_t core_id = 0;
     for (auto core : dram_adjacent_cores) {
-        uint32_t vc = core_id & 0x3;
+        uint32_t vchannel = core_id & 0x3;
 
         // Check if there is any core with the same row
         auto it = std::find_if(
@@ -153,17 +155,17 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
                 return core_prev.y == core.y;
             });
 
-        // If there is any core with the same row, make sure the VC is different
+        // If there is any core with the same row, make sure the VChannel is different
         if (it != dram_adjacent_cores.begin() + core_id) {
             size_t j = std::distance(dram_adjacent_cores.begin(), it);
-            if (vc == vcs[j]) {
-                vc = (vc + 1) & 0x3;
+            if (vchannel == vchannels[j]) {
+                vchannel = (vchannel + 1) & 0x3;
             }
         }
-        vcs.push_back(vc);
+        vchannels.push_back(vchannel);
 
         runtime_args[0] = core_id++;
-        runtime_args[1] = vc;
+        runtime_args[1] = vchannel;
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);

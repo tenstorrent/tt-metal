@@ -8,6 +8,7 @@
 void kernel_main() {
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
+    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -67,10 +68,6 @@ void kernel_main() {
     constexpr uint32_t w0_w1_stride_h = 64;
     constexpr uint32_t w2_stride_w = 1;
     constexpr uint32_t w2_stride_h = 224;
-
-    const uint32_t w0_tile_id_start = (core_id < 8) ? (5 * core_id) : (5 * 8 + 6 * (core_id - 8));
-    const uint32_t w1_tile_id_start = (core_id < 8) ? (5 * core_id) : (5 * 8 + 6 * (core_id - 8));
-    const uint32_t w2_tile_id_start = (core_id < 8) ? (19 * core_id) : (19 * 8 + 18 * (core_id - 8));
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         // Write from cb_c2w_elt

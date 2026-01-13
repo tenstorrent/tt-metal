@@ -8,6 +8,7 @@
 void kernel_main() {
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
+    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -68,19 +69,17 @@ void kernel_main() {
     constexpr uint32_t w2_stride_w = 1;
     constexpr uint32_t w2_stride_h = 224;
 
-    const uint32_t w0_tile_id_start = (core_id < 8) ? (5 * core_id) : (5 * 8 + 6 * (core_id - 8));
-    const uint32_t w1_tile_id_start = (core_id < 8) ? (5 * core_id) : (5 * 8 + 6 * (core_id - 8));
-    const uint32_t w2_tile_id_start = (core_id < 8) ? (19 * core_id) : (19 * 8 + 18 * (core_id - 8));
-
-    // // Read W0 and W1 from DRAM into CB
-    uint32_t w0_tile_id = w0_tile_id_start;
-    uint32_t w1_tile_id = w1_tile_id_start;
-    uint32_t w2_tile_id = w2_tile_id_start;
-
     // DRAM Reading constants
     const uint32_t dram_bank_id = core_id;
     const uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, /*bank_address_offset=*/0);
     uint32_t curr_trid = 1, prev_trid = 2;
+
+    // Offsets for layer_id
+    const uint32_t w0_w1_size_per_expert = num_w0_w1_tiles_h * num_w0_w1_tiles_w * w0_tile_size;
+    const uint32_t w2_size_per_expert = num_w2_tiles_h * num_w2_tiles_w * w2_tile_size;
+    const uint32_t total_size_per_expert = 2 * w0_w1_size_per_expert + w2_size_per_expert;
+    const uint32_t total_size_per_layer = num_experts * total_size_per_expert;
+    const uint32_t layer_base_offset = layer_id * total_size_per_layer;
 
     // W0 and W1 reading constants
     constexpr uint32_t w0_w1_tiles_per_txn = 14;
@@ -97,7 +96,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Read W0 with pipelined reads
     //-------------------------------------------------------------------------
-    uint32_t w0_read_offset = 0;
+    uint32_t read_offset = layer_base_offset;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         noc_async_read_one_packet_set_state</*use_vc=*/true>(
             /*src_noc_addr=*/dram_noc_addr, /*size=*/w0_w1_bytes_per_txn, /*vc=*/vchannel);
@@ -109,7 +108,7 @@ void kernel_main() {
 
             noc_async_read_set_trid(curr_trid);
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-                /*src_base_addr=*/dram_noc_addr, /*src_addr=*/w0_read_offset, /*dest_addr=*/write_addr, curr_trid);
+                /*src_base_addr=*/dram_noc_addr, /*src_addr=*/read_offset, /*dest_addr=*/write_addr, curr_trid);
 
             // After first block: wait for OTHER trid, push
             if (txn > 0) {
@@ -121,7 +120,7 @@ void kernel_main() {
             std::swap(curr_trid, prev_trid);
 
             // Increment read offset
-            w0_read_offset += w0_w1_bytes_per_txn;
+            read_offset += w0_w1_bytes_per_txn;
         }
 
         // Final cleanup
@@ -131,8 +130,6 @@ void kernel_main() {
         //-------------------------------------------------------------------------
         // Read W1 with pipelined reads
         //-------------------------------------------------------------------------
-        uint32_t w1_read_offset = w0_read_offset;
-
         noc_async_read_one_packet_set_state</*use_vc=*/true>(
             /*src_noc_addr=*/dram_noc_addr, /*size=*/w0_w1_bytes_per_txn, /*vc=*/vchannel);
 
@@ -143,7 +140,7 @@ void kernel_main() {
 
             noc_async_read_set_trid(curr_trid);
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-                /*src_base_addr=*/dram_noc_addr, /*src_addr=*/w1_read_offset, /*dest_addr=*/write_addr, curr_trid);
+                /*src_base_addr=*/dram_noc_addr, /*src_addr=*/read_offset, /*dest_addr=*/write_addr, curr_trid);
 
             // After first block: wait for OTHER trid, push
             if (txn > 0) {
@@ -155,7 +152,7 @@ void kernel_main() {
             std::swap(curr_trid, prev_trid);
 
             // Increment read offset
-            w1_read_offset += w0_w1_bytes_per_txn;
+            read_offset += w0_w1_bytes_per_txn;
         }
 
         // Final cleanup
@@ -165,8 +162,6 @@ void kernel_main() {
         //-------------------------------------------------------------------------
         // Read W2 with pipelined reads
         //-------------------------------------------------------------------------
-        uint32_t w2_read_offset = w1_read_offset;
-
         noc_async_read_one_packet_set_state</*use_vc=*/true>(
             /*src_noc_addr=*/dram_noc_addr, /*size=*/w2_tiles_per_txn, /*vc=*/vchannel);
 
@@ -177,7 +172,7 @@ void kernel_main() {
 
             noc_async_read_set_trid(curr_trid);
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-                /*src_base_addr=*/dram_noc_addr, /*src_addr=*/w2_read_offset, /*dest_addr=*/write_addr, curr_trid);
+                /*src_base_addr=*/dram_noc_addr, /*src_addr=*/read_offset, /*dest_addr=*/write_addr, curr_trid);
 
             // After first block: wait for OTHER trid, push
             if (txn > 0) {
@@ -189,12 +184,15 @@ void kernel_main() {
             std::swap(curr_trid, prev_trid);
 
             // Increment read offset
-            w2_read_offset += w2_bytes_per_txn;
+            read_offset += w2_bytes_per_txn;
         }
 
         // Final cleanup
         noc_async_read_barrier_with_trid(prev_trid);
         cb_push_back(cb_r2c_w2, w2_tiles_per_txn);
+
+        // Increment read offset
+        read_offset += total_size_per_expert;
     }
 
     //-------------------------------------------------------------------------

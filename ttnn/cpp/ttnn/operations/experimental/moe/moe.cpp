@@ -13,8 +13,9 @@ ttnn::Tensor ExecuteMoE::invoke(
     const ttnn::Tensor& w1_tensor,
     const ttnn::Tensor& w2_tensor,
     const ttnn::Tensor& output_tensor,
-    const uint32_t num_experts) {
-    return ttnn::prim::moe(input_tensor, w0_tensor, w1_tensor, w2_tensor, output_tensor, num_experts);
+    const uint32_t num_experts,
+    const uint32_t layer_id) {
+    return ttnn::prim::moe(input_tensor, w0_tensor, w1_tensor, w2_tensor, output_tensor, num_experts, layer_id);
 }
 
 }  // namespace ttnn::operations::experimental::moe
