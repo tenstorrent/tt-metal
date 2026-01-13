@@ -108,54 +108,6 @@ class GraphTracerUtils:
         return {"operation": operation_name, "arguments": serialized_list}
 
     @staticmethod
-    def _infer_mesh_shape_from_device_ids(device_ids):
-        """
-        Infer mesh shape from device IDs.
-
-        NOTE: This is a heuristic and cannot accurately distinguish between
-        certain configurations (e.g., 1x8 vs 2x4 both use 8 devices).
-        For accurate mesh shape, it should be captured from the actual MeshDevice
-        at runtime and passed through the graph trace.
-
-        For T3000/T3001 systems, device IDs follow patterns where mesh coordinates
-        map to device IDs, but the mapping alone cannot determine the mesh topology.
-        """
-        if not device_ids or len(device_ids) == 0:
-            return None
-
-        num_devices = len(device_ids)
-
-        # Parse device IDs (they come as strings)
-        try:
-            device_ints = sorted([int(d) for d in device_ids])
-        except (ValueError, TypeError):
-            return None
-
-        # Single device
-        if num_devices == 1:
-            return [1, 1]
-
-        # Common patterns for T3000 (1x4 mesh)
-        # Devices are typically: [0,1,4,5] or [2,3,6,7]
-        if num_devices == 4:
-            # Check if it's likely a 1x4 configuration
-            # T3000 maps mesh coordinates to device IDs in a specific pattern
-            if set(device_ints) in [{0, 1, 4, 5}, {2, 3, 6, 7}]:
-                return [1, 4]
-            # Could also be 2x2
-            elif device_ints == [0, 1, 2, 3] or device_ints == [4, 5, 6, 7]:
-                # Consecutive devices might indicate 2x2
-                return [2, 2]
-            else:
-                # Default to 1xN for unknown patterns
-                return [1, 4]
-
-        # For 8 devices: Cannot distinguish 1x8 from 2x4 from device IDs alone
-        # Default to 1xN (most common for linear mesh)
-        # WARNING: This may be incorrect for 2D mesh configurations
-        return [1, num_devices]
-
-    @staticmethod
     def serialize_graph(captured_graph):
         """Serialize the graph into a json document with device and placement information"""
         json_result = {"content": []}
