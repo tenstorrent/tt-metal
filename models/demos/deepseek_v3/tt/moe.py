@@ -173,7 +173,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                     cluster_axis=1,
                     dim=3,
                     memory_config=input_output_memory_config,
-                    topology=ttnn.Topology.Linear,
+                    topology=ttnn.Topology.Ring,
                 ),
                 "revert_tp": AllGatherAsyncConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -185,7 +185,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                     # ),
                     memory_config=memory_config,
                     cluster_axis=1,
-                    topology=ttnn.Topology.Linear,
+                    topology=ttnn.Topology.Ring,
                 ),
             }
         else:
@@ -215,14 +215,14 @@ class MoE(SharedStateAddOn, AbstractModule):
                     cluster_axis=1,
                     dim=3,
                     memory_config=memory_config,
-                    topology=ttnn.Topology.Linear,
+                    topology=ttnn.Topology.Ring,
                 ),
                 "revert_tp": AllGatherAsyncConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
                     dim=-1,  # Last dimension
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     cluster_axis=1,
-                    topology=ttnn.Topology.Linear,
+                    topology=ttnn.Topology.Ring,
                 ),
             }
 
