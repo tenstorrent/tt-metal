@@ -211,8 +211,9 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             start_tiles_to_read = std::min(start_tiles_to_read, output_tensor_num_pages);
             /*
              * NOTE
-             * need to create kernels even if worker not processing tiles
-             * required for pre and post op barrier/sync
+             * - need to create kernels even if worker not processing tiles
+             * - required for pre and post op barrier/sync
+             * - min so that we don't try to process non-existent tiles
              */
 
             // DO NOT ALTERNATE DIRECTIONS version
@@ -224,8 +225,9 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
             // start_tiles_to_read = std::min(start_tiles_to_read, output_tensor_num_pages);
             /*
              * NOTE
-             * need to create kernels even if worker not processing tiles
-             * required for pre and post op barrier/sync
+             * - need to create kernels even if worker not processing tiles
+             * - required for pre and post op barrier/sync
+             * - min so that we don't try to process non-existent tiles
              */
 
             // OLD version
