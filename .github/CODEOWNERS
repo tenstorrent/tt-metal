@@ -384,7 +384,7 @@ dockerfile/** @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypa
 
 # tt-train
 # primary owners
-tt-train/** @ayerofieiev-tt @tenstorrent/codeowner-bypass
+tt-train/** @ayerofieiev-tt @philei-tt @jmalone-tt @tenstorrent/codeowner-bypass
 # kernel development
 tt-train/sources/ttml/metal/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @tenstorrent/codeowner-bypass
 # ops
