@@ -178,16 +178,13 @@ def test_model_inference(
     # Embedding on host
     if run_ref_pt:
         embd = reference_model.model.model.embed_tokens
-    else:
-        embd = None
 
     # Select the first token from the prompt for initial decoding
     encoded_prompt_tensor = torch.tensor(encoded_prompt)  # [:,0]
     tt_prefill_input = encoded_prompt_tensor.unsqueeze(0)
     if run_ref_pt:
         pt_prefill_ref_input = embd(encoded_prompt_tensor).view(batch_size, seq_len, -1)
-    else:
-        pt_prefill_ref_input = None
+
     prompt_lens = [seq_len]
     start_pos = 0
     # Run TT model
