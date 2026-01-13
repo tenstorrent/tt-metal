@@ -36,6 +36,8 @@ script_config = ScriptConfig(
     depends=["inspector_data", "elfs_cache", "run_checks", "metal_device_id_mapping"],
 )
 
+MAILBOX_CORRUPTED_MESSAGE = "Mailbox is likely corrupted, potentially due to NoC writes to an invalid location."
+
 
 @dataclass
 class DispatcherCoreData:
@@ -269,7 +271,7 @@ class DispatcherData:
         log_check_location(
             location,
             launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
-            f"launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
+            f"launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}. {MAILBOX_CORRUPTED_MESSAGE}",
         )
 
         previous_launch_msg_rd_ptr = (launch_msg_rd_ptr - 1) % self._launch_msg_buffer_num_entries
