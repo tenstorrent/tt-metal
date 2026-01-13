@@ -94,8 +94,6 @@ void AdamWFused::step() {
 serialization::StateDict AdamWFused::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
-    dict["beta1_pow"] = m_beta1_pow;
-    dict["beta2_pow"] = m_beta2_pow;
     dict["exp_avg"] = m_exp_avg;
     dict["exp_avg_sq"] = m_exp_avg_sq;
     dict["amsgrad"] = m_config.amsgrad;
@@ -106,9 +104,7 @@ serialization::StateDict AdamWFused::get_state_dict() const {
 }
 
 void AdamWFused::set_state_dict(const serialization::StateDict& dict) {
-    m_steps = serialization::get_value_type<size_t>(dict, "steps");
-    m_beta1_pow = serialization::get_value_type<float>(dict, "beta1_pow");
-    m_beta2_pow = serialization::get_value_type<float>(dict, "beta2_pow");
+    set_steps(serialization::get_value_type<size_t>(dict, "steps"));
     m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
     m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));
 
