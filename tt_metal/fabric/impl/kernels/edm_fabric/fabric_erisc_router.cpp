@@ -2107,7 +2107,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 if (did_something) {
                     did_nothing_count = 0;
                 } else {
-                    if (did_nothing_count++ >= SWITCH_INTERVAL) {
+                    if (did_nothing_count++ > SWITCH_INTERVAL) {
                         did_nothing_count = 0;
 
                         run_retrain_sync(termination_signal_ptr);
