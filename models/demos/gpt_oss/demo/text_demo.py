@@ -117,7 +117,6 @@ class GPTOSSGenerator(Generator):
                 if page_table is not None
                 else None
             )
-            print(f"page_table_user: {page_table_user}")
             page_table = page_table[1:, :]
 
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None

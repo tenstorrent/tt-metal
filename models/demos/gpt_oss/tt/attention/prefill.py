@@ -80,7 +80,6 @@ def prefill_forward(
     tt_v = ttnn.typecast(tt_v, v_cache.dtype)
 
     if page_table is not None:
-        print(f"filling cache for user {user_id}")
         ttnn.experimental.paged_fill_cache(k_cache, tt_k, page_table, batch_idx=user_id)
         ttnn.experimental.paged_fill_cache(v_cache, tt_v, page_table, batch_idx=user_id)
     else:
