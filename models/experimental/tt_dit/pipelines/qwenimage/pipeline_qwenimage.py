@@ -92,25 +92,6 @@ class QwenImagePipeline:
         self._width = width
         self._is_fsdp = is_fsdp
 
-        # setup encoder and vae parallel configs.
-        if encoder_parallel_config is None:
-            encoder_parallel_config = EncoderParallelConfig(
-                tensor_parallel=(
-                    parallel_config.tensor_parallel
-                    if parallel_config.tensor_parallel.mesh_axis == 4
-                    else parallel_config.sequence_parallel
-                )
-            )
-
-        if vae_parallel_config is None:
-            vae_parallel_config = VAEParallelConfig(
-                tensor_parallel=(
-                    parallel_config.tensor_parallel
-                    if parallel_config.tensor_parallel.mesh_axis == 4
-                    else parallel_config.sequence_parallel
-                )
-            )
-
         # Create submeshes based on CFG parallel configuration
         submesh_shape = list(mesh_device.shape)
         submesh_shape[parallel_config.sequence_parallel.mesh_axis] = parallel_config.sequence_parallel.factor
@@ -145,12 +126,10 @@ class QwenImagePipeline:
 
         logger.info("loading models...")
 
-        text_encoder_checkpoint_name = "Qwen/Qwen2.5-VL-7B-Instruct"
-
         torch_transformer = diffusers.QwenImageTransformer2DModel.from_pretrained(
             checkpoint_name,
             subfolder="transformer",
-            torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
+            torch_dtype=torch.bfloat16,
         )
         torch_transformer.eval()
 
@@ -161,48 +140,35 @@ class QwenImagePipeline:
 
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
 
-        head_dim = torch_transformer.config.attention_head_dim
-        num_heads = torch_transformer.config.num_attention_heads
         self._num_channels_latents = 16
         self._patch_size = torch_transformer.config.patch_size
         self._vae_scale_factor = 8
 
-        if num_heads % parallel_config.tensor_parallel.factor != 0:
+        if torch_transformer.config.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
             padding_config = PaddingConfig.from_tensor_parallel_factor(
-                num_heads,
-                head_dim,
+                torch_transformer.config.num_attention_heads,
+                torch_transformer.config.attention_head_dim,
                 parallel_config.tensor_parallel.factor,
             )
         else:
             padding_config = None
 
-        # Store transformer config and state dict for lazy loading
-        self._transformer_config = {
-            "patch_size": torch_transformer.config.patch_size,
-            "in_channels": torch_transformer.config.in_channels,
-            "num_layers": torch_transformer.config.num_layers,
-            "attention_head_dim": head_dim,
-            "num_attention_heads": num_heads,
-            "joint_attention_dim": torch_transformer.config.joint_attention_dim,
-            "out_channels": torch_transformer.config.out_channels,
-        }
         self._transformer_state_dict = torch_transformer.state_dict()
         self._padding_config = padding_config
         self._pos_embed = torch_transformer.pos_embed
 
         # Initialize the transformers. Loading logic comes after.
-        # Loading logic is initialized in the constructor. After that modules, will be loaded/offloaded as needed.
         self.transformers = []
         for i, submesh_device in enumerate(self._submesh_devices):
             self.transformers.append(
                 QwenImageTransformer(
-                    patch_size=self._transformer_config["patch_size"],
-                    in_channels=self._transformer_config["in_channels"],
-                    num_layers=self._transformer_config["num_layers"],
-                    attention_head_dim=self._transformer_config["attention_head_dim"],
-                    num_attention_heads=self._transformer_config["num_attention_heads"],
-                    joint_attention_dim=self._transformer_config["joint_attention_dim"],
-                    out_channels=self._transformer_config["out_channels"],
+                    patch_size=torch_transformer.config.patch_size,
+                    in_channels=torch_transformer.config.in_channels,
+                    num_layers=torch_transformer.config.num_layers,
+                    attention_head_dim=torch_transformer.config.attention_head_dim,
+                    num_attention_heads=torch_transformer.config.num_attention_heads,
+                    joint_attention_dim=torch_transformer.config.joint_attention_dim,
+                    out_channels=torch_transformer.config.out_channels,
                     device=submesh_device,
                     ccl_manager=self._ccl_managers[i],
                     parallel_config=self._parallel_config,
@@ -227,7 +193,6 @@ class QwenImagePipeline:
                 is_fsdp=True,  # Best configuration for wh t3k and galaxy
             )
 
-        # load tranformer weights based on configuration
         # Encoder is already loaded. Decide if we should also load the transformers.
         if (
             not dynamic_load_encoder or use_torch_text_encoder
@@ -237,28 +202,15 @@ class QwenImagePipeline:
         # Always load transformers for vae since it comes before VAE
         self._load_transformers(self.vae_submesh_idx)
 
-        # Delete the torch model to free up CPU memory
-        del torch_transformer
-
         self._latents_scaling = 1.0 / torch.tensor(self._torch_vae.config.latents_std)
         self._latents_shift = torch.tensor(self._torch_vae.config.latents_mean)
 
         self._image_processor = VaeImageProcessor(vae_scale_factor=2 * self._vae_scale_factor)
 
-        # Store VAE config for lazy loading
-        self._vae_config = {
-            "base_dim": self._torch_vae.config["base_dim"],
-            "z_dim": self._torch_vae.config["z_dim"],
-            "dim_mult": self._torch_vae.config["dim_mult"],
-            "num_res_blocks": self._torch_vae.config["num_res_blocks"],
-            "temperal_downsample": self._torch_vae.config["temperal_downsample"],
-        }
         self._use_torch_vae_decoder = use_torch_vae_decoder
 
-        # VAE loading strategy depends on FSDP and encoder type
         if use_torch_vae_decoder:
             self._vae_decoder = None
-            self._vae_loaded = False
         else:
             with self.mesh_reshape(self.vae_device, self.vae_mesh_shape, synchronize=True):
                 logger.info("creating TT-NN VAE decoder...")
@@ -274,9 +226,7 @@ class QwenImagePipeline:
                 )
 
             # Load VAE weights based on configuration
-            if (
-                not dynamic_load_vae
-            ):  # Implies we have enough space to load with the denoising transformer. VAE comes after denoising, so load all transformers now.
+            if not dynamic_load_vae:
                 self._vae_decoder.load_torch_state_dict(self._vae_state_dict)
 
         self._traces = None
@@ -414,18 +364,7 @@ class QwenImagePipeline:
     ) -> QwenImagePipeline:
         default_config = {
             # The default cofigurations are the best found from sweeping the following: is_fsdp, dynamic_load_encoder, and dynamic_load_vae.
-            # The encoder is currently configured to always be FSDP as it is the most memory efficient configuration with little to no performance penalty.
-            (1, 8): {
-                "cfg_config": (1, 0),  # no CFG parallel
-                "sp": (1, 0),
-                "tp": (8, 1),
-                "encoder_tp": (8, 1),
-                "vae_tp": (8, 1),
-                "num_links": 1,
-                "is_fsdp": True,
-                "dynamic_load_encoder": False,
-                "dynamic_load_vae": False,
-            },
+            # The encoder is currently hardcoded to always be FSDP as it is the most memory efficient configuration with little to no performance penalty.
             (2, 4): {
                 "cfg_config": (2, 1),
                 "sp": (1, 0),
@@ -500,9 +439,6 @@ class QwenImagePipeline:
                 self._text_encoder.reload_encoder_weights()
 
     def prepare_transformers(self) -> None:
-        """Prepare transformers for inference."""
-        # For device encoder without FSDP: deallocate encoder weights, then load transformers
-        # With FSDP, all models stay loaded so no deallocation/loading needed
         if not self.transformers[self.encoder_submesh_idx].is_loaded():
             self._text_encoder.deallocate_encoder_weights()
             self._load_transformers(self.encoder_submesh_idx)
@@ -512,11 +448,6 @@ class QwenImagePipeline:
             self._load_transformers(self.vae_submesh_idx)
 
     def prepare_vae(self) -> None:
-        """Prepare VAE for inference."""
-        # Without FSDP: MEMORY CONSTRAINT - Transformer + VAE cannot coexist in device memory
-        # deallocate transformers before loading VAE weights
-        # This costs ~280s for transformer reload on subsequent images
-        # With FSDP: all models can coexist, skip deallocation/reload
         if not self._vae_decoder.is_loaded():
             self._deallocate_transformers(self.vae_submesh_idx)
             with self.mesh_reshape(self.vae_device, self.vae_mesh_shape):
@@ -746,10 +677,8 @@ class QwenImagePipeline:
                     self.prepare_vae()
 
                     with self.mesh_reshape(self.vae_device, self.vae_mesh_shape):
-                        # tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
                         tt_latents, logical_h = self._vae_decoder.prepare_input(torch_latents)
                         tt_decoded_output, logical_h = self._vae_decoder.forward(tt_latents, logical_h)
-                        # decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
                         decoded_output = self._vae_decoder.postprocess_output(tt_decoded_output, logical_h)
 
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
@@ -809,7 +738,6 @@ class QwenImagePipeline:
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
 
         if traced and self._traces is None:
-            # TRACE CAPTURE - This is often where huge time goes!
             self._traces = []
             for submesh_id, submesh_device in enumerate(self._submesh_devices):
                 timestep_device = timestep[submesh_id].to(submesh_device)
@@ -932,9 +860,8 @@ class QwenImagePipeline:
                     torch_noise_pred, device=self._submesh_devices[1], mesh_axes=[None, sp_axis, None]
                 )
 
-        # Sync - measure how long the actual device work takes
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
-            ttnn.synchronize_device(submesh_device)  # Helps with accurate time profiling.
+            ttnn.synchronize_device(submesh_device)
             ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference_device[submesh_id])
             ttnn.add_(latents[submesh_id], noise_pred_list[submesh_id])
 

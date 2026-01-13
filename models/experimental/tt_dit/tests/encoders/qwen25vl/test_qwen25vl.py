@@ -216,11 +216,10 @@ def test_qwen25vl_text_encoder(
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [
-        pytest.param((1, 4), id="1x4"),
-    ],
-    indirect=True,
+    "mesh_device , submesh_shape",
+    [[(2, 4), (1, 4)], [(4, 8), (1, 4)]],
+    ids=["2x4_1x4", "4x8_1x4"],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "prompts",
@@ -236,7 +235,9 @@ def test_qwen25vl_text_encoder(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 31000000}],
     indirect=True,
 )
-def test_qwen25vl_encoder_pair(*, mesh_device: ttnn.MeshDevice, prompts: list[str]) -> None:
+def test_qwen25vl_encoder_pair(
+    *, mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int], prompts: list[str]
+) -> None:
     # There is a bug in the HF implementation where the prompt_embeds_mask is incorrectly repeated
     # if num_images_per_prompt != 1.
     # https://github.com/huggingface/diffusers/blob/v0.35.2/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L262
@@ -245,7 +246,7 @@ def test_qwen25vl_encoder_pair(*, mesh_device: ttnn.MeshDevice, prompts: list[st
     # but should be
     # prompt_embeds_mask = prompt_embeds_mask.repeat(1, num_images_per_prompt)
     num_images_per_prompt = 1
-
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     checkpoint = "Qwen/Qwen-Image"
 
     torch_pipeline = diffusers.pipelines.qwenimage.pipeline_qwenimage.QwenImagePipeline.from_pretrained(checkpoint)
@@ -255,16 +256,16 @@ def test_qwen25vl_encoder_pair(*, mesh_device: ttnn.MeshDevice, prompts: list[st
     sequence_length = 512
 
     parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        tensor_parallel=ParallelFactor(factor=submesh_shape[1], mesh_axis=1),
     )
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device=submesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
     tt_encoder_pair = Qwen25VlTokenizerEncoderPair(
         checkpoint,
         tokenizer_subfolder="tokenizer",
         encoder_subfolder="text_encoder",
         use_torch=False,
-        device=mesh_device,
+        device=submesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
     )

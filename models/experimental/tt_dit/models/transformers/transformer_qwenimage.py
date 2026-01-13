@@ -62,8 +62,6 @@ class QwenImageTransformer(Module):
         # FSDP: shard weights on sequence parallel axis to reduce memory
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        # self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=list(axes_dims_rope), scale_rope=True)
-
         self.time_text_embed = SD35CombinedTimestepTextProjEmbeddings(
             embedding_dim=inner_dim, pooled_projection_dim=0, mesh_device=device
         )
@@ -157,8 +155,6 @@ class QwenImageTransformer(Module):
         time_embed = self.time_text_embed(timestep=timestep)
         ttnn.silu(time_embed, output_tensor=time_embed)
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
-
-        # image_rotary_emb = self.pos_embed(img_shapes, txt_seq_lens, device=hidden_states.device)
 
         spatial = self.img_in(spatial)
 

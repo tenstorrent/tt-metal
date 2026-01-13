@@ -390,7 +390,7 @@ run_t3000_motif_tests() {
 
 run_t3000_qwenimage_tests() {
   run_t3000_dit_tests \
-    "models/experimental/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k 1x4"
+    "models/experimental/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k 2x4"
 }
 
 run_t3000_wan22_tests() {

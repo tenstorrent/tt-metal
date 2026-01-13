@@ -291,10 +291,6 @@ class Qwen25VlAttention(Module):
             k = k.unflatten(0, [self._group_count, 1, self._head_dim])
             v = v.unflatten(0, [self._group_count, 1, self._head_dim])
 
-            # convert to interleaved ROPE format
-            # q = q.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
-            # k = k.unflatten(2, [2, -1]).transpose(2, 3).flatten(2, 3)
-
             # pad group size
             q = _pad(q, self._group_size_padding, dim=1)
 
@@ -566,9 +562,5 @@ def create_rope_tensors(
     s = list(mrope_section) * 2
     cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(s, dim=-1))], dim=-1).unsqueeze(1)
     sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(s, dim=-1))], dim=-1).unsqueeze(1)
-
-    # convert to interleaved format
-    # cos = cos.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
-    # sin = sin.unflatten(-1, [2, -1]).transpose(-2, -1).flatten(-2, -1)
 
     return cos, sin
