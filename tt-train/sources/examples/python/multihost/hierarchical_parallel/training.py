@@ -25,7 +25,7 @@ from ttml.common.config import (
 from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.utils import create_optimizer, initialize_device, set_seed
 
-from data import prepare_data
+from ttml.common.data import prepare_data
 from trainer import worker, aggregator, optimizer, aggregator_optimizer
 
 

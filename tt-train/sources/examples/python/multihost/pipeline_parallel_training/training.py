@@ -23,7 +23,7 @@ from ttml.common.utils import set_seed, initialize_device, create_optimizer
 from ttml.common.model_factory import TransformerModelFactory
 import click
 
-from data import prepare_data
+from ttml.common.data import prepare_data
 from trainer import train
 
 

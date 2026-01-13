@@ -7,7 +7,7 @@
 import numpy as np
 import ttnn
 import ttml
-from data import get_batch, build_causal_mask
+from ttml.common.data import get_batch, build_causal_mask
 from ttml.common.utils import PerformanceMeter, no_grad
 
 
