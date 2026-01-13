@@ -268,7 +268,6 @@ Add a comment on the PR after you do the following:
 - segformer
 
 
-
 - Identify Action Workflows that run the models that were impacted by the changes. Add the links to these workflows using url prefix 
 https://github.com/tenstorrent/tt-metal/actions/workflows/
 
