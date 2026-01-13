@@ -194,8 +194,24 @@ class DispatchManager:
         pivot_table = df.pivot_table(
             index=["func_name", "module_name"], columns="backend", values="duration", aggfunc="sum", fill_value=0
         )
+        # Add count of merged rows
+        count_table = df.pivot_table(
+            index=["func_name", "module_name"], columns="backend", values="duration", aggfunc="count", fill_value=0
+        )
+        # Add min, max, and average statistics
+        min_table = df.pivot_table(
+            index=["func_name", "module_name"], columns="backend", values="duration", aggfunc="min", fill_value=0
+        )
+        max_table = df.pivot_table(
+            index=["func_name", "module_name"], columns="backend", values="duration", aggfunc="max", fill_value=0
+        )
         columns = pivot_table.columns.tolist()
         pivot_table["Total_Duration"] = pivot_table[columns].sum(axis=1)
+        # Add total count of rows merged for each index
+        pivot_table["Row_Count"] = count_table[columns].sum(axis=1).astype(int)
+        # Add min, max, and average across all backends
+        pivot_table["Min_Duration"] = min_table[columns].min(axis=1)
+        pivot_table["Max_Duration"] = max_table[columns].max(axis=1)
 
         # Display or save
         pivot_table.to_csv(file_name.replace(".csv", "_pivot.csv"))
