@@ -10,6 +10,7 @@
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
+    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -41,10 +42,6 @@ void MAIN {
     constexpr uint32_t w2_stride_w = 1;
     constexpr uint32_t w2_stride_h = 224;
     constexpr uint32_t dst0 = 0;
-
-    const uint32_t w0_tile_id_start = core_id;
-    const uint32_t w1_tile_id_start = core_id;
-    const uint32_t w2_tile_id_start = core_id < 32 ? 4 * core_id : 4 * 32 + 3 * (core_id - 32);
 
     // Read W0 and W1 from CB into registers
     reconfig_data_format(cb_s2c_in, cb_r2c_w0);
