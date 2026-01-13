@@ -1811,7 +1811,6 @@ template <
     uint32_t DHt,
     uint32_t scale_fp32>
 void sdpa_ring(
-    const uint32_t Skt,
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
     const uint32_t qk_subblock_h,
@@ -1880,7 +1879,7 @@ void sdpa_ring(
         false,  // is_chunked (not used)
         scale_fp32,
         0>(  // sliding_window_size (not used)
-        Skt,
+        0,   // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,
         qk_subblock_h,

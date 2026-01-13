@@ -115,7 +115,6 @@ void MAIN {
         const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
         sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
-            Skt,
             qk_in0_block_w,
             qk_subblock_w,
             qk_subblock_h,
