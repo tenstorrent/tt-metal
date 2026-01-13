@@ -4,6 +4,7 @@ import pytest
 import torch
 from torch import nn
 
+from models.tt_symbiote.core.run_config import DispatchManager
 from models.tt_symbiote.modules.activation import TTNNReLU
 from models.tt_symbiote.modules.conv import TTNNConv2dNHWC, TTNNMaxPool2dNHWC, TTNNUpsampleNHWC
 from models.tt_symbiote.modules.linear import TTNNLinear
@@ -47,8 +48,8 @@ class RewrittenHead(torch.nn.Module):
         obj = [m(i) for i, m in zip(x, self.obj)]
         kpt = [m(i) for i, m in zip(x, self.kpt)]
 
-        if self.training:
-            return cls, box, obj, kpt
+        # if self.training:
+        return cls, box, obj, kpt
 
         n = cls[0].shape[0]
         sizes = [i.shape[1:3] for i in cls]
@@ -174,11 +175,14 @@ def test_resnet(device):
     }
     modules = register_module_replacement_dict(model, nn_to_ttnn, model_config=model_config)
     set_device(model, device)
+    for k, v in modules.items():
+        v.preprocess_weights()
+        v.move_weights_to_device()
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
     result = model(torch.randn(1, 224, 224, 3, dtype=torch.bfloat16))
-    # DispatchManager.clear_timings()
-    # for i in range(60):
-    #     _ = model(torch.randn(1, 224, 224, 3, dtype=torch.bfloat16))
-    # DispatchManager.save_stats_to_file("yunet_timing_stats.csv")
+    DispatchManager.clear_timings()
+    for i in range(60):
+        _ = model(torch.randn(1, 224, 224, 3, dtype=torch.bfloat16))
+    DispatchManager.save_stats_to_file("yunet_timing_stats.csv")
     print(result)
