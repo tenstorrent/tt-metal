@@ -40,9 +40,6 @@ private:
 // constraints query function. An overload resolution failure means the return type for the op in that query is not yet
 // supported and a new overload should be added
 
-// 2025-11-10: extract_output_tensor now becomes extract_output_tensors so that multiple output tensors can be returned.
-// 2025-12-03: the overloads are now unified to use visit_object_of_type to extract tensors
-
 // Generic function to extract all tensors from most return types using reflection. The return type could be:
 // - A single Tensor (Most ops)
 // - std::vector<Tensor> or std::tuple<Tensor, Tensor, ...> (multi-output ops, e.g., sort,
