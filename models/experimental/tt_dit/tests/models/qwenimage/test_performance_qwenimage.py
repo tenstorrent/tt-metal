@@ -19,9 +19,6 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        # 2x4 config with sp enabled - sp on axis 0 enables fsdp weight sharding (no cfg parallel)
-        # [(1, 8), (1, 0), (1, 0), (8, 1), (8, 1), (8, 1), ttnn.Topology.Linear, 1],  # 109 s FSDP
-        # [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (2, 1), ttnn.Topology.Linear, 1],  # 129s. Needs FSDP
         [
             (2, 4),
             (2, 0),
@@ -32,7 +29,6 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
             ttnn.Topology.Linear,
             1,
         ],  # 73 s. FSDP, only dymanic load encoder submesh
-        # [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # 112 s NO FSDP
         [
             (4, 8),
             (2, 1),
@@ -45,10 +41,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
         ],  # 25s NO FSDP for best perf on WH GLX
     ],
     ids=[
-        # "1x8cfg1sp1tp8",
-        # "2x4cfg2sp2tp2",
         "2x4cfg2sp1tp4",
-        # "2x4cfg1sp2tp4",
         "4x8cfg2sp4tp4",
     ],
     indirect=["mesh_device"],

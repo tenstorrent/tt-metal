@@ -37,7 +37,7 @@ class QwenImageTransformerBlock(TransformerBlock):
         super()._prepare_torch_state(state)
 
 
-# adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
+# adapted from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/transformers/transformer_qwenimage.py
 class QwenImageTransformer(Module):
     def __init__(
         self,

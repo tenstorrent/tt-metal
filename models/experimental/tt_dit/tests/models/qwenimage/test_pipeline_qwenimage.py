@@ -114,9 +114,9 @@ def test_qwenimage_pipeline(
         'Travel postcard collage, Kyoto landmarks; stamped welcome text "ようこそ京都"; handwritten note "また来ます" in pen; vintage grain, off-white paper.',
     ]
 
-    cfg_factor, cfg_axis = cfg
-    sp_factor, sp_axis = sp
-    tp_factor, tp_axis = tp
+    _, cfg_axis = cfg
+    _, sp_axis = sp
+    _, tp_axis = tp
     mesh_test_id = f"{mesh_device.shape[0]}x{mesh_device.shape[1]}cfg{cfg_axis}sp{sp_axis}tp{tp_axis}"
     filename_prefix = f"qwenimage_{width}_{height}_{mesh_test_id}"
     if use_torch_text_encoder:
