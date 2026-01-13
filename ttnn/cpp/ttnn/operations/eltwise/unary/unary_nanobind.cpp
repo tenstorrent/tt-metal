@@ -2037,9 +2037,10 @@ void py_module(nb::module_& mod) {
     bind_unary_operation(
         mod,
         ttnn::hardmish,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|hardmish|(\mathrm{{input\_tensor}}_i))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2.8, 0), 5)}}{{5}})doc",
         "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(Computes the Hard Mish activation function. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc");
     bind_unary_operation(
         mod,
         ttnn::gez,
@@ -2062,9 +2063,10 @@ void py_module(nb::module_& mod) {
     bind_unary_operation(
         mod,
         ttnn::i1,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|i1|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(\mathrm{{output\_tensor}}_i = I_1(\mathrm{{input\_tensor}}_i))doc",
+        "[Validated range: -10 to 10]",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(Computes the modified Bessel function of the first kind of order 1. This function is commonly used in physics and engineering, particularly in problems with cylindrical symmetry.)doc");
     bind_unary_operation(
         mod,
         ttnn::isfinite,
@@ -2421,8 +2423,14 @@ void py_module(nb::module_& mod) {
         R"doc(Performs sinh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9].",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite(mod, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");
-    bind_unary_composite(mod, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");
+    bind_unary_composite(
+        mod,
+        ttnn::var_hw,
+        R"doc(Computes the variance across the height (H) and width (W) dimensions for each batch and channel. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
+    bind_unary_composite(
+        mod,
+        ttnn::std_hw,
+        R"doc(Computes the standard deviation across the height (H) and width (W) dimensions for each batch and channel. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
     bind_unary_composite(
         mod,
         ttnn::normalize_hw,
@@ -2525,10 +2533,10 @@ void py_module(nb::module_& mod) {
         ttnn::rdiv,
         "value",
         "denominator that is considered as numerator, which should be a non-zero float value",
-        "round_mode",
+        "rounding_mode",
         "rounding_mode value",
         "None",
-        R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using round_mode.
+        R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using rounding_mode.
 
         Input tensor must have BFLOAT16 data type.
 

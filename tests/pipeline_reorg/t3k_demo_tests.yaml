@@ -13,9 +13,10 @@
 - name: t3k_mixtral_tests
   cmd: run_t3000_mixtral_tests
   sku: wh_llmbox
-  owner_id: U03PUAKE719 # Harry Zhou
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   timeout: 50
+  model-name: mixtral
 
 - name: t3k_falcon40b_tests
   cmd: run_t3000_falcon40b_tests
@@ -23,13 +24,15 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
   timeout: 50
+  model-name: falcon40b
 
 - name: t3k_llama3_tests
   cmd: run_t3000_llama3_tests
   sku: wh_llmbox
-  owner_id: U03PUAKE719 # Miguel Tairum
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   timeout: 60
+  model-name: llama3
 
 - name: t3k_qwen25_tests
   cmd: run_t3000_qwen25_tests
@@ -37,6 +40,7 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   timeout: 60
+  model-name: qwen25
 
 - name: t3k_llama3_vision_tests
   cmd: run_t3000_llama3_vision_tests
@@ -44,6 +48,7 @@
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
   timeout: 45
+  model-name: llama3_vision
 
 - name: t3k_llama3_90b_vision_tests
   cmd: run_t3000_llama3_90b_vision_tests
@@ -51,6 +56,7 @@
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
   timeout: 20
+  model-name: llama3_90b_vision
 
 - name: t3k_llama3_70b_tests
   cmd: run_t3000_llama3_70b_tests
@@ -58,6 +64,7 @@
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
   timeout: 60
+  model-name: llama3_70b
 
 - name: t3k_falcon7b_tests
   cmd: run_t3000_falcon7b_tests
@@ -65,6 +72,7 @@
   owner_id: U05RWH3QUPM # Salar Hosseini
   team: models
   timeout: 90
+  model-name: falcon7b
 
 - name: t3k_resnet50_tests
   cmd: run_t3000_resnet50_tests
@@ -72,6 +80,7 @@
   owner_id: U0837MYG788 # Marko Radosavljevic
   team: models
   timeout: 50
+  model-name: resnet50
 
 - name: t3k_sentence_bert_tests
   cmd: run_t3000_sentence_bert_tests
@@ -79,6 +88,7 @@
   owner_id: U045U3DEKM4 # Mohamed Bahnas (Aniruddha Tupe)
   team: models
   timeout: 75
+  model-name: sentence_bert
 
 - name: t3k_sd35_large_tests
   cmd: run_t3000_sd35large_tests
@@ -86,6 +96,7 @@
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
   timeout: 60
+  model-name: sd35_large
 
 - name: t3k_flux1-dev_tests
   cmd: run_t3000_flux1_tests
@@ -93,6 +104,7 @@
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   timeout: 60
+  model-name: flux1-dev
 
 - name: t3k_motif_tests
   cmd: run_t3000_motif_tests
@@ -100,6 +112,7 @@
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   timeout: 25
+  model-name: motif
 
 - name: t3k_mistral_tests
   cmd: run_t3000_mistral_tests
@@ -107,6 +120,7 @@
   owner_id: U0896VBAKFC # Pratikkumar Prajapati
   team: models
   timeout: 90
+  model-name: mistral
 
 - name: t3k_qwen3_tests
   cmd: run_t3000_qwen3_tests
@@ -114,6 +128,7 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   timeout: 60
+  model-name: qwen3
 
 - name: t3k_qwen25_vl_tests
   cmd: run_t3000_qwen25_vl_tests
@@ -121,6 +136,7 @@
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
   timeout: 30
+  model-name: qwen25_vl
 
 - name: t3k_gemma3_tests
   cmd: run_t3000_gemma3_tests
@@ -128,6 +144,7 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   timeout: 30
+  model-name: gemma3
 
 - name: t3k_wan2.2_tests
   cmd: run_t3000_wan22_tests
@@ -135,6 +152,7 @@
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
   timeout: 45
+  model-name: wan22
 
 - name: t3k_mochi_tests
   cmd: run_t3000_mochi_tests
@@ -142,3 +160,20 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   timeout: 60
+  model-name: mochi
+
+- name: t3k_whisper_tests
+  cmd: run_t3000_whisper_tests
+  sku: wh_llmbox
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  timeout: 20
+  model-name: whisper
+
+- name: t3k_gpt_oss_tests
+  cmd: run_t3000_gpt_oss_tests
+  sku: wh_llmbox
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  timeout: 30
+  model-name: gpt-oss
