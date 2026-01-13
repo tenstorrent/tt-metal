@@ -162,10 +162,10 @@ class MasterConfigLoader:
     def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str]]:
         """
         Normalize configurations to always return list of (argument list, source) tuples.
-        Handles both old format (list) and new format (dict with source).
+        Handles both old format (list) and new format (dict with source or contexts).
 
         Args:
-            configs: List of configurations (either list of args or dict with 'arguments' and 'source')
+            configs: List of configurations (either list of args or dict with 'arguments' and 'source'/'contexts')
 
         Returns:
             List of (arguments, source, machine_info) tuples for traceability
@@ -179,16 +179,35 @@ class MasterConfigLoader:
         normalized = []
         for config in configs:
             if isinstance(config, dict) and "arguments" in config:
-                # New format: extract arguments, source, and machine_info
-                source = config.get("source", "unknown")
-                machine_info = config.get("machine_info", None)
+                # Check if this config has the new contexts format
+                if "contexts" in config:
+                    # New contexts format: expand each context into separate tuples
+                    arguments = config["arguments"]
+                    for context in config["contexts"]:
+                        # Extract source (should be a list in new format)
+                        source_list = context.get("source", ["unknown"])
+                        source = source_list[0] if isinstance(source_list, list) and len(source_list) > 0 else "unknown"
 
-                # Filter for lead models if requested
-                if lead_models_only:
-                    if not any(pattern.lower() in source.lower() for pattern in lead_model_patterns):
-                        continue  # Skip this config
+                        # Extract machine_info
+                        machine_info = context.get("machine_info", None)
 
-                normalized.append((config["arguments"], source, machine_info))
+                        # Filter for lead models if requested
+                        if lead_models_only:
+                            if not any(pattern.lower() in source.lower() for pattern in lead_model_patterns):
+                                continue  # Skip this context
+
+                        normalized.append((arguments, source, machine_info))
+                else:
+                    # Old single source/machine_info format
+                    source = config.get("source", "unknown")
+                    machine_info = config.get("machine_info", None)
+
+                    # Filter for lead models if requested
+                    if lead_models_only:
+                        if not any(pattern.lower() in source.lower() for pattern in lead_model_patterns):
+                            continue  # Skip this config
+
+                    normalized.append((config["arguments"], source, machine_info))
             elif isinstance(config, list):
                 # Old format: use as-is with unknown source and no machine_info
                 # Skip if lead_models_only since we can't determine source

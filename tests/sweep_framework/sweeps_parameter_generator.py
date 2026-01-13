@@ -28,6 +28,74 @@ DO_RANDOMIZE = False
 LEAD_MODELS = ["deepseek_v3"]
 
 
+def get_mesh_shape_from_vector(vector):
+    """Extract mesh_device_shape from traced_machine_info, default to [1, 1] for single-chip.
+
+    Args:
+        vector: Dictionary containing vector parameters including traced_machine_info
+
+    Returns:
+        tuple: (rows, cols) representing mesh shape, e.g., (2, 4) or (1, 1) for single-chip
+    """
+    machine_info = vector.get("traced_machine_info")
+    if machine_info and isinstance(machine_info, list) and len(machine_info) > 0:
+        # Check if mesh_device_shape is directly in machine_info (old format)
+        mesh_shape = machine_info[0].get("mesh_device_shape")
+        if mesh_shape and isinstance(mesh_shape, list) and len(mesh_shape) == 2:
+            return tuple(mesh_shape)
+
+        # Check if mesh_device_shape is inside tensor_placements (new format)
+        tensor_placements = machine_info[0].get("tensor_placements")
+        if tensor_placements and isinstance(tensor_placements, list) and len(tensor_placements) > 0:
+            # Parse mesh_device_shape from string format "[2, 4]" to list
+            mesh_shape_str = tensor_placements[0].get("mesh_device_shape", "")
+            if isinstance(mesh_shape_str, str):
+                # Parse "[2, 4]" format
+                try:
+                    import ast
+
+                    mesh_shape = ast.literal_eval(mesh_shape_str)
+                    if isinstance(mesh_shape, list) and len(mesh_shape) == 2:
+                        return tuple(mesh_shape)
+                except (ValueError, SyntaxError):
+                    pass
+            elif isinstance(mesh_shape_str, list) and len(mesh_shape_str) == 2:
+                return tuple(mesh_shape_str)
+
+    return (1, 1)  # Default: single-chip
+
+
+def group_vectors_by_mesh_shape(vectors):
+    """Group vectors by their mesh_device_shape.
+
+    Args:
+        vectors: List of vector dictionaries
+
+    Returns:
+        dict: Mapping of mesh_shape tuple to list of vectors with that mesh shape
+    """
+    from collections import defaultdict
+
+    grouped = defaultdict(list)
+    for vector in vectors:
+        mesh_shape = get_mesh_shape_from_vector(vector)
+        grouped[mesh_shape].append(vector)
+
+    return grouped
+
+
+def format_mesh_suffix(mesh_shape):
+    """Format mesh shape as filename suffix.
+
+    Args:
+        mesh_shape: tuple of (rows, cols)
+
+    Returns:
+        str: Formatted suffix like '__mesh_2x4' or '__mesh_1x1'
+    """
+    return f"__mesh_{mesh_shape[0]}x{mesh_shape[1]}"
+
+
 # Generate vectors from module parameters
 def generate_vectors(module_name, model_traced, suite_name=None):
     # Set environment variable to control MasterConfigLoader filtering BEFORE import
@@ -187,12 +255,49 @@ def validate_exported_vectors(export_path, module_name, suite_name):
 
 
 def export_suite_vectors_json(module_name, suite_name, vectors):
-    """Export test vectors to JSON file with atomic writes and deduplication.
+    """Export test vectors to JSON files grouped by mesh shape with atomic writes and deduplication.
+
+    Vectors are grouped by mesh_device_shape and written to separate files:
+    - model_traced.op__mesh_2x4.json (for [2, 4] mesh)
+    - model_traced.op__mesh_1x1.json (for single-chip)
 
     Args:
         module_name: Name of the test module
         suite_name: Name of the test suite
         vectors: List of vector dictionaries to export
+    """
+    # Group vectors by mesh shape
+    grouped_vectors = group_vectors_by_mesh_shape(vectors)
+
+    # Export each mesh group to a separate file
+    for mesh_shape, mesh_vectors in grouped_vectors.items():
+        # Skip empty groups
+        if not mesh_vectors:
+            continue
+
+        # Generate mesh-specific module name
+        mesh_suffix = format_mesh_suffix(mesh_shape)
+        mesh_module_name = f"{module_name}{mesh_suffix}"
+
+        # Update sweep_name in each vector to include mesh suffix
+        for vector in mesh_vectors:
+            base_sweep_name = vector.get("sweep_name", module_name)
+            # Remove existing mesh suffix if present (for idempotency)
+            if "__mesh_" in base_sweep_name:
+                base_sweep_name = base_sweep_name.split("__mesh_")[0]
+            vector["sweep_name"] = f"{base_sweep_name}{mesh_suffix}"
+
+        # Export vectors for this mesh shape
+        _export_mesh_vectors_to_file(mesh_module_name, suite_name, mesh_vectors)
+
+
+def _export_mesh_vectors_to_file(module_name, suite_name, vectors):
+    """Internal function to export vectors for a specific mesh shape to JSON file.
+
+    Args:
+        module_name: Name including mesh suffix (e.g., 'model_traced.gelu__mesh_2x4')
+        suite_name: Name of the test suite
+        vectors: List of vector dictionaries for this mesh shape
     """
     EXPORT_DIR_PATH = SWEEPS_DIR / "vectors_export"
     EXPORT_PATH = EXPORT_DIR_PATH / f"{module_name}.json"
@@ -285,7 +390,12 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
                 f"If issues persist, delete the file and regenerate."
             )
 
-        logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
+        # Extract mesh shape from module name for logging
+        if "__mesh_" in module_name:
+            mesh_info = module_name.split("__mesh_")[1]
+            logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name} (mesh {mesh_info}).")
+        else:
+            logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
     except (IOError, OSError) as e:
         logger.error(f"Failed to write vectors to {EXPORT_PATH}: {e}")
         raise
