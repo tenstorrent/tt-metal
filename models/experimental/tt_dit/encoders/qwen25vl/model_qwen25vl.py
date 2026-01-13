@@ -157,6 +157,8 @@ class Qwen25VlTextEncoder(Module):
         if padded_seq_len != seq_len:
             # hidden_states_list = [x[:, :seq_len, :] for x in hidden_states_list]
             hidden_states_list = [x[:, :seq_len, :] for x in [hidden_states]]
+        else:
+            hidden_states_list = [hidden_states]
 
         return hidden_states_list
 

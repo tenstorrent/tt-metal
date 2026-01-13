@@ -217,7 +217,9 @@ class QwenImagePipeline:
         with self.mesh_reshape(self.encoder_device, self.encoder_mesh_shape, synchronize=True):
             logger.info("creating TT-NN text encoder (loading before transformers for memory efficiency)...")
             self._text_encoder = Qwen25VlTokenizerEncoderPair(
-                text_encoder_checkpoint_name,
+                checkpoint_name,
+                tokenizer_subfolder="tokenizer",
+                encoder_subfolder="text_encoder",
                 device=self._submesh_devices[self.encoder_submesh_idx],
                 ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
                 parallel_config=self._encoder_parallel_config,
@@ -284,7 +286,6 @@ class QwenImagePipeline:
         if self.transformers[idx].is_loaded():
             return
 
-        logger.info("creating TT-NN transformer...")
         if not cache.initialize_from_cache(
             tt_model=self.transformers[idx],
             torch_state_dict=self._transformer_state_dict,

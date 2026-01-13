@@ -111,9 +111,6 @@ def test_transformer(
         mesh_shape=tuple(mesh_device.shape),
         dtype="bf16",
     ):
-        logger.info(
-            "Loading transformer weights from PyTorch state dict. To use cache, set TT_DIT_CACHE_DIR environment variable."
-        )
         tt_model.load_torch_state_dict(torch_model.state_dict())
 
     spatial_seq_len = (latents_height // patch_size) * (latents_width // patch_size)

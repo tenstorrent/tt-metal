@@ -74,8 +74,7 @@ run_tg_tests() {
   elif [[ "$1" == "qwenimage" ]]; then
     echo "LOG_METAL: running QwenImage run_tg_frequent_tests"
     export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-    pytest -n auto models/experimental/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py -k "4x8sp0tp1"; fail+=$?
-    pytest -n auto models/experimental/tt_dit/tests/models/qwenimage/test_vae_qwenimage.py fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k "1x4"; fail+=$?
 
   elif [[ "$1" == "mochi" ]]; then
     echo "LOG_METAL: running mochi run_tg_frequent_tests"

@@ -257,17 +257,17 @@ def test_qwenimage_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
-            "total_encoding_time": 0.4,
+            "total_encoding_time": 0.35,
             "denoising_steps_time": 73.0,
-            "vae_decoding_time": 0.7,
-            "total_time": 78,
+            "vae_decoding_time": 0.65,
+            "total_time": 77,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
-            "total_encoding_time": 0.7,
-            "denoising_steps_time": 36.0,
-            "vae_decoding_time": 2.1,
-            "total_time": 38.0,
+            "total_encoding_time": 0.35,
+            "denoising_steps_time": 25,
+            "vae_decoding_time": 0.4,
+            "total_time": 26,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
