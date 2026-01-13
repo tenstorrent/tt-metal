@@ -7,6 +7,7 @@
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_reduce_custom_api.h"
+#include "llk_math_common.h"
 #endif
 
 #ifdef TRISC_UNPACK
@@ -104,11 +105,7 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
 // clang-format on
 template <bool clear_fp32_accumulation = false>
 ALWI void reduce_block_max_row_uninit() {
-    if constexpr (clear_fp32_accumulation) {
-        // CAN BE OMITTED FOR SOME REASON?
-        MATH((tensix_sync()));
-        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0)));
-    }
+    MATH((_llk_math_dbg_feature_enable_()));
     PACK((llk_pack_reduce_mask_clear()));
     UNPACK((llk_unpack_AB_reduce_block_max_row_uninit()));
 }

@@ -44,5 +44,8 @@ template <
     int num_fidelity_phases = 0,
     bool enforce_fp32_accumulation = false /*unused*/>
 inline void llk_math_reduce_init() {
+    if constexpr (enforce_fp32_accumulation) {
+        _llk_math_dbg_feature_disable_();
+    }
     _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, num_fidelity_phases, enforce_fp32_accumulation>();
 }

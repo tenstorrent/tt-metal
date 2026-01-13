@@ -49,10 +49,6 @@ template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumula
 ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim, BroadcastType::NONE, enforce_fp32_accumulation>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, enforce_fp32_accumulation>()));
-    if constexpr (enforce_fp32_accumulation) {
-        MATH((tensix_sync()));
-        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11)));
-    }
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
 }
 
@@ -74,8 +70,7 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
 template <bool enforce_fp32_accumulation = false>
 ALWI void reduce_uninit() {
     if constexpr (enforce_fp32_accumulation) {
-        MATH((tensix_sync()));
-        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0)));
+        MATH((_llk_math_dbg_feature_enable_()));
     }
     PACK((llk_pack_reduce_mask_clear()));
 }
