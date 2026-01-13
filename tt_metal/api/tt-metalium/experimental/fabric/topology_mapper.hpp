@@ -459,8 +459,10 @@ private:
      */
     void verify_topology_mapping(const Cluster& cluster) const;
 
-    void print_logical_adjacency_map(const std::map<MeshId, AdjacencyGraph<FabricNodeId>>& adj_map) const;
-    void print_physical_adjacency_map(const std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>>& adj_map) const;
+    void print_logical_adjacency_map(
+        const ::tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& multi_mesh_graph) const;
+    void print_physical_adjacency_map(
+        const ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& multi_mesh_graph) const;
 };
 
 }  // namespace tt::tt_fabric
