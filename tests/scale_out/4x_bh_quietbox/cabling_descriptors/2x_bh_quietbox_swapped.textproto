@@ -24,11 +24,11 @@ graph_templates {
   key: "2x_bh_quietbox"
   value {
     children {
-      name: "qb-03"
+      name: "forge-qbae-01"
       node_ref { node_descriptor: "1x_bh_quietbox" }
     }
     children {
-      name: "qb-04"
+      name: "forge-qbae-02"
       node_ref { node_descriptor: "1x_bh_quietbox" }
     }
     internal_connections {
@@ -37,38 +37,38 @@ graph_templates {
        
         # QB-3 to QB-4 connections on Port 1
         connections {
-          port_a { path: ["qb-03"] tray_id: 1 port_id: 1 }
-          port_b { path: ["qb-04"] tray_id: 1 port_id: 1 }
+          port_a { path: ["forge-qbae-01"] tray_id: 1 port_id: 1 }
+          port_b { path: ["forge-qbae-02"] tray_id: 1 port_id: 1 }
         }
         connections {
-          port_a { path: ["qb-03"] tray_id: 2 port_id: 1 }
-          port_b { path: ["qb-04"] tray_id: 2 port_id: 1 }
+          port_a { path: ["forge-qbae-01"] tray_id: 2 port_id: 1 }
+          port_b { path: ["forge-qbae-02"] tray_id: 2 port_id: 1 }
         }
         connections {
-          port_a { path: ["qb-03"] tray_id: 4 port_id: 1 }
-          port_b { path: ["qb-04"] tray_id: 4 port_id: 1 }
+          port_a { path: ["forge-qbae-01"] tray_id: 4 port_id: 1 }
+          port_b { path: ["forge-qbae-02"] tray_id: 4 port_id: 1 }
         }
         connections {
-          port_a { path: ["qb-03"] tray_id: 3 port_id: 1 }
-          port_b { path: ["qb-04"] tray_id: 3 port_id: 1 }
+          port_a { path: ["forge-qbae-01"] tray_id: 3 port_id: 1 }
+          port_b { path: ["forge-qbae-02"] tray_id: 3 port_id: 1 }
         }
 
         # QB-3 to QB-4 connections on Port 4
         connections {
-          port_a { path: ["qb-03"] tray_id: 1 port_id: 4 }
-          port_b { path: ["qb-04"] tray_id: 1 port_id: 4 }
+          port_a { path: ["forge-qbae-01"] tray_id: 1 port_id: 4 }
+          port_b { path: ["forge-qbae-02"] tray_id: 1 port_id: 4 }
         }
         connections {
-          port_a { path: ["qb-03"] tray_id: 2 port_id: 4 }
-          port_b { path: ["qb-04"] tray_id: 2 port_id: 4 }
+          port_a { path: ["forge-qbae-01"] tray_id: 2 port_id: 4 }
+          port_b { path: ["forge-qbae-02"] tray_id: 2 port_id: 4 }
         }
         connections {
-          port_a { path: ["qb-03"] tray_id: 4 port_id: 4 }
-          port_b { path: ["qb-04"] tray_id: 4 port_id: 4 }
+          port_a { path: ["forge-qbae-01"] tray_id: 4 port_id: 4 }
+          port_b { path: ["forge-qbae-02"] tray_id: 4 port_id: 4 }
         }
         connections {
-          port_a { path: ["qb-03"] tray_id: 3 port_id: 4 }
-          port_b { path: ["qb-04"] tray_id: 3 port_id: 4 }
+          port_a { path: ["forge-qbae-01"] tray_id: 3 port_id: 4 }
+          port_b { path: ["forge-qbae-02"] tray_id: 3 port_id: 4 }
         }
       }
     }
