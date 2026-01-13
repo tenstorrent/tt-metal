@@ -70,12 +70,19 @@ TilizeMultiCoreShardedProgramFactory::cached_program_t TilizeMultiCoreShardedPro
     std::vector<uint32_t> compute_args = {
         uint32_t(num_tiles_per_shard / num_tiles_per_row), uint32_t(num_tiles_per_row)};
 
+    // Set up unpack_to_dest_mode for Float32 precision preservation
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_args,
         });
 
