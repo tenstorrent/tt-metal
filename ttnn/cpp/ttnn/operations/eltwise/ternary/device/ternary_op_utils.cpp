@@ -268,11 +268,11 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
         case TernaryOpType::WHERE:
             defines["TERNARY_SFPU_OP_INIT"] = "where_tile_init";
             if (dtype == DataType::FLOAT32) {
-                defines["TERNARY_SFPU_OP_FUNC"] = "where_fp32_tile";
+                defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Float32>";
             } else if (dtype == DataType::INT32) {
-                defines["TERNARY_SFPU_OP_FUNC"] = "where_int32_tile";
+                defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Int32>";
             } else {
-                defines["TERNARY_SFPU_OP_FUNC"] = "where_tile";
+                defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Float16_b>";
             }
             break;
         case TernaryOpType::LERP:
