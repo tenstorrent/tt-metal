@@ -176,7 +176,7 @@ parser.add_argument(
 parser.add_argument(
     "--canbus",
     type=str,
-    default="models/experimental/BEVFormerV2/data/",
+    default="models/experimental/BEVFormerV2/data",
     help="specify the root path of nuScenes canbus",
 )
 parser.add_argument("--version", type=str, default="v1.0-mini", required=False, help="specify the dataset version")

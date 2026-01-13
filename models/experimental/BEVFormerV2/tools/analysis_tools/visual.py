@@ -459,8 +459,12 @@ def render_sample_data(
             assert False
         elif sensor_modality == "camera":
             # Load boxes and image.
-            all_records = [record for record in pred_data["results"][sample_toekn] if record["detection_score"] > 0.2]
-            print(f"Found {len(all_records)} predictions with score > 0.2 for {sd_record['channel']}")
+            # Use a lower threshold to visualize predictions (scores in results are very low)
+            score_threshold = 0.005  # Lower threshold to see low-confidence predictions
+            all_records = [
+                record for record in pred_data["results"][sample_toekn] if record["detection_score"] > score_threshold
+            ]
+            print(f"Found {len(all_records)} predictions with score > {score_threshold} for {sd_record['channel']}")
             boxes = [
                 Box(
                     record["translation"],
@@ -533,7 +537,7 @@ def render_sample_data(
 if __name__ == "__main__":
     nusc = NuScenes(version="v1.0-mini", dataroot="models/experimental/BEVFormerV2/data/nuscenes", verbose=True)
     # render_annotation('7603b030b42a4b1caa8c443ccc1a7d52')
-    with open("models/experimental/BEVFormerV2/bevformerv2-r50-t1-base-24ep/pts_bbox.json", "r") as f:
+    with open("models/experimental/BEVFormerV2/results/bevformerv2-r50-t1-base-24ep/pts_bbox.json", "r") as f:
         bevformer_results = json.load(f)
     sample_token_list = list(bevformer_results["results"].keys())
     print(f"Found {len(sample_token_list)} samples in results")
