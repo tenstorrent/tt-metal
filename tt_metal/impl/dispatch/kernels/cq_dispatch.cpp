@@ -494,7 +494,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
         uint32_t available_data = dispatch_cb_reader.available_data();
         bool hit_boundary = false;
         if (available_data == 0) {
-            available_data = dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+            available_data = dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
                 hit_boundary = true;
             });
         }
