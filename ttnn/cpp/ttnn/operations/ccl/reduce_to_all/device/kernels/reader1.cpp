@@ -76,7 +76,7 @@ void kernel_main() {
 
     const auto pkt_base_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    // ROUND 2: receive data
+    // ROUND 2: receive data from neighbour device and send to compute
     uint32_t round1_interm_tensor_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t device_semaphore = get_arg_val<uint32_t>(arg_idx++);
 
@@ -173,8 +173,7 @@ void kernel_main() {
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();  // Wait for Round 2 data to be read before memmove
 
-    // Write Round 2 received data to data core's bw_intermediate shard for debugging
-    // The fabric wrote to worker core (current_core_x/y), but bw_intermediate is sharded on data cores (core_noc_x/y)
+    // Write Round 2 received data to data core's intermediate shard
     uint64_t bw_interm_data_core_addr = get_noc_addr(core_noc_x, core_noc_y, pkt_base_addr);
     noc_async_write(packet_l1_addr, bw_interm_data_core_addr, new_packet_size_bytes);
     noc_async_write_barrier();
@@ -196,8 +195,6 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);
     DPRINT << "after moving to receiver cbs\n";
-
-    // still need to read intermediate data and send to compute
 
     DPRINT << "reading round1 interm from core (" << (uint32_t)core_noc_x << ", " << (uint32_t)core_noc_y << ") addr "
            << (uint32_t)round1_interm_tensor_addr << "\n";
@@ -231,13 +228,11 @@ void kernel_main() {
     cb_push_back(compute_cb_m, 1);
     DPRINT << "after pushing back cbs\n";
 
-    // Disconnect from mux - termination handled separately
+    // Disconnect from mux
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     DPRINT << "after fabric client disconnect\n";
 
     // Reader1 terminates its mux (backward for D0/D2, forward for D1/D3)
-    // 8 workers share the mux: 4 Reader1 + 4 Writer2 (or Writer1 depending on device)
-    // The termination master waits for 7 signals from the other workers
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
         DPRINT << "waiting for 7 termination signals\n";

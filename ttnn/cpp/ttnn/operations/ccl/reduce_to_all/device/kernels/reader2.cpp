@@ -150,7 +150,6 @@ void kernel_main() {
     mux_connection.wait_for_empty_write_slot();
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
-    // Disconnect from mux and signal Writer2 that it can now use the mux channel
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     DPRINT << "after fabric_client_disconnect\n";
 
@@ -189,9 +188,7 @@ void kernel_main() {
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();
 
-    // Write Round 1 received data to data core's fw_intermediate shard for debugging
-    // The fabric wrote to worker core (current_core_noc_x/y), but fw_intermediate is sharded on data cores
-    // (core_noc_x/y)
+    // Write Round 1 received data to data core's intermediate shard
     uint64_t fw_interm_data_core_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_write(packet_l1_addr, fw_interm_data_core_addr, new_packet_size_bytes);
     noc_async_write_barrier();
@@ -216,9 +213,6 @@ void kernel_main() {
     DPRINT << "end of round 1\n";
 
     // Reader2 terminates its mux (forward for D0/D2, backward for D1/D3)
-    // 8 workers share the mux: 4 Reader2 + 4 Writer1 (or Writer2 depending on device)
-    // The termination master waits for 7 signals from the other workers
-    // This MUST happen after all work is done to avoid deadlock
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
         DPRINT << "waiting for 7 termination signals\n";
