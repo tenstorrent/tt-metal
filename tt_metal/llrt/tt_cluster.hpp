@@ -6,7 +6,7 @@
 
 #include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/cluster.hpp>
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_target_device.hpp"
@@ -188,6 +188,17 @@ public:
         read_core(read_hex_vec, size, tt_cxy_pair(chip, core), addr);
         return read_hex_vec;
     }
+
+    // NOC multicast write wrappers
+    void noc_multicast_write(
+        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core_start, tt_cxy_pair core_end, uint64_t addr) const;
+    void noc_multicast_write(
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        ChipId chip_id,
+        CoreCoord core_start,
+        CoreCoord core_end,
+        uint64_t addr) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);

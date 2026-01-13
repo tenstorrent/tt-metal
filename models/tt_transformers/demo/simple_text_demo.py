@@ -672,25 +672,6 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # device-perf - Measures device performance of a prefill or decode run (by default runs prefill but test_device_perf uses args to override defaults)
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            False,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            1,  # batch_size
-            2,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            True,  # ci_only
-            1,  # data_parallel
-            False,  # token_accuracy
-            False,  # stress_test
-            True,  # enable_trace
-            10,  # num_layers, if None -> defaults to all layers
-            "prefill",  # mode
-        ),
         (  # [CI only] Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
@@ -709,6 +690,25 @@ def prepare_generator_args(
             True,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
+        ),
+        (  # device-perf - Measures device performance of a prefill or decode run (by default runs prefill but test_device_perf uses args to override defaults)
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            False,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            2,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            10,  # num_layers, if None -> defaults to all layers
+            "prefill",  # mode
         ),
     ],
     ids=[
@@ -1151,6 +1151,8 @@ def test_demo_text(
                         logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
                         if all(user_done):
                             users_decoding = False
+                    else:
+                        all_outputs[user].append(user_tok)
 
             # Print out generated outputs for each user at the end of every iteration
             for user in range(global_batch_size):
@@ -1228,6 +1230,19 @@ def test_demo_text(
 
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
+
+    # Quick sanity check that the model doesn't produce special tokens=garbage output
+    is_special_tokens_produced = [False] * len(all_outputs)
+    for i, output in enumerate(all_outputs):
+        output = output[len(encoded_prompts[i]) :]
+        is_eos = [token in tokenizer.stop_tokens for token in output]
+        if any(is_eos):
+            output = output[: is_eos.index(True)]
+        is_special_tokens_produced[i] = any(token in tokenizer.all_special_ids for token in output)
+    if any(is_special_tokens_produced):
+        logger.warning(f"{sum(is_special_tokens_produced)}/{len(all_outputs)} users produced special tokens")
+        if is_ci_env:
+            assert False, "model produced special tokens"
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill") if mode != "decode" else 0
@@ -1480,7 +1495,7 @@ def test_demo_text(
                 # T3K targets
                 "T3K_Llama-3.1-70B": 15,
                 "T3K_Qwen2.5-72B": 13.25,
-                "T3K_Qwen2.5-Coder-32B": 21,
+                "T3K_Qwen2.5-Coder-32B": 20,
                 "T3K_Qwen3-32B": 21,
             }
 

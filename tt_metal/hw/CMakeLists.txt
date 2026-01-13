@@ -118,10 +118,11 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE
     OUTPUT_VARIABLE GPP_VERSION
 )
+
 message(STATUS "Using SFPI compiler: ${GPP_CMD} ${GPP_VERSION}")
 # check this is the version we want (the system version might be wrong)
-string(REGEX REPLACE "^\\([^:]*:([^)]*)\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
-if(NOT ${GPP_VERSION} STREQUAL ${SFPI_version})
+string(REGEX REPLACE "^\\([^:]+:([^[)]+)(\\[[0-9]+\\])?\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
+if(NOT ${GPP_VERSION} STREQUAL "${SFPI_version}")
     if(TT_USE_SYSTEM_SFPI)
         message(
             FATAL_ERROR
@@ -533,6 +534,14 @@ target_sources(
             inc/api/tensor/shard_pages_address_iterator.h
             inc/api/tensor/pages_address_iterator.h
             inc/api/tensor/page.h
+            # Experimental 2.0 Headers
+            inc/experimental/lock.h
+            inc/experimental/noc.h
+            inc/experimental/circular_buffer.h
+            inc/experimental/noc_semaphore.h
+            inc/experimental/endpoints.h
+            inc/experimental/core_local_mem.h
+            inc/experimental/tensor.h
             # Interface Headers - Host-Device boundary
             inc/hostdev/dev_msgs.h
             inc/hostdev/fabric_telemetry_msgs.h

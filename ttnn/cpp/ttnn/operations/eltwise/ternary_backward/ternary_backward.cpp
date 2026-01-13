@@ -15,7 +15,7 @@ namespace ttnn::operations::ternary_backward {
 
 std::vector<Tensor> AddcmulBackwardOperation::invoke(
     const Tensor& grad,
-    const Tensor& input,
+    const Tensor& /*input*/,
     const Tensor& tensor1,
     const Tensor& tensor2,
     float value,
@@ -33,7 +33,7 @@ std::vector<Tensor> AddcmulBackwardOperation::invoke(
 
 std::vector<Tensor> AddcdivBackwardOperation::invoke(
     const Tensor& grad,
-    const Tensor& input,
+    const Tensor& /*input*/,
     const Tensor& tensor1,
     const Tensor& tensor2,
     float value,
@@ -70,8 +70,8 @@ std::vector<Tensor> AddcdivBackwardOperation::invoke(
 std::vector<OptionalTensor> WhereBackwardOperation::invoke(
     const Tensor& grad,
     const Tensor& condition,
-    const Tensor& input,
-    const Tensor& other,
+    const Tensor& /*input*/,
+    const Tensor& /*other*/,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::vector<bool>& are_required_outputs,
     OptionalTensor input_grad,
@@ -121,8 +121,8 @@ std::vector<Tensor> LerpBackwardOperation::invoke(
 
 std::vector<Tensor> LerpBackwardOperation::invoke(
     const Tensor& grad,
-    const Tensor& input,
-    const Tensor& end,
+    const Tensor& /*input*/,
+    const Tensor& /*end*/,
     float weight,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;

@@ -53,8 +53,6 @@ template <typename... Ts>
     return table[i];
 }
 
-inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
-
 template <typename device_operation_t>
 auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
@@ -145,7 +143,7 @@ auto get_operation_name(const typename device_operation_t::operation_attributes_
 
 template <typename device_operation_t>
 inline void log_operation(
-    std::size_t device_id,
+    std::size_t /*device_id*/,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
     tt::stl::hash::hash_t program_hash,
@@ -177,19 +175,19 @@ inline void log_operation(
 
 template <typename device_operation_t>
 inline void log_operation(
-    std::size_t device_id,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args,
-    tt::stl::hash::hash_t program_hash,
-    bool program_cache_hit) {}
+    std::size_t /*device_id*/,
+    const typename device_operation_t::operation_attributes_t& /*operation_attributes*/,
+    const typename device_operation_t::tensor_args_t& /*tensor_args*/,
+    tt::stl::hash::hash_t /*program_hash*/,
+    bool /*program_cache_hit*/) {}
 
 #endif
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
-    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
-    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
-    typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    [[maybe_unused]] const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload) {
     mesh_device_operation_utils::set_runtime_id(workload);
@@ -541,14 +539,14 @@ typename device_operation_t::tensor_return_value_t launch(
                 tensor_return_value);
         } else {
             // Fall back to default topology imputation
-            auto [output_topology_placements, output_topology_shape] =
+            auto output_topology_result =
                 detail::get_output_placements_and_shape<device_operation_t>(tensor_args, first_tensor.value());
 
             tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-                [&output_topology_placements, &output_topology_shape](const Tensor& output_tensor) {
+                [&output_topology_result](const Tensor& output_tensor) {
                     auto topology = tt::tt_metal::TensorTopology(
-                        output_topology_shape,
-                        output_topology_placements,
+                        output_topology_result.second,
+                        output_topology_result.first,
                         output_tensor.tensor_topology().mesh_coords());
                     return output_tensor.with_tensor_topology(topology);
                 },

@@ -2,6 +2,8 @@
 # Build TTNN and TTNNCPP
 ####################################################################################################
 
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wunused-parameter>")
+
 # FIXME: Many lambda functions in ttnn capture variables and don't use them.
 add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>")
 
@@ -542,6 +544,7 @@ target_sources(
         cpp/ttnn/operations/generic/generic_op.cpp
         cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
         cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
+        cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
