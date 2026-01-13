@@ -189,14 +189,14 @@ ttnn/cpp/ttnn/operations/experimental/slice_write/ @tenstorrent/metalium-develop
 ttnn/cpp/ttnn/operations/experimental/padded_slice/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/reduction/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/reduction/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/operations/eltwise/ @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/operations/eltwise/**/CMakeLists.txt @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/eltwise/ @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/eltwise/**/CMakeLists.txt @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/eltwise/quantization/ @wenbinlyuTT @sjameelTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/eltwise/quantization/**/CMakeLists.txt @wenbinlyuTT @sjameelTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-ttnn/ttnn/operations/unary* @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
-ttnn/ttnn/operations/binary* @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
-ttnn/ttnn/operations/ternary* @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
-ttnn/ttnn/operations/complex* @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
+ttnn/ttnn/operations/unary* @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
+ttnn/ttnn/operations/binary* @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
+ttnn/ttnn/operations/ternary* @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
+ttnn/ttnn/operations/complex* @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/reduction/accumulation/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/reduction/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -222,7 +222,7 @@ tests/nightly/t3000/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-
 tests/nightly/tg/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/gtests/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
-tests/ttnn/unit_tests/operations/eltwise/ @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
+tests/ttnn/unit_tests/operations/eltwise/ @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
@@ -234,11 +234,11 @@ tests/ttnn/**/operations/pool/ @tenstorrent/metalium-developers-convolutions @te
 /tests/ttnn/notebook_tests/ @tenstorrent/metalium-developers-external-experience @tenstorrent/codeowner-bypass
 tests/sweep_framework/ @stevendae @bbradelTT @ntarafdar @pavlejosipovic @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
-tests/ttnn/nightly/unit_tests/operations/eltwise/ @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
+tests/ttnn/nightly/unit_tests/operations/eltwise/ @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
 tests/nightly/t3000/ @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-ops-data-movement
 tests/nightly/tg/ @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-ops-data-movement
 tests/sweep_framework/sweeps @tenstorrent/codeowner-bypass @stevendae @cmaryanTT @ntarafdar @bbradelTT
-tests/sweep_framework/sweeps/eltwise/ @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
+tests/sweep_framework/sweeps/eltwise/ @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweeps/conv_transpose2d/  @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweeps/pool2d/  @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
@@ -248,11 +248,11 @@ tests/sweep_framework/sweeps/normalization/  @tenstorrent/metalium-developers-mm
 tests/sweep_framework/sweeps/matmul/  @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweeps/reduction/  @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweeps/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
-tests/sweep_framework/sweeps/composite/ @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
+tests/sweep_framework/sweeps/composite/ @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweeps/creation/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweeps/embedding/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweeps/embedding_bw/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
-tests/sweep_framework/sweeps/losses/ @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
+tests/sweep_framework/sweeps/losses/ @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweep_utils/adaptive_pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweep_utils/conv2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweep_utils/conv_transpose2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
