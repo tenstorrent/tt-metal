@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include <gtest/gtest.h>
 
 #include <enchantum/enchantum.hpp>
 #include <cstdint>
@@ -32,7 +32,6 @@
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 namespace {
 

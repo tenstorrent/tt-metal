@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/common/legacy_fixture.hpp"
+#include "common/command_queue_fixture.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -19,7 +19,7 @@
 using std::vector;
 using namespace tt;
 using std::string;
-using namespace tt::tt_metal::test;
+using namespace tt::tt_metal;
 
 static std::vector<bfloat16> make_identity_scale_tile() {
     std::vector<bfloat16> tile(tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH, static_cast<bfloat16>(1.0f));
@@ -293,7 +293,7 @@ static bool test_sdpa_reduce_c(
 }
 
 // NIGHTLY_ prefix ensures this test only runs in nightly CI pipelines
-TEST_F(FastDispatchFixture, NIGHTLY_SdpaReduceC) {
+TEST_F(UnitMeshCQSingleCardFixture, NIGHTLY_SdpaReduceC) {
     bool pass = true;
 
     /**
@@ -326,7 +326,7 @@ TEST_F(FastDispatchFixture, NIGHTLY_SdpaReduceC) {
                 for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
                     for (bool do_elt : do_eltwise) {
                         bool this_passed = test_sdpa_reduce_c(
-                            mesh_device(),
+                            devices_[0],
                             q_chunk_size,
                             k_chunk_size,
                             fp32_dest_acc_en,

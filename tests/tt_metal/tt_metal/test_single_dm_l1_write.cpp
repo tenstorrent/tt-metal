@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -15,15 +15,17 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 // This test requires simulator environment
-TEST_F(SlowDispatchFixture, SingleDmL1Write) {
+TEST_F(MeshDeviceSingleCardFixture, SingleDmL1Write) {
     // Skip if simulator is not available
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
+
+    IDevice* dev = devices_[0]->get_devices()[0];
+    auto mesh_device = devices_[0];
 
     const uint32_t address = 100 * 1024;
     const uint32_t value = 0x12345678;
@@ -44,12 +46,12 @@ TEST_F(SlowDispatchFixture, SingleDmL1Write) {
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
-    tt_metal::detail::WriteToDeviceL1(device(), core, address, outputs);
+    tt_metal::detail::WriteToDeviceL1(dev, core, address, outputs);
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
-    distributed::MeshCommandQueue& cq = mesh_device()->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device()->shape());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
     // Configure and create Data Movement kernel
@@ -71,7 +73,7 @@ TEST_F(SlowDispatchFixture, SingleDmL1Write) {
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
-    tt_metal::detail::ReadFromDeviceL1(device(), core, address, 4, outputs);
+    tt_metal::detail::ReadFromDeviceL1(dev, core, address, 4, outputs);
 
     ASSERT_EQ(outputs[0], value) << "Got the value " << std::hex << outputs[0] << " instead of " << value;
 }

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include "common/mesh_dispatch_fixture.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -28,7 +28,6 @@
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 namespace {
 
@@ -244,8 +243,8 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
 
 }  // namespace
 
-TEST_F(EitherDispatchFixture, CompileProgramInLoop) {
-    IDevice* dev = device();
+TEST_F(MeshDispatchFixture, CompileProgramInLoop) {
+    IDevice* dev = devices_[0]->get_devices()[0];
 
     ClearKernelCache(
         BuildEnvManager::get_instance().get_device_build_env(dev->build_id()).build_env.get_out_kernel_root_path());
@@ -272,8 +271,8 @@ TEST_F(EitherDispatchFixture, CompileProgramInLoop) {
     }
 }
 
-TEST_F(EitherDispatchFixture, CompileProgramAfterCleanKernelBinaryDirectory) {
-    IDevice* dev = device();
+TEST_F(MeshDispatchFixture, CompileProgramAfterCleanKernelBinaryDirectory) {
+    IDevice* dev = devices_[0]->get_devices()[0];
 
     ClearKernelCache(
         BuildEnvManager::get_instance().get_device_build_env(dev->build_id()).build_env.get_out_kernel_root_path());
@@ -298,8 +297,8 @@ TEST_F(EitherDispatchFixture, CompileProgramAfterCleanKernelBinaryDirectory) {
     assert_kernel_hash_matches(kernel_name_to_hash, second_kernel_cache_status);
 }
 
-TEST_F(EitherDispatchFixture, CompileProgramWithModifiedProgram) {
-    IDevice* dev = device();
+TEST_F(MeshDispatchFixture, CompileProgramWithModifiedProgram) {
+    IDevice* dev = devices_[0]->get_devices()[0];
 
     const static std::unordered_map<HalProcessorClassType, bool> compute_miss_data_movement_hit = {
         {HalProcessorClassType::COMPUTE, false}, {HalProcessorClassType::DM, true}};

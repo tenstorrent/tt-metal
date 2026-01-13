@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -16,7 +16,6 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // 1. Host writes data to buffer in DRAM
@@ -24,8 +23,8 @@ using namespace tt::tt_metal::test;
 //      in step 1. to buffer in L1 and back to another buffer in DRAM
 // 4. Host reads from buffer written to in step 2.
 //////////////////////////////////////////////////////////////////////////////////////////
-TEST_F(SlowDispatchFixture, DramLoopbackSingleCore) {
-    IDevice* dev = device();
+TEST_F(MeshDeviceSingleCardFixture, DramLoopbackSingleCore) {
+    IDevice* dev = devices_[0]->get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};

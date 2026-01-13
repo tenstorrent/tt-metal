@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -18,10 +18,9 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
-TEST_F(SlowDispatchFixture, DataflowCb) {
-    IDevice* dev = device();
+TEST_F(MeshDeviceSingleCardFixture, DataflowCb) {
+    IDevice* dev = devices_[0]->get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};

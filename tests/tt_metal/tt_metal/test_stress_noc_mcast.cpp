@@ -8,7 +8,7 @@
 //  - rapidly grid of tensix workers generates random noc traffic
 //  - does not verify correct transactions, just runs til termination
 
-#include "tests/tt_metal/tt_metal/common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <fmt/base.h>
 #include <cstdlib>
@@ -39,7 +39,7 @@
 #include <llrt/tt_cluster.hpp>
 
 using namespace tt;
-using namespace tt::tt_metal::test;
+using namespace tt::tt_metal;
 
 namespace {
 
@@ -52,7 +52,9 @@ const uint32_t N_RANDS = 512;
 
 // Stress test for NOC multicast - uses short duration for CI
 // Uses detail::LaunchProgram which requires slow dispatch mode
-TEST_F(SlowDispatchFixture, StressNocMcast) {
+TEST_F(MeshDeviceSingleCardFixture, StressNocMcast) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+
     // Use default test parameters
     uint32_t time_secs = DEFAULT_SECONDS;
     uint32_t tlx = 0;
@@ -73,13 +75,13 @@ TEST_F(SlowDispatchFixture, StressNocMcast) {
 
     CoreRange workers_logical({tlx, tly}, {tlx + width - 1, tly + height - 1});
     CoreCoord mcast_logical(mcast_x, mcast_y);
-    CoreCoord tl_core = device()->worker_core_from_logical_core({tlx, tly});
+    CoreCoord tl_core = dev->worker_core_from_logical_core({tlx, tly});
 
-    CoreCoord mcast_end = device()->worker_core_from_logical_core(workers_logical.end_coord);
+    CoreCoord mcast_end = dev->worker_core_from_logical_core(workers_logical.end_coord);
     bool virtualization_enabled = tt::tt_metal::MetalContext::instance().hal().is_coordinate_virtualization_enabled();
     uint32_t num_dests = workers_logical.size();
     CoreCoord virtual_offset = virtualization_enabled
-                                   ? device()->worker_core_from_logical_core({0, 0})
+                                   ? dev->worker_core_from_logical_core({0, 0})
                                    : CoreCoord(0, 0);  // In this case pass physical coordinates as runtime args
 
     std::vector<uint32_t> compile_args = {
@@ -96,8 +98,8 @@ TEST_F(SlowDispatchFixture, StressNocMcast) {
         virtual_offset.y,
         N_RANDS,
         rnd_delay,
-        device()->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
-        device()->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
+        dev->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
+        dev->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
     };
 
     KernelHandle ucast_kernel = tt_metal::CreateKernel(
@@ -114,14 +116,14 @@ TEST_F(SlowDispatchFixture, StressNocMcast) {
         std::vector<uint32_t> runtime_args;
         // Not particularly random since all cores are getting the same data
         // N_RANDS in bytes
-        CoreCoord grid_size = device()->logical_grid_size();
+        CoreCoord grid_size = dev->logical_grid_size();
         for (int i = 0; i < N_RANDS / sizeof(uint32_t); i++) {
             uint32_t rnd = 0;
             for (int j = 0; j < sizeof(uint32_t); j++) {
                 uint32_t x = rand() % grid_size.x;
                 uint32_t y = rand() % grid_size.y;
                 if (!virtualization_enabled) {
-                    CoreCoord physical_coord = device()->worker_core_from_logical_core(CoreCoord(x, y));
+                    CoreCoord physical_coord = dev->worker_core_from_logical_core(CoreCoord(x, y));
                     x = physical_coord.x;
                     y = physical_coord.y;
                 }
@@ -147,5 +149,5 @@ TEST_F(SlowDispatchFixture, StressNocMcast) {
     }
     log_info(LogTest, "Running for {} seconds", time_secs);
 
-    tt::tt_metal::detail::LaunchProgram(device(), program, true);
+    tt::tt_metal::detail::LaunchProgram(dev, program, true);
 }

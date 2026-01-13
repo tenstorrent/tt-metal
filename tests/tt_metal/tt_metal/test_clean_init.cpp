@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include <gtest/gtest.h>
 
 #include <chrono>
 #include <cstdint>
@@ -20,7 +20,6 @@
 
 using std::vector;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 /*
  * Similar to loopback programming example, except run on all devices.
@@ -31,7 +30,7 @@ using namespace tt::tt_metal::test;
 class CleanInitFixture : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (IsSlowDispatch()) {
+        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
             GTEST_SKIP() << "Test not supported with slow dispatch";
         }
     }

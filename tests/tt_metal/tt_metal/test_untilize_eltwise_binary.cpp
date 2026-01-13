@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <chrono>
 #include <cerrno>
@@ -41,7 +41,7 @@
 
 using std::vector;
 using namespace tt;
-using namespace tt::tt_metal::test;
+using namespace tt::tt_metal;
 
 inline std::vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_vec, std::vector<uint32_t> shape) {
     std::vector<uint32_t> dst_vec;
@@ -95,7 +95,8 @@ inline std::vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_ve
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-TEST_F(SlowDispatchFixture, UntilizeEltwiseBinary) {
+TEST_F(MeshDeviceSingleCardFixture, UntilizeEltwiseBinary) {
+    IDevice* dev = devices_[0]->get_devices()[0];
     bool pass = true;
     bool multibank = true;
 
@@ -125,10 +126,7 @@ TEST_F(SlowDispatchFixture, UntilizeEltwiseBinary) {
         }
 
         tt_metal::InterleavedBufferConfig dram_config{
-            .device = device(),
-            .size = dram_buffer_size,
-            .page_size = page_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
+            .device = dev, .size = dram_buffer_size, .page_size = page_size, .buffer_type = tt_metal::BufferType::DRAM};
 
         auto src0_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
@@ -226,7 +224,7 @@ TEST_F(SlowDispatchFixture, UntilizeEltwiseBinary) {
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
 
-        tt_metal::detail::LaunchProgram(device(), program);
+        tt_metal::detail::LaunchProgram(dev, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

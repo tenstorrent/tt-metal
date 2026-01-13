@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <chrono>
 #include <cerrno>
@@ -49,7 +49,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
-using namespace tt::tt_metal::test;
+using namespace tt::tt_metal;
 
 namespace {
 
@@ -99,7 +99,8 @@ std::vector<std::uint32_t> transpose_tiles(
 
 }  // namespace
 
-TEST_F(SlowDispatchFixture, GenericBinaryReaderMatmulLargeBlock) {
+TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
+    IDevice* dev = devices_[0]->get_devices()[0];
     bool pass = true;
 
     try {
@@ -125,19 +126,19 @@ TEST_F(SlowDispatchFixture, GenericBinaryReaderMatmulLargeBlock) {
             single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         tt_metal::InterleavedBufferConfig act_config{
-            .device = device(),
+            .device = dev,
             .size = dram_buffer_size_act,
             .page_size = dram_buffer_size_act,
             .buffer_type = tt_metal::BufferType::DRAM};
 
         tt_metal::InterleavedBufferConfig weights_config{
-            .device = device(),
+            .device = dev,
             .size = dram_buffer_size_weights,
             .page_size = dram_buffer_size_weights,
             .buffer_type = tt_metal::BufferType::DRAM};
 
         tt_metal::InterleavedBufferConfig dst_config{
-            .device = device(),
+            .device = dev,
             .size = dram_buffer_size_out,
             .page_size = dram_buffer_size_out,
             .buffer_type = tt_metal::BufferType::DRAM};
@@ -193,7 +194,7 @@ TEST_F(SlowDispatchFixture, GenericBinaryReaderMatmulLargeBlock) {
         TT_FATAL(source_addresses.size() == num_blocks * src0_num_reads_per_block, "Error");
 
         tt_metal::InterleavedBufferConfig l1_config{
-            .device = device(),
+            .device = dev,
             .size = source_addresses.size() * sizeof(uint32_t),
             .page_size = source_addresses.size() * sizeof(uint32_t),
             .buffer_type = tt_metal::BufferType::L1};
@@ -299,13 +300,13 @@ TEST_F(SlowDispatchFixture, GenericBinaryReaderMatmulLargeBlock) {
             convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
-        tt_metal::detail::WriteToDeviceL1(device(), core, source_addresses_in_l1_addr, source_addresses);
+        tt_metal::detail::WriteToDeviceL1(dev, core, source_addresses_in_l1_addr, source_addresses);
 
         tt_metal::SetRuntimeArgs(program, generic_binary_reader_kernel, core, generic_binary_reader_args);
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_rt_args);
 
-        tt_metal::detail::LaunchProgram(device(), program);
+        tt_metal::detail::LaunchProgram(dev, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

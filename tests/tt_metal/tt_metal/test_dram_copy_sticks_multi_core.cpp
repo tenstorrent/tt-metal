@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -37,7 +37,7 @@
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
-using namespace tt::tt_metal::test;
+using namespace tt::tt_metal;
 
 namespace unary_datacopy {
 // #include "hlks/eltwise_copy.cpp"
@@ -47,8 +47,9 @@ struct hlk_args_t {
 };
 }  // namespace unary_datacopy
 
-TEST_F(SlowDispatchFixture, DramCopySticksMultiCore) {
+TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
     bool pass = true;
+    IDevice* dev = devices_[0]->get_devices()[0];
 
     try {
         tt_metal::Program program = tt_metal::CreateProgram();
@@ -64,7 +65,7 @@ TEST_F(SlowDispatchFixture, DramCopySticksMultiCore) {
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         tt_metal::InterleavedBufferConfig dram_config{
-            .device = device(),
+            .device = dev,
             .size = dram_buffer_size,
             .page_size = dram_buffer_size,
             .buffer_type = tt_metal::BufferType::DRAM};
@@ -79,7 +80,7 @@ TEST_F(SlowDispatchFixture, DramCopySticksMultiCore) {
             for (int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 tt_metal::InterleavedBufferConfig l1_config{
-                    .device = device(),
+                    .device = dev,
                     .size = per_core_l1_size,
                     .page_size = per_core_l1_size,
                     .buffer_type = tt_metal::BufferType::L1};
@@ -123,7 +124,7 @@ TEST_F(SlowDispatchFixture, DramCopySticksMultiCore) {
             }
         }
 
-        tt_metal::detail::LaunchProgram(device(), program);
+        tt_metal::detail::LaunchProgram(dev, program);
         // std::vector<uint32_t> result_vec;
         // tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////

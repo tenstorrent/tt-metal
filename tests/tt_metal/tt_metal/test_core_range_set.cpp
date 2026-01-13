@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -31,7 +31,6 @@
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 namespace {
 
@@ -92,8 +91,8 @@ void check_semaphores_are_initialized(
 
 }  // namespace
 
-TEST_F(SlowDispatchFixture, CoreRangeSet) {
-    IDevice* dev = device();
+TEST_F(MeshDeviceSingleCardFixture, CoreRangeSet) {
+    IDevice* dev = devices_[0]->get_devices()[0];
     Program program = CreateProgram();
 
     CoreRange core_range_one({0, 0}, {1, 1});

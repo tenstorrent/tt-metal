@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include <gtest/gtest.h>
 
 #include <cstdint>
 #include <vector>
@@ -14,9 +14,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 using namespace tt;
-using namespace tt::tt_metal::test;
 
-TEST_F(HostOnlyFixture, Bfp8Conversion) {
+TEST(HostOnlyTest, Bfp8Conversion) {
     uint32_t num_tiles = 1;
 
     int num_float_in_tile = 1024;

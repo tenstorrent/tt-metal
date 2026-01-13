@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -27,7 +27,6 @@ using std::vector;
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 namespace {
 
@@ -282,14 +281,32 @@ void run_bcast_test(IDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_
 
 }  // namespace
 
-TEST_F(SlowDispatchFixture, BcastHAdd) { run_bcast_test(device(), BcastDim::H, BcastOp::ADD); }
-TEST_F(SlowDispatchFixture, BcastHSub) { run_bcast_test(device(), BcastDim::H, BcastOp::SUB); }
-TEST_F(SlowDispatchFixture, BcastHMul) { run_bcast_test(device(), BcastDim::H, BcastOp::MUL); }
+TEST_F(MeshDeviceSingleCardFixture, BcastHAdd) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::ADD);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastHSub) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::SUB);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastHMul) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::MUL);
+}
 
-TEST_F(SlowDispatchFixture, BcastWAdd) { run_bcast_test(device(), BcastDim::W, BcastOp::ADD); }
-TEST_F(SlowDispatchFixture, BcastWSub) { run_bcast_test(device(), BcastDim::W, BcastOp::SUB); }
-TEST_F(SlowDispatchFixture, BcastWMul) { run_bcast_test(device(), BcastDim::W, BcastOp::MUL); }
+TEST_F(MeshDeviceSingleCardFixture, BcastWAdd) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::ADD);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastWSub) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::SUB);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastWMul) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::MUL);
+}
 
-TEST_F(SlowDispatchFixture, BcastHWAdd) { run_bcast_test(device(), BcastDim::HW, BcastOp::ADD); }
-TEST_F(SlowDispatchFixture, BcastHWSub) { run_bcast_test(device(), BcastDim::HW, BcastOp::SUB); }
-TEST_F(SlowDispatchFixture, BcastHWMul) { run_bcast_test(device(), BcastDim::HW, BcastOp::MUL); }
+TEST_F(MeshDeviceSingleCardFixture, BcastHWAdd) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::ADD);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastHWSub) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::SUB);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastHWMul) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::MUL);
+}

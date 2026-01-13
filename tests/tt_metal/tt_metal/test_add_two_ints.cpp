@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <cstdint>
 #include <array>
@@ -16,14 +16,13 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 ////////////////////////////////////////////////////////////////////////////
 // Runs the add_two_ints kernel on BRISC to add two ints in L1
 // Result is read from L1
 ////////////////////////////////////////////////////////////////////////////
-TEST_F(SlowDispatchFixture, AddTwoInts) {
-    IDevice* dev = device();
+TEST_F(MeshDeviceSingleCardFixture, AddTwoInts) {
+    IDevice* dev = devices_[0]->get_devices()[0];
     uint32_t l1_unreserved_base = dev->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     Program program = CreateProgram();

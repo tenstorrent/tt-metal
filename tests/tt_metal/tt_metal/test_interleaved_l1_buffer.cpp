@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -16,7 +16,6 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 namespace {
 
@@ -57,10 +56,10 @@ void test_interleaved_l1_buffer_impl(IDevice* dev, int num_pages_one, int num_pa
 
 }  // namespace
 
-TEST_F(SlowDispatchFixture, InterleavedL1Buffer) {
+TEST_F(MeshDeviceSingleCardFixture, InterleavedL1Buffer) {
     uint32_t page_size = 2 * 1024;
     int num_bank_pages_one = 258;
     int num_bank_pages_two = 378;
 
-    test_interleaved_l1_buffer_impl(device(), num_bank_pages_one, num_bank_pages_two, page_size);
+    test_interleaved_l1_buffer_impl(devices_[0]->get_devices()[0], num_bank_pages_one, num_bank_pages_two, page_size);
 }

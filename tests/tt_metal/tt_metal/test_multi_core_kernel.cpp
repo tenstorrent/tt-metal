@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -21,7 +21,6 @@
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 namespace {
 
@@ -86,8 +85,8 @@ void set_rt_args(
 
 }  // namespace
 
-TEST_F(SlowDispatchFixture, MultiCoreKernelSameRuntimeArgs) {
-    IDevice* dev = device();
+TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelSameRuntimeArgs) {
+    IDevice* dev = devices_[0]->get_devices()[0];
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {2, 2};
@@ -126,8 +125,8 @@ TEST_F(SlowDispatchFixture, MultiCoreKernelSameRuntimeArgs) {
     EXPECT_EQ(src_vec, result_vec);
 }
 
-TEST_F(SlowDispatchFixture, MultiCoreKernelUniqueRuntimeArgs) {
-    IDevice* dev = device();
+TEST_F(MeshDeviceSingleCardFixture, MultiCoreKernelUniqueRuntimeArgs) {
+    IDevice* dev = devices_[0]->get_devices()[0];
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {1, 1};

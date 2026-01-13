@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include "common/device_fixture.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -23,7 +23,6 @@
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 namespace {
 
@@ -177,8 +176,8 @@ void write_program_runtime_args_to_device(
 // 2. Host read the results from eltwise binary
 // 3. Second program runs matmul, using results from step 2 as input activation
 //////////////////////////////////////////////////////////////////////////////////////////
-TEST_F(SlowDispatchFixture, MultiplePrograms) {
-    IDevice* dev = device();
+TEST_F(MeshDeviceSingleCardFixture, MultiplePrograms) {
+    IDevice* dev = devices_[0]->get_devices()[0];
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 1;

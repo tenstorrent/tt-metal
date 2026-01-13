@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/legacy_fixture.hpp"
+#include "common/command_queue_fixture.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -23,7 +23,6 @@
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::test;
 
 namespace {
 
@@ -156,14 +155,14 @@ void run_eltwise_binary_test(
 
 }  // namespace
 
-TEST_F(FastDispatchFixture, EltwiseBinaryAdd) {
-    run_eltwise_binary_test(mesh_device(), command_queue(), static_cast<int>(EltwiseOp::ADD));
+TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinaryAdd) {
+    run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::ADD));
 }
 
-TEST_F(FastDispatchFixture, EltwiseBinarySub) {
-    run_eltwise_binary_test(mesh_device(), command_queue(), static_cast<int>(EltwiseOp::SUB));
+TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinarySub) {
+    run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::SUB));
 }
 
-TEST_F(FastDispatchFixture, EltwiseBinaryMul) {
-    run_eltwise_binary_test(mesh_device(), command_queue(), static_cast<int>(EltwiseOp::MUL));
+TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinaryMul) {
+    run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::MUL));
 }
