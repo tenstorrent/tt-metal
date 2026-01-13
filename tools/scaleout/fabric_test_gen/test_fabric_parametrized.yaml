@@ -1,0 +1,217 @@
+Tests:
+- name: x_0_0_1_latency
+  latency_test_mode: true
+  benchmark_mode: false
+  fabric_setup:
+    topology: Linear
+  defaults:
+    size: 1024
+    num_packets: 10
+    ntype: unicast_write
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - - 0
+      - 0
+    core:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - - 0
+          - 1
+        core:
+        - 0
+        - 0
+- name: x_0_0_1_bandwidth
+  latency_test_mode: false
+  benchmark_mode: true
+  fabric_setup:
+    topology: Linear
+  defaults:
+    size: 1024
+    num_packets: 10
+    ntype: unicast_write
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - - 0
+      - 0
+    core:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - - 0
+          - 1
+        core:
+        - 0
+        - 0
+- name: x_1_0_1_latency
+  latency_test_mode: true
+  benchmark_mode: false
+  fabric_setup:
+    topology: Linear
+  defaults:
+    size: 1024
+    num_packets: 10
+    ntype: unicast_write
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - - 1
+      - 0
+    core:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - - 1
+          - 1
+        core:
+        - 0
+        - 0
+- name: x_1_0_1_bandwidth
+  latency_test_mode: false
+  benchmark_mode: true
+  fabric_setup:
+    topology: Linear
+  defaults:
+    size: 1024
+    num_packets: 10
+    ntype: unicast_write
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - - 1
+      - 0
+    core:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - - 1
+          - 1
+        core:
+        - 0
+        - 0
+- name: y_0_0_1_latency
+  latency_test_mode: true
+  benchmark_mode: false
+  fabric_setup:
+    topology: Linear
+  defaults:
+    size: 1024
+    num_packets: 10
+    ntype: unicast_write
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - - 0
+      - 0
+    core:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - - 1
+          - 0
+        core:
+        - 0
+        - 0
+- name: y_0_0_1_bandwidth
+  latency_test_mode: false
+  benchmark_mode: true
+  fabric_setup:
+    topology: Linear
+  defaults:
+    size: 1024
+    num_packets: 10
+    ntype: unicast_write
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - - 0
+      - 0
+    core:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - - 1
+          - 0
+        core:
+        - 0
+        - 0
+- name: y_1_0_1_latency
+  latency_test_mode: true
+  benchmark_mode: false
+  fabric_setup:
+    topology: Linear
+  defaults:
+    size: 1024
+    num_packets: 10
+    ntype: unicast_write
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - - 0
+      - 1
+    core:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - - 1
+          - 1
+        core:
+        - 0
+        - 0
+- name: y_1_0_1_bandwidth
+  latency_test_mode: false
+  benchmark_mode: true
+  fabric_setup:
+    topology: Linear
+  defaults:
+    size: 1024
+    num_packets: 10
+    ntype: unicast_write
+    ftype: unicast
+  senders:
+  - device:
+    - 0
+    - - 0
+      - 1
+    core:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - - 1
+          - 1
+        core:
+        - 0
+        - 0
