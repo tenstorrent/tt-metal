@@ -148,11 +148,10 @@ void create_cb(Program& program, const tt::tt_metal::CoreCoord& core, uint32_t n
  * | Argument  | Description                                                         |
  * |-----------|---------------------------------------------------------------------|
  * | a         | Input matrix A in row-major format, size MxN                        |
- * | b         | Input matrix B in row-major format, size MxN                        |                                                     |
+ * | b         | Input matrix B in row-major format, size MxN                        |
+ * | output    | Output matrix (will be overwritten)                                 |
  * | M         | Number of rows in matrices A and B                                  |
  * | N         | Number of columns in matrices A and B                               |
-
- * | output    | Output matrix (will be overwritten)                                 |
  * | prog_state| Program state containing device, program, and execution context     |
  */
 // clang-format on
@@ -341,8 +340,7 @@ int main() {
             const float expected = static_cast<float>(reference_result[i]);
             const float actual = static_cast<float>(result_vec[i]);
 
-            float relative_error = (expected == 0.0f) ? std::abs(actual) 
-                : std::abs(actual - expected) / expected;
+            float relative_error = (expected == 0.0f) ? std::abs(actual) : std::abs(actual - expected) / expected;
             if (relative_error > RELTOL) {
                 log_error(tt::LogAlways, "Mismatch at index {}: {} vs expected {}", i, actual, expected);
                 log_error(tt::LogAlways, "Expected relative tolerance: {} actual relative error: {}", RELTOL, relative_error);
