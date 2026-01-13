@@ -516,6 +516,184 @@ class MistralForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
+class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
+    """
+    Mistral 3.1 24B Multimodal (Vision-Language) Model for vLLM.
+
+    This model supports both text-only and text+image inputs using the Pixtral vision encoder.
+    Based on mistralai/Mistral-Small-3.1-24B-Instruct-2503.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Image token ID for Mistral 3 - using Pixtral's image token
+        self.MISTRAL_IMAGE_TOKEN_ID = 10  # TODO: Verify this is correct for Mistral 3
+        self.max_gen_len = self.model_args[0].max_seq_len - 1
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len=131072,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        """
+        Initialize Mistral 3.1 24B multimodal model for vLLM.
+
+        Args:
+            hf_config: HuggingFace model configuration
+            mesh_device: TT mesh device
+            max_batch_size: Maximum batch size
+            max_seq_len: Maximum sequence length
+            n_layers: Number of layers (None = use all)
+            tt_data_parallel: Data parallel size
+            optimizations: Optimization preset ("performance", "accuracy", etc.)
+
+        Returns:
+            Initialized Mistral3ForConditionalGeneration instance
+        """
+        from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+
+        optimizations_preset = (
+            DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
+        )
+
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+
+        model_args = []
+        model = []
+        state_dict = None
+
+        for submesh in submesh_devices:
+            # Use the create_multimodal_model function from simple_vision_demo
+            # This handles Mistral 24B detection and initialization automatically
+            model_args_i, model_i, state_dict = create_multimodal_model(
+                mesh_device=submesh,
+                max_batch_size=max_batch_size // tt_data_parallel,
+                max_seq_len=max_seq_len,
+                use_paged_kv_cache=True,
+                checkpoint=state_dict,
+            )
+
+            # Apply optimizations if specified
+            if optimizations_preset and hasattr(model_args_i, "optimizations"):
+                model_args_i.optimizations = lambda model_args: optimizations_preset(
+                    model_args.n_layers, model_args.model_name
+                )
+
+            # Override n_layers if specified
+            if n_layers is not None:
+                model_args_i.n_layers = n_layers
+
+            model_args.append(model_args_i)
+            model.append(model_i)
+
+        return cls(model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    @property
+    def max_cross_attn_tokens(self):
+        """
+        Maximum number of vision tokens for cross-attention.
+        For Mistral 24B with Pixtral vision encoder.
+        """
+        # Pixtral uses patch-based vision encoding
+        # This should match the vision model's output token count
+        if hasattr(self.model_args[0], "vision_max_num_chunks") and hasattr(self.model_args[0], "vision_chunk_ntok"):
+            return self.model_args[0].vision_max_num_chunks * nearest_32(self.model_args[0].vision_chunk_ntok)
+        # Fallback: reasonable default for Pixtral
+        return 1024  # Adjust based on actual vision encoder output
+
+    def prefill_forward(
+        self,
+        tokens: torch.Tensor,
+        images: Union[List[Image], List[List[Image]]],
+        page_table: torch.Tensor,
+        kv_cache,
+        prompt_lens,
+        cross_page_table: torch.Tensor,
+    ):
+        """
+        Prefill forward pass with vision + text support.
+
+        Args:
+            tokens: Input token IDs [batch, seq_len]
+            images: List of PIL images (one per batch item, or None for text-only)
+            page_table: KV cache page table for text tokens
+            kv_cache: KV cache storage
+            prompt_lens: Length of each prompt in the batch
+            cross_page_table: Cross-attention page table for vision tokens
+
+        Returns:
+            Model outputs (logits)
+        """
+        batch = tokens.shape[0]
+
+        vision_images = []
+        vision_masks = []
+        total_lens = []
+
+        for user_id in range(batch):
+            image = images[user_id]
+
+            # Handle list of images (support single image per user for now)
+            if isinstance(image, list):
+                if len(image) > 1:
+                    logger.warning(
+                        f"Mistral 24B currently supports only 1 image per prompt, got {len(image)}. Using first image."
+                    )
+                image = image[0] if image else None
+
+            # Prepare vision inputs
+            vision_images.append([image] if image else None)
+
+            # Create vision mask to identify image token positions in the sequence
+            prompt_tokens = [int(tokens[user_id, i]) for i in range(prompt_lens[user_id])]
+
+            # Use create_vision_mask if available, otherwise create simple mask
+            if image:
+                try:
+                    from models.common.llama_models import create_vision_mask
+
+                    vision_masks.append(create_vision_mask(prompt_tokens, self.MISTRAL_IMAGE_TOKEN_ID))
+                except ImportError:
+                    # Fallback: create a simple mask marking image token positions
+                    vision_masks.append([1 if tok == self.MISTRAL_IMAGE_TOKEN_ID else 0 for tok in prompt_tokens])
+            else:
+                vision_masks.append(None)
+
+            total_lens.append(prompt_lens[user_id] + self.max_gen_len)
+
+        # Call base Generator's multimodal prefill_forward
+        # The MistralTransformer.prepare_inputs_prefill will handle vision processing
+        return super().prefill_forward(
+            vision_images,
+            vision_masks,
+            tokens,
+            None,  # cross_attention_masks - handled by MistralTransformer
+            total_lens,
+            prompt_lens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            cross_page_table=cross_page_table,
+        )
+
+    def decode_forward(self, *args, **kwargs):
+        """Decode forward - text only after prefill (vision already processed)."""
+        return super().decode_forward_text(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        """Allocate KV cache for both text and vision tokens."""
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
 class MultiModalProcessor(BaseMultiModalProcessor):
     """Multi-modal processor for Gemma3 / Qwen-VL."""
 
