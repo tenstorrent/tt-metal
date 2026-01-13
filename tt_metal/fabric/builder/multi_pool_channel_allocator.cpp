@@ -6,6 +6,7 @@
 #include <tt_stl/assert.hpp>
 #include "builder/fabric_static_sized_channels_allocator.hpp"
 #include "builder/fabric_remote_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 
 namespace tt::tt_fabric {
 
@@ -102,7 +103,7 @@ void MultiPoolChannelAllocator::emit_ct_args(
     // to skip the 5th VC0 sender channel. Mesh routers VC0 sender channels are 0-3, and VC1 sender channels are 4-7
     // which map to pools 0-3 and 5-8 respectively.
     if (z_router_enabled) {
-        if (num_used_sender_channels == 8) {
+        if (num_used_sender_channels == builder_config::num_sender_channels_2d) {
             // mesh router on device with z router
             for (size_t i = 0; i < num_used_sender_channels; ++i) {
                 if (i < 4) {
@@ -127,7 +128,7 @@ void MultiPoolChannelAllocator::emit_ct_args(
 
     if (z_router_enabled) {
         for (size_t i = 0; i < num_used_receiver_channels; ++i) {
-            ct_args.push_back(static_cast<uint32_t>(i + 9));
+            ct_args.push_back(static_cast<uint32_t>(i + builder_config::num_max_sender_channels));
         }
     } else {
         for (size_t i = 0; i < num_used_receiver_channels; ++i) {

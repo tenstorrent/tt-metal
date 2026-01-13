@@ -71,17 +71,12 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // Determine the router variant
     bool has_z_router = fabric_context.has_z_router_on_device(local_node);
-    RouterVariant variant = RouterVariant::MESH;  // Default to mesh router
-    if (location.direction == RoutingDirection::Z) {
-        variant = RouterVariant::Z_ROUTER;  // Z router
-    } else if (has_z_router) {
-        variant = RouterVariant::MESH_AND_Z_ROUTER;  // Mesh router on a device that has a Z router
-    }
+    RouterVariant variant = (location.direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
 
     // Create channel mapping EARLY (needed for computing injection flags)
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto channel_mapping =
-        FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config);
+        FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config, has_z_router);
 
     // Create connection mapping (Phase 3)
     RouterConnectionMapping connection_mapping;
