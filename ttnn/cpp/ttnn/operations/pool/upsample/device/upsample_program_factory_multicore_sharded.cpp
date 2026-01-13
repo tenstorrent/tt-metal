@@ -10,6 +10,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -198,6 +199,48 @@ static Tensor create_config_tensor(
     return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
+// Returns a reduced CoreRangeSet containing only cores that have actual work.
+// For height sharding: returns first N cores from the grid.
+// For block sharding: keeps all channel cores, reduces NHW dimension.
+static CoreRangeSet get_cores_with_work(
+    const CoreRangeSet& all_cores,
+    uint32_t total_nhw,
+    uint32_t nsticks_per_core,
+    bool is_height_sharded,
+    ShardOrientation orientation) {
+    const uint32_t num_cores = all_cores.num_cores();
+    const uint32_t actual_nhw_cores = tt::div_up(total_nhw, nsticks_per_core);
+
+    if (is_height_sharded) {
+        if (actual_nhw_cores >= num_cores) {
+            return all_cores;
+        }
+        return num_cores_to_corerangeset_in_subcoregrids(
+            all_cores.ranges().begin()->start_coord,
+            actual_nhw_cores,
+            all_cores,
+            orientation == ShardOrientation::ROW_MAJOR);
+    }
+
+    // Block sharding: keep all channel cores, reduce NHW dimension
+    const auto& range = *all_cores.ranges().begin();
+    const bool row_major = orientation == ShardOrientation::ROW_MAJOR;
+
+    // NHW is on Y axis for ROW_MAJOR, X axis for COL_MAJOR
+    const uint32_t nhw_start = row_major ? range.start_coord.y : range.start_coord.x;
+    const uint32_t nhw_end = row_major ? range.end_coord.y : range.end_coord.x;
+    const uint32_t nhw_cores_in_grid = nhw_end - nhw_start + 1;
+    const uint32_t nhw_cores_needed = std::min(actual_nhw_cores, nhw_cores_in_grid);
+
+    if (nhw_cores_needed >= nhw_cores_in_grid) {
+        return all_cores;
+    }
+
+    const CoreCoord new_end = row_major ? CoreCoord(range.end_coord.x, nhw_start + nhw_cores_needed - 1)
+                                        : CoreCoord(nhw_start + nhw_cores_needed - 1, range.end_coord.y);
+    return CoreRangeSet(CoreRange(range.start_coord, new_end));
+}
+
 UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreShardedProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -249,6 +292,12 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
 
     const uint32_t input_nsticks_per_core = shard_spec.shape[0];
     const uint32_t output_nsticks_per_core = input_nsticks_per_core * scale_factor_h * scale_factor_w;
+    const bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const uint32_t total_nhw = input.padded_shape()[0] * input.padded_shape()[1] * in_w;
+
+    // Get reduced core set - only cores that actually have work
+    const CoreRangeSet cores_with_work =
+        get_cores_with_work(all_cores, total_nhw, input_nsticks_per_core, is_height_sharded, shard_spec.orientation);
 
     uint32_t next_cb_index = CBIndex::c_0;
     const uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
@@ -296,7 +345,8 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
     auto config_tensor_shard_orientation = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
                                                ? ShardOrientation::COL_MAJOR
                                                : shard_spec.orientation;
-    ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
+    // Use cores_with_work for config tensor sharding - only cores that have actual work need config data
+    ShardSpec config_shard_spec(cores_with_work, shard_shape, config_tensor_shard_orientation);
     MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
     auto config_tensor_device = config_tensor.to_device(device, memory_config);
 
@@ -305,8 +355,9 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
     auto* config_buffer = config_storage.get_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
 
+    // Create config CB only for cores that have work
     auto [config_cb_id, config_cb] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
+        next_cb_index++, program, cores_with_work, config_buffer_page_size, 1, config_df, &*config_buffer);
 
     // Kernels
 
@@ -322,17 +373,18 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
         // number of intervals in config tensor per core, 4 is number of bfloat16 elements per entry
         static_cast<uint32_t>(config_tensor.logical_shape()[-1] / 4),
     };
+    // Only dispatch kernels to cores that have actual work
     std::string writer_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
     auto writer_kernel =
-        CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
+        CreateKernel(program, writer_kernel_fname, cores_with_work, WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> reader_compile_time_args = writer_compile_time_args;
     reader_compile_time_args[2] = true;  // reader
 
     std::string reader_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
-    CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
+    CreateKernel(program, reader_kernel_fname, cores_with_work, ReaderDataMovementConfig(reader_compile_time_args));
 
     return cached_program_t{
         std::move(program),
