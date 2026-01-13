@@ -813,8 +813,8 @@ def test_dispatch_cores_extended_worker():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [9325],
         "Tensix CQ Prefetch": [9325],
-        "dispatch_total_cq_cmd_op_time": [223],
-        "dispatch_go_send_wait_time": [223],
+        "dispatch_total_cq_cmd_op_time": [87],
+        "dispatch_go_send_wait_time": [87],
     }
 
     verify_stats(
@@ -843,7 +843,7 @@ def test_dispatch_cores_extended_worker():
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.WORKER",
             setupAutoExtract=False,
             doDispatchCores=True,
         ),
