@@ -619,7 +619,7 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
             uint32_t in_mask_tile_id = q_tile * Sk_chunk_t + k_tile;
             const bool do_zero = k_tile < unpad_tile_col_in_chunk;
             const bool do_inf =
-                k_tile > unpad_tile_col_in_chunk || k_tile == unpad_tile_col_in_chunk && unpad_col_in_tile == 0;
+                (k_tile > unpad_tile_col_in_chunk) || (k_tile == unpad_tile_col_in_chunk && unpad_col_in_tile == 0);
 
             if (do_zero) {
                 if (zero_tile_idx == -1) {
@@ -900,18 +900,23 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
     }
 }
 
-template <bool is_causal, bool is_chunked, uint32_t sliding_window_size, uint32_t cb_mask_in>
+template <
+    bool is_causal,
+    bool is_chunked,
+    uint32_t sliding_window_size,
+    bool padded_or_joint_masks,
+    uint32_t cb_mask_in>
 void generate_mask(
-    uint32_t Sq_chunk_t,
-    uint32_t Sk_chunk_t,
-    uint32_t q_chunk,
-    uint32_t chunk_start_t_in_q_chunks,
-    bool generate_mask_0,
-    bool generate_mask_1,
-    bool generate_mask_2,
-    uint32_t unpadded_Sk_mask_0,
-    uint32_t unpadded_Sk_mask_1,
-    uint32_t unpadded_Sk_mask_2) {
+    const uint32_t Sq_chunk_t,
+    const uint32_t Sk_chunk_t,
+    const uint32_t q_chunk,
+    const uint32_t chunk_start_t_in_q_chunks,
+    const bool generate_mask_0,
+    const bool generate_mask_1,
+    const bool generate_mask_2,
+    const uint32_t unpadded_Sk_mask_0,
+    const uint32_t unpadded_Sk_mask_1,
+    const uint32_t unpadded_Sk_mask_2) {
     if constexpr (is_causal || sliding_window_size > 0) {
         uint32_t offset_q_chunk = q_chunk;
         if constexpr (is_chunked) {
@@ -937,7 +942,7 @@ void generate_mask(
                     Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
             }
         }
-    } else {
+    } else if constexpr (padded_or_joint_masks) {
         if (generate_mask_0) {
             generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_0);
         }

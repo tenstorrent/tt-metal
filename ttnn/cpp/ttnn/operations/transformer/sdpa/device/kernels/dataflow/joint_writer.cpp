@@ -63,7 +63,7 @@ void kernel_main() {
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
-                generate_mask<false, false, false, cb_mask_in>(
+                generate_mask<false, false, 0, use_joint_mask, cb_mask_in>(
                     Sq_chunk_t,
                     Sk_chunk_t,
                     q_chunk,

@@ -97,7 +97,7 @@ void kernel_main() {
 #else
                     q_chunk = local_q_start + q_iter;
 #endif
-                    generate_mask<is_causal, is_chunked, sliding_window_size, cb_mask_in>(
+                    generate_mask<is_causal, is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
                         Sq_chunk_t,
                         Sk_chunk_t,
                         q_chunk,

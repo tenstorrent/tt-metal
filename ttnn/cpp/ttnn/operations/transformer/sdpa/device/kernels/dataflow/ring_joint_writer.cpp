@@ -128,7 +128,7 @@ void kernel_main() {
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-            generate_mask<false, false, false, cb_mask_in>(
+            generate_mask<false, false, 0, true, cb_mask_in>(
                 Sq_chunk_t,
                 Sk_chunk_t,
                 q_chunk,
