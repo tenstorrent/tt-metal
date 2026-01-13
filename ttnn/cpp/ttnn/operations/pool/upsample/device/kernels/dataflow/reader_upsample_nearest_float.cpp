@@ -5,16 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-
-// Fixed-point arithmetic constants (Q16.16 format)
-constexpr int32_t FIXED_POINT_SHIFT = 16;
-
-// Multiply integer by fixed-point value and return integer result
-// This computes: floor(integer * fixed_point_value)
-// where fixed_point_value is in Q16.16 format
-inline uint32_t fixed_mul_int_fixed(uint32_t integer, int32_t fixed) {
-    return static_cast<uint32_t>((static_cast<int64_t>(integer) * fixed) >> FIXED_POINT_SHIFT);
-}
+#include "fixed_point_arithmetic.hpp"
 
 void kernel_main() {
     // Runtime arguments
@@ -52,8 +43,8 @@ void kernel_main() {
         // Map output coordinates to input coordinates using fixed-point arithmetic
         // src_y = floor(y_out * reciprocal_scale_h) = floor(y_out / scale_h)
         // src_x = floor(x_out * reciprocal_scale_w) = floor(x_out / scale_w)
-        const uint32_t src_y = fixed_mul_int_fixed(y_out, reciprocal_scale_h_fixed);
-        const uint32_t src_x = fixed_mul_int_fixed(x_out, reciprocal_scale_w_fixed);
+        const uint32_t src_y = static_cast<uint32_t>(fixed_mul(y_out, reciprocal_scale_h_fixed));
+        const uint32_t src_x = static_cast<uint32_t>(fixed_mul(x_out, reciprocal_scale_w_fixed));
 
         // Clamp source coordinates to valid range
         const uint32_t clamped_src_y = (src_y < input_height) ? src_y : (input_height - 1);

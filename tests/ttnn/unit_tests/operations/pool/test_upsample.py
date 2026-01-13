@@ -574,7 +574,7 @@ def test_nearest_upsample_with_uneven_input_shards(
 )
 def test_upsample_nearest_float_interleaved(device, input_shape, scale_factor_h, scale_factor_w):
     """Test upsample with float scale factors using interleaved memory."""
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     # Input shape is NCHW, create tensor and permute to NHWC for ttnn
     input_nchw = torch.randn(input_shape, dtype=torch.bfloat16)

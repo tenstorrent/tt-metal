@@ -105,9 +105,7 @@ inline tt::tt_metal::MemoryConfig compute_integer_output_mem_config(
         shard_spec.shape = {padded / shard_spec.num_cores(), input.shard_spec()->shape[1]};
     } else {
         // Nearest: output shard is input shard * scale factors
-        shard_spec.shape = {
-            static_cast<uint32_t>(std::floor(input.shard_spec()->shape[0] * scale_h * scale_w)),
-            input.shard_spec()->shape[1]};
+        shard_spec.shape = {input.shard_spec()->shape[0] * scale_h * scale_w, input.shard_spec()->shape[1]};
     }
     return output_mem_config.with_shard_spec(shard_spec);
 }

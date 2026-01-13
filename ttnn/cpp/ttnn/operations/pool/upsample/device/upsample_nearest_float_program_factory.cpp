@@ -18,9 +18,6 @@
 namespace ttnn::operations::pool::upsample::program {
 
 constexpr uint32_t BUFFERING_FACTOR = 2;
-constexpr uint32_t NUM_TILES_DEST = 8;
-// Maximum number of sticks to process per batch for optimal NOC utilization
-constexpr uint32_t MAX_BATCH_SIZE = 5;
 
 UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -75,23 +72,8 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
 
     // Calculate stick sizes (aligned based on buffer type for efficient reads)
 
-    const uint32_t element_size = input_tensor.element_size();
+    const uint32_t num_cb_pages = BUFFERING_FACTOR;
 
-    // Calculate max CB pages based on available L1 memory
-    // Use conservative estimate: ~16KB of L1 for CB allocation
-    const uint32_t available_l1 = NUM_TILES_DEST * tt::constants::TILE_HW * element_size;
-    const uint32_t l1_for_cb = available_l1 / BUFFERING_FACTOR;
-    const uint32_t max_cb_pages_from_l1 = l1_for_cb / aligned_input_page_size;
-
-    // Determine actual number of CB pages: min of (max work per core, L1 capacity)
-    const uint32_t max_pages_per_core = std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
-    uint32_t num_cb_pages = std::min(max_pages_per_core, max_cb_pages_from_l1);
-    if (num_cb_pages == 0) {
-        num_cb_pages = 1;  // Need at least 1 page
-    }
-
-    // Create circular buffer for reader-writer communication
-    // Single CB (no fill CB needed unlike rotate, since all source coords are valid)
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_page_size = aligned_output_page_size;
 
@@ -102,7 +84,6 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
         output_cb_page_size,
         num_cb_pages * BUFFERING_FACTOR,
         output_cb_data_format);
-    (void)output_cb_handle;
 
     std::vector<uint32_t> reader_compile_time_args = {
         output_cb_index,
@@ -128,14 +109,14 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
     const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/"
-        "reader_upsample_nearest_float_interleaved.cpp",
+        "reader_upsample_nearest_float.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     const tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/"
-        "writer_upsample_nearest_float_interleaved.cpp",
+        "writer_upsample_nearest_float.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

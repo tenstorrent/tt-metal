@@ -6,7 +6,6 @@
 #include <algorithm>
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/operation.hpp"
@@ -15,8 +14,6 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 
 namespace ttnn::operations::upsample {
-
-using ttnn::operations::pool::upsample::is_integer_scale;
 
 static std::pair<Tensor, sliding_window::SlidingWindowConfig> apply_bilinear_halo_preprocessing(
     const ttnn::Tensor& input_tensor, int scale_h, int scale_w) {
