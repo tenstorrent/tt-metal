@@ -102,6 +102,38 @@ ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, co
     PACK((llk_pack_init(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
+ALWI void mm_init_AB(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, const uint32_t transpose = 0) {
+    // Note: in0_cb_id and in1_cb_id are swapped here because internally,
+    // matmul maps in0 to srcB and in1 to srcA, so the arguments must be swapped
+    // to ensure the correct operand mapping for the hardware implementation.
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
+    // UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(in0_cb_id, in1_cb_id)));
+
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_hw_configure(in0_cb_id, in1_cb_id)));
+
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
+    PACK((llk_pack_init(out_cb_id)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+}
+ALWI void mm_init_A(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, const uint32_t transpose = 0) {
+    // Note: in0_cb_id and in1_cb_id are swapped here because internally,
+    // matmul maps in0 to srcB and in1 to srcA, so the arguments must be swapped
+    // to ensure the correct operand mapping for the hardware implementation.
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE, false>(
+        false, false, in0_cb_id)));
+
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_hw_configure(in0_cb_id, in1_cb_id)));
+
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
+    PACK((llk_pack_init(out_cb_id)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+}
 
 // clang-format off
 /**
@@ -124,6 +156,15 @@ ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, co
 ALWI void matmul_tiles(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
+    // UNPACK((llk_unpack_A<BroadcastType::NONE, false>(in0_cb_id, in0_tile_index)));
+    // UNPACK((llk_unpack_set_srcb_dummy_valid()));
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
+}
+ALWI void matmul_tiles_A(
+    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
+    // UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
+    UNPACK((llk_unpack_A<BroadcastType::NONE, true>(in0_cb_id, in0_tile_index)));
+    UNPACK((llk_unpack_set_srcb_dummy_valid()));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
 }
 

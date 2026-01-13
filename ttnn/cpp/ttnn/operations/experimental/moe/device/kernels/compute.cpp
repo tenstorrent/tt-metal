@@ -48,14 +48,19 @@ void MAIN {
     const uint32_t w2_tile_id_start = core_id < 32 ? 4 * core_id : 4 * 32 + 3 * (core_id - 32);
 
     // Read W0 and W1 from CB into registers
-    // reconfig_data_format(cb_s2c_in,cb_r2c_w0 );
-    // pack_reconfig_data_format(cb_c2c_mm0);
-    // mm_init(cb_s2c_in, cb_r2c_w0, cb_c2c_mm0);
+    reconfig_data_format(cb_s2c_in, cb_r2c_w0);
+    pack_reconfig_data_format(cb_c2c_mm0);
+    DPRINT << "PRE MM 0" << ENDL();
+    mm_init_A(cb_s2c_in, cb_r2c_w0, cb_c2c_mm0);
     tile_regs_acquire();
     tile_regs_wait();
     for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
         cb_wait_front(cb_r2c_w0, 1);
-        matmul_tiles(cb_s2c_in, cb_r2c_w0, i, 0, dst0);
+        // matmul_tiles_math(dst0);
+        DPRINT << "i: " << i << ENDL();
+        DPRINT << "pre MM_LLK" << ENDL();
+        matmul_tiles_A(cb_s2c_in, cb_r2c_w0, i, 0, dst0);
+        DPRINT << "post MM_LLK" << ENDL();
         cb_pop_front(cb_r2c_w0, 1);
     }
     // silu_tile_init();
@@ -65,16 +70,18 @@ void MAIN {
     pack_tile(dst0, cb_c2c_mm0);
     cb_push_back(cb_c2c_mm0, 1);
     tile_regs_release();
+    DPRINT << "POST MM 0" << ENDL();
 
     // reconfig_data_format(cb_s2c_in,cb_r2c_w1 );
     // pack_reconfig_data_format(cb_c2c_mm1);
-    mm_init(cb_s2c_in, cb_r2c_w1, cb_c2c_mm1);
+    mm_init_A(cb_s2c_in, cb_r2c_w1, cb_c2c_mm1);
 
     tile_regs_acquire();
     tile_regs_wait();
     for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
         cb_wait_front(cb_r2c_w1, 1);
-        matmul_tiles(cb_s2c_in, cb_r2c_w1, i, 0, dst0);
+        // matmul_tiles_math(dst0);
+        matmul_tiles_A(cb_s2c_in, cb_r2c_w1, i, 0, dst0);
         cb_pop_front(cb_r2c_w1, 1);
     }
     tile_regs_commit();
@@ -82,6 +89,7 @@ void MAIN {
     pack_tile(dst0, cb_c2c_mm1);
     cb_push_back(cb_c2c_mm1, 1);
     tile_regs_release();
+    DPRINT << "post_mm_1" << ENDL();
 
     // Write to cb_c2w_elt
     // binary_op_init_common(cb_c2c_mm0,cb_c2c_mm1,cb_c2w_elt);
