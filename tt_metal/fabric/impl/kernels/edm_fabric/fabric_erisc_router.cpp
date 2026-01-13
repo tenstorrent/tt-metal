@@ -900,17 +900,23 @@ FORCE_INLINE
     using eth_chan_directions::NORTH;
     using eth_chan_directions::SOUTH;
     using eth_chan_directions::WEST;
+    using eth_chan_directions::Z;
 
     switch (hop_cmd) {
         case MeshRoutingFields::NOOP:
             if constexpr (z_router_enabled) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<Z>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
+                if constexpr (my_direction == Z) {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                } else {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<Z>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
             }
             break;
         case MeshRoutingFields::FORWARD_EAST:
@@ -2715,11 +2721,6 @@ void kernel_main() {
             *reinterpret_cast<volatile uint32_t*>(local_sender_channel_7_connection_semaphore_addr) = 0;
             *reinterpret_cast<volatile uint32_t*>(local_sender_channel_7_connection_buffer_index_id) = 0;
             *sender7_worker_semaphore_ptr = 0;
-        }
-        if constexpr (is_sender_channel_serviced[8]) {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_8_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_8_connection_buffer_index_id) = 0;
-            *sender8_worker_semaphore_ptr = 0;
         }
     }
     asm volatile("nop");

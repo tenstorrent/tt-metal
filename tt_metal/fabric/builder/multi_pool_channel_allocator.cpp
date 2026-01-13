@@ -31,7 +31,10 @@ MultiPoolChannelAllocator::MultiPoolChannelAllocator(
 }
 
 void MultiPoolChannelAllocator::emit_ct_args(
-    std::vector<uint32_t>& ct_args, size_t num_used_sender_channels, size_t num_used_receiver_channels) const {
+    std::vector<uint32_t>& ct_args,
+    size_t num_used_sender_channels,
+    size_t num_used_receiver_channels,
+    bool z_router_enabled) const {
     // Step 0: Emit special tag (replaces the tag that was in static allocator)
     ct_args.push_back(0xabcd1234);
 
@@ -92,11 +95,44 @@ void MultiPoolChannelAllocator::emit_ct_args(
                 dynamic_cast<FabricRemoteChannelsAllocator*>(pool_allocator.get()),
             "Non static sized channel allocators not supported in the code below yet");
     }
-    for (size_t i = 0; i < num_used_sender_channels; ++i) {
-        ct_args.push_back(static_cast<uint32_t>(i));
+
+    // Temporary workaround for z routers.
+    // Static channel allocator is allocating 9 channels for z routers, since we can have 5 VC0 and 4 VC1 sender
+    // channels. However, mesh routers only need 8 channels. When creating sender channel to pool index mapping, we need
+    // to skip the 5th VC0 sender channel. Mesh routers VC0 sender channels are 0-3, and VC1 sender channels are 4-7
+    // which map to pools 0-3 and 5-8 respectively.
+    if (z_router_enabled) {
+        if (num_used_sender_channels == 8) {
+            // mesh router on device with z router
+            for (size_t i = 0; i < num_used_sender_channels; ++i) {
+                if (i < 4) {
+                    ct_args.push_back(static_cast<uint32_t>(i));
+                } else {
+                    ct_args.push_back(static_cast<uint32_t>(i + 1));
+                }
+            }
+            ct_args.push_back(static_cast<uint32_t>(4));
+        } else {
+            // z router on device with z router
+            for (size_t i = 0; i < num_used_sender_channels; ++i) {
+                ct_args.push_back(static_cast<uint32_t>(i));
+            }
+        }
+    } else {
+        // mesh router on device without z router
+        for (size_t i = 0; i < num_used_sender_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(i));
+        }
     }
-    for (size_t i = 0; i < num_used_receiver_channels; ++i) {
-        ct_args.push_back(static_cast<uint32_t>(i + num_used_sender_channels));
+
+    if (z_router_enabled) {
+        for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(i + 9));
+        }
+    } else {
+        for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(i + num_used_sender_channels));
+        }
     }
 
     // Emit the sender channel to pool type -- NVM

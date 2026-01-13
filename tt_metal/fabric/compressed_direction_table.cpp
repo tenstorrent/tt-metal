@@ -38,6 +38,7 @@ std::uint8_t direction_table_t<ArraySize>::compress_value(std::uint8_t original_
         case eth_chan_directions::WEST: return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_WEST);
         case eth_chan_directions::NORTH: return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_NORTH);
         case eth_chan_directions::SOUTH: return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_SOUTH);
+        case eth_chan_directions::Z: return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_Z);
         case eth_chan_magic_values::INVALID_DIRECTION:
             return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_INVALID_DIRECTION);
         case eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY:
