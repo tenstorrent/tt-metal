@@ -25,8 +25,8 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
-uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
@@ -223,6 +223,7 @@ extern "C" uint32_t _start1() {
                     // barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                     uint32_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                    asm("FENCE.i");
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                     record_stack_usage(stack_free);
                 } else {
