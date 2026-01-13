@@ -1150,7 +1150,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             .writer_kernel1 = writer_kernel1,
             .writer_kernel2 = writer_kernel2,
             .semaphores = semaphores,
-            .is_device_0_2 = is_sender_device,  // D0 and D3 are senders
+            .is_device_0_2 = (is_sender_device && is_leftmost) || is_root2_device,  // D0 and D2
             .cores1_handoff_sem_addrs = cores1_handoff_sem_addrs,
             .cores2_handoff_sem_addrs = cores2_handoff_sem_addrs}};
 }

@@ -33,17 +33,9 @@ void kernel_main() {
     const uint32_t current_core_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t current_core_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // Read handoff semaphore ID early (at arg index 12) and reset it immediately
-    // This must happen BEFORE any work to avoid race with Writer1
-    // Arg indices: 7=fabric_idx, 8=intermediate_base_addr, 9=sender_sem, 10=round1_interm, 11=device_sem,
-    // 12=handoff_sem
-    const uint32_t writer_to_reader_handoff_sem = get_semaphore(get_arg_val<uint32_t>(12));
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_to_reader_handoff_sem), 0);
-
     constexpr uint32_t onetile = 1;
 
     DPRINT << "start of reader 1 kernel\n";
-    DPRINT << "reader1 handoff_sem addr: " << writer_to_reader_handoff_sem << "\n";
     // ROUND 1: read local data
     DPRINT << "round1\n";
     cb_reserve_back(packet_cb_id0, 1);
@@ -138,15 +130,6 @@ void kernel_main() {
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
     DPRINT << "after wait for fabric endpoint ready\n";
-
-    // Wait for Writer1 to disconnect from the mux channel before we connect
-    // Writer1 and Reader1 share the same mux channel (same worker_id), so we must
-    // wait for Writer1 to release it after Round 1 before we can use it in Round 2
-    DPRINT << "waiting for writer1 handoff semaphore at addr " << writer_to_reader_handoff_sem << "\n";
-    auto* handoff_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_to_reader_handoff_sem);
-    DPRINT << "current sem value: " << *handoff_sem_ptr << "\n";
-    noc_semaphore_wait(handoff_sem_ptr, 1);
-    DPRINT << "after waiting for writer1 handoff semaphore\n";
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
 
