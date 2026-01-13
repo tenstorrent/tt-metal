@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/math.hpp"
 
 #include <optional>
@@ -22,22 +23,6 @@ namespace ttnn::operations::experimental::transformer::dit_layernorm::program {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(
-        sizeof float_num == sizeof uint32_data,
-        "Float size ({}) must equal uint32 size ({})",
-        sizeof float_num,
-        sizeof uint32_data);
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    uint32_data = (uint32_data >> 16);
-    return (uint16_t)uint32_data;
-}
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
 
 std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
     IDevice* device, uint32_t W, const CoreRangeSet& cores) {
