@@ -23,16 +23,8 @@ GraphIndexData<TargetNode, GlobalNode> build_graph_index_data(
     const auto& target_nodes_vec = target_graph.get_nodes();
     const auto& global_nodes_vec = global_graph.get_nodes();
 
-    data.target_nodes.reserve(target_nodes_vec.size());
-    for (const auto& node : target_nodes_vec) {
-        data.target_nodes.push_back(node);
-    }
-
-    data.global_nodes.reserve(global_nodes_vec.size());
-    for (const auto& node : global_nodes_vec) {
-        data.global_nodes.push_back(node);
-    }
-
+    data.target_nodes = target_nodes_vec;
+    data.global_nodes = global_nodes_vec;
     data.n_target = data.target_nodes.size();
     data.n_global = data.global_nodes.size();
 
