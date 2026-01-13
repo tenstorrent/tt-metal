@@ -34,9 +34,9 @@ void matmul_with_relu_block(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint3
 
     tile_regs_commit();
 
-    // Don't pop front here because we need to use the input again for the next operation
-    // cb_pop_front(cb_a, num_tiles);
-    // cb_pop_front(cb_b, num_tiles);
+    // cb_pop_front(cb_a, num_tiles); // Don't pop front here because we need to use the input again for the next
+    // operation
+    cb_pop_front(cb_b, num_tiles);
 
     tile_regs_wait();
     pack_tile(0, cb_out);
@@ -57,6 +57,7 @@ void matmul_with_bias_block(uint32_t cb_a, uint32_t cb_b, uint32_t cb_bias, uint
         matmul_tiles(cb_a, cb_b, k, k, 0);
     }
     // TODO: Add bias here!
+    // Can we do this in-place?
 
     tile_regs_commit();
 
