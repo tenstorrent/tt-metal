@@ -10,6 +10,7 @@ void MAIN {
     // Run-time arguments
     uint32_t argidx = 0;
     const auto core_id = get_arg_val<uint32_t>(argidx++);
+    const auto vchannel = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_r2c_w0 = tt::CBIndex::c_0;
