@@ -32,45 +32,60 @@ import ttml
 from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
 from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_home
-from ttml.common.config import load_config
+from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
+from ttml.common.data import CharTokenizer, build_causal_mask
 
 
-@dataclass
-class TrainingConfig:
-    """Training configuration matching C++ TrainingConfig."""
+class TrainingConfig(BaseTrainingConfig):
+    """Extended training config with NanoGPT-specific fields.
 
-    project_name: str = "tt_train_nano_gpt"
-    seed: int = 5489
-    model_save_interval: int = 500
-    batch_size: int = 64
-    num_epochs: int = 1
-    max_steps: int = 5000
-    learning_rate: float = 3e-4
-    weight_decay: float = 1e-2
-    use_no_op: bool = False
-    use_moreh_adamw: bool = False
-    use_kahan_summation: bool = False
-    gradient_accumulation_steps: int = 1
-    model_config: str = ""
-    data_path: str = ""
-    scheduler_type: str = "identity"  # "identity" or "warmup_linear"
-    tokenizer_type: str = "char"  # "char" or "bpe"
-    use_clip_grad_norm: bool = False
-    clip_grad_norm_max_norm: float = 1.0
+    Inherits from ttml.common.config.TrainingConfig and adds fields needed
+    for the full NanoGPT training example.
+    """
+
+    def __init__(self, yaml_config=None):
+        """Initialize training config, optionally from YAML.
+
+        Args:
+            yaml_config: Dictionary or path to YAML config. If None, uses defaults.
+        """
+        # Initialize base class (requires yaml_config, so pass empty dict for defaults)
+        super().__init__(yaml_config if yaml_config is not None else {})
+
+        # Get training_config section for additional fields
+        tc = {}
+        if isinstance(yaml_config, dict):
+            tc = yaml_config.get("training_config", {})
+
+        # Extended fields not in base TrainingConfig
+        self.project_name = tc.get("project_name", "tt_train_nano_gpt")
+        self.data_path = tc.get("data_path", "")
+        self.scheduler_type = tc.get("scheduler_type", "identity")
+        self.tokenizer_type = tc.get("tokenizer_type", "char")
+        self.use_no_op = tc.get("use_no_op", False)
+        self.use_moreh_adamw = tc.get("use_moreh_adamw", False)
+        self.use_kahan_summation = tc.get("use_kahan_summation", False)
+        self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
+        self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
+
+        # Aliases to match expected field names in this example
+        self.max_steps = self.steps
+        self.num_epochs = self.epochs
+        self.model_save_interval = self.save_every
+        self.learning_rate = self.lr
 
 
 @dataclass
 class ModelConfig:
-    """Model configuration matching C++ ModelConfig."""
+    """Model configuration aligned with ttml.common.config.TransformerConfig naming."""
 
     model_type: str = "gpt2"  # "gpt2" or "llama"
     model_path: str = ""
     vocab_size: int = 50304
-    block_size: int = 128  # Reduced from 1024 to avoid memory issues
-    n_embd: int = 384  # NanoGPT default (reduced from 768)
-    n_layer: int = 6  # NanoGPT default (reduced from 12)
-    n_head: int = 6  # NanoGPT default (reduced from 12)
-    dropout: float = 0.2  # Match C++ default: float dropout_prob = 0.2F
+    embedding_dim: int = 384  # NanoGPT default (reduced from 768)
+    num_blocks: int = 6  # NanoGPT default (reduced from 12)
+    num_heads: int = 6  # NanoGPT default (reduced from 12)
+    dropout_prob: float = 0.2  # Match C++ default: float dropout_prob = 0.2F
     bias: bool = True
     max_sequence_length: int = 128  # Reduced from 1024 to avoid memory issues
 
@@ -144,49 +159,10 @@ class GradientAccumulator:
         return self.m_total_loss / float(self.m_total_samples)
 
 
-class CharTokenizer:
-    """Character-level tokenizer matching C++ CharTokenizer."""
-
-    def __init__(self, text: str):
-        """Initialize tokenizer from text."""
-        # Get unique characters and sort them
-        chars = sorted(list(set(text)))
-        self.vocab_size = len(chars)
-        self.stoi = {ch: i for i, ch in enumerate(chars)}
-        self.itos = {i: ch for i, ch in enumerate(chars)}
-
-    def encode(self, text: str) -> list[int]:
-        """Encode text to token IDs."""
-        return [self.stoi[ch] for ch in text]
-
-    def decode(self, tokens: list[int]) -> str:
-        """Decode token IDs to text."""
-        # Handle out-of-range token IDs (can happen if model vocab_size > tokenizer vocab_size)
-        result = []
-        for t in tokens:
-            if t in self.itos:
-                result.append(self.itos[t])
-            else:
-                # Use a fallback character (space) for out-of-range tokens
-                result.append(" ")
-        return "".join(result)
-
-    def get_vocab_size(self) -> int:
-        """Get vocabulary size."""
-        return self.vocab_size
-
-
 def read_file_to_str(file_path: str) -> str:
     """Read file to string."""
     with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
-
-
-def create_identity_scheduler(optimizer, total_steps: int):
-    """Create identity (constant) learning rate scheduler."""
-    # For identity scheduler, we don't need to do anything
-    # The learning rate stays constant
-    return None
 
 
 def create_warmup_linear_scheduler(optimizer, total_steps: int):
@@ -228,20 +204,12 @@ def create_dataset_from_text(
         raise ValueError(f"Unsupported tokenizer type: {tokenizer_type}")
 
 
-def create_mask(sequence_length: int, device) -> ttml.autograd.Tensor:
-    """Create causal attention mask matching C++ implementation."""
-    mask = np.zeros((sequence_length, sequence_length), dtype=np.float32)
-    for i in range(sequence_length):
-        for j in range(sequence_length):
-            mask[i, j] = 1.0 if i >= j else 0.0
-
-    # Reshape to (1, 1, seq_len, seq_len) to match C++ shape
-    # Use TILE layout and BFLOAT16 to match C++ implementation
-    mask = mask.reshape(1, 1, sequence_length, sequence_length)
-    mask_tensor = ttml.autograd.Tensor.from_numpy(
-        mask, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
+def create_causal_mask_tensor(sequence_length: int) -> ttml.autograd.Tensor:
+    """Create causal attention mask as a tensor using ttml.common.data.build_causal_mask."""
+    mask_np = build_causal_mask(sequence_length)
+    return ttml.autograd.Tensor.from_numpy(
+        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
     )
-    return mask_tensor
 
 
 def collate_fn(
@@ -369,54 +337,6 @@ def train_step(
     return loss_float, step_time, should_step
 
 
-def parse_training_config(yaml_config: dict) -> TrainingConfig:
-    """Parse training config from YAML matching C++ parse_config."""
-    training_config = yaml_config.get("training_config", {})
-    config = TrainingConfig()
-
-    # Parse all fields with defaults matching C++ implementation
-    config.project_name = training_config.get("project_name", config.project_name)
-    config.seed = training_config.get("seed", config.seed)
-    config.model_save_interval = training_config.get(
-        "model_save_interval", config.model_save_interval
-    )
-    config.batch_size = training_config.get("batch_size", config.batch_size)
-    config.num_epochs = training_config.get("num_epochs", config.num_epochs)
-    config.max_steps = training_config.get("max_steps", config.max_steps)
-    config.learning_rate = training_config.get("learning_rate", config.learning_rate)
-    config.weight_decay = training_config.get("weight_decay", config.weight_decay)
-    config.use_no_op = training_config.get("use_no_op", config.use_no_op)
-    config.use_moreh_adamw = training_config.get(
-        "use_moreh_adamw", config.use_moreh_adamw
-    )
-    config.use_kahan_summation = training_config.get(
-        "use_kahan_summation", config.use_kahan_summation
-    )
-    config.gradient_accumulation_steps = training_config.get(
-        "gradient_accumulation_steps", config.gradient_accumulation_steps
-    )
-    config.model_config = training_config.get("model_config", config.model_config)
-
-    # Data path with default matching C++ (DATA_FOLDER + "/shakespeare.txt")
-    default_data_path = "data/shakespeare.txt"
-    config.data_path = training_config.get("data_path", default_data_path)
-
-    # Scheduler type defaults to "identity" if not specified
-    config.scheduler_type = training_config.get("scheduler_type", config.scheduler_type)
-
-    # Tokenizer type defaults to "char" if not specified
-    config.tokenizer_type = training_config.get("tokenizer_type", config.tokenizer_type)
-
-    config.use_clip_grad_norm = training_config.get(
-        "use_clip_grad_norm", config.use_clip_grad_norm
-    )
-    config.clip_grad_norm_max_norm = training_config.get(
-        "clip_grad_norm_max_norm", config.clip_grad_norm_max_norm
-    )
-
-    return config
-
-
 def parse_model_config(yaml_config: dict) -> ModelConfig:
     """Parse model config from YAML matching C++ parse_model_config."""
     # The YAML has a "transformer_config" top-level key
@@ -429,16 +349,17 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
     if config.model_type == "gpt2":
         # GPT2 config fields are directly under transformer_config
         config.vocab_size = transformer_config.get("vocab_size", config.vocab_size)
-        config.block_size = transformer_config.get("block_size", config.block_size)
-        config.n_embd = transformer_config.get("embedding_dim", config.n_embd)
-        config.n_layer = transformer_config.get("num_blocks", config.n_layer)
-        config.n_head = transformer_config.get("num_heads", config.n_head)
-        config.dropout = transformer_config.get(
-            "dropout_prob", transformer_config.get("dropout", config.dropout)
+        config.embedding_dim = transformer_config.get(
+            "embedding_dim", config.embedding_dim
+        )
+        config.num_blocks = transformer_config.get("num_blocks", config.num_blocks)
+        config.num_heads = transformer_config.get("num_heads", config.num_heads)
+        config.dropout_prob = transformer_config.get(
+            "dropout_prob", config.dropout_prob
         )
         config.bias = transformer_config.get("bias", config.bias)
         config.max_sequence_length = transformer_config.get(
-            "max_sequence_length", config.block_size
+            "max_sequence_length", config.max_sequence_length
         )
     else:
         raise ValueError(f"Unsupported model type: {config.model_type}")
@@ -540,7 +461,7 @@ def sample_greedy(
             last_logits = logits_np.reshape(-1, logits_np.shape[-1])[-1:]
 
         # Get vocabulary size (model may have rounded up, but tokenizer has actual size)
-        vocab_size = tokenizer.get_vocab_size()
+        vocab_size = tokenizer.vocab_size
 
         # Truncate logits to valid vocabulary
         last_logits = last_logits[:, :vocab_size]
@@ -698,14 +619,14 @@ def load_model_from_checkpoint(
     training_config = checkpoint.get("training_config", None)
     step = checkpoint.get("step", 0)
 
-    # Create model config
+    # Create model config (map aligned names to NanoGPTConfig fields)
     nanogpt_config = NanoGPTConfig(
         vocab_size=model_config.vocab_size,
-        block_size=model_config.block_size,
-        n_embd=model_config.n_embd,
-        n_layer=model_config.n_layer,
-        n_head=model_config.n_head,
-        dropout=model_config.dropout,
+        block_size=model_config.max_sequence_length,
+        n_embd=model_config.embedding_dim,
+        n_layer=model_config.num_blocks,
+        n_head=model_config.num_heads,
+        dropout=model_config.dropout_prob,
         bias=model_config.bias,
     )
 
@@ -930,7 +851,7 @@ def main():
     try:
         print(f"Loading training config from: {args.config}")
         yaml_config = load_config(args.config, f"{configs_root}/training_configs")
-        training_config = parse_training_config(yaml_config)
+        training_config = TrainingConfig(yaml_config)
 
         # Load model config from separate file (matching C++ behavior)
         if training_config.model_config:
@@ -963,7 +884,6 @@ def main():
         training_config.clip_grad_norm_max_norm = args.clip_grad_norm
     if args.sequence_length is not None:
         model_config.max_sequence_length = args.sequence_length
-        model_config.block_size = args.sequence_length
     # Set checkpoint save path (separate from model_config YAML path)
     # If --model_save_path is provided, use it; otherwise use a default based on project name
     if args.model_save_path:
@@ -1014,7 +934,7 @@ def main():
             print(f"   - Vocabulary size: {model_config.vocab_size}")
             print(f"   - Sequence length: {sequence_length}")
             print(
-                f"   - Model: {model_config.n_layer} layers, {model_config.n_embd} embd, {model_config.n_head} heads"
+                f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
             )
 
         except Exception as e:
@@ -1063,7 +983,7 @@ def main():
         dataset, tokenizer = create_dataset_from_text(
             text, sequence_length, training_config.tokenizer_type
         )
-        model_config.vocab_size = tokenizer.get_vocab_size()
+        model_config.vocab_size = tokenizer.vocab_size
 
         print(f"   - Vocabulary size: {model_config.vocab_size}")
         print(f"   - Dataset size: {len(dataset)} samples")
@@ -1073,14 +993,14 @@ def main():
         # Round vocab size to tile boundary (matching C++ behavior)
         model_config.vocab_size = round_up_to_tile(model_config.vocab_size, 32)
 
-        # Create model config
+        # Create model config (map aligned names to NanoGPTConfig fields)
         nanogpt_config = NanoGPTConfig(
             vocab_size=model_config.vocab_size,
-            block_size=model_config.block_size,
-            n_embd=model_config.n_embd,
-            n_layer=model_config.n_layer,
-            n_head=model_config.n_head,
-            dropout=model_config.dropout,
+            block_size=model_config.max_sequence_length,
+            n_embd=model_config.embedding_dim,
+            n_layer=model_config.num_blocks,
+            n_head=model_config.num_heads,
+            dropout=model_config.dropout_prob,
             bias=model_config.bias,
         )
 
@@ -1094,7 +1014,7 @@ def main():
             if isinstance(p, Parameter) and hasattr(p, "tensor")
         )
         print(
-            f"   - Model: {model_config.n_layer} layers, {model_config.n_embd} embd, {model_config.n_head} heads"
+            f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
         )
         print(f"   - Total parameters: {total_params:,}")
 
@@ -1167,9 +1087,7 @@ def main():
         print("\n2. Creating attention mask...")
     else:
         print("\n5. Creating attention mask...")
-    mask = create_mask(
-        sequence_length, ttml.autograd.AutoContext.get_instance().get_device()
-    )
+    mask = create_causal_mask_tensor(sequence_length)
 
     # Training or inference mode
     if args.prompt:
@@ -1188,7 +1106,7 @@ def main():
         print(
             f"  - Gradient accumulation steps: {training_config.gradient_accumulation_steps}"
         )
-        print(f"  - Dropout: {model_config.dropout}")
+        print(f"  - Dropout: {model_config.dropout_prob}")
         if training_config.use_clip_grad_norm:
             print(
                 f"  - Gradient clipping: max_norm={training_config.clip_grad_norm_max_norm}"

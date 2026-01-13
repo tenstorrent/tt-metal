@@ -18,6 +18,7 @@ import ml_dtypes
 
 import ttnn
 import ttml
+from ttml.common.data import build_causal_mask
 from ttml.models.nanogpt import (
     NanoGPT,
     NanoGPTConfig,
@@ -70,14 +71,10 @@ def tiny_config():
 
 
 def create_causal_mask(seq_len: int) -> ttml.autograd.Tensor:
-    """Create a causal attention mask."""
-    mask = np.zeros((seq_len, seq_len), dtype=np.float32)
-    for i in range(seq_len):
-        for j in range(seq_len):
-            mask[i, j] = 1.0 if i >= j else 0.0
-    mask = mask.reshape(1, 1, seq_len, seq_len)
+    """Create a causal attention mask as a tensor using common utility."""
+    mask_np = build_causal_mask(seq_len)
     return ttml.autograd.Tensor.from_numpy(
-        mask, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
+        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
     )
 
 
