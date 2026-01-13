@@ -1,6 +1,6 @@
 lora_config:
   # LoRA rank (r) - dimensionality of the low-rank adaptation
-  r: 128
+  r: 8
 
   # Alpha parameter for LoRA scaling
   lora_alpha: 1.0
@@ -14,24 +14,24 @@ lora_config:
   target_modules:
     - "llama/llama_block_0/attention/q_linear"
     - "llama/llama_block_0/attention/kv_linear"
-    - "llama/llama_block_0/attention/out_linear"
+    # - "llama/llama_block_0/attention/out_linear"
 
     - "llama/llama_block_1/attention/q_linear"
     - "llama/llama_block_1/attention/kv_linear"
-    - "llama/llama_block_1/attention/out_linear"
+    # - "llama/llama_block_1/attention/out_linear"
 
     - "llama/llama_block_2/attention/q_linear"
     - "llama/llama_block_2/attention/kv_linear"
-    - "llama/llama_block_2/attention/out_linear"
+    # - "llama/llama_block_2/attention/out_linear"
 
     - "llama/llama_block_3/attention/q_linear"
     - "llama/llama_block_3/attention/kv_linear"
-    - "llama/llama_block_3/attention/out_linear"
+    # - "llama/llama_block_3/attention/out_linear"
 
     - "llama/llama_block_4/attention/q_linear"
     - "llama/llama_block_4/attention/kv_linear"
-    - "llama/llama_block_4/attention/out_linear"
+    # - "llama/llama_block_4/attention/out_linear"
 
     - "llama/llama_block_5/attention/q_linear"
     - "llama/llama_block_5/attention/kv_linear"
-    - "llama/llama_block_5/attention/out_linear"
+    # - "llama/llama_block_5/attention/out_linear"

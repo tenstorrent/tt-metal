@@ -1,0 +1,101 @@
+lora_config:
+  # LoRA rank (r) - dimensionality of the low-rank adaptation
+  r: 128
+
+  # Alpha parameter for LoRA scaling
+  lora_alpha: 1.0
+
+  # Dropout probability for LoRA layers
+  lora_dropout: 0.0
+
+  # Whether bias should be trainable
+  is_bias_trainable: false
+
+  target_modules:
+    - "llama/llama_block_0/attention/q_linear"
+    - "llama/llama_block_0/attention/kv_linear"
+    # - "llama/llama_block_0/attention/out_linear"
+
+    - "llama/llama_block_1/attention/q_linear"
+    - "llama/llama_block_1/attention/kv_linear"
+    # - "llama/llama_block_1/attention/out_linear"
+
+    - "llama/llama_block_2/attention/q_linear"
+    - "llama/llama_block_2/attention/kv_linear"
+    # - "llama/llama_block_2/attention/out_linear"
+
+    - "llama/llama_block_3/attention/q_linear"
+    - "llama/llama_block_3/attention/kv_linear"
+    # - "llama/llama_block_3/attention/out_linear"
+
+    - "llama/llama_block_4/attention/q_linear"
+    - "llama/llama_block_4/attention/kv_linear"
+    # - "llama/llama_block_4/attention/out_linear"
+
+    - "llama/llama_block_5/attention/q_linear"
+    - "llama/llama_block_5/attention/kv_linear"
+    # - "llama/llama_block_5/attention/out_linear"
+
+    - "llama/llama_block_6/attention/q_linear"
+    - "llama/llama_block_6/attention/kv_linear"
+    # - "llama/llama_block_6/attention/out_linear"
+
+    - "llama/llama_block_7/attention/q_linear"
+    - "llama/llama_block_7/attention/kv_linear"
+    # - "llama/llama_block_7/attention/out_linear"
+
+    - "llama/llama_block_8/attention/q_linear"
+    - "llama/llama_block_8/attention/kv_linear"
+    # - "llama/llama_block_8/attention/out_linear"
+
+    - "llama/llama_block_9/attention/q_linear"
+    - "llama/llama_block_9/attention/kv_linear"
+    # - "llama/llama_block_9/attention/out_linear"
+
+    - "llama/llama_block_10/attention/q_linear"
+    - "llama/llama_block_10/attention/kv_linear"
+    # - "llama/llama_block_10/attention/out_linear"
+
+    - "llama/llama_block_11/attention/q_linear"
+    - "llama/llama_block_11/attention/kv_linear"
+    # - "llama/llama_block_11/attention/out_linear"
+
+    - "llama/llama_block_12/attention/q_linear"
+    - "llama/llama_block_12/attention/kv_linear"
+    # - "llama/llama_block_12/attention/out_linear"
+
+    - "llama/llama_block_13/attention/q_linear"
+    - "llama/llama_block_13/attention/kv_linear"
+    # - "llama/llama_block_13/attention/out_linear"
+
+    - "llama/llama_block_14/attention/q_linear"
+    - "llama/llama_block_14/attention/kv_linear"
+    # - "llama/llama_block_14/attention/out_linear"
+
+    - "llama/llama_block_15/attention/q_linear"
+    - "llama/llama_block_15/attention/kv_linear"
+    # - "llama/llama_block_15/attention/out_linear"
+
+    - "llama/llama_block_16/attention/q_linear"
+    - "llama/llama_block_16/attention/kv_linear"
+    # - "llama/llama_block_16/attention/out_linear"
+
+    - "llama/llama_block_17/attention/q_linear"
+    - "llama/llama_block_17/attention/kv_linear"
+    # - "llama/llama_block_17/attention/out_linear"
+
+    - "llama/llama_block_18/attention/q_linear"
+    - "llama/llama_block_18/attention/kv_linear"
+    # - "llama/llama_block_18/attention/out_linear"
+
+    - "llama/llama_block_19/attention/q_linear"
+    - "llama/llama_block_19/attention/kv_linear"
+    # - "llama/llama_block_19/attention/out_linear"
+
+    - "llama/llama_block_20/attention/q_linear"
+    - "llama/llama_block_20/attention/kv_linear"
+    # - "llama/llama_block_20/attention/out_linear"
+
+    - "llama/llama_block_21/attention/q_linear"
+    - "llama/llama_block_21/attention/kv_linear"
+    # - "llama/llama_block_21/attention/out_linear"
