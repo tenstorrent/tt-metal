@@ -52,6 +52,10 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: 🚨 Force failure for testing merge gate
+        run: |
+          echo "This is a temporary failure to test merge gate behavior"
+          exit 1
       - name: Run fabric cpu-only unit tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
