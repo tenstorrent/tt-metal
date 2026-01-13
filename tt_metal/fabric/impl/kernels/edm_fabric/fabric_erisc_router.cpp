@@ -2939,7 +2939,7 @@ void kernel_main() {
     // Ensure array size is at least 1 to avoid undefined behavior
     static_assert(VC1_DOWNSTREAM_EDM_SIZE > 0, "VC1_DOWNSTREAM_EDM_SIZE must be at least 1");
     if (has_downstream_edm_vc1_buffer_connection) {
-        uint32_t has_downstream_edm = has_downstream_edm_vc1_buffer_connection & 0xF;  // 3-bit mask
+        uint32_t has_downstream_edm = has_downstream_edm_vc1_buffer_connection & 0xF;  // 4-bit mask
         uint32_t compact_index = 0;
         uint32_t dense_index = 0;
         while (has_downstream_edm) {
