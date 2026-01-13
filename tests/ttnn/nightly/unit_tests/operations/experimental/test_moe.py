@@ -136,7 +136,7 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2048): 360.0,
+    (32, 7168, 2048): 102.0,
 }
 
 
@@ -184,9 +184,15 @@ def test_moe_performance(M, K, N, check_accuracy, dump_outputs):
     run_device_profiler(command, "ttnn_moe_performance", device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log("ttnn_moe_performance", float_columns=["DEVICE KERNEL DURATION [ns]"])
     duration_us = int(r["DEVICE KERNEL DURATION [ns]"].min()) / 1000.0
-    logger.info(f"Performance: {duration_us} us")
-    duration_us = int(r["DEVICE KERNEL DURATION [ns]"].min()) / 1000.0
-    logger.info(f"Performance: {duration_us} us")
+    logger.warning(f"Performance: {duration_us} us")
+
+    bytes_per_tile = 512 + 64
+    total_tiles_0_1 = 224 * 64
+    total_tiles_2 = 224 * 64
+    total_tiles_per_core = 2 * total_tiles_0_1 + total_tiles_2
+    total_bytes = total_tiles_per_core * bytes_per_tile
+    bandwidth = total_bytes / (duration_us * 1000)
+    logger.warning(f"Bandwidth: {bandwidth} GB/s")
 
     assert (
         duration_us < SHAPE2TIME[(M, K, N)]
