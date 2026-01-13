@@ -67,10 +67,10 @@ robot control.
 │                    └──────────────┬───────────────┘                   │
 │                                   │                                   │
 │                                   ▼                                   │
-│                         ┌─────────────────┐                           │
-│                         │  Action Output  │                           │
-│                         │  [1, 50, 32]    │                           │
-│                         └─────────────────┘                           │
+│                         ┌───────────────────┐                         │
+│                         │   Action Output   │                         │
+│                         │ [batch=1, 50, 32] │                         │
+│                         └───────────────────┘                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -102,7 +102,7 @@ pi0/
 │   ├── ttnn_gemma.py           # Gemma attention/MLP (TTNN)
 │   ├── ttnn_prefix.py          # Prefix embedding (TTNN)
 │   ├── ttnn_suffix.py          # Suffix embedding (TTNN)
-│   └── ttnn_denoise.py         # Denoising logic (TTNN)
+│   └── ttnn_common.py          # Common TTNN utilities
 ├── tests/
 │   ├── pcc/                    # PCC (accuracy) tests
 │   ├── perf/                   # Performance benchmarks
@@ -173,6 +173,13 @@ $TT_METAL_HOME/models/experimental/pi0/weights/
 
 PCC (Pearson Correlation Coefficient) tests compare TTNN outputs against PyTorch reference.
 
+**Full Model PCC Test:**
+
+```bash
+# Using pytest
+pytest models/experimental/pi0/tests/pcc/test_pcc_ttnn_pi0_model.py -v
+```
+
 **Code Flow (what gets tested):**
 
 ```
@@ -217,17 +224,7 @@ PI0ModelTTNN.sample_actions()
 │       └─► PaliGemmaBackboneTTNN.forward_expert()
 │           └─► GemmaBlockTTNN.forward() × 18 layers (Expert blocks)
 │
-└─► return denoised_actions [batch, 50, 32]
-```
-
-**Full Model PCC Test:**
-
-```bash
-# Using pytest
-pytest models/experimental/pi0/tests/pcc/test_pcc_ttnn_pi0_model.py -v
-
-# Direct execution (recommended for debugging)
-python models/experimental/pi0/tests/pcc/test_pcc_ttnn_pi0_model.py
+└─► return denoised_actions [batch=1, 50, 32]
 ```
 
 **Component PCC Tests:**
