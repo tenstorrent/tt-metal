@@ -22,9 +22,8 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import is_grayskull, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.prefetcher import Prefetcher
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
@@ -84,7 +83,6 @@ def create_weight_tensors(
     assert hidden_dim % num_devices == 0, f"hidden_dim {hidden_dim} must be divisible by num_devices {num_devices}"
 
     # Number of receiver cores
-    ring_size = prefetcher.ring_size
     dram_cores = mesh_device.dram_grid_size().x
 
     # Create DRAM sharded memory configs for weights

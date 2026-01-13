@@ -318,9 +318,9 @@ class Prefetcher(LightweightModule):
         The addresses are replicated on each sender core
         """
         assert (
-            len(self.prefetched_tensor_addr) == self.num_tensors * self.num_layers,
-            "No tensor addresses have been inserted",
-        )
+            len(self.prefetched_tensor_addr) == self.num_tensors * self.num_layers
+        ), "No tensor addresses have been inserted"
+
         tensor_addrs = torch.tensor(self.prefetched_tensor_addr)
         tensor_addrs = tensor_addrs.repeat(self.mesh_device.dram_grid_size().x, 1)
         tensor_addrs_mem_config = ttnn.MemoryConfig(
