@@ -6,7 +6,7 @@ import inspect
 import json
 import math
 import os
-from enum import Enum
+from enum import Enum, auto
 from pathlib import Path
 from typing import Tuple
 
@@ -390,6 +390,13 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
 
     except Exception as e:
         raise ValueError(f"Error loading JSON configuration: {e}")
+
+
+class CheckpointType(Enum):
+    """Enum for checkpoint types."""
+
+    Meta = auto()
+    HuggingFace = auto()
 
 
 class ModelArgs:
