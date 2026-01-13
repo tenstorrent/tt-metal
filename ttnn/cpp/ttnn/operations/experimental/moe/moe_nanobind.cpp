@@ -24,7 +24,8 @@ void bind_moe(nb::module_& mod) {
             w1_tensor: Weight tensor for second matmul
             w2_tensor: Weight tensor for third matmul
             output_tensor: Output tensor (sharded)
-            num_experts: Number of experts
+            num_experts: Number of experts per layer
+            layer_id: The layer for which the MoE operation is being performed
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
@@ -34,6 +35,7 @@ void bind_moe(nb::module_& mod) {
             nb::arg("w2_tensor"),
             nb::arg("output_tensor"),
             nb::arg("num_experts"),
+            nb::arg("layer_id"),
         });
 }
 
