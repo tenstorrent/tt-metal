@@ -250,40 +250,61 @@ function updateOwnersJson(ownersPath, pipelineReorgDir) {
   const newEntries = [];
   const seenJobs = new Set(); // Track jobs we've already processed
 
+  // Track which job-name-components we've added during this run
+  const addedWithPrefix = new Set();
+  const addedWithoutPrefix = new Set();
+
   for (const job of pipelineJobs) {
     const normalizedName = normalizeJobName(job.name);
     const workflowPrefix = job.workflowPrefix;
     const jobKey = `${workflowPrefix}:${normalizedName}`;
 
-    // Skip if we've already processed this job
+    // Skip if we've already processed this job (for this prefix/name pair)
     if (seenJobs.has(jobKey)) {
       continue;
     }
 
-    // Check if either version exists
+    const prefixedComponent = `${workflowPrefix} / ${normalizedName}`;
+    const unprefixedComponent = normalizedName;
+
+    // Check if either version exists in owners.json
     const existsWithPrefix = jobExistsInOwners(job.name, normalizedName, workflowPrefix, ownersData);
     const existsWithoutPrefix = jobExistsInOwners(job.name, normalizedName, '', ownersData);
 
-    if (!existsWithPrefix && !existsWithoutPrefix) {
-      seenJobs.add(jobKey);
+    const alreadyAddedWithPrefix = addedWithPrefix.has(prefixedComponent);
+    const alreadyAddedWithoutPrefix = addedWithoutPrefix.has(unprefixedComponent);
 
+    const shouldAddWithPrefix = !existsWithPrefix && !alreadyAddedWithPrefix;
+    const shouldAddWithoutPrefix = !existsWithoutPrefix && !alreadyAddedWithoutPrefix;
+
+    if (!shouldAddWithPrefix && !shouldAddWithoutPrefix) {
+      continue;
+    }
+
+    seenJobs.add(jobKey);
+
+    if (shouldAddWithPrefix) {
       // Add entry with workflow prefix
       newEntries.push({
-        'job-name-component': `${workflowPrefix} / ${normalizedName}`,
+        'job-name-component': prefixedComponent,
         owner: {
           id: job.ownerId,
           name: job.ownerName
         }
       });
+      addedWithPrefix.add(prefixedComponent);
+    }
 
+    if (shouldAddWithoutPrefix) {
       // Add entry without workflow prefix
       newEntries.push({
-        'job-name-component': normalizedName,
+        'job-name-component': unprefixedComponent,
         owner: {
           id: job.ownerId,
           name: job.ownerName
         }
       });
+      addedWithoutPrefix.add(unprefixedComponent);
     }
   }
 
