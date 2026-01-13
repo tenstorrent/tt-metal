@@ -203,7 +203,6 @@ class Transformer(LightweightModule):
             total_seq = tokens.shape[-1]
             S = total_seq // batch_size  # Per-user sequence length
             tokens = tokens.reshape(1, 1, 1, -1)
-            print(f"[DEBUG MODEL] Batched prefill: tokens.shape={tokens.shape}, S_per_user={S}, total_seq={total_seq}")
         else:
             tokens = tokens.reshape(1, 1, 1, -1)
             S = tokens.shape[-1]
@@ -225,7 +224,6 @@ class Transformer(LightweightModule):
         # For batched prefill, each user needs their own RoPE positions (not concatenated)
         # So seq_len remains S (per-user sequence), not S * batch_size
         seq_len = S
-        print(f"[DEBUG ROPE] batch_size={batch_size}, S={S}, seq_len={seq_len}, mat_len={mat_len}")
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
         # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.
@@ -288,9 +286,6 @@ class Transformer(LightweightModule):
             # For batched prefill (batch_size > 1), concatenate page tables along sequence dimension
             # Following 70B Galaxy approach: reshape from [B, num_pages] to [1, B * num_pages]
             if batch_size > 1:
-                print(
-                    f"[DEBUG MODEL] Reshaping page_table for batched prefill: {page_table.shape} -> [1, {batch_size * page_table.shape[1]}]"
-                )
                 page_table_concat = page_table.reshape(1, -1)  # [B, num_pages] -> [1, B * num_pages]
                 tt_page_table = ttnn.from_torch(
                     page_table_concat,

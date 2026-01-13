@@ -677,7 +677,6 @@ class Attention(LightweightModule):
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
 
         seq_len = x_11SH.shape[-2]
-        print(f"[DEBUG ATT] forward_prefill: x_11SH.shape={x_11SH.shape}, batch_size={batch_size}, seq_len={seq_len}")
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
         # QKV matmuls
@@ -805,7 +804,6 @@ class Attention(LightweightModule):
             # For batched prefill, following 70B Galaxy approach:
             # 1. Reshape k_fill/v_fill from [B, K, S, D] back to [1, 1, B*S, -1] (concatenated sequence)
             # 2. Use single paged_fill_cache call with batch_idx_tensor (pre-created tensor of user IDs)
-            print(f"[DEBUG KV] batch_size={batch_size}, k_fill.shape={k_fill.shape}, seq_len={seq_len}")
             k_fill = ttnn.reshape(k_fill, [1, 1, seq_len, -1])
             v_fill = ttnn.reshape(v_fill, [1, 1, seq_len, -1])
 
@@ -815,7 +813,6 @@ class Attention(LightweightModule):
 
             # user_id_tensor is pre-created in model.prepare_inputs_prefill to avoid tensor creation during trace
             assert user_id_tensor is not None, "user_id_tensor must be provided for batched prefill"
-            print(f"[DEBUG KV] k_fill_sliced.shape={k_fill_sliced.shape}, page_table.shape={fill_page_table.shape}")
             ttnn.experimental.paged_fill_cache(
                 keys_BKSD, k_fill_sliced, fill_page_table, batch_idx_tensor=user_id_tensor
             )

@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from collections import defaultdict
 from dataclasses import dataclass, fields
 from typing import List
@@ -28,6 +27,9 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
+
+# Maximum total sequence length for batched prefill (batch_size * per_user_seq_len)
+MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 
 
 @dataclass(frozen=True)
@@ -175,12 +177,9 @@ class Generator:
         batch_size=1,
         user_id=0,
     ):
-        # Use actual batch_size since tokens are now in batch dimension
-        print(f"[DEBUG] _capture_trace_prefill: prefill_ids.shape={prefill_ids.shape}, batch_size_param={batch_size}")
         host_inputs = self.model[model_id].prepare_prefill_inputs_trace(
             prefill_ids, page_table=page_table, batch_size=batch_size, user_id=user_id
         )
-        print(f"[DEBUG] _capture_trace_prefill: host_inputs[0].shape={host_inputs[0].shape}")
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
@@ -323,18 +322,13 @@ class Generator:
             prompt_lens = prompt_lens.tolist()
 
         prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
-        # If batch is 32 and prompt_lens are all the same and batch_seq_len * batch is less than 128*1024, use batched prefill
-        # Set DISABLE_BATCHED_PREFILL=1 to disable for debugging
-        use_batched_prefill = False
-        disable_batched_prefill = os.environ.get("DISABLE_BATCHED_PREFILL", "0") == "1"
-        if (
-            not disable_batched_prefill
-            and batch_size == 32
+        # Use batched prefill when all prompts have the same padded length and total sequence fits in memory
+        use_batched_prefill = (
+            batch_size > 1
             and len(set(prefill_seq_lens)) == 1
-            and prefill_seq_lens[0] * batch_size < 128 * 1024
-        ):
-            use_batched_prefill = True
-            assert self.data_parallel == 1, "Batched prefill is only supported for data_parallel=1 currently"
+            and prefill_seq_lens[0] * batch_size < MAX_BATCHED_PREFILL_SEQ_LEN
+            and self.data_parallel == 1  # Batched prefill only supported for data_parallel=1 currently
+        )
 
         all_users = [0] if use_batched_prefill else empty_slots
 
@@ -361,9 +355,6 @@ class Generator:
             if use_batched_prefill:
                 # reordering the tokens when empty_slots are not sequential (from vllm)
                 inverse_empty_slots = [empty_slots.index(i) for i in range(batch_size)]
-                print(
-                    f"[DEBUG BATCHED] Before batch prep: tokens.shape={tokens.shape}, batch_size={batch_size}, prefill_seq_len={prefill_seq_len}"
-                )
                 # Following 70B Galaxy approach: concatenate all users' tokens along sequence dimension
                 # This creates shape [1, batch_size * prefill_seq_len] instead of [batch_size, prefill_seq_len]
                 prefill_ids = torch.cat(
@@ -380,9 +371,6 @@ class Generator:
                     dim=-1,
                 )
                 last_token_idx = [last_token_idx[idx] for idx in inverse_empty_slots]
-                print(
-                    f"[DEBUG BATCHED] After batch prep: prefill_ids.shape={prefill_ids.shape}, last_token_idx[:3]={last_token_idx[:3]}"
-                )
             else:
                 num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
                 prefill_ids = torch.cat(
@@ -421,19 +409,7 @@ class Generator:
                 page_table_reordered = torch.ones_like(page_table_user) * -1
                 for i, original_user_idx in enumerate(inverse_empty_slots):
                     page_table_reordered[i, :] = page_table_user[empty_slots[original_user_idx], :]
-                    print(
-                        f"[DEBUG REORDER] Position {i} in batch -> User {empty_slots[original_user_idx]}, page_table: {page_table_user[empty_slots[original_user_idx], :].tolist()[:4]}"
-                    )
                 page_table_user = page_table_reordered
-                # Store the mapping on the model for KV cache filling
-                batched_prefill_user_mapping = [
-                    empty_slots[original_user_idx] for original_user_idx in inverse_empty_slots
-                ]
-                print(f"[DEBUG REORDER] Batch position -> User ID mapping: {batched_prefill_user_mapping[:5]}")
-                print(f"[DEBUG REORDER] After reordering, page_table[0]: {page_table_user[0, :].tolist()[:4]}")
-                print(f"[DEBUG REORDER] After reordering, page_table[1]: {page_table_user[1, :].tolist()[:4]}")
-                for layer in self.model[model_id].layers:
-                    layer.attention._batched_prefill_user_mapping = batched_prefill_user_mapping
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
             # Check if 'pixel_values' exists and index it safely
@@ -464,14 +440,10 @@ class Generator:
                     batch_size=batch_size if use_batched_prefill else 1,
                     **local_kwargs,
                 )
-            print(
-                f"[DEBUG BATCHED] After forward pass, logits.shape: {logits.shape if hasattr(logits, 'shape') else type(logits)}"
-            )
             if use_batched_prefill:
                 # Process each user's logits from the batched output
                 # The logits are shaped (1, 1, batch_size * prefill_seq_len, vocab_size)
                 # We need to slice along the sequence dimension to extract each user's chunk
-                print(f"[DEBUG BATCHED] Processing logits, shape: {logits.shape}")
                 for i in range(batch_size):
                     # Extract this user's logits from the concatenated sequence
                     # User i's tokens are at positions [i * prefill_seq_len : (i + 1) * prefill_seq_len]
@@ -483,8 +455,6 @@ class Generator:
                     output_logits[user_idx] = self.model[model_id].process_output_prefill(
                         _logits.cpu(), last_token_idx=(last_token_idx[i] % 32)
                     )
-                    if i < 3:
-                        print(f"[DEBUG BATCHED] User {i} (actual user {user_idx}): processed logits")
             else:
                 if enable_trace_current_prompt:
                     # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
@@ -513,16 +483,6 @@ class Generator:
             )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
-
-        # DEBUG: Save final output_logits for all users
-        if os.environ.get("DEBUG_PREFILL_COMPARE", "0") == "1":
-            run_name = os.environ.get("DEBUG_PREFILL_RUN_NAME", "run")
-            debug_dir = f"/tmp/prefill_compare/{run_name}"
-            os.makedirs(debug_dir, exist_ok=True)
-            torch.save(output_logits, f"{debug_dir}/final_output_logits.pt")
-            logger.info(
-                f"[DEBUG] Saved final output_logits to {debug_dir}/final_output_logits.pt, shape={output_logits.shape}"
-            )
 
         return output_logits
 
