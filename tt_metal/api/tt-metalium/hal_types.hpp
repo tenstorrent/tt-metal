@@ -47,6 +47,7 @@ enum class HalL1MemAddrType : uint8_t {
     ROUTING_TABLE,
     ETH_FW_MAILBOX,
     TENSIX_FABRIC_CONNECTIONS,
+    FABRIC_CONNECTION_LOCK,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 

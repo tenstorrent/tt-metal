@@ -47,9 +47,15 @@ public:
         return it->second;
     }
 
+    void register_dm_kernel_on_gcore(uint32_t gcore_id) { dm_kernels_on_gcores_.insert(gcore_id); }
+
+    bool has_dm_kernel_on_gcore(uint32_t gcore_id) const { return dm_kernels_on_gcores_.contains(gcore_id); }
+
 private:
     std::unordered_map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::Program> programs_;
     std::unordered_map<tt::tt_metal::distributed::MeshCoordinate, bool> has_kernel_;
+    // Track which global cores have DM kernels
+    std::unordered_set<uint32_t> dm_kernels_on_gcores_;
 };
 
 MeshProgram::MeshProgram(const MeshBuilder& builder) : impl_(std::make_unique<Impl>(builder)) {}
@@ -74,6 +80,10 @@ void MeshProgram::register_kernel(const tt::tt_metal::distributed::MeshCoordinat
 bool MeshProgram::has_kernel(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
     return impl_->has_kernel(coord);
 }
+
+void MeshProgram::register_dm_kernel_on_gcore(uint32_t gcore_id) { impl_->register_dm_kernel_on_gcore(gcore_id); }
+
+bool MeshProgram::has_dm_kernel_on_gcore(uint32_t gcore_id) const { return impl_->has_dm_kernel_on_gcore(gcore_id); }
 
 MeshProgram CreateMeshProgram(const MeshBuilder& builder) { return MeshProgram(builder); }
 

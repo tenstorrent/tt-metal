@@ -127,13 +127,18 @@
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
 // Fabric transaction counters (similar to NoC counters)
-// 3 barrier types × 2 DMs × 4 bytes = 40 bytes
+// 3 barrier types × 2 DMs × 4 bytes = 24 bytes + 8 bytes padding for 16-byte alignment
 #define MEM_FABRIC_COUNTER_SIZE 4
-#define MEM_FABRIC_COUNTER_L1_SIZE (3 * 2 * MEM_FABRIC_COUNTER_SIZE + 8)  // Add 8 bytes padding for alignment
+#define MEM_FABRIC_COUNTER_L1_SIZE (3 * 2 * MEM_FABRIC_COUNTER_SIZE + 8)
 #define MEM_FABRIC_COUNTER_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
 
+// Fabric connection sync region for synchronization across RISCs (BRISC/NCRISC)
+// Contains: lock (4) + initialized (4) + connection object (128) + padding (8) = 144 bytes (16-byte aligned)
+#define MEM_FABRIC_CONNECTION_LOCK_SIZE 144
+#define MEM_FABRIC_CONNECTION_LOCK_BASE (MEM_FABRIC_COUNTER_BASE + MEM_FABRIC_COUNTER_L1_SIZE)
+
 // Tensix routing table for fabric networking
-#define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_COUNTER_BASE + MEM_FABRIC_COUNTER_L1_SIZE)
+#define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_CONNECTION_LOCK_BASE + MEM_FABRIC_CONNECTION_LOCK_SIZE)
 #define MEM_ROUTING_TABLE_SIZE \
     2288  // struct layout: base(484) + 1d_path(256) + 2d_path(512) + exit_table(1024) + padding(12)
 #define MEM_OFFSET_OF_ROUTING_PATHS 484
