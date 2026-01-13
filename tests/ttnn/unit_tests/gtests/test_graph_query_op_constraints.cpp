@@ -36,6 +36,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -215,8 +216,9 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -243,8 +245,9 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -275,8 +278,9 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -303,8 +307,9 @@ TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -327,8 +332,9 @@ TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -351,8 +357,9 @@ TEST_P(EltwiseUnaryOpIfTest, Sin) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -375,8 +382,9 @@ TEST_P(EltwiseUnaryOpIfTest, Cos) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -431,7 +439,8 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -747,8 +756,9 @@ TEST_P(MatmulOpIfTest, Matmul) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), output_spec);
     }
 }
 
@@ -858,8 +868,9 @@ TEST_P(Conv2dOpIfTest, Conv2d) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, l1_peak_threshold);
         const uint32_t total_peak_threshold = (conv2d_config == std::nullopt) ? 400000 : 350000;
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, total_peak_threshold);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), output_spec);
     }
 }
 
@@ -867,5 +878,52 @@ INSTANTIATE_TEST_SUITE_P(
     Conv2dConfigVariations,
     Conv2dOpIfTest,
     ::testing::Values(std::nullopt, ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation = true}));
+
+// ============================================================================
+// Transformer tests
+// ============================================================================
+
+class SplitQKVAndSplitHeadsOpIfTest : public ttnn::TTNNFixtureWithDevice {};
+
+TEST_F(SplitQKVAndSplitHeadsOpIfTest, SplitQueryKeyValueAndSplitHeads) {
+    const auto& input_spec = ttnn::TensorSpec(
+        ttnn::Shape{1, 1024, 768},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const uint32_t num_heads = 4;
+
+    // Run the test
+    {
+        tt::tt_metal::distributed::MeshDevice* device = device_;
+
+        // Calculate expected output shapes
+        const auto batch_size = input_spec.logical_shape()[0];
+        const auto M = input_spec.logical_shape()[-2];
+        const auto K = input_spec.logical_shape()[-1] / (num_heads * 3);
+
+        auto query = ttnn::graph::query_op_constraints(
+            ttnn::transformer::split_query_key_value_and_split_heads,
+            device,
+            input_spec,
+            std::optional<ttnn::TensorSpec>{},  // input_tensor_kv
+            num_heads,
+            std::nullopt,
+            true,                                  // transpose_key
+            std::optional<ttnn::MemoryConfig>{});  // memory_config
+
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 48000);  // 49152 as of 2025/11/20
+        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 8000);    // 8192 as of 2025/11/20
+
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 3);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0).logical_shape(), ttnn::Shape({batch_size, num_heads, M, K}));
+        EXPECT_EQ(query.output_tensor_specs.value().at(1).logical_shape(), ttnn::Shape({batch_size, num_heads, K, M}));
+        EXPECT_EQ(query.output_tensor_specs.value().at(2).logical_shape(), ttnn::Shape({batch_size, num_heads, M, K}));
+    }
+}
 
 }  // namespace ttnn::operations::binary::test
