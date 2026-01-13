@@ -6,6 +6,8 @@
 
 namespace tt::tt_metal {
 
-// TODO: Implement tensor types
+// TODO:
+// DataType and associated utilities.
+// (Renamed from types.hpp.)
 
 }  // namespace tt::tt_metal

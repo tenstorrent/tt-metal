@@ -4,8 +4,6 @@
 
 #pragma once
 
-namespace tt::tt_metal {
-
-// TODO: Implement shape specification
-
-}  // namespace tt::tt_metal
+// File description:
+// This is meant to be where Shape class is moved to.
+#include <tt-metalium/shape.hpp>

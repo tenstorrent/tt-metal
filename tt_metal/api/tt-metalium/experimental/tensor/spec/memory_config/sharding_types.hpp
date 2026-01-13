@@ -6,6 +6,8 @@
 
 namespace tt::tt_metal {
 
-// TODO: Implement sharding types
+// TODO:
+// Structs related to ShardSpec and NDShardSpec,
+// some refactored from elsewhere in Metalium.
 
 }  // namespace tt::tt_metal

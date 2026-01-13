@@ -6,6 +6,9 @@
 
 namespace tt::tt_metal {
 
-// TODO: Implement device tensor functionality
+// TODO: Doc
+class DeviceTensor {
+    // TODO: Implement device tensor functionality
+};
 
 }  // namespace tt::tt_metal

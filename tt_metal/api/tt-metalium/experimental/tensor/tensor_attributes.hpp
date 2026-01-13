@@ -6,6 +6,8 @@
 
 namespace tt::tt_metal {
 
-// TODO: Implement tensor attributes
+// TODO:
+// This becomes just the union of TensorSpec and TensorTopology.
+// TODO(River): does this still belong to Runtime?
 
 }  // namespace tt::tt_metal

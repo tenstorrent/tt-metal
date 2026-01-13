@@ -6,6 +6,9 @@
 
 namespace tt::tt_metal {
 
-// TODO: Implement host tensor functionality
+// TODO: Doc
+class HostTensor {
+    // TODO: Implement host tensor functionality
+};
 
 }  // namespace tt::tt_metal
