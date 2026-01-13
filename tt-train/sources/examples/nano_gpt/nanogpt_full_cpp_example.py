@@ -213,8 +213,8 @@ def create_causal_mask_tensor(sequence_length: int) -> ttml.autograd.Tensor:
 
 
 def collate_fn(
-    samples: list, batch_size: int, sequence_length: int, device
-) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor, ttml.autograd.Tensor]:
+    samples: list, batch_size: int, sequence_length: int
+) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
     """Collate function matching C++ collate_fn."""
     # Flatten samples into data and targets
     data = []
@@ -924,7 +924,9 @@ def main():
     inference_only = args.prompt and (args.model_path or checkpoint_save_path)
 
     # Initialize device early (needed for both training and inference)
-    ttml.autograd.AutoContext.get_instance().open_device()
+    instance = ttml.autograd.AutoContext.get_instance()
+    instance.open_device()
+    instance.get_device()
 
     # Handle inference-only mode: load model from checkpoint
     if inference_only:
@@ -954,7 +956,7 @@ def main():
 
         except Exception as e:
             print(f"Error loading model from checkpoint: {e}")
-            ttml.autograd.AutoContext.get_instance().close_device()
+            instance.close_device()
             return
     else:
         # Training mode: load data and create model
@@ -983,7 +985,7 @@ def main():
                 )
                 print("Please specify --data_path or place shakespeare.txt in data/")
                 print(f"  Searched paths: {possible_paths}")
-                ttml.autograd.AutoContext.get_instance().close_device()
+                instance.close_device()
                 return
 
         print("1. Loading and preparing data...")
@@ -1079,7 +1081,7 @@ def main():
     else:
         print("\n3. Setting up optimizer...")
         # Set seed
-        ttml.autograd.AutoContext.get_instance().set_seed(training_config.seed)
+        instance.set_seed(training_config.seed)
 
         # Create optimizer config
         if training_config.use_no_op:
@@ -1195,7 +1197,6 @@ def main():
                     batch_samples,
                     training_config.batch_size,
                     sequence_length,
-                    ttml.autograd.AutoContext.get_instance().get_device(),
                 )
 
                 # Training step with mask (matching C++: run_model(model, features, masks))
@@ -1294,7 +1295,7 @@ def main():
         )
 
     # Close device
-    ttml.autograd.AutoContext.get_instance().close_device()
+    instance.close_device()
 
 
 if __name__ == "__main__":
