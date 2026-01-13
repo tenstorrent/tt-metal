@@ -192,7 +192,7 @@ const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = ttnn::TensorSpec(
 // Unary tests
 // ============================================================================
 
-class EltwiseUnaryOpIfTest : public TTNNFixtureWithDevice,
+class EltwiseUnaryOpIfTest : public TTNNFixtureWithSuiteDevice<EltwiseUnaryOpIfTest>,
                              public testing::WithParamInterface<std::tuple<ttnn::TensorSpec>> {};
 
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
@@ -407,7 +407,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Softmax tests
 // ============================================================================
 
-class SoftmaxOpIfTest : public TTNNFixtureWithDevice,
+class SoftmaxOpIfTest : public TTNNFixtureWithSuiteDevice<SoftmaxOpIfTest>,
                         public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, int>> {};
 
 TEST_P(SoftmaxOpIfTest, Softmax) {
@@ -462,7 +462,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Binary tests
 // ============================================================================
 
-class EltwiseBinaryOpIfTest : public TTNNFixtureWithDevice,
+class EltwiseBinaryOpIfTest : public TTNNFixtureWithSuiteDevice<EltwiseBinaryOpIfTest>,
                               public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>> {};
 
 TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
@@ -689,7 +689,7 @@ INSTANTIATE_TEST_SUITE_P(
 // ============================================================================
 
 class MatmulOpIfTest
-    : public TTNNFixtureWithDevice,
+    : public TTNNFixtureWithSuiteDevice<MatmulOpIfTest>,
       public testing::WithParamInterface<
           std::
               tuple<ttnn::TensorSpec, ttnn::TensorSpec, std::optional<ttnn::operations::matmul::MatmulProgramConfig>>> {
@@ -791,7 +791,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .fused_activation = std::nullopt})));
 
 class Conv2dOpIfTest
-    : public ttnn::TTNNFixtureWithDevice,
+    : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
       public ::testing::WithParamInterface<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>> {};
 
 TEST_P(Conv2dOpIfTest, Conv2d) {

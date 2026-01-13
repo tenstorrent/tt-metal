@@ -19,7 +19,8 @@ struct BroadcastParam {
     std::vector<uint32_t> broadcast_shape;
 };
 
-class Broadcast_toFixture : public TTNNFixtureWithDevice, public testing::WithParamInterface<BroadcastParam> {};
+class Broadcast_toFixture : public TTNNFixtureWithSuiteDevice<Broadcast_toFixture>,
+                            public testing::WithParamInterface<BroadcastParam> {};
 
 TEST_P(Broadcast_toFixture, Broadcast_to) {
     auto param = GetParam();
