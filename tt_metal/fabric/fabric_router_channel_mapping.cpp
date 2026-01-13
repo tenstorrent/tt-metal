@@ -35,8 +35,7 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
     if (is_2d) {
         // 2D topology VC0 sender channels:
         //   Z_ROUTER: 5 channels (0=Worker, 1-4=E/W/N/S)
-        //   MESH and MESH_AND_Z_ROUTER: 4 channels (0=Worker, 1-3=mesh directions)
-        // Note: MESH routers use the MESH_TO_Z connection target (not a 5th sender channel)
+        //   MESH: 4 channels (0=Worker, 1-3=mesh directions)
         auto num_sender_channels = is_z_router() ? builder_config::num_sender_channels_z_router_vc0  // 5 channels
                                                  : builder_config::num_sender_channels_2d_mesh;      // 4 channels
 
@@ -112,7 +111,6 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
             // Determine sender count based on whether device has Z router
             // Mesh with Z: 4 sender channels (3 mesh directions + 1 for Z router connection)
             // Mesh without Z: 3 sender channels (3 mesh directions only)
-            // This keeps mesh+Z at 8 total: 4 VC0 + 4 VC1 = 8
             uint32_t mesh_vc1_sender_count = has_z_on_device_ ? 4 : 3;
 
             uint32_t mesh_vc1_base_sender_channel = builder_config::num_sender_channels_2d_mesh;

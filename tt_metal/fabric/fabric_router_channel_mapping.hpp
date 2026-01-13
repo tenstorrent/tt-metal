@@ -28,8 +28,8 @@ enum class BuilderType : uint8_t {
  * Z_ROUTER: Vertical Z router for inter-device connectivity
  */
 enum class RouterVariant : uint8_t {
-    MESH = 0,      // Mesh horizontal routers
-    Z_ROUTER = 1,  // Z routers
+    MESH = 0,
+    Z_ROUTER = 1,
 };
 
 struct LogicalSenderChannelKey {

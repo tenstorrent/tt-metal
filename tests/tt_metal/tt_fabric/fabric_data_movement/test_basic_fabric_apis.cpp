@@ -373,7 +373,7 @@ std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> GenerateAllValid
 }
 
 TEST_F(Fabric2DFixture, TestUnicastRaw) {
-    for (uint32_t i = 0; i < 1; i++) {
+    for (uint32_t i = 0; i < 10; i++) {
         RunTestUnicastRaw(this);
     }
 }

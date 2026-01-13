@@ -3234,12 +3234,6 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
-#if defined(FABRIC_2D_VC1_ACTIVE)
-    DPRINT << "checkpoint " << has_downstream_edm_vc1_buffer_connection << ":"
-           << has_downstream_edm_vc0_buffer_connection << ENDL();
-#else
-    DPRINT << "checkpoint " << has_downstream_edm_vc0_buffer_connection << ENDL();
-#endif
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
 
     //////////////////////////////
