@@ -23,11 +23,14 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // Get the cores for the program
-    std::vector<tt::tt_metal::CoreCoord> cores_vec = {
-        tt::tt_metal::CoreCoord({3, 7}),
-        // tt::tt_metal::CoreCoord({4, 0}),
-    };
-    auto cores = tt::tt_metal::CoreRangeSet(cores_vec);
+    const auto dram_adjacent_cores =
+        tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
+            tt::tt_metal::NOC::RISCV_0_default);
+    for (size_t idx = 0; idx < dram_adjacent_cores.size(); ++idx) {
+        auto core = dram_adjacent_cores[idx];
+        log_warning(tt::LogOp, "DRAM {} mapped to core {}", idx, core.str());
+    }
+    auto cores = tt::tt_metal::CoreRangeSet(dram_adjacent_cores);
 
     // Create CBs for the program
     // CBs used in the MOE operation
@@ -128,26 +131,36 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> runtime_args;
     runtime_args.push_back(0);  // Core ID placeholder
+    runtime_args.push_back(0);  // VChannel placeholder
     for (const auto& tensor : tensors) {
         runtime_args.push_back(tensor->buffer()->address());
     }
 
+    std::vector<uint32_t> vcs;
     uint32_t core_id = 0;
-    for (const auto& core : cores.ranges()) {
-        for (const auto& core : core) {
-            runtime_args[0] = core_id++;
-            tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
-            tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
-        }
-    }
+    for (auto core : dram_adjacent_cores) {
+        uint32_t vc = core_id & 0x3;
 
-    const auto all_worker_cores_ordered =
-        tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
-            tt::tt_metal::NOC::RISCV_0_default);
-    for (size_t idx = 0; idx < all_worker_cores_ordered.size(); ++idx) {
-        const auto& core = all_worker_cores_ordered[idx];
-        log_warning(tt::LogOp, "DRAM {} mapped to core {}", idx, core.str());
+        // Check if there is any core with the same row
+        auto it = std::find_if(
+            dram_adjacent_cores.begin(), dram_adjacent_cores.begin() + core_id, [&](const auto& core_prev) {
+                return core_prev.y == core.y;
+            });
+
+        // If there is any core with the same row, make sure the VC is different
+        if (it != dram_adjacent_cores.begin() + core_id) {
+            size_t j = std::distance(dram_adjacent_cores.begin(), it);
+            if (vc == vcs[j]) {
+                vc = (vc + 1) & 0x3;
+            }
+        }
+        vcs.push_back(vc);
+
+        runtime_args[0] = core_id++;
+        runtime_args[1] = vc;
+        tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
     }
 
     return cached_program_t{std::move(program), MoESharedVariables{}};
