@@ -21,9 +21,6 @@
  * @note Based on LayerNorm mcast_receiver style but simplified for SUM reduction only
  */
 void kernel_main() {
-    // TODO(#34735): move fabric counter init to fw kernel init
-    tt::tt_fabric::udm::fabric_local_state_init();
-
     // ============================================================================
     // Compile-time arguments
     // ============================================================================
@@ -143,7 +140,4 @@ void kernel_main() {
 
     // All data received, push to output
     cb_push_back(cb_out, block_ht);
-
-    // TODO(#34736): remove once we have persistent connection across programs
-    tt::tt_fabric::udm::close_fabric_connection();
 }

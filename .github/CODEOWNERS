@@ -103,8 +103,8 @@ tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @mo-tensto
 tt_metal/tools/profiler/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/noc_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/noc_event_profiler_utils.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
-tt_metal/experimental/udm/ @yugaoTT @tenstorrent/codeowner-bypass
-tt_metal/hw/inc/experimental/udm/ @yugaoTT @tenstorrent/codeowner-bypass
+tt_metal/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
+tt_metal/hw/inc/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
 
 # metal misc
 tt_metal/sfpi-info.sh @nathan-TT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -223,7 +223,7 @@ tests/nightly/tg/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-dat
 tests/ttnn/unit_tests/gtests/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/eltwise/ @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
-tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @tenstorrent/codeowner-bypass
+tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/data_movement/test_slice_for_conv.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
