@@ -17,7 +17,7 @@ def count_tests_in_directory(directory):
 
             # Walk through every element in the tree (functions, classes, variables, etc.)
             for node in ast.walk(tree):
-                # Check if this element is a test function  and then check if its name starts with 'test_'
+                # Check if this element is a test function and then check if its name starts with 'test_'
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
                     # Start with 1 test, then multiply by parameter counts
                     mult = 1
@@ -53,7 +53,7 @@ def count_tests_in_directory(directory):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: count_tests.py <directory>")
+        print("Usage: count_pytests.py <directory>")
         sys.exit(1)
 
     directory = sys.argv[1]
