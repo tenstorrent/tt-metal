@@ -24,20 +24,6 @@
 #include "compute_kernel_api/transpose_wh_dest.h"
 
 namespace NAMESPACE {
-template <typename To, typename From>
-inline To _bit_cast_(const From& from) noexcept {
-    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
-    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
-    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
-
-    union {
-        From f;
-        To t;
-    } u;
-
-    u.f = from;
-    return u.t;
-}
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     namespace kutil = norm::kernel_util;
