@@ -23,7 +23,7 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_visi
 )
 
 
-class MllamaModel(MllamaPreTrainedModel):
+class CrossAttentionTransformerVisionModel(MllamaPreTrainedModel):
     _checkpoint_conversion_mapping = {"language_model.model": "language_model"}
     _supports_quantized_cache = False  # quant cache not supported in encoder-decoder setting
 
@@ -114,18 +114,18 @@ def test_vision_transformer_inference(mesh_device, reset_seeds):
     # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(model_repo_name)
     config.vision_config._attn_implementation = "sdpa"
-    reference_model1 = MllamaModel(config)
+    reference_model1 = CrossAttentionTransformerVisionModel(config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict1 = load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.vision_model.")
+    partial_state_dict = load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.vision_model.")
 
     prefix = "vision_model."
-    partial_state_dict1 = {f"{prefix}{key}": value for key, value in partial_state_dict1.items()}
+    partial_state_dict = {f"{prefix}{key}": value for key, value in partial_state_dict.items()}
 
-    partial_state_dict2 = load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.multi_modal_projector.")
+    partial_state_dict1 = load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.multi_modal_projector.")
     prefix = "multi_modal_projector."
-    partial_state_dict1.update({f"{prefix}{key}": value for key, value in partial_state_dict2.items()})
+    partial_state_dict.update({f"{prefix}{key}": value for key, value in partial_state_dict1.items()})
 
-    reference_model1.load_state_dict(partial_state_dict1)
+    reference_model1.load_state_dict(partial_state_dict)
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaCrossAttentionTransformerVision(
