@@ -781,7 +781,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
                 graph_data.target_nodes[selection.target_idx],
                 remaining_targets,
                 remaining_global);
-            log_error(tt::LogFabric, "{}", error_msg);
+            log_debug(tt::LogFabric, "{}", error_msg);
             if (state_.error_message.empty()) {
                 state_.error_message = error_msg;
             }
@@ -790,7 +790,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
             std::string error_msg = fmt::format(
                 "Search error: no unassigned target nodes found, but {} nodes still need to be placed",
                 graph_data.n_target - pos);
-            log_error(tt::LogFabric, "{}", error_msg);
+            log_debug(tt::LogFabric, "{}", error_msg);
             if (state_.error_message.empty()) {
                 state_.error_message = error_msg;
             }
