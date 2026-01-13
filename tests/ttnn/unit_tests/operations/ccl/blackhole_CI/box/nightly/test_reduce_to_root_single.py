@@ -24,11 +24,11 @@ def compute_reduction(l1, s1, m1, l2, s2, m2, scale_value, l_width=128):
     return l_new, s_new, m_new
 
 
-def compute_reference_reduce_to_root(
+def compute_reference_reduce_to_all(
     l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx=1, num_cores=8, scale_value=1.0
 ):
     """
-    Compute the reference output for reduce_to_root operation.
+    Compute the reference output for reduce_to_all operation.
 
     Algorithm:
     Round 1: Neighbor exchange D0<->D1 and D2<->D3
@@ -96,10 +96,10 @@ def compute_reference_reduce_to_root(
     indirect=["device_params"],
     ids=["fabric_1d_ring"],
 )
-def test_reduce_to_root_simple_ones(bh_2d_mesh_device):
-    """Test reduce_to_root operation with all-ones input - simplest case for debugging."""
+def test_reduce_to_all_simple_ones(bh_2d_mesh_device):
+    """Test reduce_to_all operation with all-ones input - simplest case for debugging."""
 
-    print("\n=== Testing reduce_to_root with ALL ONES ===")
+    print("\n=== Testing reduce_to_all with ALL ONES ===")
 
     # Setup
     num_devices = 4
@@ -167,7 +167,7 @@ def test_reduce_to_root_simple_ones(bh_2d_mesh_device):
     m_data_per_device = [torch.ones(m_shape, dtype=torch.bfloat16) for _ in range(num_devices)]
 
     # Compute reference
-    ref_l, ref_s, ref_m = compute_reference_reduce_to_root(
+    ref_l, ref_s, ref_m = compute_reference_reduce_to_all(
         l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx, num_cores, scale_value
     )
 
@@ -243,9 +243,9 @@ def test_reduce_to_root_simple_ones(bh_2d_mesh_device):
         mesh_mapper=mesh_mapper2,
     )
 
-    # Run reduce_to_root
-    print("\nRunning reduce_to_root...")
-    output_l, output_s, output_m = ttnn.reduce_to_root(
+    # Run reduce_to_all
+    print("\nRunning reduce_to_all...")
+    output_l, output_s, output_m = ttnn.reduce_to_all(
         l_tensor,
         s_tensor,
         m_tensor,
@@ -369,10 +369,10 @@ def test_reduce_to_root_simple_ones(bh_2d_mesh_device):
     indirect=["device_params"],
     ids=["fabric_1d_ring"],
 )
-def test_reduce_to_root_random(bh_2d_mesh_device):
-    """Test reduce_to_root operation with random input values."""
+def test_reduce_to_all_random(bh_2d_mesh_device):
+    """Test reduce_to_all operation with random input values."""
 
-    print("\n=== Testing reduce_to_root with RANDOM values ===")
+    print("\n=== Testing reduce_to_all with RANDOM values ===")
 
     # Setup
     num_devices = 4
@@ -446,7 +446,7 @@ def test_reduce_to_root_random(bh_2d_mesh_device):
     s_data_f32 = [t.float() for t in s_data_per_device]
     m_data_f32 = [t.float() for t in m_data_per_device]
 
-    ref_l, ref_s, ref_m = compute_reference_reduce_to_root(
+    ref_l, ref_s, ref_m = compute_reference_reduce_to_all(
         l_data_f32, s_data_f32, m_data_f32, root_device_idx, num_cores, scale_value
     )
     ref_l = ref_l.to(torch.bfloat16)
@@ -514,9 +514,9 @@ def test_reduce_to_root_random(bh_2d_mesh_device):
         mesh_mapper=mesh_mapper2,
     )
 
-    # Run reduce_to_root
-    print("Running reduce_to_root (single iteration, no trace)...")
-    output_l, output_s, output_m = ttnn.reduce_to_root(
+    # Run reduce_to_all
+    print("Running reduce_to_all (single iteration, no trace)...")
+    output_l, output_s, output_m = ttnn.reduce_to_all(
         l_tensor,
         s_tensor,
         m_tensor,
@@ -654,9 +654,9 @@ def test_reduce_to_root_random(bh_2d_mesh_device):
     indirect=["device_params"],
     ids=["fabric_1d_ring"],
 )
-def test_reduce_to_root_distinct_values(bh_2d_mesh_device):
+def test_reduce_to_all_distinct_values(bh_2d_mesh_device):
     """
-    Test reduce_to_root with distinct values per device to trace neighbor exchange.
+    Test reduce_to_all with distinct values per device to trace neighbor exchange.
 
     Each device has a distinct constant value:
     - D0: L=10, S=1, M=0
@@ -681,7 +681,7 @@ def test_reduce_to_root_distinct_values(bh_2d_mesh_device):
     This test will reveal which devices are actually exchanging data.
     """
 
-    print("\n=== Testing reduce_to_root with DISTINCT values per device ===")
+    print("\n=== Testing reduce_to_all with DISTINCT values per device ===")
     print("D0=10, D1=20, D2=30, D3=40")
     print("Expected: Round1 D0+D1=30, D2+D3=70 -> Round2 all=100, final=100/4=25")
 
@@ -762,7 +762,7 @@ def test_reduce_to_root_distinct_values(bh_2d_mesh_device):
     s_data_f32 = [t.float() for t in s_data_per_device]
     m_data_f32 = [t.float() for t in m_data_per_device]
 
-    ref_l, ref_s, ref_m = compute_reference_reduce_to_root(
+    ref_l, ref_s, ref_m = compute_reference_reduce_to_all(
         l_data_f32, s_data_f32, m_data_f32, root_device_idx, num_cores, scale_value
     )
 
@@ -832,9 +832,9 @@ def test_reduce_to_root_distinct_values(bh_2d_mesh_device):
         mesh_mapper=mesh_mapper2,
     )
 
-    # Run reduce_to_root
-    print("\nRunning reduce_to_root...")
-    output_l, output_s, output_m = ttnn.reduce_to_root(
+    # Run reduce_to_all
+    print("\nRunning reduce_to_all...")
+    output_l, output_s, output_m = ttnn.reduce_to_all(
         l_tensor,
         s_tensor,
         m_tensor,

@@ -91,7 +91,7 @@ def compute_reference_reduce_to_root(
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 389120}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 217872}),
     ],
     indirect=["device_params"],
     ids=["fabric_1d_linear_trace"],
@@ -105,7 +105,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     root_device_idx = root_coord[0]
     num_cores = 8
 
-    topology = ttnn.Topology.Ring
+    topology = ttnn.Topology.Linear
     validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
@@ -165,27 +165,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     mesh_mapper2 = ttnn.create_mesh_mapper(submesh_device, mesh_mapper_config2)
 
     # Create intermediate tensors
-    fw_intermediate = ttnn.from_torch(
-        torch.zeros(intermediate_shapes[0], dtype=torch.bfloat16),
-        device=submesh_device,
-        layout=layout,
-        tile=tile,
-        dtype=dtype,
-        memory_config=mesh_config_int_l,
-        mesh_mapper=mesh_mapper2,
-    )
-
-    bw_intermediate = ttnn.from_torch(
-        torch.zeros(intermediate_shapes[0], dtype=torch.bfloat16),
-        device=submesh_device,
-        layout=layout,
-        tile=tile,
-        dtype=dtype,
-        memory_config=mesh_config_int_l,
-        mesh_mapper=mesh_mapper2,
-    )
-
-    coord_intermediate = ttnn.from_torch(
+    intermediate = ttnn.from_torch(
         torch.zeros(intermediate_shapes[0], dtype=torch.bfloat16),
         device=submesh_device,
         layout=layout,
@@ -259,9 +239,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
         m_tensor,
         root_coord=ttnn.MeshCoordinate(root_coord),
         scale_fp32=scale_value,
-        fw_intermediate_tensor=fw_intermediate,
-        bw_intermediate_tensor=bw_intermediate,
-        coord_intermediate_tensor=coord_intermediate,
+        intermediate_tensor=intermediate,
         topology=topology,
         input_mux_cores=mux_cores,
     )
@@ -277,9 +255,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
             m_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
             scale_fp32=scale_value,
-            fw_intermediate_tensor=fw_intermediate,
-            bw_intermediate_tensor=bw_intermediate,
-            coord_intermediate_tensor=coord_intermediate,
+            intermediate_tensor=intermediate,
             topology=topology,
             input_mux_cores=mux_cores,
         )
@@ -296,9 +272,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
             m_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
             scale_fp32=scale_value,
-            fw_intermediate_tensor=fw_intermediate,
-            bw_intermediate_tensor=bw_intermediate,
-            coord_intermediate_tensor=coord_intermediate,
+            intermediate_tensor=intermediate,
             topology=topology,
             input_mux_cores=mux_cores,
         )
@@ -337,26 +311,6 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     # Tolerances for bfloat16 with exponentials
     rtol = 0.01
     atol = 0.06
-
-    # print expected vs actual output
-    print("L tensor output vs reference:")
-    print("Output :")
-    print(out_l_root)
-    print("Reference:")
-    print(l_ref)
-
-    # same for s and m
-    print("S tensor output vs reference:")
-    print("Output:")
-    print(out_s_root)
-    print("Reference:")
-    print(s_ref)
-
-    print("M tensor output vs reference:")
-    print("Output :")
-    print(out_m_root)
-    print("Reference:")
-    print(m_ref)
 
     # Check L tensor
     l_match = torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol)

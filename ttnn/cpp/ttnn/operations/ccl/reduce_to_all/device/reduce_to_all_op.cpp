@@ -10,14 +10,14 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/global_semaphore.hpp"
 
-#include "reduce_to_root_op.hpp"
+#include "reduce_to_all_op.hpp"
 
 using namespace tt::tt_metal;
 namespace ttnn::operations::ccl {
 
-using cached_workload_t = device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_variables_t>;
+using cached_workload_t = device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t>;
 
-void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void ReduceToAllOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_l = tensor_args.input_tensor_l;
 
     auto* mesh_device = input_l.device();
@@ -77,8 +77,8 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
     }
 };
 
-ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+ReduceToAllOp::spec_return_value_t ReduceToAllOp::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
@@ -87,8 +87,12 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
         input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()};
 
     std::vector<TensorSpec> intermediate_specs;
-    if (tensor_args.optional_intermediate_tensor.has_value()) {
-        intermediate_specs.push_back(tensor_args.optional_intermediate_tensor.value().tensor_spec());
+    if (tensor_args.optional_fw_intermediate_tensor.has_value() &&
+        tensor_args.optional_bw_intermediate_tensor.has_value() &&
+        tensor_args.optional_coord_intermediate_tensor.has_value()) {
+        intermediate_specs.push_back(tensor_args.optional_fw_intermediate_tensor.value().tensor_spec());
+        intermediate_specs.push_back(tensor_args.optional_bw_intermediate_tensor.value().tensor_spec());
+        intermediate_specs.push_back(tensor_args.optional_coord_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
     }
     // intermediate shape is the shape of the 3 tenssors combined so that we can send them all in a single packet
@@ -97,12 +101,14 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
                        (2 * final_output_spec[1].memory_config().shard_spec()->shape[1]);
     Shape intermediate_shape = Shape{shape_0, shape_1};
     TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
-    intermediate_specs.push_back(intermediate_spec);
+    for (auto j = 0; j < 3; j++) {
+        intermediate_specs.push_back(intermediate_spec);
+    }
 
     return {intermediate_specs, final_output_spec};
 }
 
-ReduceToRootOp::tensor_return_value_t ReduceToRootOp::create_output_tensors(
+ReduceToAllOp::tensor_return_value_t ReduceToAllOp::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
@@ -111,9 +117,17 @@ ReduceToRootOp::tensor_return_value_t ReduceToRootOp::create_output_tensors(
     std::vector<ttnn::Tensor> intermediate_output_tensors;
     std::vector<ttnn::Tensor> final_output_tensors;
 
-    auto intermediate_output_tensor_l = create_device_tensor(output_specs.at(0)[0], mesh_device);
-    if (tensor_args.optional_intermediate_tensor.has_value()) {
-        intermediate_output_tensor_l = tensor_args.optional_intermediate_tensor.value();
+    auto fw_intermediate_output_tensor = create_device_tensor(output_specs.at(0)[0], mesh_device);
+    if (tensor_args.optional_fw_intermediate_tensor.has_value()) {
+        fw_intermediate_output_tensor = tensor_args.optional_fw_intermediate_tensor.value();
+    }
+    auto bw_intermediate_output_tensor = create_device_tensor(output_specs.at(0)[1], mesh_device);
+    if (tensor_args.optional_bw_intermediate_tensor.has_value()) {
+        bw_intermediate_output_tensor = tensor_args.optional_bw_intermediate_tensor.value();
+    }
+    auto coord_intermediate_output_tensor = create_device_tensor(output_specs.at(0)[2], mesh_device);
+    if (tensor_args.optional_coord_intermediate_tensor.has_value()) {
+        coord_intermediate_output_tensor = tensor_args.optional_coord_intermediate_tensor.value();
     }
 
     auto final_output_tensor_l = create_device_tensor(output_specs.at(1)[0], mesh_device);
@@ -131,13 +145,14 @@ ReduceToRootOp::tensor_return_value_t ReduceToRootOp::create_output_tensors(
         final_output_tensor_m = tensor_args.optional_output_tensor_m.value();
     }
 
-    intermediate_output_tensors = {intermediate_output_tensor_l};
+    intermediate_output_tensors = {
+        fw_intermediate_output_tensor, bw_intermediate_output_tensor, coord_intermediate_output_tensor};
     final_output_tensors = {final_output_tensor_l, final_output_tensor_s, final_output_tensor_m};
 
     return {intermediate_output_tensors, final_output_tensors};
 }
 
-ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoot::create_mesh_workload(
+ReduceToAllOp::ReduceToAll::cached_mesh_workload_t ReduceToAllOp::ReduceToAll::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
@@ -149,17 +164,16 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
-    semaphores.reserve(2);
-    // 2 semaphores: one for each round
-    for (size_t i = 0; i < 2; ++i) {
+    semaphores.reserve(5);
+    for (size_t i = 0; i < 5; ++i) {
         semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
     }
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in reduce_to_root op");
+    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in reduce_to_all op");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
-    log_debug(tt::LogOp, "Synchronize devices in reduce_to_root op done");
+    log_debug(tt::LogOp, "Synchronize devices in reduce_to_all op done");
 
     const auto& coords = tensor_coords.coords();
-    auto topology = tt::tt_fabric::Topology::Linear;
+    auto topology = tt::tt_fabric::Topology::Ring;
     for (const auto& coord : coords) {
         std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor_l, coord, 1, topology, std::nullopt);
@@ -169,7 +183,14 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
 
         if (coord == operation_attributes.root_coord) {
             if (forward_coord.has_value() == 0 || backward_coord.has_value() == 0) {
-                TT_FATAL(false, "Root device must have both forward and backward neighbors in reduce_to_root op");
+                TT_FATAL(false, "Root device must have both forward and backward neighbors in reduce_to_all op");
+            }
+        }
+        if (topology == tt::tt_fabric::Topology::Ring) {
+            if (forward_coord.has_value() == 0 || backward_coord.has_value() == 0) {
+                TT_FATAL(
+                    false,
+                    "In ring topology, all devices must have both forward and backward neighbors in reduce_to_all op");
             }
         }
         auto cached_workload = create_at(
@@ -180,7 +201,7 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-cached_workload_t ReduceToRootOp::ReduceToRoot::create_at(
+cached_workload_t ReduceToAllOp::ReduceToAll::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     std::optional<MeshCoordinate>& forward_coord,
@@ -191,7 +212,7 @@ cached_workload_t ReduceToRootOp::ReduceToRoot::create_at(
     const auto& root_coordinate = operation_attributes.root_coord;
     const float scale_fp32 = operation_attributes.scale_fp32;
 
-    return reduce_to_root_program_factory(
+    return reduce_to_all_program_factory(
         tensor_args,
         operation_attributes,
         root_coordinate,
@@ -206,7 +227,7 @@ cached_workload_t ReduceToRootOp::ReduceToRoot::create_at(
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {
-ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
+ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const Tensor& input_tensor_l,
     const Tensor& input_tensor_s,
     const Tensor& input_tensor_m,
@@ -216,9 +237,11 @@ ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
     const std::optional<Tensor>& optional_output_tensor_l,
     const std::optional<Tensor>& optional_output_tensor_s,
     const std::optional<Tensor>& optional_output_tensor_m,
-    const std::optional<Tensor>& optional_intermediate_tensor,
+    const std::optional<Tensor>& optional_fw_intermediate_tensor,
+    const std::optional<Tensor>& optional_bw_intermediate_tensor,
+    const std::optional<Tensor>& optional_coord_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
-    using OperationType = ttnn::operations::ccl::ReduceToRootOp;
+    using OperationType = ttnn::operations::ccl::ReduceToAllOp;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             root_coord,
@@ -233,6 +256,8 @@ ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
             optional_output_tensor_l,
             optional_output_tensor_s,
             optional_output_tensor_m,
-            optional_intermediate_tensor});
+            optional_fw_intermediate_tensor,
+            optional_bw_intermediate_tensor,
+            optional_coord_intermediate_tensor});
 }
 }  // namespace ttnn::prim
