@@ -2,8 +2,8 @@ tests:
   0:
     name: "DRAM Packet Sizes"
     memory: "dram"
-    operation: "read"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   1:
     name: "DRAM Core Locations"
@@ -24,74 +24,80 @@ tests:
   4:
     name: "One to One Packet Sizes"
     memory: "l1"
-    operation: "write"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   5:
     name: "One from One Packet Sizes"
     memory: "l1"
-    operation: "read"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_from_one"
 
   6:
     name: "One to All Unicast 2x2 Packet Sizes"
-#    memory: "l1"
-#    operation: "write"
-#    pattern: "unicast"
+    memory: "l1"
+    mechanism: "unicast"
+    pattern: "one_to_all"
+    num_peers: 4
 
   7:
     name: "One to All Unicast 5x5 Packet Sizes"
-#    memory: "l1"
-#    operation: "write"
-#    pattern: "unicast"
+    memory: "l1"
+    mechanism: "unicast"
+    pattern: "one_to_all"
+    num_peers: 25
 
   8:
     name: "One to All Unicast Packet Sizes"
-#    memory: "l1"
-#    operation: "write"
-#    pattern: "unicast"
+    memory: "l1"
+    mechanism: "unicast"
+    pattern: "one_to_all"
 
   9:
     name: "One to All Multicast 2x2 Packet Sizes"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
+    num_peers: 4
 
   10:
     name: "One to All Multicast 5x5 Packet Sizes"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
+    num_peers: 25
 
   11:
     name: "One to All Multicast Packet Sizes"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
 
   12:
     name: "One to All Multicast Linked 2x2 Packet Sizes"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
+    num_peers: 4
 
   13:
     name: "One to All Multicast Linked 5x5 Packet Sizes"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
+    num_peers: 25
 
   14:
     name: "One to All Multicast Linked Packet Sizes"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
 
   15:
     name: "One from All Packet Sizes"
-    # memory: "l1"
-    # operation: "read"
-    # pattern: "unicast"
+    memory: "l1"
+    mechanism: "unicast"
+    pattern: "one_from_all"
 
   16:
     name: "Loopback Packet Sizes"
@@ -164,8 +170,8 @@ tests:
   40:
     name: "DRAM Packet Sizes 2.0"
     memory: "dram"
-    operation: "read"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   50:
     name: "One to One Directed Ideal"
@@ -272,8 +278,8 @@ tests:
   111:
     name: "Multi Interleaved Sizes"
     memory: "dram"
-    operation: "write"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   112:
     name: "Multi Interleaved Read Directed Ideal"
@@ -281,8 +287,8 @@ tests:
   113:
     name: "Multi Interleaved Read Sizes"
     memory: "dram"
-    operation: "read"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_from_one"
 
   114:
     name: "Multi Interleaved Write Directed Ideal"
@@ -290,8 +296,8 @@ tests:
   115:
     name: "Multi Interleaved Write Sizes"
     memory: "dram"
-    operation: "write"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   116:
     name: "Multi Interleaved 2x2 Directed Ideal"
@@ -299,8 +305,8 @@ tests:
   117:
     name: "Multi Interleaved 2x2 Sizes"
     memory: "dram"
-    operation: "write"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   118:
     name: "Multi Interleaved 2x2 Read Directed Ideal"
@@ -308,8 +314,8 @@ tests:
   119:
     name: "Multi Interleaved 2x2 Read Sizes"
     memory: "dram"
-    operation: "read"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_from_one"
 
   120:
     name: "Multi Interleaved 2x2 Write Directed Ideal"
@@ -317,8 +323,8 @@ tests:
   121:
     name: "Multi Interleaved 2x2 Write Sizes"
     memory: "dram"
-    operation: "write"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   122:
     name: "Multi Interleaved 6x6 Directed Ideal"
@@ -326,8 +332,8 @@ tests:
   123:
     name: "Multi Interleaved 6x6 Sizes"
     memory: "dram"
-    operation: "write"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   124:
     name: "Multi Interleaved 6x6 Read Directed Ideal"
@@ -335,8 +341,8 @@ tests:
   125:
     name: "Multi Interleaved 6x6 Read Sizes"
     memory: "dram"
-    operation: "read"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_from_one"
 
   126:
     name: "Multi Interleaved 6x6 Write Directed Ideal"
@@ -344,8 +350,8 @@ tests:
   127:
     name: "Multi Interleaved 6x6 Write Sizes"
     memory: "dram"
-    operation: "write"
-    pattern: "unicast"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
@@ -406,57 +412,63 @@ tests:
 
   170:
     name: "One to All Unicast 2x2 Packet Sizes 2.0"
-#    memory: "l1"
-#    operation: "write"
-#    pattern: "unicast"
+    memory: "l1"
+    mechanism: "unicast"
+    pattern: "one_to_all"
+    num_peers: 4
 
   171:
     name: "One to All Unicast 5x5 Packet Sizes 2.0"
-#    memory: "l1"
-#    operation: "write"
-#    pattern: "unicast"
+    memory: "l1"
+    mechanism: "unicast"
+    pattern: "one_to_all"
+    num_peers: 25
 
   172:
     name: "One to All Unicast Packet Sizes 2.0"
-#    memory: "l1"
-#    operation: "write"
-#    pattern: "unicast"
+    memory: "l1"
+    mechanism: "unicast"
+    pattern: "one_to_all"
 
   173:
     name: "One to All Multicast 2x2 Packet Sizes 2.0"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
+    num_peers: 4
 
   174:
     name: "One to All Multicast 5x5 Packet Sizes 2.0"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
+    num_peers: 25
 
   175:
     name: "One to All Multicast Packet Sizes 2.0"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
 
   176:
     name: "One to All Multicast Linked 2x2 Packet Sizes 2.0"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
+    num_peers: 4
 
   177:
     name: "One to All Multicast Linked 5x5 Packet Sizes 2.0"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
+    num_peers: 25
 
   178:
     name: "One to All Multicast Linked Packet Sizes 2.0"
     memory: "l1"
-    operation: "write"
-    pattern: "multicast"
+    mechanism: "multicast"
+    pattern: "one_to_all"
 
   179:
     name: "One to All Multicast Linked Loopback Directed Ideal 2.0"
@@ -484,9 +496,9 @@ tests:
 
   301:
     name: "All to All Packet Sizes"
-#    memory: "l1"
-#    operation: "write"
-#    pattern: "unicast"
+    memory: "l1"
+    mechanism: "unicast"
+    pattern: "all_to_all"
 
   302:
     name: "All to All 2x2 To 1x1 Directed Ideal"

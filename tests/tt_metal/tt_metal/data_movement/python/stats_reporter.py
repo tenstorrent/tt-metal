@@ -94,16 +94,20 @@ class StatsReporter:
                 ]
 
                 # Add metadata columns for NOC estimator consumption
+                # Column names match csv_reader.cpp expectations
                 if test_metadata is not None:
                     header.extend(
                         [
                             "Architecture",
-                            "Operation",
+                            "Mechanism",
                             "Memory Type",
                             "Pattern",
-                            "Same Axis",
                         ]
                     )
+                    # Add Number of Peers if present in metadata
+                    if "num_peers" in test_metadata:
+                        header.append("Number of Peers")
+                    header.append("Same Axis")
 
                 header.extend(
                     [
@@ -145,26 +149,18 @@ class StatsReporter:
 
                         # Add metadata columns
                         if test_metadata is not None:
-                            # Check if kernel explicitly set operation type, otherwise use test metadata
-                            # This handles cases like DRAM tests where riscv_1=read, riscv_0=write
-                            operation = attributes.get("Operation")
-                            if operation is None:
-                                # Use test metadata default, but for DRAM tests infer from RISC-V
-                                if test_metadata["memory"] == "dram":
-                                    # For DRAM tests: riscv_1 is reader, riscv_0 is writer
-                                    operation = "read" if riscv == "riscv_1" else "write"
-                                else:
-                                    operation = test_metadata["operation"]
-
                             row.extend(
                                 [
                                     test_metadata["architecture"],
-                                    operation,
+                                    test_metadata["mechanism"],
                                     test_metadata["memory"],
                                     test_metadata["pattern"],
-                                    attributes.get("Same axis", 0),  # Default to 0 (false) if not present
                                 ]
                             )
+                            # Add Number of Peers if present in metadata
+                            if "num_peers" in test_metadata:
+                                row.append(test_metadata["num_peers"])
+                            row.append(attributes.get("Same axis", 0))  # Default to 0 (false) if not present
 
                         # Add internal debugging columns
                         row.extend(

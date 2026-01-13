@@ -35,24 +35,28 @@ class TestMetadataLoader:
             arch: The architecture name (e.g., "blackhole", "wormhole_b0")
 
         Returns:
-            Dictionary containing metadata fields: memory, operation, pattern, architecture
+            Dictionary containing metadata fields: memory, mechanism, pattern, architecture, num_peers (optional)
 
         Raises:
-            KeyError: If test_id not found or doesn't have metadata fields
+            KeyError: If test_id not found or doesn't have required metadata fields
         """
         test_info = self.load_test_information()
         test_data = test_info.get("tests", {}).get(test_id, {})
 
-        # Check if test has metadata fields
-        if "memory" not in test_data or "operation" not in test_data or "pattern" not in test_data:
-            raise KeyError(f"Test ID {test_id} does not have complete metadata (memory, operation, pattern)")
+        # Check if test has required metadata fields
+        if "memory" not in test_data or "mechanism" not in test_data or "pattern" not in test_data:
+            raise KeyError(f"Test ID {test_id} does not have complete metadata (memory, mechanism, pattern)")
 
         # Build result with metadata fields
         result = {
             "memory": test_data["memory"],
-            "operation": test_data["operation"],
+            "mechanism": test_data["mechanism"],
             "pattern": test_data["pattern"],
         }
+
+        # Add optional num_peers field if present
+        if "num_peers" in test_data:
+            result["num_peers"] = test_data["num_peers"]
 
         # Set architecture based on runtime environment
         # Convert architecture name to match csv_reader.cpp expectations
