@@ -1195,7 +1195,7 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
             const GlobalNode& global_node = graph_data.global_nodes[global_idx];
 
             result.target_to_global[target_node] = global_node;
-            result.global_to_target[global_node] = target_node;
+            result.global_to_target.emplace(global_node, target_node);
             mapped_count++;
         }
     }
