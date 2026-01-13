@@ -12,20 +12,17 @@
 namespace ttnn::operations::experimental::transformer::dit_layernorm {
 
 struct PostAllGatherOperationAttributes {
-    float eps;
+    float eps = 0.0f;
     tt::tt_metal::MemoryConfig memory_config;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::DataType> dtype;
 };
 
 struct PostAllGatherTensorArgs {
-    const Tensor& input;
-    const Tensor& stats;
+    Tensor input;
+    Tensor stats;
     std::optional<Tensor> gamma;
     std::optional<Tensor> beta;
 };
-
-using PostAllGatherTensorReturnValue = Tensor;
-using PostAllGatherSpecReturnValue = TensorSpec;
 
 }  // namespace ttnn::operations::experimental::transformer::dit_layernorm

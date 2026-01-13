@@ -23,7 +23,7 @@ namespace ttnn::operations::experimental::transformer::dit_layernorm::program {
 PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgramFactory::create(
     const PostAllGatherOperationAttributes& operation_attributes,
     const PostAllGatherTensorArgs& tensor_args,
-    PostAllGatherTensorReturnValue& output) {
+    Tensor& output) {
     using tt::tt_metal::CircularBufferConfig;
 
     const auto& a = tensor_args.input;
@@ -299,7 +299,7 @@ void PostAllGatherWelfordProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const PostAllGatherOperationAttributes&,
     const PostAllGatherTensorArgs& tensor_args,
-    PostAllGatherTensorReturnValue& output) {
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 

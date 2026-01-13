@@ -18,10 +18,7 @@ struct PreAllGatherOperationAttributes {
 };
 
 struct PreAllGatherTensorArgs {
-    const Tensor& input;
+    Tensor input;
 };
-
-using PreAllGatherSpecReturnValue = TensorSpec;
-using PreAllGatherTensorReturnValue = Tensor;
 
 }  // namespace ttnn::operations::experimental::transformer::dit_layernorm
