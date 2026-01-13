@@ -92,7 +92,6 @@ def test_isin_random_data(elements_shape, test_elements_shape, invert, device):
 
     elements_ttnn = ttnn.from_torch(elements_torch, device=device, dtype=ttnn.int32)
     test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, dtype=ttnn.int32)
-    ttnn.set_printoptions(profile="full")
 
     # Act - Compute results
     torch_isin_result = torch.isin(elements_torch, test_elements_torch, invert=invert)
