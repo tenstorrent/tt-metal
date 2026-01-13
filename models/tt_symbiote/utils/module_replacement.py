@@ -65,7 +65,7 @@ def register_module_replacement_dict_with_module_names(
                 continue
             try:
                 value = getattr(model, attr_name)
-            except:
+            except Exception as e:
                 continue
             if isinstance(value, dict):
                 for k, v in value.items():
@@ -101,7 +101,7 @@ def register_module_replacement_dict_with_module_names(
                 continue
             try:
                 value = getattr(model, attr_name)
-            except:
+            except Exception as e:
                 continue
             if isinstance(value, dict):
                 for k, v in value.items():

@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test for ViT model with TTNN backend."""
+"""Test for YUNet model with TTNN backend."""
 
 import pytest
 import torch
