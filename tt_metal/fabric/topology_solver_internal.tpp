@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <unordered_set>
-#include <set>
 
 namespace tt::tt_fabric::detail {
 
