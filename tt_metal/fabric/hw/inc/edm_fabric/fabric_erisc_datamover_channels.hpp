@@ -292,7 +292,7 @@ public:
     // header + payload regions only
     std::size_t max_eth_payload_size_in_bytes;
     // Includes header + payload + channel_sync
-    std::size_t next_packet_buffer_index;    
+    std::size_t next_packet_buffer_index;
     std::size_t cached_next_buffer_slot_addr;
 };
 

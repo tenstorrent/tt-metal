@@ -205,7 +205,7 @@ struct OutboundReceiverChannelPointers {
     
     FORCE_INLINE void init() {
         this->slot_size_bytes = 0U;
-        this->remote_receiver_channel_address_base = 0U;        
+        this->remote_receiver_channel_address_base = 0U;
         this->remote_receiver_channel_address_ptr = 0U;
         this->remote_receiver_channel_address_last = 0U;
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
