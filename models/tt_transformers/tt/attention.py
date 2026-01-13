@@ -393,9 +393,9 @@ class Attention(LightweightModule):
         This function:
         - Infers the number of Q heads and KV heads from the input tensors
         - Shards Q and K along the batch dimension using HEIGHT sharding
-        - Places Q and K on disjoint core regions to avoid overlap:
-            * Q cores start at (0, 0)
-            * K cores start at (0, 4)
+        - Places Q and K on disjoint core regions to avoid overlap (assuming a row size of 8 cores):
+            - For q_batch = 32: 32 cores for Q fill 4 complete rows (32 // 8 = 4), so K starts at row 4, column 0
+            - For q_batch = 1: 1 core for Q starts at (0,0), so K starts at column 1, row 0
         - Uses row-major shard orientation with explicit shard shapes
 
         The resulting memory layouts are compatible with fused attention
@@ -418,10 +418,9 @@ class Attention(LightweightModule):
         q_batch = q_tensor.shape[1]
         k_batch = k_tensor.shape[1]
         assert q_batch == k_batch
-        if q_batch == 32:
-            k_start_core = ttnn.CoreCoord(0, 4)
-        else:
-            k_start_core = ttnn.CoreCoord(1, 0)
+
+        row_size = 8  # We assume a row size of 8 cores
+        k_start_core = ttnn.CoreCoord(q_batch % row_size, q_batch // row_size)
 
         q_core_grid = ttnn.CoreRangeSet({num_to_corerange(q_batch)})
         k_core_grid = ttnn.CoreRangeSet({num_to_corerange(k_batch, start_core=k_start_core)})
