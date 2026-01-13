@@ -12,7 +12,6 @@
 #include <optional>
 #include <tuple>
 #include <map>
-#include <string>
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
