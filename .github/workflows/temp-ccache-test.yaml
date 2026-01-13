@@ -1,4 +1,4 @@
-name: "[temp] CCache test"
+name: "[temp] CCache cross-commit test"
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
 
   ttnn-ccache-test:
     needs: build-artifact
-    name: TTNN CCache Test (3 runs on same machine)
+    name: TTNN CCache Cross-Commit Test (test cache across git commits)
     runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
@@ -71,7 +71,7 @@ jobs:
 
       - name: Initial ccache configuration and stats
         run: |
-          echo "=== TTNN RUN 1: Initial ccache configuration ==="
+          echo "=== TTNN RUN 1 (original commit): Initial ccache configuration ===="
           ccache --show-config | head -40
           echo ""
           echo "=== Redis Remote Storage Configuration ==="
@@ -81,8 +81,7 @@ jobs:
           echo ""
           echo "=== Git commit info ==="
           echo "Git commit: $(git rev-parse HEAD)"
-          echo "Git commit short: $(git rev-parse --short=10 HEAD)"
-          echo ""
+          echo "Git commit short: $(git rev-parse --short=10 HEAD)"          git rev-parse HEAD > /tmp/ttnn_original_commit.txt          echo ""
           echo "=== Zeroing ccache stats ==="
           ccache -z
           echo "=== Initial ccache stats ==="
@@ -104,8 +103,8 @@ jobs:
           CCACHE_LOGFILE: /tmp/ttnn_ccache_run1.log
         run: |
           echo "========================================="
-          echo "=== TTNN RUN 1: First ccache population ===="
-          echo "========================================="
+          echo "=== TTNN RUN 1: Populate cache from older commit ===="
+          echo "=========================================="
           pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_first_run.log
 
       - name: Capture ccache hash keys after Run 1
@@ -179,20 +178,25 @@ jobs:
             echo "Total keys in Redis after TTNN Run 1: ${TOTAL_KEYS}"
           fi
 
-      - name: Clear kernel caches for Run 2 (but keep ccache)
+      - name: Move to newer commit for Run 2 and clear kernel caches
         run: |
           echo ""
           echo "========================================="
-          echo "=== Preparing TTNN RUN 2: Test ccache hits ==="
+          echo "=== Preparing TTNN RUN 2: Test newer commit with older commit's cache ===="
           echo "========================================="
-          echo "Clearing kernel binaries to force recompilation (ccache should provide hits)"
+          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          echo "Moving to newer commit (HEAD) to test forward cache compatibility"
+          git checkout HEAD@{1}  # Go back to the original HEAD before we switched to HEAD~1
+          echo "Now at newer commit: $(git rev-parse --short=10 HEAD)"
+          git rev-parse HEAD > /tmp/ttnn_newer_commit.txt
+          echo ""
+          echo "Clearing kernel binaries to force recompilation (testing newer commit with older cache)"
           rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
           echo "Kernel binaries cleared, ccache intact"
           echo ""
-          echo "=== Zeroing ccache stats for Run 2 ==="
-          ccache -z
+          echo "=== Current ccache stats before Run 2 (newer commit) ===="
           ccache -s
 
       - name: Run TTNN tests (Second run - expect ccache hits)
@@ -201,7 +205,7 @@ jobs:
           CCACHE_DEBUG: "true"
           CCACHE_LOGFILE: /tmp/ttnn_ccache_run2.log
         run: |
-          echo "=== Running TTNN unit tests (RUN 2 - should hit ccache) ==="
+          echo "=== Running TTNN unit tests (RUN 2 - newer commit, can it use older commit's cache?) ===="
           pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_second_run.log
 
       - name: Capture kernel hashes after Run 2 and compare
@@ -222,12 +226,16 @@ jobs:
           echo "=== Build environment that affects cache keys ==="
           env | grep -E "(TT_METAL|ARCH_NAME|CCACHE)" | sort | tee /tmp/ttnn_run2_env.txt
           echo ""
-          echo "=== Comparing Run 1 vs Run 2 ==="
-          echo "--- Git commits ---"
-          if diff -u /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run2_git_commit.txt; then
-            echo "✅ Git commits are identical"
+          echo "=== Comparing Run 1 (older) vs Run 2 (newer) ===="
+          echo "--- Git commits (expected: older vs newer) ---"
+          echo "Run 1 commit (older): $(cat /tmp/ttnn_older_commit.txt | cut -c1-10)"
+          echo "Run 2 commit (newer): $(cat /tmp/ttnn_newer_commit.txt | cut -c1-10)"
+          if diff -u /tmp/ttnn_older_commit.txt /tmp/ttnn_newer_commit.txt; then
+            echo "❌ ERROR: Git commits should be different but are identical!"
+            exit 1
           else
-            echo "🔴 Git commits differ!"
+            echo "✅ Git commits differ as expected (older -> newer commit progression)"
+            echo "Testing if newer commit can use cache from older commit"
           fi
           echo ""
           echo "--- Build environment ---"
@@ -274,19 +282,23 @@ jobs:
             echo "ℹ️  No cache activity detected"
           fi
 
-      - name: Clear kernel caches for Run 3
+      - name: Return to older commit and clear kernel caches for Run 3
         run: |
           echo ""
           echo "========================================="
-          echo "=== Preparing TTNN RUN 3: Verify consistency ==="
+          echo "=== Preparing TTNN RUN 3: Return to older commit ===="
           echo "========================================="
+          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          echo "Returning to older commit to test cache consistency"
+          git checkout $(cat /tmp/ttnn_older_commit.txt)
+          echo "Back to older commit: $(git rev-parse --short=10 HEAD)"
+          echo ""
           echo "Clearing kernel binaries for third test"
           rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
           echo ""
-          echo "=== Zeroing ccache stats for Run 3 ==="
-          ccache -z
+          echo "=== Current ccache stats before Run 3 (back to older commit) ===="
           ccache -s
 
       - name: Run TTNN tests (Third run)
@@ -295,7 +307,7 @@ jobs:
           CCACHE_DEBUG: "true"
           CCACHE_LOGFILE: /tmp/ttnn_ccache_run3.log
         run: |
-          echo "=== Running TTNN unit tests (RUN 3) ==="
+          echo "=== Running TTNN unit tests (RUN 3 - back to older commit, should hit cache from Run 1) ===="
           pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_third_run.log
 
       - name: Capture kernel hashes after Run 3 and final comparison
@@ -316,18 +328,22 @@ jobs:
           echo "=== Build environment that affects cache keys ==="
           env | grep -E "(TT_METAL|ARCH_NAME|CCACHE)" | sort | tee /tmp/ttnn_run3_env.txt
           echo ""
-          echo "=== Final Comparison: Run 1 vs Run 2 vs Run 3 ==="
-          echo "--- Git commits consistency ---"
-          if diff -q /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run2_git_commit.txt /tmp/ttnn_run3_git_commit.txt >/dev/null 2>&1; then
-            echo "✅ All git commits are identical across 3 runs"
+          echo "=== Final Comparison: Cross-Commit Cache Test Results ===="
+          echo "--- Git commits (expected: Run1==Run3, Run2 different) ---"
+          echo "Run 1 commit: $(cat /tmp/ttnn_run1_git_commit.txt)"
+          echo "Run 2 commit: $(cat /tmp/ttnn_run2_git_commit.txt)"
+          echo "Run 3 commit: $(cat /tmp/ttnn_run3_git_commit.txt)"
+          echo ""
+          if diff -q /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run3_git_commit.txt >/dev/null 2>&1; then
+            echo "✅ Run 1 and Run 3 commits match (same commit should hit cache)"
           else
-            echo "🔴 Git commits differ between runs!"
-            echo "Run 1 commit:"
-            cat /tmp/ttnn_run1_git_commit.txt
-            echo "Run 2 commit:"
-            cat /tmp/ttnn_run2_git_commit.txt
-            echo "Run 3 commit:"
-            cat /tmp/ttnn_run3_git_commit.txt
+            echo "❌ ERROR: Run 1 and Run 3 should have same commit!"
+          fi
+          echo ""
+          if ! diff -q /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run2_git_commit.txt >/dev/null 2>&1; then
+            echo "✅ Run 2 commit differs as expected (testing cross-commit behavior)"
+          else
+            echo "❌ ERROR: Run 2 should have different commit!"
           fi
           echo ""
           echo "--- Build environment consistency ---"
@@ -341,15 +357,28 @@ jobs:
             diff -u /tmp/ttnn_run2_env.txt /tmp/ttnn_run3_env.txt || true
           fi
           echo ""
-          echo "--- Ccache key consistency ---"
-          if diff -q /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run2_ccache_keys.txt /tmp/ttnn_run3_ccache_keys.txt >/dev/null 2>&1; then
-            echo "✅ Ccache keys are identical across 3 runs - cache should be hitting!"
-          else
-            echo "🔴 Ccache keys differ between runs! This explains cache misses!"
-            echo "Diff Run1 vs Run2:"
-            diff -u /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run2_ccache_keys.txt || true
-            echo "Diff Run2 vs Run3:"
-            diff -u /tmp/ttnn_run2_ccache_keys.txt /tmp/ttnn_run3_ccache_keys.txt || true
+          echo "--- Ccache key analysis for cross-commit testing ---"
+          echo "Comparing Run 1 (original) vs Run 3 (back to original):"
+          if [ -f /tmp/ttnn_run1_ccache_keys.txt ] && [ -f /tmp/ttnn_run3_ccache_keys.txt ]; then
+            if diff -q /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run3_ccache_keys.txt >/dev/null 2>&1; then
+              echo "✅ Run 1 and Run 3 ccache keys are identical - same commit should hit cache!"
+            else
+              echo "🔴 Run 1 and Run 3 ccache keys differ - same commit should have same cache keys!"
+              diff -u /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run3_ccache_keys.txt || true
+            fi
+          fi
+          echo ""
+          echo "Comparing Run 1 vs Run 2 (different commits):"
+          if [ -f /tmp/ttnn_run1_ccache_keys.txt ] && [ -f /tmp/ttnn_run2_ccache_keys.txt ]; then
+            if diff -q /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run2_ccache_keys.txt >/dev/null 2>&1; then
+              echo "🟡 Run 1 and Run 2 ccache keys are identical despite different commits"
+              echo "This suggests git commit hash is NOT part of cache key calculation"
+            else
+              echo "✅ Run 1 and Run 2 ccache keys differ - different commits have different cache keys"
+              echo "This suggests git commit hash IS part of cache key calculation"
+              echo "First 10 differing lines:"
+              diff -u /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run2_ccache_keys.txt | head -20 || true
+            fi
           fi
           echo ""
           echo "=== Sample from ccache debug log (cache decisions) ==="
@@ -364,7 +393,7 @@ jobs:
         run: |
           echo '## CCache TTNN Unit Tests Results' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
-          echo 'This test checks if ccache works consistently for TTNN unit tests across rebuilds from the same commit using Redis as the remote storage backend.' >> $GITHUB_STEP_SUMMARY
+          echo 'This test checks ccache behavior for TTNN unit tests across different git commits using Redis as the remote storage backend. Tests if cache keys include git commit hash and whether cross-commit cache hits are possible.' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
 
           STATS=$(ccache -s)
@@ -433,7 +462,7 @@ jobs:
 
   tt-train-ccache-test:
     needs: build-artifact
-    name: tt-train CCache Test (3 runs on same machine)
+    name: tt-train CCache Cross-Commit Test (test cache across git commits)
     runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
@@ -483,9 +512,18 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
 
-      - name: Initial ccache configuration and stats
+      - name: Start from older commit and initial ccache setup
         run: |
-          echo "=== RUN 1: Initial ccache configuration ==="
+          echo "========================================="
+          echo "=== Starting from older commit for natural progression ==="
+          echo "========================================="
+          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          echo "Moving to older commit (HEAD~1) to start test"
+          git checkout HEAD~1
+          echo "Starting from commit: $(git rev-parse --short=10 HEAD)"
+          git rev-parse HEAD > /tmp/tt_train_older_commit.txt
+          echo ""
+          echo "=== RUN 1 (older commit): Initial ccache configuration ====="
           ccache --show-config | head -40
           echo ""
           echo "=== Redis Remote Storage Configuration ==="
@@ -613,12 +651,18 @@ jobs:
           du -sh /github/home/.ccache 2>/dev/null || echo "/github/home/.ccache not found"
           ls -la /github/home/.ccache 2>/dev/null | head -20 || echo "Cannot list /github/home/.ccache"
 
-      - name: Clear kernel caches for Run 2 (but keep ccache)
+      - name: Move to newer commit for Run 2 and clear kernel caches
         run: |
           echo ""
           echo "========================================="
-          echo "=== Preparing tt-train RUN 2: Test ccache hits ==="
+          echo "=== Preparing tt-train RUN 2: Test newer commit with older commit's cache ==="
           echo "========================================="
+          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          echo "Moving to newer commit (HEAD) to test forward cache compatibility"
+          git checkout HEAD@{1}  # Go back to the original HEAD before we switched to HEAD~1
+          echo "Now at newer commit: $(git rev-parse --short=10 HEAD)"
+          git rev-parse HEAD > /tmp/tt_train_newer_commit.txt
+          echo ""
           echo "=== RUN 2: ccache configuration ==="
           ccache --show-config | grep -E "(remote_storage|remote_only|cache_dir)" || true
           echo ""
@@ -627,7 +671,7 @@ jobs:
           echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
           echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
           echo ""
-          echo "=== Redis Key Check Before Run 2 ==="
+          echo "=== Redis Key Check Before Run 2 (newer commit) ==="
           REDIS_HOST="${{ vars.REDIS_HOST }}"
           REDIS_PORT="${{ vars.REDIS_PORT }}"
           REDIS_PASS="${{ secrets.REDIS_PASSWORD }}"
@@ -639,29 +683,26 @@ jobs:
               apt-get update -qq && apt-get install -y -qq redis-tools 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking" || true
             fi
 
-            GIT_HASH=$(git rev-parse --short=10 HEAD)
-            echo "Git hash: $GIT_HASH"
+            echo "Older commit: $(cat /tmp/tt_train_older_commit.txt | cut -c1-10)"
+            echo "Current commit: $(cat /tmp/tt_train_newer_commit.txt | cut -c1-10)"
             TOTAL_KEYS=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" DBSIZE 2>/dev/null | grep -oE '[0-9]+' || echo "0")
             echo "Total keys in Redis before Run 2: ${TOTAL_KEYS}"
 
             if [ "$TOTAL_KEYS" -gt 0 ]; then
               echo "✅ Redis has ${TOTAL_KEYS} cached entries from Run 1"
-              echo "Sample keys (first 10):"
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" --scan --count 10 2>/dev/null | head -10
+              echo "Testing if newer commit can use cache from older commit..."
             else
               echo "⚠️  WARNING: Redis appears empty - ccache may not have persisted from Run 1"
-              echo "This means Run 2 will NOT get cache hits!"
             fi
           fi
           echo ""
-          echo "Clearing kernel binaries to force recompilation (ccache should provide hits)"
+          echo "Clearing kernel binaries to force recompilation (testing newer commit with older cache)"
           rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
           echo "Kernel binaries cleared, ccache intact"
           echo ""
-          echo "=== Zeroing ccache stats for Run 2 ==="
-          ccache -z
+          echo "=== Current ccache stats before Run 2 (different commit) ====="
           ccache -s
 
 
@@ -670,7 +711,7 @@ jobs:
         run: |
           cd /work/build/tt-train
           mkdir -p generated/test_reports
-          echo "=== Running tt-train tests (RUN 2 - should hit ccache) ==="
+          echo "=== Running tt-train tests (RUN 2 - different commit, testing cross-commit cache) ===="
           ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml 2>&1 | tee /tmp/tt_train_second_run.log
 
       - name: Analyze ccache after Run 2
@@ -699,26 +740,31 @@ jobs:
             echo "ℹ️  No cache activity detected"
           fi
 
-      - name: Clear kernel caches for Run 3
+      - name: Return to older commit and clear kernel caches for Run 3
         run: |
           echo ""
           echo "========================================="
-          echo "=== Preparing tt-train RUN 3: Verify consistency ==="
+          echo "=== Preparing tt-train RUN 3: Return to older commit ===="
           echo "========================================="
+          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          echo "Returning to older commit to test cache consistency"
+          git checkout $(cat /tmp/tt_train_older_commit.txt)
+          echo "Back to older commit: $(git rev-parse --short=10 HEAD)"
+          git rev-parse HEAD > /tmp/tt_train_run3_commit.txt
+          echo ""
           echo "Clearing kernel binaries for third test"
           rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
           echo ""
-          echo "=== Zeroing ccache stats for Run 3 ==="
-          ccache -z
+          echo "=== Current ccache stats before Run 3 (back to original commit) ====="
           ccache -s
 
       - name: Run tt-train tests (Third run)
         timeout-minutes: 30
         run: |
           cd /work/build/tt-train
-          echo "=== Running tt-train tests (RUN 3) ==="
+          echo "=== Running tt-train tests (RUN 3 - back to original commit, should hit cache from Run 1) ===="
           ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml 2>&1 | tee /tmp/tt_train_third_run.log
 
       - name: Analyze final ccache stats
@@ -730,7 +776,7 @@ jobs:
         run: |
           echo '## CCache tt-train Tests Results' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
-          echo 'This test checks if ccache works consistently for tt-train tests across rebuilds from the same commit using Redis as the remote storage backend.' >> $GITHUB_STEP_SUMMARY
+          echo 'This test checks ccache behavior for tt-train tests across different git commits using Redis as the remote storage backend. Tests if cache keys include git commit hash and whether cross-commit cache hits are possible.' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
 
           STATS=$(ccache -s)
