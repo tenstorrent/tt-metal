@@ -579,12 +579,6 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
                 checkpoint=state_dict,
             )
 
-            # Apply optimizations if specified
-            if optimizations_preset and hasattr(model_args_i, "optimizations"):
-                model_args_i.optimizations = lambda model_args: optimizations_preset(
-                    model_args.n_layers, model_args.model_name
-                )
-
             # Override n_layers if specified
             if n_layers is not None:
                 model_args_i.n_layers = n_layers
