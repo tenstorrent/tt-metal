@@ -118,7 +118,6 @@ def test_qwen25vl_attention(*, mesh_device: ttnn.MeshDevice, masked: bool) -> No
 @pytest.mark.parametrize(
     ("mesh_device", "batch_size", "skip_layers"),
     [
-        # pytest.param((1, 1), 2, 4, id="1x1"),
         pytest.param((1, 2), 1, 0, id="1x2"),
         pytest.param((1, 4), 1, 0, id="1x4"),
         pytest.param((1, 8), 1, 0, id="1x8"),
@@ -146,12 +145,8 @@ def test_qwen25vl_text_encoder(
     tp_axis = 1
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    parallel_config = (
-        EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=mesh_device.shape[tp_axis], mesh_axis=tp_axis),
-        )
-        if tp_axis is not None
-        else None
+    parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=mesh_device.shape[tp_axis], mesh_axis=tp_axis),
     )
 
     torch_model = transformers.Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -206,8 +201,6 @@ def test_qwen25vl_text_encoder(
             output_hidden_states=True,
         )
         prompt_embeds = out.hidden_states[-1]
-
-    # assert len(out.hidden_states) == len(tt_hidden_states)
 
     if masked:
         assert_quality(prompt_embeds, tt_prompt_embeds_torch, pcc=0.952, relative_rmse=0.31)

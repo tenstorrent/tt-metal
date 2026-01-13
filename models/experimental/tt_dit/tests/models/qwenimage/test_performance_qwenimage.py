@@ -19,26 +19,8 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        [
-            (2, 4),
-            (2, 0),
-            (1, 0),
-            (4, 1),
-            (4, 1),
-            (4, 1),
-            ttnn.Topology.Linear,
-            1,
-        ],  # 73 s. FSDP, only dymanic load encoder submesh
-        [
-            (4, 8),
-            (2, 1),
-            (4, 0),
-            (4, 1),
-            (4, 1),
-            (4, 1),
-            ttnn.Topology.Linear,
-            4,
-        ],  # 25s NO FSDP for best perf on WH GLX
+        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
         "2x4cfg2sp1tp4",
@@ -93,7 +75,6 @@ def test_qwenimage_pipeline_performance(
         height=image_h,
     )
 
-    # test prompts - diverse set for comprehensive performance testing
     prompts = [
         'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee $2 per cup," with a neon light '
         'beside it displaying "通义千问". Next to it hangs a poster showing a beautiful Chinese woman, and beneath the '
@@ -104,9 +85,6 @@ def test_qwenimage_pipeline_performance(
         'Hardcover fantasy novel cover, textured paper, gold foil; title text "物語のはじまり" centered; author line "山本ひかり" below; tasteful serif typography, dramatic vignette illustration.',
     ]
 
-    # =========================================================================
-    # warmup run (not timed for performance metrics)
-    # =========================================================================
     logger.info("Running warmup iteration...")
     with benchmark_profiler("run", iteration=0):
         images = pipeline(
@@ -121,9 +99,6 @@ def test_qwenimage_pipeline_performance(
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
-    # =========================================================================
-    # performance measurement runs
-    # =========================================================================
     logger.info("Running performance measurement iterations...")
     num_perf_runs = 2  # len(prompts)
 
@@ -166,9 +141,6 @@ def test_qwenimage_pipeline_performance(
             profiler.disable()
             logger.info("Tracy profiling disabled")
 
-    # =========================================================================
-    # calculate statistics
-    # =========================================================================
     total_encoding_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
     vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
     total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
@@ -182,21 +154,13 @@ def test_qwenimage_pipeline_performance(
             ), f"All runs should have {num_inference_steps} denoising steps"
             all_denoising_steps.append(benchmark_profiler.get_duration(f"denoising_step_{j}", i))
 
-    cfg_factor = cfg[0]  # First element is always the factor
-    sp_factor = sp[0]
-    tp_factor = tp[0]
-    encoder_tp_factor = encoder_tp[0]
-    vae_tp_factor = vae_tp[0]
-
     print("\n" + "=" * 100)
     print("QWEN IMAGE PIPELINE PERFORMANCE RESULTS")
     print("=" * 100)
     print(f"Model: QwenImage")
     print(f"Image Size: {image_w}x{image_h}")
     print(f"Inference Steps: {num_inference_steps}")
-    print(
-        f"Configuration: cfg={cfg_factor}, sp={sp_factor}, tp={tp_factor}, encoder_tp={encoder_tp_factor}, vae_tp={vae_tp_factor}"
-    )
+    print(f"Configuration: cfg={cfg[0]}, sp={sp[0]}, tp={tp[0]}, encoder_tp={encoder_tp[0]}, vae_tp={vae_tp[0]}")
     print(f"Mesh Shape: {mesh_device.shape}")
     print(f"Topology: {topology}")
     print("-" * 100)
@@ -299,11 +263,11 @@ def test_qwenimage_pipeline_performance(
                 "width": image_w,
                 "height": image_h,
                 "num_steps": num_inference_steps,
-                "cfg_factor": cfg_factor,
-                "sp_factor": sp_factor,
-                "tp_factor": tp_factor,
-                "encoder_tp_factor": encoder_tp_factor,
-                "vae_tp_factor": vae_tp_factor,
+                "cfg_factor": cfg[0],
+                "sp_factor": sp[0],
+                "tp_factor": tp[0],
+                "encoder_tp_factor": encoder_tp[0],
+                "vae_tp_factor": vae_tp[0],
                 "topology": str(topology),
                 "num_links": num_links,
             },
