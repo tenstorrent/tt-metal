@@ -4,7 +4,7 @@ training_config:
   model_save_interval: 1
   batch_size: 1
   num_epochs: 1
-  max_steps: 5000
+  max_steps: 10
   learning_rate: 0.0003
   weight_decay: 0.01
   use_moreh_adamw: true
@@ -12,9 +12,9 @@ training_config:
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/tinyllama.yaml"
-  estimate_memory_usage: true
+  print_model_summary: false
   # Uncomment to enable LoRA fine-tuning:
-  # lora_config: "configs/lora_configs/tinyllama.yaml"
+  lora_config: "configs/lora_configs/tinyllama.yaml"
 
 device_config:
   enable_ddp: false
