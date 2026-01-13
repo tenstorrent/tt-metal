@@ -65,8 +65,6 @@ void kernel_main() {
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(14);
     constexpr uint32_t packet_size_bytes = get_compile_time_arg_val(15);
     constexpr uint32_t round1_interm_cb_id = get_compile_time_arg_val(16);
-    constexpr uint32_t device_idx = get_compile_time_arg_val(17);
-    DPRINT << "device_idx: " << (uint32_t)device_idx << "\n";
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -76,14 +74,11 @@ void kernel_main() {
     constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(fabric_ct_idx + 3);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(fabric_ct_idx + 4);
 
-    const uint32_t fabric_idx_2 = get_arg_val<uint32_t>(arg_idx++);
-    const auto intermediate_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    const auto pkt_base_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     // ROUND 2: receive data
     uint32_t round1_interm_tensor_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t device_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    // Handoff semaphore already read and reset at kernel start - just advance arg_idx
-    arg_idx++;  // skip writer_to_reader_handoff_sem (already read at index 12)
 
     const uint8_t sender_num_hops = 1;
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
@@ -167,38 +162,20 @@ void kernel_main() {
     noc_semaphore_wait(local_semaphore_ptr, 1);
     noc_semaphore_set(local_semaphore_ptr, 0);
 
-    /* only one should do termination sync
-    tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
-    DPRINT << "after waiting for fabric semaphore and disconnect\n";
-
-    if (is_termination_master) {
-        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
-        noc_semaphore_wait(termination_sync_ptr, 3);
-        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
-    } else {
-        uint64_t dest_addr =
-            safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-        noc_semaphore_inc(dest_addr, 1);
-        noc_async_atomic_barrier();
-    }
-    */
-    DPRINT << "after termination sync\n";
-
     cb_reserve_back(packet_cb_id, 1);
     uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
     cb_reserve_back(receiver_cb_id_l, input_num_tiles);
     uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
-    uint64_t packet_noc_addr = get_noc_addr(current_core_x, current_core_y, intermediate_base_addr);
+    uint64_t packet_noc_addr = get_noc_addr(current_core_x, current_core_y, pkt_base_addr);
     DPRINT << "reading round2 data from core (" << current_core_x << ", " << current_core_y << ") addr "
-           << intermediate_base_addr << "\n";
+           << pkt_base_addr << "\n";
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();  // Wait for Round 2 data to be read before memmove
 
     // Write Round 2 received data to data core's bw_intermediate shard for debugging
     // The fabric wrote to worker core (current_core_x/y), but bw_intermediate is sharded on data cores (core_noc_x/y)
-    uint64_t bw_interm_data_core_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
+    uint64_t bw_interm_data_core_addr = get_noc_addr(core_noc_x, core_noc_y, pkt_base_addr);
     noc_async_write(packet_l1_addr, bw_interm_data_core_addr, new_packet_size_bytes);
     noc_async_write_barrier();
     DPRINT << "wrote round2 data to data core at (" << core_noc_x << ", " << core_noc_y << ")\n";
@@ -264,7 +241,7 @@ void kernel_main() {
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
         DPRINT << "waiting for 7 termination signals\n";
-        noc_semaphore_wait(termination_sync_ptr, 7);
+        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         DPRINT << "terminated mux\n";
     } else {

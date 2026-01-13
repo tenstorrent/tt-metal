@@ -37,8 +37,6 @@ void kernel_main() {
     constexpr uint32_t input_num_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(8);
     constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t device_idx = get_compile_time_arg_val(10);
-    DPRINT << "device_idx: " << (uint32_t)device_idx << "\n";
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -57,14 +55,10 @@ void kernel_main() {
     const uint32_t current_core_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t round1_interm_tensor_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t device_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    // Handoff semaphore to wait for Reader2 to disconnect from mux
-    const uint32_t reader2_to_writer2_handoff_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     // Data core coordinates for writing round1 intermediate tensor
     const uint32_t data_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t data_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
-
-    // Handoff semaphore already reset at kernel start - no need to reset again
 
     const uint8_t dst_num_hops = 1;
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);

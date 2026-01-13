@@ -67,9 +67,6 @@ void kernel_main() {
     constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(7);
     constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(8);
     constexpr uint32_t cb_int_cb_m = get_compile_time_arg_val(9);
-    constexpr uint32_t device_idx = get_compile_time_arg_val(10);
-    DPRINT << "device_idx: " << (uint32_t)device_idx << "\n";
-    constexpr uint32_t page_bytes = page_size_bytes;
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -81,7 +78,6 @@ void kernel_main() {
 
     // ROUND 1: send data to neighbor
     DPRINT << "round1\n";
-    uint32_t chunk_size = input_num_tiles;
 
     size_t arg_idx = 0;
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(arg_idx++);
@@ -94,8 +90,6 @@ void kernel_main() {
     uint32_t final_dst_addr_l = get_arg_val<uint32_t>(arg_idx++);
     uint32_t final_dst_addr_s = get_arg_val<uint32_t>(arg_idx++);
     uint32_t final_dst_addr_m = get_arg_val<uint32_t>(arg_idx++);
-    // Handoff semaphore for Writer1→Reader1 mux channel coordination
-    uint32_t writer_to_reader_handoff_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     const uint8_t dst_num_hops = 1;
 
@@ -204,21 +198,13 @@ void kernel_main() {
     DPRINT << "round2\n";
     // ROUND 2: wait for compute and write output
 
-    /*
-    constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_int_cb_m = get_compile_time_arg_val(2);
-    constexpr uint32_t input_num_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(4);
-    */
-
     // receives l, m, s tensors from the compute kernel and writes to the final output buffers
     constexpr uint32_t onetile = 1;
     write_data(
         final_dst_addr_l,
         final_dst_addr_s,
         final_dst_addr_m,
-        page_bytes,
+        page_size_bytes,
         core_noc_x,
         core_noc_y,
         cb_int_cb_l,
