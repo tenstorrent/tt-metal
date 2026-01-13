@@ -8,7 +8,6 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn import ShardTensorToMesh
 
 pytestmark = pytest.mark.use_module_device
 
