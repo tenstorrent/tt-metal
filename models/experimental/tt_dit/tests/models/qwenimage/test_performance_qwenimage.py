@@ -38,7 +38,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
             (2, 1),
             (4, 0),
             (4, 1),
-            (16, 1),
+            (4, 1),
             (4, 1),
             ttnn.Topology.Linear,
             4,
