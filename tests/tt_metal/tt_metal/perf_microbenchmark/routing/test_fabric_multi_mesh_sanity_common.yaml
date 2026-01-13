@@ -14,4 +14,4 @@ Tests:
       num_packets: 10000
 
     patterns:
-      - type: sequential_all_to_all
+      - type: all_to_all
