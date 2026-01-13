@@ -12,7 +12,7 @@ from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose
 
 
-TILE_SIZE = 32
+TILE_SIZE = ttnn.TILE_SIZE
 
 
 def chunk_and_shard_tensor(tensor, num_simulated_devices, device, dim, dtype, layout=ttnn.TILE_LAYOUT):
