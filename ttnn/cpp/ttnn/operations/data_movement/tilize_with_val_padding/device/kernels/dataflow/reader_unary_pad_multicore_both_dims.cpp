@@ -34,9 +34,7 @@ void kernel_main() {
                           uint32_t width_size,
                           uint32_t size_2d,
                           uint32_t element_size,
-                          uint32_t single_block_size,
-                          uint32_t sblock_width_size,
-                          uint32_t single_sblock_size) {
+                          uint32_t single_block_size) {
         uint32_t padding_rows = num_rows == 32 ? 0 : 32 - num_rows;
         bool has_rows = (num_rows + padding_rows) > 0;
 
@@ -44,7 +42,6 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
         uint32_t original_addr = get_write_ptr(cb_id_in0);
-#if 0
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
             uint64_t src_noc_addr = get_noc_addr(size_2d + k, s);
 
@@ -69,35 +66,6 @@ void kernel_main() {
         }
 
         cb_push_back(cb_id_in0, single_block_size * has_rows);
-#else
-        for (uint32_t m = 0; m < width_size; m += sblock_width_size) {
-            uint32_t local_column_id = start_column_id + m;
-            for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-                uint64_t src_noc_addr = get_noc_addr(size_2d + k, s);
-
-                // Read from DRAM to tmp buffer
-                noc_async_read(src_noc_addr + local_column_id, l1_write_addr, sblock_width_size);
-
-                uint32_t prev_size = local_column_id;
-                uint32_t this_block_size = unpadded_X_size - prev_size;
-                if (this_block_size < sblock_width_size) {
-                    uint32_t to_pad = sblock_width_size - this_block_size;
-                    fill_with_val(l1_write_addr + this_block_size + element_size, (to_pad) >> 2, pad_value);
-                }
-
-                // Block before copying data from tmp to cb buffer
-                noc_async_read_barrier();
-                l1_write_addr += sblock_width_size;
-            }
-
-            for (uint32_t pad_row = 0; pad_row < padding_rows; pad_row++) {
-                fill_with_val(l1_write_addr, (sblock_width_size >> 2), pad_value);
-                l1_write_addr += sblock_width_size;
-            }
-
-            cb_push_back(cb_id_in0, single_sblock_size * has_rows);
-        }
-#endif
     };
 
     const uint32_t width_size = get_arg_val<uint32_t>(2);
@@ -111,6 +79,7 @@ void kernel_main() {
         uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(6);
         uint32_t sblock_width_size = get_arg_val<uint32_t>(7);
         uint32_t single_sblock_size_row_arg = get_arg_val<uint32_t>(8);
+
         for (uint32_t b = 0; b < single_block_size_col_arg; b++) {
             uint32_t this_block_num_rows = tile_height;
             if (start_row_id + tile_height > total_num_rows) {
@@ -122,11 +91,11 @@ void kernel_main() {
                     read_block(
                         this_block_num_rows,
                         start_row_id,
-                        start_column_id_u /*start_column_id*/,
-                        sblock_width_size /*width_size*/,
+                        start_column_id_u,
+                        sblock_width_size,
                         size_2d,
                         element_size,
-                        single_sblock_size_row_arg /*single_block_size_row_arg*/);
+                        single_sblock_size_row_arg);
                 }
             }
             start_row_id += tile_height;
