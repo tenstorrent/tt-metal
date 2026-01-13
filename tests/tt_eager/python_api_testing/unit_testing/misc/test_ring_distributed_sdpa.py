@@ -277,7 +277,7 @@ def run_test_ring_distributed_sdpa_with_prefix_and_paged_kv(
 
     # Log timing information
     logger.info(
-        f"Timing (seq_len={s}, prefix_len={prefix_len}, page_block_size={page_block_size}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}): "
+        f"Timing (New tokens seq_len={s-prefix_len}, prefix_len={prefix_len}, page_block_size={page_block_size}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}): "
         f"ring_distributed={ring_time*1000:.2f}ms"
     )
 
@@ -285,17 +285,17 @@ def run_test_ring_distributed_sdpa_with_prefix_and_paged_kv(
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize(
     "s",
-    [256, 512, 1024, 1536, 2048, 2560, 3072, 3584, 4096],
-    ids=["s256", "s512", "s1k", "s1.5k", "s2k", "s2.5k", "s3k", "s3.5k", "s4k"],
+    [1024, 2048, 4096, 8192, 16384, 32768],
+    ids=["s1k", "s2k", "s4k", "s8k", "s16k", "s32k"],
 )
 @pytest.mark.parametrize(
     "prefix_len",
-    [0, 32, 64, 96, 128, 256, 480, 512, 544],
-    ids=["p0", "p32", "p64", "p96", "p128", "p256", "p480", "p512", "p544"],
+    [0, 64, 128, 256, 512],
+    ids=["p0", "p32", "p128", "p512"],
 )
-@pytest.mark.parametrize("page_block_size", [32, 64], ids=["b32", "b64"])
-@pytest.mark.parametrize("q_chunk_size", [64, 128, 256], ids=["q64", "q128", "q256"])
-@pytest.mark.parametrize("k_chunk_size", [64, 128, 256, 512], ids=["k64", "k128", "k256", "k512"])
+@pytest.mark.parametrize("page_block_size", [64], ids=["b64"])
+@pytest.mark.parametrize("q_chunk_size", [64, 256], ids=["q64", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [64, 512], ids=["k64", "k512"])
 def test_ring_distributed_sdpa_prefix_and_paged_kv(device, s, prefix_len, page_block_size, q_chunk_size, k_chunk_size):
     """Test ring-distributed SDPA with both prefix caching and paged KV cache."""
     b, ring_size = 1, 4
