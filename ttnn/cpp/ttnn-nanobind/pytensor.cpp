@@ -80,7 +80,8 @@ void log_external_operation(const operation::ExternalOperation& operation, const
 }
 #else
 
-void log_external_operation(const operation::ExternalOperation& operation, const std::vector<Tensor>& input_tensors) {}
+void log_external_operation(
+    const operation::ExternalOperation& /*operation*/, const std::vector<Tensor>& /*input_tensors*/) {}
 
 #endif
 

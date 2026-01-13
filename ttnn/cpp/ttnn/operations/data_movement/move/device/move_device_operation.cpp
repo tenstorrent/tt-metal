@@ -20,12 +20,12 @@ MoveDeviceOperation::program_factory_t MoveDeviceOperation::select_program_facto
 }
 
 void MoveDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // TODO: #33357
 }
 
 void MoveDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // TODO: #33357
 }
 
