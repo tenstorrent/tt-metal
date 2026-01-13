@@ -224,16 +224,14 @@ tests/ttnn/unit_tests/gtests/ccl/ @tenstorrent/metalium-developers-ops-data-move
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/eltwise/ @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @tenstorrent/codeowner-bypass
-tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
-tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/data_movement/test_slice_for_conv.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 /tests/ttnn/**/unit_tests/operations/fused/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 /tests/ttnn/**/unit_tests/operations/reduce/ @tenstorrent/metalium-developers-external-experience @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/ttnn/**/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
+tests/ttnn/**/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 /tests/ttnn/notebook_tests/ @tenstorrent/metalium-developers-external-experience @tenstorrent/codeowner-bypass
-tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
-tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/ @stevendae @bbradelTT @ntarafdar @pavlejosipovic @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/eltwise/ @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
