@@ -18,6 +18,7 @@ def _get_tensors(input_shape, dim, dtype, memory_config, layout, cluster_axis, d
 
     assert input_shape[dim] % cluster_size == 0
 
+    torch.manual_seed(0)
     torch_input = torch.rand(input_shape).bfloat16()
 
     tt_input = ttnn.from_torch(
@@ -70,7 +71,11 @@ def test_mesh_partition_deepseek(mesh_device, shape, dim, dtype, mem_config, lay
 
     tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-    for tt_out, torch_ref in zip(ttnn.get_device_tensors(tt_out_tensors), torch_references):
+    coords = list(tt_out_tensors.tensor_topology().mesh_coords())
+    view = mesh_device.get_view()
+    for coord, tt_out, torch_ref in zip(coords, ttnn.get_device_tensors(tt_out_tensors), torch_references):
+        if not view.is_local(coord):
+            continue
         torch_out = ttnn.to_torch(tt_out)
         eq, output = comp_equal(torch_out, torch_ref)
         assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
