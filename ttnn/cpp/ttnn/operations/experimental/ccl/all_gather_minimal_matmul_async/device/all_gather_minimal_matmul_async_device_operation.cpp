@@ -89,7 +89,7 @@ void AllGatherMinimalMatmulAsyncOp::validate(
     }
 
     const uint32_t M = a_logical[-2];
-    const uint32_t K = a_logical[-1];
+    const uint32_t K = a_logical[-1] * this->ring_size;
     const uint32_t K_w = w_logical[-2];
     const uint32_t N = w_logical[-1];
 
