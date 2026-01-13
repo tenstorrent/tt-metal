@@ -80,32 +80,20 @@ void EnqueueMeshWorkloadWithOffset(
             }
         }
 
-        size_t num_program_devices = 0;
-        size_t num_program_devices_in_submeshes = 0;
         for (const auto& [device_range, program] : mesh_workload.get_programs()) {
             for (const auto& coord : device_range) {
                 // Skip coordinates that don't fall within this mesh
                 if (!is_coord_in_mesh_with_offset(coord, offset, mesh_device->shape())) {
                     continue;
                 }
-                num_program_devices++;
                 auto translated_coord = coord.translate(offset, false);
                 TT_FATAL(
                     all_submesh_devices.contains(mesh_device->get_device(translated_coord)->id()),
                     "Program targets device {} (translated from {}) which is not contained in any submesh",
                     translated_coord,
                     coord);
-                num_program_devices_in_submeshes++;
-                }
             }
         }
-
-        TT_FATAL(
-            num_program_devices == num_program_devices_in_submeshes,
-            "Program targets {} devices but only {} are covered by submeshes. "
-            "Some devices in the program's device range are not in any submesh.",
-            num_program_devices,
-            num_program_devices_in_submeshes);
 
         // Route to submeshes, passing the offset for coordinate translation
         for (const auto& submesh : submeshes) {
