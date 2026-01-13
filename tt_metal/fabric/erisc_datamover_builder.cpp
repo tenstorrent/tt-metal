@@ -1275,12 +1275,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         args_pt2.push_back(this->receiver_channels_downstream_teardown_semaphore_id[i].value_or(-1));
     }
 
-    // Pack sender flow control semaphores (always send MAX_NUM_SENDER_CHANNELS)
-    // unpacked into sender*_worker_semaphore_ptr in the device kernel
-    for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        args_pt2.push_back(this->sender_channels_flow_control_semaphore_id[i]);
-    }
-
     rt_args.reserve(rt_args.size() + args_pt2.size());
     std::ranges::copy(args_pt2, std::back_inserter(rt_args));
 
