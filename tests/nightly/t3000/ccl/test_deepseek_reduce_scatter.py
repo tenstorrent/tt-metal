@@ -237,7 +237,7 @@ def run_reduce_scatter_impl(
             ttnn.bfloat16,
             False,
             1,
-        ),
+        ),  # T3K single link test - 4 tiles per slice forward, 4 tiles per slice backward
     ],
     # ids=[
     #     "one",
