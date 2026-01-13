@@ -19,6 +19,31 @@
  *     output += in0[:, k] @ weight0[k, :]
  */
 namespace NAMESPACE {
+
+void matmul_with_relu_block(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint32_t num_tiles) {
+    cb_wait_front(cb_a, num_tiles);
+    cb_wait_front(cb_b, num_tiles);
+    cb_reserve_back(cb_out, 1);
+
+    tile_regs_acquire();
+
+    for (uint32_t k = 0; k < num_tiles; k++) {
+        matmul_tiles(cb_a, cb_b, k, k, 0);
+    }
+    relu_tile(0);
+
+    tile_regs_commit();
+
+    cb_pop_front(cb_a, num_tiles);
+    cb_pop_front(cb_b, num_tiles);
+
+    tile_regs_wait();
+    pack_tile(0, cb_out);
+    tile_regs_release();
+
+    cb_push_back(cb_out, 1);
+}
+
 void MAIN {
     constexpr uint32_t in0_cb = get_compile_time_arg_val(0);
     constexpr uint32_t weight0_cb = get_compile_time_arg_val(1);
@@ -27,7 +52,6 @@ void MAIN {
     constexpr uint32_t num_tiles_k = get_compile_time_arg_val(4);
     constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(5);
 
-    // For single tile output, we use simple matmul accumulation
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
@@ -35,36 +59,6 @@ void MAIN {
     mm_block_init(in0_cb, weight0_cb, out_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
     relu_tile_init();
 
-    // Wait for all input tiles (both from sharded tensors in L1)
-    cb_wait_front(in0_cb, num_tiles_k);
-    cb_wait_front(weight0_cb, num_tiles_k);
-
-    // Reserve output
-    cb_reserve_back(out_cb, 1);
-
-    // Accumulate across K dimension
-    tile_regs_acquire();
-
-    for (uint32_t k = 0; k < num_tiles_k; k++) {
-        // Compute matmul for this k tile
-        // in0 tile index: k (from sharded input)
-        // weight0 tile index: k (from sharded weights)
-        // dst index: 0 (single output tile, accumulating)
-        matmul_tiles(in0_cb, weight0_cb, k, k, 0);
-    }
-    relu_tile(0);
-
-    tile_regs_commit();
-
-    // Pop inputs
-    cb_pop_front(in0_cb, num_tiles_k);
-    cb_pop_front(weight0_cb, num_tiles_k);
-
-    // Pack output
-    tile_regs_wait();
-    pack_tile(0, out_cb);
-    tile_regs_release();
-
-    cb_push_back(out_cb, 1);
+    matmul_with_relu_block(in0_cb, weight0_cb, out_cb, num_tiles_k);
 }
 }  // namespace NAMESPACE
