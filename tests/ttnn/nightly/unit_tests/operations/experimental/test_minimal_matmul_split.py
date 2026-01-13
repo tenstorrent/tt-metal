@@ -196,7 +196,7 @@ def test_linear_split_dtypes(device, dtype):
 
 @pytest.mark.parametrize("M", [32, 96, 320, 1024])
 @pytest.mark.parametrize("K", [32, 96, 320, 1024])
-@pytest.mark.parametrize("N", [96, 320, 960, 3072])  # All divisible by 3 and tile-aligned after division
+@pytest.mark.parametrize("N", [96, 960, 3072])  # All divisible by 3 and tile-aligned after division
 def test_linear_split_sizes(device, M, K, N):
     M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 8, 8, 8, 2, 2
     check_result = run_test_linear_split(

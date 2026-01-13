@@ -101,19 +101,6 @@ void append_accessors_split(
     }
 }
 
-// Append for in0 kernels (reuse in0_sender from regular matmul)
-void append_accessors_in0(
-    std::vector<uint32_t>& args,
-    const Tensor& main_tensor,
-    const Tensor& output_tensor,
-    const std::optional<const Tensor>& bias_tensor) {
-    tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
-    if (bias_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(args);
-    }
-}
-
 }  // namespace
 
 MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFactory::create(
@@ -312,7 +299,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
     bool in0_is_output_writer = !transpose_core_grid;
     bool in1_is_output_writer = transpose_core_grid;
 
-    // in0_sender kernel - reuse from regular minimal_matmul (writes to first output only)
+    // in0_sender kernel - use split version
     std::vector<uint32_t> in0_sender_compile_time_args = {
         M_tiles,
         padded_M_tiles,
@@ -332,14 +319,21 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        true,           // is_injector_core
-        in0_tile_size,  // placeholder for in3_tile_size
+        true,               // is_injector_core
+        N_tiles_per_chunk,  // NEW: for split logic
+        in0_tile_size,      // placeholder for in3_tile_size
     };
-    append_accessors_in0(in0_sender_compile_time_args, input_tensor, output_tensors[0], bias_tensor);
+    append_accessors_split(
+        in0_sender_compile_time_args,
+        input_tensor,
+        output_tensors[0],
+        output_tensors[1],
+        output_tensors[2],
+        bias_tensor);
 
     auto in0_sender_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_split.cpp",
         in0_sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc, .noc = in0_noc, .compile_args = in0_sender_compile_time_args, .defines = defines});
@@ -363,14 +357,21 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        false,          // is_injector_core
-        in0_tile_size,  // placeholder for in3_tile_size
+        false,              // is_injector_core
+        N_tiles_per_chunk,  // NEW: for split logic
+        in0_tile_size,      // placeholder for in3_tile_size
     };
-    append_accessors_in0(in0_receiver_compile_time_args, input_tensor, output_tensors[0], bias_tensor);
+    append_accessors_split(
+        in0_receiver_compile_time_args,
+        input_tensor,
+        output_tensors[0],
+        output_tensors[1],
+        output_tensors[2],
+        bias_tensor);
 
     auto in0_receiver_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_split.cpp",
         in0_receiver_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args, .defines = defines});
@@ -533,10 +534,12 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
 
-        // in0 args - only writes to first output
+        // in0 args - writes to all 3 outputs
         std::vector<uint32_t> in0_args = {
             in0_addr,
-            out0_addr,  // Only first output
+            out0_addr,  // NEW: 3 separate addresses
+            out1_addr,
+            out2_addr,
             in2_addr,
             0,  // in3_addr placeholder
             is_in0_sink,
@@ -632,11 +635,15 @@ void MinimalMatmulSplitProgramFactory::override_runtime_arguments(
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = out0_addr;
-            in0_sender_args[2] = in2_addr;
+            in0_sender_args[2] = out1_addr;
+            in0_sender_args[3] = out2_addr;
+            in0_sender_args[4] = in2_addr;
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
             in0_receiver_args[1] = out0_addr;
-            in0_receiver_args[2] = in2_addr;
+            in0_receiver_args[2] = out1_addr;
+            in0_receiver_args[3] = out2_addr;
+            in0_receiver_args[4] = in2_addr;
         }
 
         if (in0_idx == 0) {
