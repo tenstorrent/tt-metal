@@ -13,7 +13,7 @@
 namespace ttnn {
 namespace operations::ccl {
 
-struct ExecuteReduceToRoot {
+struct ExecuteReduceToAll {
     static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor_l,
         const ttnn::Tensor& input_tensor_s,
@@ -24,11 +24,13 @@ struct ExecuteReduceToRoot {
         const std::optional<ttnn::Tensor>& optional_output_tensor_l = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_output_tensor_s = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_output_tensor_m = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_coord_intermediate_tensor = std::nullopt,
         const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt);
 };
 
-std::vector<ttnn::TensorSpec> reduce_to_root_tensor_spec(
+std::vector<ttnn::TensorSpec> reduce_to_all_tensor_spec(
     const ttnn::Tensor& input_tensor_l,
     const ttnn::Tensor& input_tensor_s,
     const ttnn::Tensor& input_tensor_m,
@@ -39,7 +41,7 @@ std::vector<ttnn::TensorSpec> reduce_to_root_tensor_spec(
 
 }  // namespace operations::ccl
 
-constexpr auto reduce_to_root =
-    ttnn::register_operation<"ttnn::reduce_to_root", ttnn::operations::ccl::ExecuteReduceToRoot>();
+constexpr auto reduce_to_all =
+    ttnn::register_operation<"ttnn::reduce_to_all", ttnn::operations::ccl::ExecuteReduceToAll>();
 
 }  // namespace ttnn

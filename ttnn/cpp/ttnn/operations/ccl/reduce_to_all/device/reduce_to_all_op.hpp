@@ -14,7 +14,7 @@
 namespace ttnn {
 namespace operations::ccl {
 
-struct ReduceToRootOp {
+struct ReduceToAllOp {
     struct operation_attributes_t {
         const MeshCoordinate& root_coord;
         const float scale_fp32;
@@ -23,8 +23,11 @@ struct ReduceToRootOp {
 
         const std::vector<ttnn::TensorSpec> _input_tensor_spec;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "scale_fp32", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(root_coord, scale_fp32, topology); };
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("root_coord", "scale_fp32", "topology", "input_mux_cores");
+        auto attribute_values() const {
+            return std::forward_as_tuple(root_coord, scale_fp32, topology, input_mux_cores);
+        };
     };
 
     struct tensor_args_t {
@@ -34,27 +37,32 @@ struct ReduceToRootOp {
         const std::optional<Tensor> optional_output_tensor_l;
         const std::optional<Tensor> optional_output_tensor_s;
         const std::optional<Tensor> optional_output_tensor_m;
-        const std::optional<Tensor> optional_intermediate_tensor;
+        const std::optional<Tensor> optional_fw_intermediate_tensor;
+        const std::optional<Tensor> optional_bw_intermediate_tensor;
+        const std::optional<Tensor> optional_coord_intermediate_tensor;
     };
 
     using spec_return_value_t = std::array<std::vector<ttnn::TensorSpec>, 2>;
     using tensor_return_value_t = std::array<std::vector<ttnn::Tensor>, 2>;
 
-    struct ReduceToRoot {
+    struct ReduceToAll {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle send_unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle send_unary_writer_kernel_id;
-            std::vector<CoreCoord> cores;
+            tt::tt_metal::KernelHandle reader_kernel1;
+            tt::tt_metal::KernelHandle reader_kernel2;
+            std::vector<CoreCoord> cores1;
+            std::vector<CoreCoord> cores2;
 
-            tt::tt_metal::KernelHandle root1_reader_kernel_id;
-            tt::tt_metal::KernelHandle root1_writer_kernel_id;
-
-            tt::tt_metal::KernelHandle root2_reader_kernel_id;
-            tt::tt_metal::KernelHandle root2_writer_kernel_id;
-
-            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel1;
+            tt::tt_metal::KernelHandle writer_kernel2;
 
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
+            bool is_device_0_2;
+
+            // Handoff semaphore addresses for resetting between iterations
+            // cores1 handoff sems: Writer1->Reader1 (D0/D2 first 4 cores, D1/D3 second 4 cores)
+            // cores2 handoff sems: Reader2->Writer2 (D0/D2 second 4 cores, D1/D3 first 4 cores)
+            std::vector<uint32_t> cores1_handoff_sem_addrs;
+            std::vector<uint32_t> cores2_handoff_sem_addrs;
         };
 
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -81,10 +89,10 @@ struct ReduceToRootOp {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<ReduceToRoot>;
+    using program_factory_t = std::variant<ReduceToAll>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-        return ReduceToRoot{};
+        return ReduceToAll{};
     };
 
     static void validate_on_program_cache_miss(
@@ -105,20 +113,20 @@ private:
     static void validate(const operation_attributes_t&, const tensor_args_t&);
 };
 
-device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_variables_t> reduce_to_root_program_factory(
-    const ReduceToRootOp::tensor_args_t& tensor_args,
-    const ReduceToRootOp::operation_attributes_t& operation_attributes,
+device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t> reduce_to_all_program_factory(
+    const ReduceToAllOp::tensor_args_t& tensor_args,
+    const ReduceToAllOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& root_coord,
     float scale_fp32,
     const MeshCoordinate& device_coordinate,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
-    ReduceToRootOp::tensor_return_value_t& output_tensor,
+    ReduceToAllOp::tensor_return_value_t& output_tensor,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
 }  // namespace operations::ccl
 
 namespace prim {
-ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
+ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const Tensor& input_tensor_l,
     const Tensor& input_tensor_s,
     const Tensor& input_tensor_m,
@@ -128,7 +136,9 @@ ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
     const std::optional<Tensor>& optional_output_tensor_l = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor_s = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor_m = std::nullopt,
-    const std::optional<Tensor>& optional_intermediate_tensor = std::nullopt,
+    const std::optional<Tensor>& optional_fw_intermediate_tensor = std::nullopt,
+    const std::optional<Tensor>& optional_bw_intermediate_tensor = std::nullopt,
+    const std::optional<Tensor>& optional_coord_intermediate_tensor = std::nullopt,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt);
 }  // namespace prim
 }  // namespace ttnn

@@ -25,11 +25,11 @@ def compute_reduction(l1, s1, m1, l2, s2, m2, scale_value, l_width=128):
     return l_new, s_new, m_new
 
 
-def compute_reference_reduce_to_root(
+def compute_reference_reduce_to_all(
     l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx=1, num_cores=8, scale_value=1.0
 ):
     """
-    Compute the reference output for reduce_to_root operation.
+    Compute the reference output for reduce_to_all operation.
 
     Algorithm:
     Round 1: Neighbor exchange D0<->D1 and D2<->D3
@@ -98,9 +98,9 @@ def compute_reference_reduce_to_root(
     ids=["fabric_1d_ring_trace"],
 )
 def test_reduce_to_all_with_trace(bh_2d_mesh_device):
-    """Test reduce_to_root operation with trace capture and replay for performance testing."""
+    """Test reduce_to_all operation with trace capture and replay for performance testing."""
 
-    print("\n=== Testing reduce_to_root with TRACE ===")
+    print("\n=== Testing reduce_to_all with TRACE ===")
 
     # Setup
     num_devices = 4
@@ -173,7 +173,7 @@ def test_reduce_to_all_with_trace(bh_2d_mesh_device):
     s_data_f32 = [t.float() for t in s_data_per_device]
     m_data_f32 = [t.float() for t in m_data_per_device]
 
-    ref_l, ref_s, ref_m = compute_reference_reduce_to_root(
+    ref_l, ref_s, ref_m = compute_reference_reduce_to_all(
         l_data_f32, s_data_f32, m_data_f32, root_device_idx, num_cores, scale_value
     )
     ref_l = ref_l.to(torch.bfloat16)
@@ -244,8 +244,8 @@ def test_reduce_to_all_with_trace(bh_2d_mesh_device):
     profiler = BenchmarkProfiler()
 
     # Run once to compile
-    print("Running reduce_to_root (compiling)...")
-    ttnn.reduce_to_root(
+    print("Running reduce_to_all (compiling)...")
+    ttnn.reduce_to_all(
         l_tensor,
         s_tensor,
         m_tensor,
@@ -265,7 +265,7 @@ def test_reduce_to_all_with_trace(bh_2d_mesh_device):
     num_warmup_iters = 15
     trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for i in range(num_warmup_iters):
-        out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_root(
+        out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_all(
             l_tensor,
             s_tensor,
             m_tensor,
@@ -286,7 +286,7 @@ def test_reduce_to_all_with_trace(bh_2d_mesh_device):
     num_perf_iters = 30
     trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for i in range(num_perf_iters):
-        out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_root(
+        out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_all(
             l_tensor,
             s_tensor,
             m_tensor,
@@ -373,11 +373,11 @@ def test_reduce_to_all_with_trace(bh_2d_mesh_device):
 @pytest.mark.parametrize("num_iterations", [100])
 def test_reduce_to_all_trace_perf(bh_2d_mesh_device, num_iterations):
     """
-    Performance-focused test for reduce_to_root with trace.
+    Performance-focused test for reduce_to_all with trace.
     Runs more iterations for accurate performance measurement.
     """
 
-    print(f"\n=== Testing reduce_to_root PERF with {num_iterations} iterations ===")
+    print(f"\n=== Testing reduce_to_all PERF with {num_iterations} iterations ===")
 
     # Setup
     num_devices = 4
@@ -511,7 +511,7 @@ def test_reduce_to_all_trace_perf(bh_2d_mesh_device, num_iterations):
 
     # Run once to compile
     print("Compiling...")
-    ttnn.reduce_to_root(
+    ttnn.reduce_to_all(
         l_tensor,
         s_tensor,
         m_tensor,
@@ -530,7 +530,7 @@ def test_reduce_to_all_trace_perf(bh_2d_mesh_device, num_iterations):
     num_warmup_iters = 20
     trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for _ in range(num_warmup_iters):
-        ttnn.reduce_to_root(
+        ttnn.reduce_to_all(
             l_tensor,
             s_tensor,
             m_tensor,
@@ -549,7 +549,7 @@ def test_reduce_to_all_trace_perf(bh_2d_mesh_device, num_iterations):
     logger.info(f"Capturing main trace with {num_iterations} iterations")
     trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for _ in range(num_iterations):
-        ttnn.reduce_to_root(
+        ttnn.reduce_to_all(
             l_tensor,
             s_tensor,
             m_tensor,
