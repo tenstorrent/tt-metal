@@ -25,13 +25,33 @@ SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 SHUFFLE_SEED = None
 DO_RANDOMIZE = False
 
+LEAD_MODELS = ["deepseek_v3"]
+
 
 # Generate vectors from module parameters
-def generate_vectors(module_name):
-    test_module = importlib.import_module("sweeps." + module_name)
+def generate_vectors(module_name, model_traced, suite_name=None):
+    # Set environment variable to control MasterConfigLoader filtering BEFORE import
+    if model_traced == "lead":
+        os.environ["SWEEPS_LEAD_MODELS_ONLY"] = "1"
+    else:
+        os.environ.pop("SWEEPS_LEAD_MODELS_ONLY", None)
+
+    # Import or reload the module to pick up environment variable
+    module_path = "sweeps." + module_name
+    if module_path in sys.modules:
+        # Force reload if module was already imported with different filter setting
+        test_module = importlib.reload(sys.modules[module_path])
+    else:
+        test_module = importlib.import_module(module_path)
+
     parameters = test_module.parameters
 
     for suite in parameters:
+        # Skip suite if suite_name filter is specified and doesn't match
+        if suite_name and suite != suite_name:
+            logger.info(f"Skipping suite {suite} (filtering to {suite_name}).")
+            continue
+
         logger.info(f"Generating test vectors for suite {suite}.")
         suite_vectors = list(permutations(parameters[suite]))
         for v in suite_vectors:
@@ -280,15 +300,18 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
 
 
 # Generate one or more sets of test vectors depending on module_name
-def generate_tests(module_name, skip_modules=None, model_traced_only=False):
+def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name=None):
     skip_modules_set = set()
     if skip_modules:
         skip_modules_set = {name.strip() for name in skip_modules.split(",")}
         logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
 
+    if suite_name:
+        logger.info(f"Filtering to suite: {suite_name}")
+
     if not module_name:
         # Determine which directory to search based on model_traced_only flag
-        if model_traced_only:
+        if model_traced != None:
             search_dir = SWEEP_SOURCES_DIR / "model_traced"
             logger.info("Generating test vectors for model_traced operations only.")
             # Only search directly in model_traced directory, not subdirectories
@@ -304,7 +327,7 @@ def generate_tests(module_name, skip_modules=None, model_traced_only=False):
                 continue
             logger.info(f"Generating test vectors for module {module_name}.")
             try:
-                generate_vectors(module_name)
+                generate_vectors(module_name, model_traced, suite_name)
                 logger.info(f"Finished generating test vectors for module {module_name}.\n\n")
             except Exception as e:
                 logger.error(f"Failed to generate vectors for module {module_name}: {e}")
@@ -315,7 +338,7 @@ def generate_tests(module_name, skip_modules=None, model_traced_only=False):
             return
         logger.info(f"Generating test vectors for module {module_name}.")
         try:
-            generate_vectors(module_name)
+            generate_vectors(module_name, model_traced, suite_name)
         except Exception as e:
             logger.error(f"Failed to generate vectors for module {module_name}: {e}")
             raise
@@ -334,13 +357,6 @@ if __name__ == "__main__":
         default=os.getenv("USER"),
         help="Custom tag for the vectors you are generating. This is to keep copies separate from other people's test vectors. By default, this will be your username. You are able to specify a tag when running tests using the runner.",
     )
-    parser.add_argument("--explicit", required=False, action="store_true")
-    parser.add_argument(
-        "--dump-file",
-        required=False,
-        action="store_true",
-        help="[DEPRECATED - will be removed in a future version] This flag is now the default behavior. Vectors are always dumped to disk in JSON format. This flag is ignored and will be removed.",
-    )
     parser.add_argument(
         "--randomize",
         required=False,
@@ -355,24 +371,26 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model-traced",
         required=False,
-        action="store_true",
-        help="If set, only generate test vectors for operations in sweeps/model_traced directory",
+        type=str,
+        nargs="?",
+        const="all",
+        default=None,
+        choices=["all", "lead"],
+        help="Generate test vectors for model traced operations. Options: 'all' (default if flag provided) or 'lead' (only lead models like DeepSeek). Omit flag to generate all sweeps.",
+    )
+    parser.add_argument(
+        "--suite-name",
+        required=False,
+        type=str,
+        help="Generate vectors for a specific suite only (e.g., 'nightly', 'model_traced'). Omit to generate all suites.",
     )
 
     args = parser.parse_args(sys.argv[1:])
 
-    # Vectors are always dumped to disk in JSON format.
-    if args.dump_file:
-        logger.warning(
-            "The --dump-file flag is deprecated and will be removed in a future version. "
-            "Vectors are now always dumped to disk in JSON format by default. "
-            "Please remove this flag from your scripts."
-        )
-
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
 
-    if args.tag == "ci-main" and not args.explicit:
+    if args.tag == "ci-main":
         logger.error("The ci-main tag is reserved for CI only.")
         exit(1)
 
@@ -388,4 +406,4 @@ if __name__ == "__main__":
         DO_RANDOMIZE = False
         SHUFFLE_SEED = None
 
-    generate_tests(args.module_name, args.skip_modules, args.model_traced)
+    generate_tests(args.module_name, args.skip_modules, args.model_traced, args.suite_name)
