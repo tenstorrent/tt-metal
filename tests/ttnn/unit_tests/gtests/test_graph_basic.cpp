@@ -49,7 +49,7 @@ struct BufferTestParam {
 };
 
 class BufferTestFixture
-    : public TTNNFixtureWithDevice,
+    : public TTNNFixtureWithSuiteDevice<BufferTestFixture>,
       public testing::WithParamInterface<std::tuple<BufferTestParam, tt::tt_metal::IGraphProcessor::RunMode>> {};
 
 TEST_P(BufferTestFixture, BufferTest) {
