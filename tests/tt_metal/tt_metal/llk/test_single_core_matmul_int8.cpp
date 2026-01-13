@@ -73,7 +73,7 @@ void convert_to_sign_mag(std::vector<int8_t>& vec) {
 
 int get_output_coordinate(int x, int y) {
     int offset = ((x < 16) ? 0 : 256) + ((y < 16) ? 0 : 512);
-    return offset + (y % 16) * 16 + (x % 16);
+    return offset + ((y % 16) * 16) + (x % 16);
 }
 
 bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
