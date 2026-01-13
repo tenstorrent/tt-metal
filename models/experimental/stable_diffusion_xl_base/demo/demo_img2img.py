@@ -255,7 +255,7 @@ def run_demo_inference(
     (("An astronaut riding a red dragon in space, cinematic lighting"),),
 )
 @pytest.mark.parametrize(
-    "image_path",
+    "images_or_path",
     (("models/experimental/stable_diffusion_xl_base/reference/output/sdxl_output.jpg"),),
 )
 @pytest.mark.parametrize(
@@ -310,7 +310,7 @@ def test_demo(
     mesh_device,
     is_ci_env,
     prompt,
-    image_path,
+    images_or_path,
     negative_prompt,
     num_inference_steps,
     vae_on_device,
@@ -328,10 +328,10 @@ def test_demo(
     timesteps,
     sigmas,
 ):
-    if isinstance(image_path, str):
-        images = [Image.open(image_path).convert("RGB")]
+    if isinstance(images_or_path, str):
+        images = [Image.open(images_or_path).convert("RGB")]
     else:
-        images = image_path if isinstance(image_path, list) else [image_path]
+        images = images_or_path if isinstance(images_or_path, list) else [images_or_path]
 
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(

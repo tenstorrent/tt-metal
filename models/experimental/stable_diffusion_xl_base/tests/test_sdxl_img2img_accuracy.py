@@ -125,7 +125,7 @@ def test_accuracy_sdxl_img2img(
     start_from, num_prompts = evaluation_range
 
     assert (
-        num_prompts > MIN_N_SAMPLES and num_prompts < MAX_N_SAMPLES
+        num_prompts >= MIN_N_SAMPLES and num_prompts <= MAX_N_SAMPLES
     ), f"Number of prompts must be between {MIN_N_SAMPLES} and {MAX_N_SAMPLES}"
     dataset = load_dataset(
         "imthanhlv/instructpix2pix-clip-filtered-10k",
