@@ -38,9 +38,10 @@ std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tenso
     const Tensor& w1_tensor,
     const Tensor& w2_tensor,
     const Tensor& output_tensor,
-    const uint32_t num_experts) {
+    const uint32_t num_experts,
+    const uint32_t layer_id) {
     return {
-        operation_attributes_t{.num_experts = num_experts},
+        operation_attributes_t{.num_experts = num_experts, .layer_id = layer_id},
         tensor_args_t{
             .input_tensor = input_tensor,
             .w0_tensor = w0_tensor,
