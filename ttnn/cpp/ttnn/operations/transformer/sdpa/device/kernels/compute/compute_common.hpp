@@ -1115,10 +1115,15 @@ enum SDPAType {
  * @param mask_chunk_1 - Second mask chunk index
  * @param ring_iter - Ring iteration index
  * @param ring_id - Ring ID
- * @param N_mask_ring_id - N mask ring ID
- * @param L_mask_ring_id - L mask ring ID
- * @param global_logical_NK_chunks - Global logical NK chunks
- * @param global_padded_NK_chunks - Global padded NK chunks
+ * @param num_local_k_chunks - Number of K chunks stored locally on this device (used in Ring SDPA)
+ * @param local_padded_Nt - Padded sequence length in tiles for local K/V chunks on this device
+ * @param logical_nt - Logical (unpadded) sequence length in tiles for K/V
+ * @param ring_iter_needs_global_n_mask - Whether current ring iteration requires global N masking
+ * @param ring_iter_needs_joint_n_mask - Whether current ring iteration requires joint N masking
+ * @param local_n_needs_masking - Whether local N dimension requires masking
+ * @param global_n_mask_chunk_id - K chunk index where global N mask should be applied
+ * @param local_n_mask_chunk_id - K chunk index where local N mask should be applied
+ * @param joint_n_mask_chunk_id - K chunk index where joint N mask should be applied (relative to joint chunks)
  * @param cb_q_in - Query input buffer
  * @param cb_k_in - Key input buffer
  * @param cb_v_in - Value input buffer
