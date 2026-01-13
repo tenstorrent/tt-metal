@@ -140,14 +140,6 @@ public:
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr() const {
         return static_cast<const DERIVED_T*>(this)->get_cached_next_buffer_slot_addr_impl();
     }
-
-    FORCE_INLINE void set_cached_next_buffer_slot_addr(size_t next_buffer_slot_addr) {
-        static_cast<DERIVED_T*>(this)->set_cached_next_buffer_slot_addr_impl(next_buffer_slot_addr);
-    }
-
-    FORCE_INLINE void advance_remote_receiver_buffer_index() {
-        static_cast<DERIVED_T*>(this)->advance_remote_receiver_buffer_index_impl();
-    }
 };
 
 // Elastic sender channel implementation (stub for now)
@@ -198,10 +190,6 @@ public:
         // TODO: Issue #26311
         return 0;
     }
-
-    FORCE_INLINE void set_cached_next_buffer_slot_addr_impl(size_t addr) {
-        // TODO: Issue #26311
-    }
 };
 
 // This class implements the interface for static sized receiver/Ethernet channels.
@@ -225,24 +213,14 @@ public:
     explicit StaticSizedEthChannelBuffer() = default;
 
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
-	constexpr size_t const HEADER_TYPE_SIZE_BYTES = sizeof(HEADER_TYPE) / sizeof(uint32_t);
-
         this->channel_base_address = reinterpret_cast<volatile uint32_t*>(channel_base_address);
         this->max_eth_payload_size_in_bytes = buffer_size_bytes;
-        this->next_packet_buffer_index = 0;
 
         size_t const stride_in_words = this->max_eth_payload_size_in_bytes >> 2U; // remove divide by sizeof(uint32_t)
         volatile uint32_t* header_ptr = this->channel_base_address;
-        for (uint8_t i = 0U; i < NUM_BUFFERS; i++) {
-            #pragma GCC unroll 1
-            for (size_t j = 0U; j < HEADER_TYPE_SIZE_BYTES; j++) {
-                header_ptr[j] = 0U;
-             }
-            header_ptr += stride_in_words;
-         }
 
          if constexpr (NUM_BUFFERS) {
-            set_cached_next_buffer_slot_addr_impl(reinterpret_cast<size_t>(this->channel_base_address));
+            this->cached_next_buffer_slot_addr = reinterpret_cast<size_t>(this->channel_base_address);
          }
     }
 
@@ -278,21 +256,11 @@ public:
 
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const { return this->cached_next_buffer_slot_addr; }
 
-    FORCE_INLINE void set_cached_next_buffer_slot_addr_impl(size_t next_buffer_slot_addr) {
-        this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
-    }
-
-    FORCE_INLINE void advance_remote_receiver_buffer_index_impl() {
-        next_packet_buffer_index = wrap_increment<NUM_BUFFERS>(next_packet_buffer_index);
-        this->cached_next_buffer_slot_addr = reinterpret_cast<size_t>(channel_base_address) + next_packet_buffer_index * this->max_eth_payload_size_in_bytes;
-    }
-
     volatile uint32_t* channel_base_address;
 
     // header + payload regions only
     std::size_t max_eth_payload_size_in_bytes;
     // Includes header + payload + channel_sync
-    std::size_t next_packet_buffer_index;
     std::size_t cached_next_buffer_slot_addr;
 };
 
