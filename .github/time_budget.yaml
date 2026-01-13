@@ -96,8 +96,8 @@ models:
   unit:
     wh_llmbox: 445
   integration:
-    wh_llmbox: 420
+    wh_llmbox: 422
   perf:
     wh_llmbox: 685
   demo:
-    wh_llmbox: 1020
+    wh_llmbox: 1070

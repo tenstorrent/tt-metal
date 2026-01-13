@@ -52,6 +52,7 @@ class RMSNorm(LightweightModule):
         output_mem_config=None,
         ccl_topology=ttnn.Topology.Ring,
         tt_ccl=None,
+        fp32_dest_acc_en=True,
     ):
         super().__init__()
         self.device = device
@@ -113,7 +114,7 @@ class RMSNorm(LightweightModule):
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=True,
         )
 
