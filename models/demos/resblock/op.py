@@ -10,6 +10,7 @@ class FusedResblock:
     WEIGHT1_CB = 2
     OUT_CB = 3
     INTERM_CB = 4
+    INTERM_CB2 = 5
 
     @staticmethod
     def golden(input_a, weight0, weight1):
@@ -81,12 +82,30 @@ class FusedResblock:
             core_ranges=all_cores,
             format_descriptors=[interm_cb_format],
         )
+        interm_cb2_format = ttnn.CBFormatDescriptor(
+            buffer_index=FusedResblock.INTERM_CB2,
+            data_format=out_dtype,
+            page_size=out_tile_size,
+            tile=out_tile_descriptor,
+        )
+        interm_cb2_descriptor = ttnn.CBDescriptor(
+            total_size=out_tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[interm_cb2_format],
+        )
 
         reader_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_cores,
-            compile_time_args=[FusedResblock.IN0_CB, FusedResblock.WEIGHT0_CB, FusedResblock.WEIGHT1_CB, num_tiles_k],
+            compile_time_args=[
+                FusedResblock.IN0_CB,
+                FusedResblock.WEIGHT0_CB,
+                FusedResblock.WEIGHT1_CB,
+                FusedResblock.INTERM_CB,
+                FusedResblock.INTERM_CB2,
+                num_tiles_k,
+            ],
             config=ttnn.ReaderConfigDescriptor(),
         )
         writer_kernel_descriptor = ttnn.KernelDescriptor(
@@ -106,6 +125,7 @@ class FusedResblock:
                 FusedResblock.WEIGHT1_CB,
                 FusedResblock.OUT_CB,
                 FusedResblock.INTERM_CB,
+                FusedResblock.INTERM_CB2,
                 num_tiles_k,
                 1 if fp32_dest_acc_en else 0,
             ],
@@ -127,6 +147,7 @@ class FusedResblock:
                     weight1_cb_descriptor,
                     out_cb_descriptor,
                     interm_cb_descriptor,
+                    interm_cb2_descriptor,
                 ],
             ),
         )
