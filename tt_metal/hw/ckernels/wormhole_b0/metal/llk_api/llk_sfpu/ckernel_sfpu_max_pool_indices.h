@@ -29,7 +29,7 @@ inline void calculate_max_pool_with_indices(uint values_tile_idx, uint indices_t
         static_assert(num_rows <= 32, "num_rows must be <= 32");
         static_assert(
             layout == DataLayout::ROW_MAJOR, "generic max pool with indices is only implemented for ROW_MAJOR layout");
-        _calculate_max_pool_with_indices_generic_<APPROX_MODE is_fp32_dest_acc_en, ITERATIONS>(
+        _calculate_max_pool_with_indices_generic_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>(
             values_tile_idx, indices_tile_idx, tile_idx);
     }
 }
