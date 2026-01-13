@@ -318,9 +318,16 @@ def test_selective_tilize_no_trace(
     logger.info(f"  expert_token_counts:\n{expert_token_counts}")
 
     # Define core ranges for the operation
-    # Budget: 4 cores for selective_tilize
-    # Core 0 is the drain tilizer core where indices and scores are sharded
-    num_tilizer_cores = 4
+    # Grid: 8x9 (Wormhole on Galaxy, 8x10 with 1 row reserved for dispatch)
+    # Total: 72 cores = 4 tilize + 36 matmul + 32 combine
+    #
+    # Layout:
+    #   Row 0, cols 0-3: Tilize (4 cores)
+    #   Row 0, cols 4-7: Matmul part 1 (4 cores)
+    #   Rows 1-4, cols 0-7: Matmul part 2 (32 cores) -> total matmul = 36
+    #   Rows 5-8, cols 0-7: Combine (32 cores)
+
+    # Drain tilizer core is core (0,0) where indices and scores are sharded
     drain_tilizer_core = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
@@ -330,29 +337,36 @@ def test_selective_tilize_no_trace(
         }
     )
 
+    # Tilize: 4 cores on row 0, columns 0-3
     selective_tilize_core_range_set = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(num_tilizer_cores - 1, 0),  # 4 cores: (0,0) to (3,0)
+                ttnn.CoreCoord(3, 0),
             ),
         }
     )
 
-    # For now, use placeholder core ranges for matmul and combine
+    # Matmul: 36 cores = row 0 cols 4-7 (4 cores) + rows 1-4 all cols (32 cores)
     matmul_core_range_set = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
+                ttnn.CoreCoord(4, 0),
+                ttnn.CoreCoord(7, 0),
+            ),
+            ttnn.CoreRange(
                 ttnn.CoreCoord(0, 1),
-                ttnn.CoreCoord(7, 7),
+                ttnn.CoreCoord(7, 4),
             ),
         }
     )
+
+    # Combine: 32 cores on rows 5-8, all columns
     combine_core_range_set = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
-                ttnn.CoreCoord(0, 1),
-                ttnn.CoreCoord(3, 1),
+                ttnn.CoreCoord(0, 5),
+                ttnn.CoreCoord(7, 8),
             ),
         }
     )
