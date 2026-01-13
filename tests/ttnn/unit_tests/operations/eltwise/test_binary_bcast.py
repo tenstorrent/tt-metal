@@ -2463,6 +2463,12 @@ def test_binary_sharded_bcast_w_block(device, dtype_pt, dtype_tt):
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert_with_pcc(out_pt, out_tt_sharded)
 
+        # swap a and b
+        out_pt = torch.add(b_pt, a_pt)
+        out_tt_sharded = ttnn.add(b_tt, a_tt, use_legacy=None)
+        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+        assert_with_pcc(out_pt, out_tt_sharded)
+
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
@@ -3010,6 +3016,12 @@ def test_binary_sharded_bcast_w_block_uneven(device, dtype_pt, dtype_tt):
 
         out_pt = torch.add(a_pt, b_pt)
         out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+        assert_with_pcc(out_pt, out_tt_sharded)
+
+        # swap a and b
+        out_pt = torch.add(b_pt, a_pt)
+        out_tt_sharded = ttnn.add(b_tt, a_tt, use_legacy=None)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert_with_pcc(out_pt, out_tt_sharded)
 
@@ -3724,7 +3736,7 @@ def test_binary_sharded_bcast_hw_mixed_orientation_output(device, dtype_pt, dtyp
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=out_sharded_config,
+            memory_config=dst_config,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -4173,3 +4185,203 @@ def test_remainder_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, 
     golden_fn = ttnn.get_golden_function(ttnn.remainder)
     expected = golden_fn(inp_a, 2.0, device=device)
     assert_with_pcc(out, expected)
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    ([torch.bfloat16, ttnn.bfloat16],),
+)
+def test_binary_sharded_bcast_identical_sdxl(device, dtype_pt, dtype_tt):
+    torch.manual_seed(0)
+    a_shape = torch.Size([1, 1, 4096, 640])
+    b_shape = torch.Size([1, 1, 4096, 640])
+
+    a_sharded_config = ttnn.create_sharded_memory_config(
+        [512, 128],
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (4, 7))}),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_combinations = ((ttnn.L1_MEMORY_CONFIG, a_sharded_config),)
+
+    for a_config, b_config in input_combinations:
+        a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
+        b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
+
+        a_tt = ttnn.from_torch(
+            a_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=a_config,
+        )
+        b_tt = ttnn.from_torch(
+            b_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=b_config,
+        )
+
+        out_pt = torch.add(a_pt, b_pt)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+        assert_with_pcc(out_pt, out_tt_sharded)
+
+
+def test_binary_reshard(device):
+    torch.manual_seed(0)
+    # Create input tensors (32x8192 = 1x256 tiles)
+    torch_a = torch.randn(32, 8192, dtype=torch.bfloat16)
+    torch_b = torch.randn(32, 8192, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors on device (DRAM interleaved)
+    a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT)
+    b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Shard both inputs to 64 cores (8x8 grid)
+    # 256 tiles / 64 cores = 4 tiles per shard
+    shard_spec_64 = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        (32, 128),  # shard shape: 32 rows x 128 cols (4 tiles width)
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config_64 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec_64)
+
+    # Output shard spec: 32 cores (first 4 columns of 8x8 grid)
+    # 256 tiles / 32 cores = 8 tiles per shard
+    shard_spec_32 = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        (32, 256),  # shard shape: 32 rows x 256 cols (8 tiles width)
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config_32 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec_32)
+
+    expected = torch_a + torch_b
+    a_sharded = ttnn.to_memory_config(a, mem_config_64)
+    b_sharded = ttnn.to_memory_config(b, mem_config_64)
+    result = ttnn.add(a_sharded, b_sharded, memory_config=mem_config_32, use_legacy=None)
+    result = ttnn.to_torch(result)
+    assert_with_pcc(expected, result)
+
+    a_sharded = ttnn.to_memory_config(a, mem_config_32)
+    b_sharded = ttnn.to_memory_config(b, mem_config_32)
+    result = ttnn.add(a_sharded, b_sharded, memory_config=mem_config_64, use_legacy=None)
+    result = ttnn.to_torch(result)
+    assert_with_pcc(expected, result)
+
+
+@pytest.mark.parametrize(
+    "output_memory_config",
+    [
+        ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    ],
+)
+@pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+def test_binary_sharded_half_mem_config(device, input_shard_orientation, output_memory_config):
+    """Test binary operations with generic sharded memory configs that inherit shard spec from inputs"""
+    torch.manual_seed(0)
+    torch_input_a = torch.rand((32, 32, 64), dtype=torch.bfloat16)
+    torch_input_b = torch.rand((32, 32, 64), dtype=torch.bfloat16)
+    torch_output = torch_input_a + torch_input_b
+
+    # Create sharded input configuration
+    if output_memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        shard_config = ttnn.create_sharded_memory_config(
+            shape=(32, 64),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=input_shard_orientation,
+            use_height_and_width_as_shard_shape=True,
+        )
+    else:  # WIDTH_SHARDED or BLOCK_SHARDED
+        # Use a simpler config for WIDTH_SHARDED and BLOCK_SHARDED
+        shard_config = ttnn.create_sharded_memory_config(
+            shape=(1024, 64),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.WIDTH
+            if output_memory_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            else ttnn.ShardStrategy.BLOCK,
+            orientation=input_shard_orientation,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device)
+    input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device)
+
+    # Use generic sharded memory config without explicit shard spec - should inherit from inputs
+    output = ttnn.add(input_a, input_b, memory_config=output_memory_config)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output, output)
+
+
+@pytest.mark.parametrize(
+    "output_memory_config",
+    [
+        ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+    ],
+)
+def test_binary_sharded_half_mem_config_scalar(device, output_memory_config, scalar=3.0):
+    """Test binary scalar operations with generic sharded memory configs that inherit shard spec from input"""
+    torch.manual_seed(0)
+    torch_input = torch.rand((32, 32, 64), dtype=torch.bfloat16)
+    torch_output = scalar * torch_input
+
+    # Create sharded input configuration with ROW_MAJOR orientation
+    if output_memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        shard_config = ttnn.create_sharded_memory_config(
+            shape=(32, 64),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    else:  # WIDTH_SHARDED
+        shard_config = ttnn.create_sharded_memory_config(
+            shape=(1024, 32),
+            core_grid=ttnn.CoreGrid(y=1, x=2),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device)
+
+    # Use generic sharded memory config without explicit shard spec - should inherit from input
+    output = ttnn.mul(input_tensor, scalar, memory_config=output_memory_config)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output, output)
+
+
+def test_binary_bcast_sharded_output_half_mem_config(device):
+    pytest.skip("Skipping test due to incomplete implementation of sharded broadcast output")
+    """Test binary broadcast with generic sharded memory config inheriting from sharded input"""
+    torch.manual_seed(0)
+    torch_input_a = torch.rand((2, 7, 64, 128), dtype=torch.bfloat16)
+    torch_input_b = torch.rand((64, 128), dtype=torch.bfloat16)
+    torch_output = torch_input_a + torch_input_b
+
+    # Create height sharded config for input B (2 rows x 1 col grid)
+    b_shard_config = ttnn.create_sharded_memory_config(
+        shape=(32, 128),
+        core_grid=ttnn.CoreGrid(y=2, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, memory_config=b_shard_config, device=device)
+
+    # Use generic height sharded memory config - should inherit from input B
+    output = ttnn.add(input_a, input_b, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output, output)
