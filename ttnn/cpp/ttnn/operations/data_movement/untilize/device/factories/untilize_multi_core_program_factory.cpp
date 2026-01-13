@@ -51,7 +51,10 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t tile_width = tile_shape[1];
 
     bool input_is_sharded = a.is_sharded();
-    bool output_is_sharded = output.is_sharded();
+    bool output_is_sharded = output.shard_spec().has_value();  // output.is_sharded();
+    std::cout << "output_is_sharded: " << output_is_sharded << std::endl;
+    bool output_is_nd_sharded = output.nd_shard_spec().has_value();
+    std::cout << "output_is_nd_sharded: " << output_is_nd_sharded << std::endl;
 
     uint32_t num_tiles_per_row = tensor_width / tile_width;
     uint32_t num_tiles_per_col = tensor_height / tile_height;
