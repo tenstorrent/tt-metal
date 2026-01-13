@@ -35,7 +35,7 @@ bool LoraModel::should_replace_module(const std::string& module_name) const {
 
     // Check if module name matches any of the target modules
     for (const auto& target : *m_config.target_modules) {
-        if (module_name.find(target) != std::string::npos) {
+        if (module_name == target) {
             return true;
         }
     }
