@@ -24,7 +24,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
 
     // Get the cores for the program
     std::vector<tt::tt_metal::CoreCoord> cores_vec = {
-        tt::tt_metal::CoreCoord({0, 0}),
+        tt::tt_metal::CoreCoord({3, 7}),
         // tt::tt_metal::CoreCoord({4, 0}),
     };
     auto cores = tt::tt_metal::CoreRangeSet(cores_vec);
@@ -35,7 +35,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         ---------------------------------------------------------------------------
         |     Name      |   CB Index    |   Dtype    | Tiles/CB |  Total size (B) |
         ---------------------------------------------------------------------------
-        | cb_r2c_w0     | CBIndex::c_0  | bfp4_b     |    2     |      1152       |
+        | cb_r2c_w0     | CBIndex::c_0  | bfp4_b     |    28    |      16128      |
         | cb_s2c_in     | CBIndex::c_1  | bfp8_b     |    224   |      243712     |
         | cb_c2c_mm0    | CBIndex::c_2  | bfp8_b     |    1     |      576        |
         | cb_c2c_mm1    | CBIndex::c_3  | bfp8_b     |    1     |      576        |
@@ -48,7 +48,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2w_out are handled separately as they are sharded CBs
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t>> cb_specs = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 2},
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 28},
         {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Bfp8_b, 1},
         {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Bfp8_b, 1},
         {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Bfp8_b, 1},
@@ -115,7 +115,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
 
     auto compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute_dummy.cpp",
         cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
@@ -140,6 +140,14 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
         }
+    }
+
+    const auto all_worker_cores_ordered =
+        tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
+            tt::tt_metal::NOC::RISCV_0_default);
+    for (size_t idx = 0; idx < all_worker_cores_ordered.size(); ++idx) {
+        const auto& core = all_worker_cores_ordered[idx];
+        log_warning(tt::LogOp, "DRAM {} mapped to core {}", idx, core.str());
     }
 
     return cached_program_t{std::move(program), MoESharedVariables{}};
