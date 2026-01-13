@@ -504,6 +504,7 @@ Tensor ExecutePrelu::invoke(
     Tensor result = ttnn::where(ttnn::ltz(input_a, output_mem_config), ttnn::multiply(input_a, b), input_a);
     return result;
 }
+
 Tensor run_remainder(
     const Tensor& input_a,
     const Tensor& input_b,
@@ -658,7 +659,6 @@ Tensor ExecuteBinaryFmod::invoke(
         return ttnn::prim::binary_ng(
             input_a, input_b, BinaryOpType::FMOD, std::nullopt, output_mem_config, std::nullopt);
     }
-    
     Tensor div_res = ttnn::div(input_a, input_b, false, "trunc", std::nullopt, output_mem_config);
 
     // No typecast for FP32 input

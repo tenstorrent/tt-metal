@@ -13,7 +13,7 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs an elementwise remainder operation with the two 32-bit integer inputs: y = remainder(x0,x1)
+ * Performs an elementwise fmod operation with the two 32-bit integer inputs: y = fmod(x0,x1)
  * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
@@ -34,7 +34,7 @@ ALWI void fmod_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }
 
 /**
- * Please refer to documentation for remainder_int32_tile.
+ * Please refer to documentation for fmod_int32_tile.
  */
 ALWI void fmod_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_fmod_int32_init<APPROX>())); }
 

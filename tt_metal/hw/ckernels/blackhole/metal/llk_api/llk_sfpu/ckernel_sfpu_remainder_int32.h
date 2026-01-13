@@ -11,18 +11,19 @@
 
 namespace ckernel::sfpu {
 
-// Remainder = a - floor(a / b) * b
+// Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|
 // Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
-sfpi_inline void calculate_remainder_int32_body(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+// Returns: r (unsigned remainder), a_signed, b_signed (original signed values)
+sfpi_inline void compute_unsigned_remainder_int32(
+    const uint dst_index_in0, const uint dst_index_in1, sfpi::vInt& r, sfpi::vInt& a_signed, sfpi::vInt& b_signed) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
-    sfpi::vInt b_orig = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
     // When converting to float, integers are treated as sign-magnitude.
     // Convert inputs to positive values to avoid conversion problems.
-    sfpi::vInt b = sfpi::abs(b_orig);
+    sfpi::vInt b = sfpi::abs(b_signed);
 
     // Convert to float for reciprocal computation
     // Handle edge case: if conversion results in negative
@@ -33,9 +34,9 @@ sfpi_inline void calculate_remainder_int32_body(
     // Compute reciprocal of b
     sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
     sfpi::vFloat e = -inv_b_f * b_f + sfpi::vConst1;
-    sfpi::vInt a_orig = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     e = e * e + e;
-    sfpi::vInt a = sfpi::abs(a_orig);
+    sfpi::vInt a = sfpi::abs(a_signed);
     inv_b_f = e * inv_b_f + inv_b_f;
     sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
     v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
@@ -43,7 +44,6 @@ sfpi_inline void calculate_remainder_int32_body(
 
     // Initial quotient approximation : q = a * 1/b
     sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
-    sfpi::vInt sign = a_orig ^ b_orig;
     sfpi::vUInt q = sfpi::exman9(q_f);
 
     // Compute q * b
@@ -56,7 +56,7 @@ sfpi_inline void calculate_remainder_int32_body(
     qb <<= 10;
 
     // Compute remainder
-    sfpi::vInt r = a - qb;
+    r = a - qb;
     sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
 
     // Compute correction: r / b in float32
@@ -84,15 +84,31 @@ sfpi_inline void calculate_remainder_int32_body(
     v_if(r < 0 && (r - 1) < 0) { r += b; }
     v_elseif(r >= b) { r -= b; }
     v_endif;
+}
 
+// Remainder = a - floor(a / b) * b
+// Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
+sfpi_inline void calculate_remainder_int32_body(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr uint dst_tile_size_sfpi = 32;
+
+    // Compute unsigned remainder
+    sfpi::vInt r;
+    sfpi::vInt a_signed;
+    sfpi::vInt b_signed;
+    compute_unsigned_remainder_int32(dst_index_in0, dst_index_in1, r, a_signed, b_signed);
+
+    // Remainder sign handling
+    sfpi::vInt sign = a_signed ^ b_signed;
     v_if(r != 0) {
-        v_if(sign < 0) {  // signs differ: need to adjust for floor division
+        v_if(sign < 0) {
             // When signs differ, floor(a/b) = trunc(a/b) - 1, so remainder needs adjustment
-            v_if(a_orig < 0) { r = b_orig - r; }
-            v_else { r += b_orig; }
+            v_if(a_signed < 0) { r = b_signed - r; }
+            v_else { r += b_signed; }
             v_endif;
         }
-        v_elseif(a_orig < 0 && b_orig < 0) { r = -r; }
+        v_elseif(a_signed < 0 && b_signed < 0) { r = -r; }
         v_endif;
     }
     v_endif;

@@ -6,86 +6,26 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_div_int32_floor.h"
+#include "ckernel_sfpu_remainder_int32.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
 
 // FMOD = a - trunc(a / b) * b
-// Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
+// Implemented using 32-bit integer remainder kernel (see ckernel_sfpu_remainder_int32.h)
 sfpi_inline void calculate_fmod_int32_body(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
-    sfpi::vInt b_orig = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    // Compute unsigned remainder
+    sfpi::vInt r;
+    sfpi::vInt a_signed;
+    sfpi::vInt b_signed;
+    compute_unsigned_remainder_int32(dst_index_in0, dst_index_in1, r, a_signed, b_signed);
 
-    // When converting to float, integers are treated as sign-magnitude.
-    // Convert inputs to positive values to avoid conversion problems.
-    sfpi::vInt b = sfpi::abs(b_orig);
-
-    // Convert to float for reciprocal computation
-    // Handle edge case: if conversion results in negative
-    sfpi::vFloat b_f = sfpi::int32_to_float(b, 0);
-    v_if(b_f < 0.0f) { b_f = 2147483648.0f; }
-    v_endif;
-
-    // Compute reciprocal of b
-    sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
-    sfpi::vFloat e = -inv_b_f * b_f + sfpi::vConst1;
-    sfpi::vInt a_orig = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-    e = e * e + e;
-    sfpi::vInt a = sfpi::abs(a_orig);
-    inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
-    v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
-    v_endif;
-
-    // Initial quotient approximation : q = a * 1/b
-    sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
-    sfpi::vInt sign = a_orig ^ b_orig;
-    sfpi::vUInt q = sfpi::exman9(q_f);
-
-    // Compute q * b
-    // SFPMUL24 multiplies two 23-bit integers
-    sfpi::vInt qb;
-
-    qb.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 0);
-
-    q <<= 10;
-    qb <<= 10;
-
-    /// Compute remainder
-    sfpi::vInt r = a - qb;
-    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
-
-    // Compute correction: r / b in float32
-    sfpi::vFloat correction_f = r_f * inv_b_f;
-    sfpi::vInt b1 = b >> 23;
-    sfpi::vInt correction = sfpi::float_to_uint16(correction_f, 0);
-
-    // Compute tmp = correction * b
-    sfpi::vInt tmp_hi;
-    sfpi::vInt tmp_lo;
-    b1.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b1.get(), 0);
-    tmp_hi.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 1);
-    tmp_lo.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 0);
-    tmp_hi += b1;
-    tmp_hi <<= 23;
-    sfpi::vInt tmp = tmp_lo + tmp_hi;
-
-    // Adjust FMOD based on its sign
-    v_if(r < 0) { r += tmp; }
-    v_else { r -= tmp; }
-    v_endif;
-
-    // Since the correction might have been rounded, we may need to correct one
-    // additional bit.  The (r - 1) < 0 check is required to handle r=INT_MIN.
-    v_if(r < 0 && (r - 1) < 0) { r += b; }
-    v_elseif(r >= b) { r -= b; }
-    v_endif;
-
-    v_if(a_orig < 0) { r = -r; }
+    // FMOD sign handling (result has the same sign as a)
+    v_if(a_signed < 0) { r = -r; }
     v_endif;
 
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = r;
