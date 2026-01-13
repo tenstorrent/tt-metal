@@ -80,14 +80,9 @@ def prefill_forward(
     tt_v = ttnn.typecast(tt_v, v_cache.dtype)
 
     if page_table is not None:
-        # Paged attention: handle potential padding
-        block_size = k_cache.shape[2]
-        page_len = page_table.shape[1] * block_size
-        tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
-        tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
-
-        ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
-        ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=user_id)
+        print(f"filling cache for user {user_id}")
+        ttnn.experimental.paged_fill_cache(k_cache, tt_k, page_table, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(v_cache, tt_v, page_table, batch_idx=user_id)
     else:
         # Non-paged attention
         ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
