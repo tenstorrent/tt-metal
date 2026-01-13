@@ -125,7 +125,18 @@ class DispatchManager:
         begin = time.time()
         res = dispatch_to_ttnn(func.name(), ttnn_args, ttnn_kwargs)
         end = time.time()
-        DispatchManager.record_timing("TTNN", "", func.name(), {}, end - begin)
+        func_name = f"{func.name().replace('aten::', 'TTNN::')}"
+        DispatchManager.record_timing(
+            "TTNN",
+            (
+                ""
+                if DispatchManager.current_module_name is None
+                else DispatchManager.current_module_name + f".{func_name}"
+            ),
+            func_name,
+            {},
+            end - begin,
+        )
         if get_tensor_run_implementation().verbose:
             print(f"Finished {func.name()} on TTNN backend.")
         return res
@@ -147,9 +158,11 @@ class DispatchManager:
             end = time.time()
             DispatchManager.record_timing(
                 "Torch",
-                ""
-                if DispatchManager.current_module_name is None
-                else DispatchManager.current_module_name + f".{func.name()}",
+                (
+                    ""
+                    if DispatchManager.current_module_name is None
+                    else DispatchManager.current_module_name + f".{func.name()}"
+                ),
                 func.name(),
                 {},
                 end - begin,
@@ -373,9 +386,11 @@ class NormalRun:
         end = time.time()
         DispatchManager.record_timing(
             "TTNN",
-            ""
-            if DispatchManager.current_module_name is None
-            else DispatchManager.current_module_name + ".ttnn_to_torch",
+            (
+                ""
+                if DispatchManager.current_module_name is None
+                else DispatchManager.current_module_name + ".ttnn_to_torch"
+            ),
             "ttnn_to_torch",
             {},
             end - begin,
@@ -388,7 +403,17 @@ class NormalRun:
         begin = time.time()
         if self.ttnn_tensor is not None:
             end = time.time()
-            DispatchManager.record_timing("TTNN", "", "torch_to_ttnn", {}, end - begin)
+            DispatchManager.record_timing(
+                "TTNN",
+                (
+                    ""
+                    if DispatchManager.current_module_name is None
+                    else DispatchManager.current_module_name + ".torch_to_ttnn_no_conversion"
+                ),
+                "torch_to_ttnn_no_conversion",
+                {},
+                end - begin,
+            )
             return self.ttnn_tensor
         assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
         # convert elem to ttnn tensor here
@@ -412,9 +437,11 @@ class NormalRun:
         end = time.time()
         DispatchManager.record_timing(
             "TTNN",
-            ""
-            if DispatchManager.current_module_name is None
-            else DispatchManager.current_module_name + ".torch_to_ttnn",
+            (
+                ""
+                if DispatchManager.current_module_name is None
+                else DispatchManager.current_module_name + ".torch_to_ttnn"
+            ),
             "torch_to_ttnn",
             {},
             end - begin,
