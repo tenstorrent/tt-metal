@@ -11,7 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::data_movement {

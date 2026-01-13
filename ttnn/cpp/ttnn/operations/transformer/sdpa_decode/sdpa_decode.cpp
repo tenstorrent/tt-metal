@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "device/sdpa_decode_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
 using namespace tt::tt_metal;
 

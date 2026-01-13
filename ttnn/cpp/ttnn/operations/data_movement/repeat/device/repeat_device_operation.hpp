@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"

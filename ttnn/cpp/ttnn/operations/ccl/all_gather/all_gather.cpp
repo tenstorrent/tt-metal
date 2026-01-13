@@ -7,7 +7,7 @@
 #include <algorithm>
 #include "all_gather.hpp"
 #include "device/all_gather_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
