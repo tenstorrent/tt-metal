@@ -80,8 +80,7 @@ void kernel_main() {
     // DRAM Reading constants
     const uint32_t dram_bank_id = core_id;
     const uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, /*bank_address_offset=*/0);
-    uint32_t curr_trid = 1;
-    uint32_t prev_trid = 2;
+    uint32_t curr_trid = 1, prev_trid = 2;
 
     // W0 and W1 reading constants
     constexpr uint32_t w0_w1_tiles_per_txn = 14;
