@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_metal {
 
@@ -361,8 +362,8 @@ private:
      */
     void populate_fabric_node_id_to_asic_id_mappings(
         MeshId mesh_id,
-        const PhysicalAdjacencyMap& adjacency_map_physical,
-        const LogicalAdjacencyMap& adjacency_map_logical,
+        const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_map_physical,
+        const AdjacencyGraph<FabricNodeId>& adjacency_map_logical,
         const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
         const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
 
@@ -434,8 +435,8 @@ private:
      */
     void verify_topology_mapping() const;
 
-    void print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) const;
-    void print_physical_adjacency_map(const std::map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
+    void print_logical_adjacency_map(const std::map<MeshId, AdjacencyGraph<FabricNodeId>>& adj_map) const;
+    void print_physical_adjacency_map(const std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>>& adj_map) const;
 };
 
 }  // namespace tt::tt_fabric
