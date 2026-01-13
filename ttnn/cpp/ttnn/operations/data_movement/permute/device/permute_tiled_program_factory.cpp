@@ -159,12 +159,20 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     if (swap_hw) {
         std::vector<uint32_t> compute_kernel_args = {};
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
+
+        // Set up unpack_to_dest_mode for Float32 precision preservation
+        std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        if (fp32_dest_acc_en) {
+            unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        }
+
         compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp",
             all_cores,
             tt::tt_metal::ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                //.unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = compute_kernel_args,
             });
     }
@@ -405,12 +413,20 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     if (swap_hw) {
         std::vector<uint32_t> compute_kernel_args = {};
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
+
+        // Set up unpack_to_dest_mode for Float32 precision preservation
+        std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        if (fp32_dest_acc_en) {
+            unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        }
+
         compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp",
             all_cores,
             tt::tt_metal::ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                //.unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = compute_kernel_args,
             });
     }
@@ -755,12 +771,20 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     std::vector<uint32_t> compute_kernel_args = {};
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
+
+    // Set up unpack_to_dest_mode for Float32 precision preservation
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_tiled.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            //.unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_kernel_args,
         });
 

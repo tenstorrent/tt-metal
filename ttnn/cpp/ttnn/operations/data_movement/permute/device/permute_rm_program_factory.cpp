@@ -293,12 +293,20 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
         {"x_block_size", x_block_size}, {"w_block_size", w_block_size}};
     bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32;
+
+    // Set up unpack_to_dest_mode for Float32 precision preservation
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_kernel_args,
             .named_compile_args = compute_named_compile_time_args,
         });
