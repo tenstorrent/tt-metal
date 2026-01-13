@@ -813,8 +813,8 @@ def test_dispatch_cores_extended_worker():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [9325],
         "Tensix CQ Prefetch": [9325],
-        "dispatch_total_cq_cmd_op_time": [223],
-        "dispatch_go_send_wait_time": [223],
+        "dispatch_total_cq_cmd_op_time": [87],
+        "dispatch_go_send_wait_time": [87],
     }
 
     verify_stats(
