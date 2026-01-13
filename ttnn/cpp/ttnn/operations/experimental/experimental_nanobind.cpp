@@ -54,6 +54,7 @@
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -125,8 +126,12 @@ void py_module(nb::module_& mod) {
     operations::experimental::ternary::detail::bind_where(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
+<<<<<<< HEAD
 
     isin::detail::bind_isin_operation(mod);
+=======
+    minimal_matmul::detail::bind_minimal_matmul_split(mod);
+>>>>>>> 16804ce740 (Initial (buggy) implementation of minimal_matmul_split with chunks=3)
 }
 
 }  // namespace ttnn::operations::experimental
