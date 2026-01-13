@@ -168,18 +168,32 @@ class MasterConfigLoader:
             configs: List of configurations (either list of args or dict with 'arguments' and 'source')
 
         Returns:
-            List of (arguments, source) tuples for traceability
+            List of (arguments, source, machine_info) tuples for traceability
         """
+        # Check if we should filter for lead models only
+        lead_models_only = os.environ.get("SWEEPS_LEAD_MODELS_ONLY") == "1"
+        lead_model_patterns = [
+            "deepseek_v3",
+        ]
+
         normalized = []
         for config in configs:
             if isinstance(config, dict) and "arguments" in config:
                 # New format: extract arguments, source, and machine_info
                 source = config.get("source", "unknown")
                 machine_info = config.get("machine_info", None)
+
+                # Filter for lead models if requested
+                if lead_models_only:
+                    if not any(pattern.lower() in source.lower() for pattern in lead_model_patterns):
+                        continue  # Skip this config
+
                 normalized.append((config["arguments"], source, machine_info))
             elif isinstance(config, list):
                 # Old format: use as-is with unknown source and no machine_info
-                normalized.append((config, "unknown", None))
+                # Skip if lead_models_only since we can't determine source
+                if not lead_models_only:
+                    normalized.append((config, "unknown", None))
             else:
                 # Fallback: wrap in list with unknown source
                 normalized.append((config if isinstance(config, list) else [config], "unknown"))
@@ -2781,6 +2795,7 @@ class MasterConfigLoader:
                     "input_b_memory_config",
                     "output_memory_config",
                     "traced_source",
+                    "traced_machine_info",
                 ]
                 param_lists = [
                     [cfg.get("input_shape") for cfg in paired_configs],
@@ -2793,6 +2808,7 @@ class MasterConfigLoader:
                     [cfg.get("input_b_memory_config") for cfg in paired_configs],
                     [cfg.get("output_memory_config") for cfg in paired_configs],
                     [cfg.get("traced_source", "unknown") for cfg in paired_configs],
+                    [cfg.get("traced_machine_info") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
