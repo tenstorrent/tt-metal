@@ -21,14 +21,31 @@ using namespace tt::tt_fabric::linear::experimental;
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(2);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
-constexpr uint32_t page_size = get_compile_time_arg_val(4);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(6);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(7);
+constexpr uint32_t page_size = get_compile_time_arg_val(2);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(4);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(5);
+constexpr uint32_t input_slice_0_cb_id = get_compile_time_arg_val(6);
+constexpr uint32_t input_slice_1_cb_id = get_compile_time_arg_val(7);
+constexpr uint32_t input_slice_2_cb_id = get_compile_time_arg_val(8);
+constexpr uint32_t input_slice_3_cb_id = get_compile_time_arg_val(9);
+constexpr uint32_t input_slice_4_cb_id = get_compile_time_arg_val(10);
+constexpr uint32_t input_slice_5_cb_id = get_compile_time_arg_val(11);
+constexpr uint32_t input_slice_6_cb_id = get_compile_time_arg_val(12);
+constexpr uint32_t input_slice_7_cb_id = get_compile_time_arg_val(13);
+constexpr uint32_t compute_cb_id = get_compile_time_arg_val(14);
 
-constexpr uint32_t initial_ct_idx = 8;
+constexpr uint32_t initial_ct_idx = 15;
+
+constexpr uint32_t input_slice_cb_ids[8] = {
+    input_slice_0_cb_id,
+    input_slice_1_cb_id,
+    input_slice_2_cb_id,
+    input_slice_3_cb_id,
+    input_slice_4_cb_id,
+    input_slice_5_cb_id,
+    input_slice_6_cb_id,
+    input_slice_7_cb_id};
 
 void kernel_main() {
     uint32_t arg_idx = 0;
@@ -132,7 +149,8 @@ void kernel_main() {
             actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
         }
 
-        uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
+        uint32_t reduced_cb_id = i == 0 ? input_slice_cb_ids[actual_slice_idx] : compute_cb_id;
+
         if (i < (ring_size - 1)) {
             uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
             uint32_t intermediate_pages_read_in_row = start_pages_read_in_row;
@@ -140,21 +158,9 @@ void kernel_main() {
 
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
-
-            // if (!direction) {
-            //     for (uint32_t k = 0; k < tile_granularity; ++k) {
-            //         intermediate_pages_read_in_row++;
-            //         if (intermediate_pages_read_in_row == slice_Wt) {
-            //             intermediate_row_offset += input_tensor_Wt;
-            //             intermediate_pages_read_in_row -= slice_Wt;
-            //         }
-            //     }
-            //     tiles_read += tile_granularity;
-            // }
-
             while (tiles_read < tiles_to_read) {
-                cb_wait_front(cb_output_id, tile_granularity);
-                size_t intermediate_l1_read_addr = get_read_ptr(cb_output_id);
+                cb_wait_front(reduced_cb_id, tile_granularity);
+                size_t intermediate_l1_read_addr = get_read_ptr(reduced_cb_id);
 
                 uint32_t intermediate_tile_one_id =
                     intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
@@ -187,7 +193,7 @@ void kernel_main() {
                 tiles_read += 2;
 
                 noc_async_writes_flushed();
-                cb_pop_front(cb_output_id, tile_granularity);
+                cb_pop_front(reduced_cb_id, tile_granularity);
 
                 uint64_t op_semaphore_noc_addr_in_pkt =
                     safe_get_noc_addr(semaphore_noc0_x, semaphore_noc0_y, op_semaphore, 0);
@@ -195,32 +201,15 @@ void kernel_main() {
                     fabric_connection,
                     unicast_sem_inc_route_id,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_addr_in_pkt, 0});
-
-                // uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                // if (tiles_remaining_to_read > 0) {
-                //     for (uint32_t k = 0; k < tile_granularity; ++k) {
-                //         intermediate_pages_read_in_row++;
-                //         if (intermediate_pages_read_in_row == slice_Wt) {
-                //             intermediate_row_offset += input_tensor_Wt;
-                //             intermediate_pages_read_in_row -= slice_Wt;
-                //         }
-                //     }
-                //     tiles_read += tile_granularity;
-                // }
             }
 
             noc_async_writes_flushed();
         } else {
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
-
-            // if (!direction) {
-            //     tiles_read += tile_granularity;
-            // }
-
             while (tiles_read < tiles_to_read) {
-                cb_wait_front(cb_output_id, tile_granularity);
-                size_t output_l1_read_addr = get_read_ptr(cb_output_id);
+                cb_wait_front(reduced_cb_id, tile_granularity);
+                size_t output_l1_read_addr = get_read_ptr(reduced_cb_id);
                 for (uint32_t j = 0; j < tile_granularity; ++j) {
                     uint64_t output_local_noc_addr = get_noc_addr(tiles_read, output_addrgen);
                     noc_async_write(output_l1_read_addr, output_local_noc_addr, page_size);
@@ -229,12 +218,7 @@ void kernel_main() {
                 }
 
                 noc_async_write_barrier();
-                cb_pop_front(cb_output_id, tile_granularity);
-
-                // uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                // if (tiles_remaining_to_read > 0) {
-                //     tiles_read += tile_granularity;
-                // }
+                cb_pop_front(reduced_cb_id, tile_granularity);
             }
         }
 

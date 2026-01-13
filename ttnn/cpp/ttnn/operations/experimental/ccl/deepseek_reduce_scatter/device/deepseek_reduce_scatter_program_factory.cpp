@@ -17,6 +17,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/math.hpp"
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -41,6 +42,66 @@ using namespace tt::tt_metal;
 using ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekReduceScatterProgramArtifacts;
 
 namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
+
+DeviceAddr calculate_bank_size_spread(
+    DeviceAddr size_bytes, DeviceAddr page_size_bytes, uint32_t num_banks, uint32_t alignment_bytes) {
+    TT_ASSERT(
+        page_size_bytes == 0 ? size_bytes == 0 : size_bytes % page_size_bytes == 0,
+        "Page size {} should be divisible by buffer size {}",
+        page_size_bytes,
+        size_bytes);
+    DeviceAddr num_pages = page_size_bytes == 0 ? 0 : size_bytes / page_size_bytes;
+    DeviceAddr num_equally_distributed_pages = num_pages == 0 ? 0 : 1 + ((num_pages - 1) / num_banks);
+    return num_equally_distributed_pages * tt::round_up(page_size_bytes, static_cast<DeviceAddr>(alignment_bytes));
+}
+
+// NOTE: shadow_global_buffer (set in set_globally_allocated_address_and_total_size) seems only to be used for
+// operator==
+tt::tt_metal::CircularBufferConfig create_sub_tensor_cb_config(
+    uint32_t cb_idx,
+    uint32_t slice_idx,
+    const ttnn::Tensor& input_tensor,
+    distributed::MeshDevice* mesh_device,
+    uint32_t cb_num_pages,
+    tt::DataFormat cb_data_format,
+    CoreRangeSet shard_core_range_set) {
+    uint32_t page_size = input_tensor.buffer()->page_size();
+
+    uint32_t shard_spec_num_pages =
+        4; /* TODO: (GR) should be able to get this from input_tensor - shard_spec_->num_pages() */
+    uint32_t alignment = mesh_device->allocator()->get_alignment(input_tensor.memory_config().buffer_type());
+    uint32_t num_dev_pages = shard_spec_num_pages * shard_core_range_set.size();
+    DeviceAddr aligned_page_size = tt::align(page_size, alignment);
+    DeviceAddr aligned_size = num_dev_pages * aligned_page_size;
+
+    uint32_t num_banks = shard_core_range_set.size();
+    DeviceAddr max_size = calculate_bank_size_spread(aligned_size, aligned_page_size, num_banks, alignment);
+
+    uint32_t buffer_size = num_dev_pages * aligned_page_size;
+
+    tt::tt_metal::CircularBufferConfig circular_buffer_config =
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{cb_idx, cb_data_format}})
+            .set_page_size(cb_idx, page_size);
+
+    uint32_t sub_tensor_offset = slice_idx * shard_spec_num_pages;
+    uint32_t start_address = input_tensor.buffer()->address() + sub_tensor_offset;
+    circular_buffer_config = tt::tt_metal::CircularBufferConfig(
+        circular_buffer_config.total_size(),             // no changes from init
+        start_address,                                   // set_globally_allocated_address_and_total_size
+        circular_buffer_config.data_formats(),           // set_config(data_format_spec), no changes from init
+        circular_buffer_config.page_sizes(),             // set_page_size(cb_id, page_size),  no changes from init
+        circular_buffer_config.tiles(),                  // no changes from init (never set in init)
+        circular_buffer_config.buffer_indices(),         // set_config(data_format_spec), no changes from init
+        circular_buffer_config.local_buffer_indices(),   // set_config(data_format_spec), no changes from init
+        circular_buffer_config.remote_buffer_indices(),  // no changes from init (never set in init)
+        /* bool dynamic_cb - true */ true,               // set_globally_allocated_address_and_total_size
+                                                         /* uint32_t max_size - buffer.aligned_size_per_bank() */
+        max_size,                                        // set_globally_allocated_address_and_total_size
+        /* uint32_t buffer_size - buffer.aligned_size() */ buffer_size  // set_globally_allocated_address_and_total_size
+    );
+
+    return circular_buffer_config;
+}
 
 DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_artifacts(
     tt::tt_metal::Program& program,
@@ -102,26 +163,106 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                                                          // given slice), test/check if we should use more
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t input_cb_index = tt::CB::c_in0;
-    tt::tt_metal::CircularBufferConfig cb_input_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_cb_index, df}})
-            .set_page_size(input_cb_index, page_size);
-    CreateCircularBuffer(program, worker_core_range_set, cb_input_config);
-    uint32_t intermediate_cb_index = tt::CB::c_in1;
+    uint32_t input_slice_0_cb_id = tt::CBIndex::c_0;
+    uint32_t input_slice_1_cb_id = tt::CBIndex::c_1;
+    uint32_t input_slice_2_cb_id = tt::CBIndex::c_2;
+    uint32_t input_slice_3_cb_id = tt::CBIndex::c_3;
+    uint32_t input_slice_4_cb_id = tt::CBIndex::c_4;
+    uint32_t input_slice_5_cb_id = tt::CBIndex::c_5;
+    uint32_t input_slice_6_cb_id = tt::CBIndex::c_6;
+    uint32_t input_slice_7_cb_id = tt::CBIndex::c_7;
+    uint32_t intermediate_cb_id = tt::CBIndex::c_8;
+    uint32_t compute_cb_id = tt::CBIndex::c_9;
+
     tt::tt_metal::CircularBufferConfig cb_intermediate_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_cb_index, df}})
-            .set_page_size(intermediate_cb_index, page_size);
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_cb_id, df}})
+            .set_page_size(intermediate_cb_id, page_size);
     CreateCircularBuffer(program, worker_core_range_set, cb_intermediate_config);
-    uint32_t reader_output_cb_index = tt::CB::c_in2;
-    tt::tt_metal::CircularBufferConfig cb_reader_output_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{reader_output_cb_index, df}})
-            .set_page_size(reader_output_cb_index, page_size);
-    CreateCircularBuffer(program, worker_core_range_set, cb_reader_output_config);
-    uint32_t compute_output_cb_index = tt::CB::c_in3;
+
     tt::tt_metal::CircularBufferConfig cb_compute_output_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{compute_output_cb_index, df}})
-            .set_page_size(compute_output_cb_index, page_size);
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{compute_cb_id, df}})
+            .set_page_size(compute_cb_id, page_size);
     CreateCircularBuffer(program, worker_core_range_set, cb_compute_output_config);
+
+    tt::tt_metal::CircularBufferConfig input_slice_0_cb_config = create_sub_tensor_cb_config(
+        input_slice_0_cb_id,
+        /* slice_idx */ 0,
+        input_tensor,
+        mesh_device,
+        cb_num_pages,
+        df,
+        /* shard_core_range_set */ worker_core_range_set);
+    CreateCircularBuffer(program, worker_core_range_set, input_slice_0_cb_config);
+
+    tt::tt_metal::CircularBufferConfig input_slice_1_cb_config = create_sub_tensor_cb_config(
+        input_slice_1_cb_id,
+        /* slice_idx */ 1,
+        input_tensor,
+        mesh_device,
+        cb_num_pages,
+        df,
+        /* shard_core_range_set */ worker_core_range_set);
+    CreateCircularBuffer(program, worker_core_range_set, input_slice_1_cb_config);
+
+    tt::tt_metal::CircularBufferConfig input_slice_2_cb_config = create_sub_tensor_cb_config(
+        input_slice_2_cb_id,
+        /* slice_idx */ 2,
+        input_tensor,
+        mesh_device,
+        cb_num_pages,
+        df,
+        /* shard_core_range_set */ worker_core_range_set);
+    CreateCircularBuffer(program, worker_core_range_set, input_slice_2_cb_config);
+
+    tt::tt_metal::CircularBufferConfig input_slice_3_cb_config = create_sub_tensor_cb_config(
+        input_slice_3_cb_id,
+        /* slice_idx */ 3,
+        input_tensor,
+        mesh_device,
+        cb_num_pages,
+        df,
+        /* shard_core_range_set */ worker_core_range_set);
+    CreateCircularBuffer(program, worker_core_range_set, input_slice_3_cb_config);
+
+    tt::tt_metal::CircularBufferConfig input_slice_4_cb_config = create_sub_tensor_cb_config(
+        input_slice_4_cb_id,
+        /* slice_idx */ 4,
+        input_tensor,
+        mesh_device,
+        cb_num_pages,
+        df,
+        /* shard_core_range_set */ worker_core_range_set);
+    CreateCircularBuffer(program, worker_core_range_set, input_slice_4_cb_config);
+
+    tt::tt_metal::CircularBufferConfig input_slice_5_cb_config = create_sub_tensor_cb_config(
+        input_slice_5_cb_id,
+        /* slice_idx */ 5,
+        input_tensor,
+        mesh_device,
+        cb_num_pages,
+        df,
+        /* shard_core_range_set */ worker_core_range_set);
+    CreateCircularBuffer(program, worker_core_range_set, input_slice_5_cb_config);
+
+    tt::tt_metal::CircularBufferConfig input_slice_6_cb_config = create_sub_tensor_cb_config(
+        input_slice_6_cb_id,
+        /* slice_idx */ 6,
+        input_tensor,
+        mesh_device,
+        cb_num_pages,
+        df,
+        /* shard_core_range_set */ worker_core_range_set);
+    CreateCircularBuffer(program, worker_core_range_set, input_slice_6_cb_config);
+
+    tt::tt_metal::CircularBufferConfig input_slice_7_cb_config = create_sub_tensor_cb_config(
+        input_slice_7_cb_id,
+        /* slice_idx */ 7,
+        input_tensor,
+        mesh_device,
+        cb_num_pages,
+        df,
+        /* shard_core_range_set */ worker_core_range_set);
+    CreateCircularBuffer(program, worker_core_range_set, input_slice_7_cb_config);
 
     // handle output sharded tensors using ShardedAddrGen
     bool output_is_sharded = output_tensor.is_sharded();
@@ -132,15 +273,21 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
 
     // reader
     std::vector<uint32_t> reader_ct_args = {
-        ring_index,              // my_chip_id
-        ring_size,               // ring_size
-        input_cb_index,          // cb_input_id
-        intermediate_cb_index,   // cb_intermediate_id
-        reader_output_cb_index,  // cb_reader_output_id
-        page_size,               // page_size
-        tile_granularity,        // tile_granularity
-        input_tensor_Wt,         // input_tensor_Wt
-        slice_Wt,                // slice_Wt
+        ring_index,        // my_chip_id
+        ring_size,         // ring_size
+        page_size,         // page_size
+        tile_granularity,  // tile_granularity
+        input_tensor_Wt,   // input_tensor_Wt
+        slice_Wt,          // slice_Wt
+        input_slice_0_cb_id,
+        input_slice_1_cb_id,
+        input_slice_2_cb_id,
+        input_slice_3_cb_id,
+        input_slice_4_cb_id,
+        input_slice_5_cb_id,
+        input_slice_6_cb_id,
+        input_slice_7_cb_id,
+        intermediate_cb_id,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(reader_ct_args);
@@ -154,14 +301,22 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
 
     // writer
     std::vector<uint32_t> writer_ct_args = {
-        ring_index,               // my_chip_id
-        ring_size,                // ring_size
-        compute_output_cb_index,  // cb_compute_output_id
-        reader_output_cb_index,   // cb_reader_output_id
-        page_size,                // page_size
-        tile_granularity,         // tile_granularity
-        input_tensor_Wt,          // input_tensor_Wt
-        slice_Wt,                 // slice_Wt
+        ring_index,        // my_chip_id
+        ring_index,        // my_chip_id
+        ring_size,         // ring_size
+        page_size,         // page_size
+        tile_granularity,  // tile_granularity
+        input_tensor_Wt,   // input_tensor_Wt
+        slice_Wt,          // slice_Wt
+        input_slice_0_cb_id,
+        input_slice_1_cb_id,
+        input_slice_2_cb_id,
+        input_slice_3_cb_id,
+        input_slice_4_cb_id,
+        input_slice_5_cb_id,
+        input_slice_6_cb_id,
+        input_slice_7_cb_id,
+        compute_cb_id,
     };
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(writer_ct_args);
     if (output_is_sharded) {
@@ -183,11 +338,18 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     // reduce
     auto reduce_kernel_config = tt::tt_metal::ComputeConfig{};
     reduce_kernel_config.compile_args = {
-        input_cb_index,           // input_cb_id
-        intermediate_cb_index,    // intermediate_cb
-        compute_output_cb_index,  // output_cb
-        ring_size,                // ring_size
-        tile_granularity,         // tile_granularity
+        ring_size,         // ring_size
+        tile_granularity,  // tile_granularity
+        input_slice_0_cb_id,
+        input_slice_1_cb_id,
+        input_slice_2_cb_id,
+        input_slice_3_cb_id,
+        input_slice_4_cb_id,
+        input_slice_5_cb_id,
+        input_slice_6_cb_id,
+        input_slice_7_cb_id,
+        intermediate_cb_id,
+        compute_cb_id,
     };
 
     std::string reduce_kernel_path =

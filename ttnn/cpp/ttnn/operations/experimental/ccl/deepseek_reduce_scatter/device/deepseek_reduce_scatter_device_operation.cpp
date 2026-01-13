@@ -41,8 +41,9 @@ spec_return_value_t DeepseekReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
 
+    // TODO: (GR) set intermediate to sharded as well
     const auto& intermediate_shape = input_tensor.logical_shape();
-    MemoryConfig intermediate_memory_config = input_tensor.memory_config();
+    MemoryConfig intermediate_memory_config = operation_attributes.output_memory_config;
 
     auto output_shape = input_tensor.logical_shape();
     output_shape[3] /= 8; /* /= ring_size */
