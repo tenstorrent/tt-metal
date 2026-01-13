@@ -367,6 +367,7 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
         attrs.scale,
+        attrs.sliding_window_size,
         attrs.output_mem_config,
         attrs.program_config,
         attrs.is_causal,

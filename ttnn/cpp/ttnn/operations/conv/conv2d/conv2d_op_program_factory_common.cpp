@@ -52,7 +52,7 @@ std::vector<CBInfo> get_cb_info(
     const Conv2dParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> input_shape,
+    std::array<uint32_t, 2> /*input_shape*/,
     std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
@@ -597,7 +597,7 @@ bool is_split_reader_viable(
     uint32_t weights_block_ntiles,
     uint32_t weights_tile_size,
     uint32_t dilation_w,
-    uint32_t num_blocks_act_h,
+    uint32_t /*num_blocks_act_h*/,
     uint32_t act_block_w_ntiles,
     bool fp32_dest_acc,
     DataType output_datatype,
@@ -670,7 +670,7 @@ void post_conv2d_op_memory_checks(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& /*output_tensor*/) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;
     const auto& input_tensor_bias = tensor_args.bias;

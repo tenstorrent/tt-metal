@@ -58,10 +58,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FABRIC_ROUTING_FIELDS_1D = 37,
         FABRIC_ROUTING_FIELDS_2D = 38,
 
-        READ_TRAILER = 39,
-        WRITE_TRAILER = 40,
-
-        UNSUPPORTED = 41,
+        UNSUPPORTED = 39,
     };
 
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
@@ -86,10 +83,10 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         uint32_t getNumBytes() const { return payload_chunks * PAYLOAD_CHUNK_SIZE; }
     };
 
-    // Expected to come after a LocalNocEvent when NoC Debug Mode is enabled
-    struct LocalNocEventTrailer {
-        NocEventType noc_xfer_type;
+    // Expected to come after a LocalNocEvent when NoC Debug Mode is enabled.
+    struct LocalNocEventDstTrailer {
         uint32_t dst_addr;
+        uint32_t padding;
     } __attribute__((packed));
 
     // represents a fabric NOC event
@@ -137,7 +134,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     union EventData {
         RawEvent raw_event;
         LocalNocEvent local_event;
-        LocalNocEventTrailer local_event_trailer;
+        LocalNocEventDstTrailer local_event_dst_trailer;
         FabricNoCEvent fabric_event;
         FabricNoCScatterEvent fabric_scatter_event;
         FabricRoutingFields1D fabric_routing_fields_1d;
@@ -152,7 +149,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     }
 
     static bool isValidEventType(NocEventType event_type) {
-        return event_type >= NocEventType::READ && event_type <= NocEventType::WRITE_TRAILER;
+        return event_type >= NocEventType::READ && event_type < NocEventType::UNSUPPORTED;
     }
 
     static bool isFabricEventType(NocEventType event_type) {
@@ -182,18 +179,8 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         return event_type == NocEventType::FABRIC_UNICAST_SCATTER_WRITE;
     }
 
-    static bool isLocalEventTrailer(NocEventType event_type) {
-        return event_type == NocEventType::READ_TRAILER || event_type == NocEventType::WRITE_TRAILER;
-    }
-
-    // Getter to return the correct variant based on the tag
-    std::variant<
-        LocalNocEvent,
-        LocalNocEventTrailer,
-        FabricNoCEvent,
-        FabricNoCScatterEvent,
-        FabricRoutingFields1D,
-        FabricRoutingFields2D>
+    // Getter to return the correct variant based on the tag (noc_xfer_type)
+    std::variant<LocalNocEvent, FabricNoCEvent, FabricNoCScatterEvent, FabricRoutingFields1D, FabricRoutingFields2D>
     getContents() const {
         if (isFabricEventType(data.raw_event.noc_xfer_type)) {
             if (isFabricScatterEventType(data.raw_event.noc_xfer_type)) {
@@ -207,11 +194,12 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         if (isFabricRoutingFields2D(data.raw_event.noc_xfer_type)) {
             return data.fabric_routing_fields_2d;
         }
-        if (isLocalEventTrailer(data.raw_event.noc_xfer_type)) {
-            return data.local_event_trailer;
-        }
         return data.local_event;
     }
+
+    // Getter to return a LocalNocEventDstTrailer from the metadata. Called knows from TS_DATA_16B context that this is
+    // a dst trailer.
+    LocalNocEventDstTrailer getLocalNocEventDstTrailer() const { return data.local_event_dst_trailer; }
 
     uint64_t asU64() const {
         uint64_t ret;

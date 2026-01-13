@@ -15,7 +15,7 @@ using namespace tt::constants;
 using namespace tt;
 
 NlpCreateQkvHeadsFalcon7BProgramFactory::cached_program_t NlpCreateQkvHeadsFalcon7BProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& a = tensor_args.input;

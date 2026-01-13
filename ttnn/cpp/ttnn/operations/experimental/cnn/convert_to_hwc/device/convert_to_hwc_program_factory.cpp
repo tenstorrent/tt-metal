@@ -179,7 +179,7 @@ inline std::vector<std::vector<uint32_t>> serialize_transfers_per_core(
 
 // Effective HW used by gather: always the padded capacity per input core
 uint32_t calculate_effective_hw_for_sharding(
-    uint32_t hw_total, uint32_t batch_size, uint32_t padded_shard_width, uint32_t num_cores) {
+    uint32_t /*hw_total*/, uint32_t /*batch_size*/, uint32_t padded_shard_width, uint32_t num_cores) {
     // Covers both even sharding (exact fit) and uneven sharding (B=1; padded)
     return num_cores * padded_shard_width;
 }
@@ -423,7 +423,7 @@ void set_runtime_arguments(
 }  // namespace
 
 ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -564,7 +564,7 @@ ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
 
 void ConvertToHWCProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;

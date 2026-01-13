@@ -11,13 +11,6 @@
 #include <optional>
 #include <vector>
 
-[[deprecated("Use pack_as_bfp8_tiles instead.")]]
-std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
-    tt::stl::Span<const float> fp32_vec,
-    bool row_major_input,
-    bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
-
 template <typename T>
 std::vector<uint32_t> pack_as_bfp8_tiles(
     tt::stl::Span<const T> data,
