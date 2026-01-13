@@ -115,7 +115,7 @@ bool ConstraintIndexData<TargetNode, GlobalNode>::is_valid_mapping(size_t target
     }
     // Check if global_idx is in the restricted list
     const auto& candidates = restricted_global_indices[target_idx];
-    return std::find(candidates.begin(), candidates.end(), global_idx) != candidates.end();
+    return std::binary_search(candidates.begin(), candidates.end(), global_idx);
 }
 
 template <typename TargetNode, typename GlobalNode>
