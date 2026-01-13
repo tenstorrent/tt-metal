@@ -68,6 +68,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
          single_sblock_size] =
             ttnn::split_blocks_for_tilize_wh(
                 available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+
     if (single_sblock_size > 0 && single_block_size % single_sblock_size) {
         TT_FATAL(false, "single_block_size is not divided by single_sblock_size");
     }
@@ -177,7 +178,6 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
         ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
-
     std::vector<uint32_t> writer_compile_time_args = {tt::CBIndex::c_16, num_tiles_2d, third_dim, total_tiles_per_row};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
@@ -187,10 +187,8 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
         WriterDataMovementConfig(writer_compile_time_args));
 
     // compute
-    //
     uint32_t single_sblock_wh = single_block_size * single_block_size / single_sblock_size;
     uint32_t single_sblock_cliff_col_wh = single_block_size_cliff_col * single_block_size / single_sblock_size;
-
     if (!core_range.empty()) {
         CreateKernel(
             program,
