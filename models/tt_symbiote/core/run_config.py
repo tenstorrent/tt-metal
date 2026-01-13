@@ -611,8 +611,6 @@ class SELRun(NormalRun):
 
     @staticmethod
     def module_run(self, *args, **kwds):
-        pass
-
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
         copied_torch_tensors_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
