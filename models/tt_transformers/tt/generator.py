@@ -1931,6 +1931,43 @@ class Generator:
     ## Destructor
 
     def __del__(self):
+        # Release all captured traces to prevent nanobind memory leaks
+        # Traces must be released before closing the mesh device
+        try:
+            # Release prefill traces
+            if hasattr(self, "trace_id_prefill"):
+                for trace_key, trace_id in self.trace_id_prefill.items():
+                    if trace_id is not None:
+                        # Extract model_id from trace_key (format: "{prefill_seq_len}_{model_id}" or "{prefill_seq_len}_{model_id}_{batch_size}")
+                        parts = trace_key.split("_")
+                        model_id = int(parts[1]) if len(parts) >= 2 else 0
+                        try:
+                            ttnn.release_trace(self.model_args[model_id].mesh_device, trace_id)
+                        except Exception:
+                            pass  # Ignore errors during cleanup
+
+            # Release decode traces
+            if hasattr(self, "trace_ids_decode"):
+                for sampling_key, trace_ids_dict in self.trace_ids_decode.items():
+                    if trace_ids_dict is not None:
+                        for model_id, trace_id in trace_ids_dict.items():
+                            if trace_id is not None:
+                                try:
+                                    ttnn.release_trace(self.model_args[model_id].mesh_device, trace_id)
+                                except Exception:
+                                    pass  # Ignore errors during cleanup
+
+            # Release vision traces if present
+            if hasattr(self, "trace_ids"):
+                for model_id, trace_id in self.trace_ids.items():
+                    if trace_id is not None:
+                        try:
+                            ttnn.release_trace(self.mesh_device, trace_id)
+                        except Exception:
+                            pass  # Ignore errors during cleanup
+        except Exception:
+            pass  # Ignore any errors during trace cleanup
+
         # Workaround for issue #19052
         if self.data_parallel > 1:
             for m in self.model:
