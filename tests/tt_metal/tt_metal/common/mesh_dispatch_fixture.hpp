@@ -55,7 +55,7 @@ public:
             mesh_device->mesh_command_queue(), dst_vec, out_buffer, distributed::MeshCoordinate(0, 0));
     }
     int NumDevices() { return this->devices_.size(); }
-    bool IsSlowDispatch() { return this->slow_dispatch_; }
+    bool IsSlowDispatch() const { return this->slow_dispatch_; }
 
 protected:
     tt::ARCH arch_{tt::ARCH::Invalid};
@@ -102,14 +102,14 @@ protected:
 
     void RunTestOnDevice(
         const std::function<void()>& run_function, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         log_info(tt::LogTest, "Running test on device {}.", device->id());
         run_function();
         log_info(tt::LogTest, "Finished running test on device {}.", device->id());
     }
 
     void DetectDispatchMode() {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(tt::LogTest, "Running test using Slow Dispatch");
             this->slow_dispatch_ = true;

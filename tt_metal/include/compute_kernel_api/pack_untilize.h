@@ -61,7 +61,7 @@ template <
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4) {
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b:
-    MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
+    MATH((llk_math_reconfig_remap(true)));
 #endif
     // A workaround for tt-metal#17132. Should be addressed more systematically.
     PACK(
@@ -107,8 +107,7 @@ template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false, false, icb)));  // init must be after configure
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
 }
 
@@ -222,8 +221,8 @@ ALWI void pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
-    PACK((llk_pack_init(ocb)));
     PACK((llk_init_packer_dest_offset_registers<false>()));
+    PACK((llk_pack_init(ocb)));
 
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_untilize_uninit(ocb)));

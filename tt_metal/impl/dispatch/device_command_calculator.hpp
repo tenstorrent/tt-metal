@@ -156,6 +156,12 @@ public:
         this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     }
 
+    void add_prefetch_exec_buf() { this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment); }
+
+    void add_prefetch_exec_buf_end() {
+        this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), this->pcie_alignment);
+    }
+
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
         uint16_t num_sub_cmds,
@@ -163,12 +169,12 @@ public:
         uint32_t packed_write_max_unicast_sub_cmds,
         const bool no_stride = false) {
         static_assert(
-            std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
-            std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
+            std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd> or
+            std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
 
         uint32_t packed_write_max_multicast_sub_cmds =
             get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
-        uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value
+        uint32_t max_num_packed_sub_cmds = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>
                                                ? packed_write_max_unicast_sub_cmds
                                                : packed_write_max_multicast_sub_cmds;
         TT_FATAL(

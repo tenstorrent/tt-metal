@@ -13,22 +13,8 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
-
-
-def _default_mesh_shape() -> ttnn.MeshShape:
-    device_ids = ttnn.get_device_ids()
-    mesh_device_env = os.getenv("MESH_DEVICE")
-    if mesh_device_env == "DUAL":
-        default_mesh_shape = ttnn.MeshShape(8, 8)  # If running on DUAL system
-    elif mesh_device_env == "QUAD":
-        default_mesh_shape = ttnn.MeshShape(16, 8)  # If running on QUAD system
-    elif mesh_device_env == "TG" or len(device_ids) == 32:  # If running on Galaxy system
-        default_mesh_shape = ttnn.MeshShape(4, 8)
-    else:
-        default_mesh_shape = ttnn.MeshShape(1, len(device_ids))
-    return default_mesh_shape
+from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -76,11 +62,11 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--model-path",
         type=str,
-        default=os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"),
+        required=True,
         help="Path to local HF DeepSeek-V3 model (safetensors)",
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
-    p.add_argument("--cache-dir", type=str, default=os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3"))
+    p.add_argument("--cache-dir", type=str, required=True)
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
         "--random-weights", action="store_true", help="Use randomly initialized weights instead of loading safetensors"
@@ -110,15 +96,21 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--generator",
-        choices=["pp", "bp"],
+        choices=["bp"],
         default="bp",
-        help="Select generator implementation: default = bp (batch parallel), pp (pipeline parallel).",
+        help="Select generator implementation: default = bp (batch parallel).",
     )
     p.add_argument(
         "--enable-trace",
         action="store_true",
         default=False,
         help="Enable trace for decode forward pass",
+    )
+    p.add_argument(
+        "--repeat-batches",
+        type=int,
+        default=1,
+        help="Number of times to repeat the generation process.",
     )
     return p
 
@@ -186,21 +178,16 @@ def load_prompts_from_json(json_file_path: str, max_prompts: int | None = None) 
 def validate_model_path(model_path_str: str, require_safetensors: bool, require_tokenizer: bool) -> None:
     """Validate model path for presence of config, tokenizer (optional), and safetensors (optional)."""
     mp = Path(model_path_str)
-    env_hint = (
-        "Set DEEPSEEK_V3_HF_MODEL to a directory containing the model files,\n"
-        "or pass --model-path /path/to/local/hf/model.\n"
-        "Example: export DEEPSEEK_V3_HF_MODEL=/abs/path/to/deepseek-v3"
-    )
 
     if not mp.exists():
-        raise SystemExit(f"Model path does not exist: '{mp}'.\n{env_hint}")
+        raise SystemExit(f"Model path does not exist: '{mp}'.")
     if not mp.is_dir():
-        raise SystemExit(f"Model path is not a directory: '{mp}'.\n{env_hint}")
+        raise SystemExit(f"Model path is not a directory: '{mp}'.")
 
     # Config: always required so AutoConfig can load
     has_config = (mp / "config.json").exists()
     if not has_config:
-        raise SystemExit("config.json not found in the model directory.\n" f"Checked: '{mp}'.\n{env_hint}")
+        raise SystemExit(f"config.json not found in the model directory. Checked: '{mp}'.")
 
     # Tokenizer files: common possibilities (optional in random-weights mode)
     if require_tokenizer:
@@ -211,15 +198,15 @@ def validate_model_path(model_path_str: str, require_safetensors: bool, require_
         if not has_tokenizer:
             raise SystemExit(
                 "Tokenizer files not found in the model directory. Expected one of: "
-                "tokenizer.model, tokenizer.json, spiece.model, tokenizer_config.json.\n"
-                f"Checked: '{mp}'.\n{env_hint}"
+                "tokenizer.model, tokenizer.json, spiece.model, tokenizer_config.json. "
+                f"Checked: '{mp}'."
             )
 
     if require_safetensors:
         # Weights: require at least one safetensors shard
         has_safetensors = len(glob(str(mp / "*.safetensors"))) > 0
         if not has_safetensors:
-            raise SystemExit("No .safetensors files found in the model directory.\n" f"Checked: '{mp}'.\n{env_hint}")
+            raise SystemExit("No .safetensors files found in the model directory. " f"Checked: '{mp}'.")
 
 
 def run_demo(
@@ -236,6 +223,8 @@ def run_demo(
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = False,
+    override_num_layers: int | None = None,
+    repeat_batches: int = 1,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -243,20 +232,31 @@ def run_demo(
         - tokens: List[int] of generated token IDs
         - text: Optional[str] decoded text (only when a tokenizer is present)
     """
-    model_path = str(model_path or os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
-    cache_dir = str(cache_dir or os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3"))
+    if model_path is None:
+        raise SystemExit("Missing model path. Provide --model-path.")
+    model_path = Path(model_path)
+
+    if cache_dir is None:
+        raise SystemExit("Missing cache directory. Provide --cache-dir.")
+    cache_dir = Path(cache_dir)
 
     # Validate model directory per mode
     validate_model_path(
-        model_path,
+        str(model_path),
         require_safetensors=not random_weights,
         require_tokenizer=not random_weights,
     )
 
-    # Open mesh device (reusing test fixture defaults) and set fabric to 1D
-    mesh_shape = _default_mesh_shape()
-    logger.info("Setting fabric config to FABRIC_1D for demo run")
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    requested_system_name = os.getenv("MESH_DEVICE")
+    if requested_system_name is None:
+        raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
+    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
+    logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
+
+    fabric_config = ttnn.FabricConfig.FABRIC_1D
+    logger.info(f"Setting fabric config to {fabric_config} for demo run")
+    ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
+
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
@@ -300,35 +300,28 @@ def run_demo(
         if generator == "bp":
             gen = DeepseekGeneratorDP(
                 mesh_device=mesh_device,
-                model_path=Path(model_path),
-                cache_dir=Path(cache_dir),
+                model_path=model_path,
+                cache_dir=cache_dir,
                 tokenizer=tokenizer,
                 random_weights=bool(random_weights),
                 dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(1 if random_weights else None),
+                override_num_layers=(
+                    override_num_layers if override_num_layers is not None else (1 if random_weights else None)
+                ),
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
             )
-        else:  # generator == "pp"
-            if enable_trace:
-                assert False, "Tracing is not supported for pp generator."
-            gen = DeepseekGeneratorPP(
-                mesh_device=mesh_device,
-                model_path=Path(model_path),
-                cache_dir=Path(cache_dir),
-                tokenizer=tokenizer,
-                random_weights=bool(random_weights),
-                dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(1 if random_weights else None),
-                single_layer=(single_layer if random_weights else None),
-            )
         # Build the prompt list
+        pre_tokenized_prompts = None
         if random_weights:
             prompt_list = [""]
         else:
             if token_acc is not None:
-                # Prepare prompt text from reference tokens to align with teacher forcing
-                prompt_list = [token_acc.prepare_ref_tokens(gen.tokenizer)]
+                # Use pre-tokenized tokens directly to avoid re-encoding with chat template.
+                # This ensures the TT model uses the exact same token sequence as the reference.
+                pre_tokenized_prompts = [token_acc.get_prompt_token_ids()]
+                # Still need a placeholder prompt for the generator API
+                prompt_list = [""]
                 # If not overridden, ensure we don't decode past the available ground truth
                 max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
             else:
@@ -342,6 +335,8 @@ def run_demo(
             max_new_tokens=max_new_tokens,
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
+            repeat_batches=repeat_batches,
+            pre_tokenized=pre_tokenized_prompts,
         )
 
         # Process all generations
@@ -352,7 +347,13 @@ def run_demo(
                 result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
             if token_acc is not None and i == 0:  # Only compute accuracy for first generation
                 acc = token_acc.compute_accuracy()
-                result.update({"accuracy_top1": acc.get("top1"), "accuracy_top5": acc.get("top5")})
+                result.update(
+                    {
+                        "accuracy_top1": acc.get("top1"),
+                        "accuracy_top5": acc.get("top5"),
+                        "predicted_tokens": token_acc._pred_tokens,
+                    }
+                )
             results.append(result)
 
         return {"generations": results, "statistics": statistics}

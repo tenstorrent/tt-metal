@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::cnn {
 
 ConvertToHWCDeviceOperation::program_factory_t ConvertToHWCDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::ConvertToHWCProgramFactory{};
 }
 
@@ -30,7 +30,7 @@ void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(
     const auto& C = shape[-2];
 
     TT_FATAL(shape.size() == 4, "Input shape must be rank 4 (was rank {})", shape.size());
-    TT_FATAL(shape[0] == 1 && shape[1] == 1, "Expected input tensor to be shape [1, 1, C, HW] (shape was {})", shape);
+    TT_FATAL(shape[0] == 1, "Expected input tensor to be shape [1, B, C, HW] (shape was {})", shape);
     TT_FATAL(C <= TILE_HEIGHT, "C must be less than or equal to 32 (was {})", C);
 
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Input tensor must be in row-major layout");
@@ -48,7 +48,7 @@ void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t ConvertToHWCDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& shape = tensor_args.input.logical_shape();
-    const int B = shape[0];
+    const int B = shape[1];
     const int C = shape[2];
     const int HW = shape[3];
 
@@ -57,7 +57,7 @@ spec_return_value_t ConvertToHWCDeviceOperation::compute_output_specs(
     const auto output_channels = tt::round_up(C, alignment_elements);
 
     return TensorSpec(
-        Shape({B, 1, HW, output_channels}),
+        Shape({1, 1, B * HW, output_channels}),
         TensorLayout(args.dtype, PageConfig(Layout::ROW_MAJOR), args.memory_config));
 }
 
@@ -72,14 +72,21 @@ tt::stl::hash::hash_t ConvertToHWCDeviceOperation::compute_program_hash(
         tt::stl::hash::type_hash<ConvertToHWCDeviceOperation>, args, tensor_args);
 }
 
-std::tuple<ConvertToHWCDeviceOperation::operation_attributes_t, ConvertToHWCDeviceOperation::tensor_args_t>
-ConvertToHWCDeviceOperation::invoke(const Tensor& input, const MemoryConfig& memory_config, const DataType& dtype) {
-    return {
-        operation_attributes_t{
-            .memory_config = memory_config,
-            .dtype = dtype,
-        },
-        tensor_args_t{.input = input}};
+}  // namespace ttnn::operations::experimental::cnn
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::cnn::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
+    const Tensor& input, const MemoryConfig& memory_config, const DataType& dtype) {
+    using OperationType = ttnn::operations::experimental::cnn::ConvertToHWCDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .memory_config = memory_config,
+        .dtype = dtype,
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::cnn
+}  // namespace ttnn::prim

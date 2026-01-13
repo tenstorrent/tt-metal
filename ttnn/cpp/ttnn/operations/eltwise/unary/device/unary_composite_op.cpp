@@ -160,8 +160,12 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
         }
         result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
         {
-            { result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result); }
-            { result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result); }
+            {
+                result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result);
+            }
+            {
+                result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result);
+            }
         }
     }
     return result;
@@ -190,16 +194,11 @@ Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_
     return result;
 }
 
-Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
-    // x / (1.0f + exp(-x))
-    return ttnn::silu(a);
-}
-
 // Function variance of whole tensor.
 // Tensor variance(const Tensor& y,const Tensor& mean_y);
 Tensor _variance_impl(
     const Tensor& y,
-    const Tensor& mean_y,
+    const Tensor& /*mean_y*/,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
     ttnn::SmallVector<int> dims = {2, 3};
@@ -305,12 +304,10 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
             max.has_value() ? std::get<int32_t>(max.value())
                             : 16775716;  // max_val and min_val will be updated once unary infra supports int32 scalar.
         return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
-    } else {
-        // All scalars are float (or null)
-        float min_val = min.has_value() ? std::get<float>(min.value()) : std::numeric_limits<float>::lowest();
-        float max_val = max.has_value() ? std::get<float>(max.value()) : std::numeric_limits<float>::max();
-        return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
-    }
+    }  // All scalars are float (or null)
+    float min_val = min.has_value() ? std::get<float>(min.value()) : std::numeric_limits<float>::lowest();
+    float max_val = max.has_value() ? std::get<float>(max.value()) : std::numeric_limits<float>::max();
+    return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
 }
 
 Tensor ExecuteUnaryCompositeClamp::invoke(
@@ -318,13 +315,14 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     std::optional<Tensor> min,
     std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& output_tensor) {
+    const std::optional<Tensor>& /*output_tensor*/) {
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         return ttnn::where(
             ttnn::ge(a, min.value(), std::nullopt, output_memory_config), a, min.value(), output_memory_config);
-    } else if (!min.has_value()) {
+    }
+    if (!min.has_value()) {
         return ttnn::where(
             ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
     }
@@ -440,7 +438,7 @@ Tensor _swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryCon
 
     std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
 
-    Tensor swish_b = _swish(ab[1], output_mem_config);
+    Tensor swish_b = ttnn::swish(ab[1], output_mem_config);
     Tensor swiglu_result = ttnn::multiply(ab[0], swish_b, std::nullopt, output_mem_config);
     return swiglu_result;
 }
@@ -498,40 +496,6 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
     }
     fact_val *= pos_neg;
     return ttnn::multiply(temp, fact_val, std::nullopt, output_mem_config);
-}
-
-// logit(input, eps)=log(input / 1 - input)
-Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
-    float t1m_eps = 1 - eps;
-    Tensor logit_input = ttnn::where(
-        ttnn::lt(input_a, eps, std::nullopt, output_mem_config),
-        eps,
-        ttnn::where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a));
-    Tensor linput_m1 = ttnn::rsub(logit_input, 1.0f, std::nullopt, output_mem_config);
-    Tensor log_input =
-        ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
-    linput_m1.deallocate();
-    Tensor t_inf = ttnn::multiply(
-        ttnn::sign(input_a, output_mem_config), tt::tt_metal::hal::get_inf(), std::nullopt, output_mem_config);
-    Tensor logit_result;
-    if (eps == 0.0 || eps == 1.0) {
-        logit_result = ttnn::where(
-            ttnn::eqz(logit_input, output_mem_config),
-            t_inf,
-            ttnn::where(
-                ttnn::eq(logit_input, 1.0f, std::nullopt, output_mem_config),
-                tt::tt_metal::hal::get_inf(),
-                ttnn::log(log_input, true, output_mem_config)));
-    } else {
-        logit_result = ttnn::where(
-            ttnn::eq(logit_input, 1.0f, std::nullopt, output_mem_config),
-            t_inf,
-            ttnn::where(
-                ttnn::ltz(log_input, output_mem_config),
-                tt::tt_metal::hal::get_nan(),
-                ttnn::log(log_input, true, output_mem_config)));
-    }
-    return logit_result;
 }
 
 // // tanhshrink(x) = x - tanh(x)

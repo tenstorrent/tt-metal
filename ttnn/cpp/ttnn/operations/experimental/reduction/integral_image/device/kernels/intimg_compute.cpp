@@ -20,6 +20,8 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 
+#include "compute_kernel_api/bcast.h"
+
 #include "common.hpp"
 
 namespace {
@@ -33,14 +35,12 @@ struct IntImgComputeCTAs {
     const uint32_t cumsum_stage_2_cb;
     const uint32_t output_cb;
     const uint32_t axis_2_buffer_cb;    // covers entire propagation
-    const uint32_t axis_3_buffer_0_cb;  // each tile is spawned from broadcasting the last row of
-                                        // upper block across all rows of a given tile - for the time being, their
-                                        // spawning is forced to be done in the writer kernel.
-    const uint32_t axis_3_buffer_1_cb;  // dual channel communication with the writer kernel is comprehensive and
-                                        // properly synchronizes writer and compute kernels.
+    const uint32_t axis_3_buffer_cb;    // each tile is spawned from broadcasting the last row of
+                                        // upper block across all rows of a given tile using `add_bcast_rows`.
+
     const uint32_t tile_height;
     const uint32_t tile_width;
-    const uint32_t block_depth;   // usually 32
+    const uint32_t block_depth;
     const uint32_t num_channels;  // axis 4/4
     const uint32_t input_height;  // axis 3/4
     const uint32_t input_depth;   // axis 2/4
@@ -51,13 +51,24 @@ struct IntImgComputeCTAs {
 
 FORCE_INLINE constexpr IntImgComputeCTAs get_ctas() {
     return {
-        get_compile_time_arg_val(0),  get_compile_time_arg_val(1),  get_compile_time_arg_val(2),
-        get_compile_time_arg_val(3),  get_compile_time_arg_val(4),  get_compile_time_arg_val(5),
-        get_compile_time_arg_val(6),  get_compile_time_arg_val(7),  get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),  get_compile_time_arg_val(10), get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12), get_compile_time_arg_val(13), get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15), get_compile_time_arg_val(16), get_compile_time_arg_val(17),
-        get_compile_time_arg_val(18),
+        get_compile_time_arg_val(0),
+        get_compile_time_arg_val(1),
+        get_compile_time_arg_val(2),
+        get_compile_time_arg_val(3),
+        get_compile_time_arg_val(4),
+        get_compile_time_arg_val(5),
+        get_compile_time_arg_val(6),
+        get_compile_time_arg_val(7),
+        get_compile_time_arg_val(8),
+        get_compile_time_arg_val(9),
+        get_compile_time_arg_val(10),
+        get_compile_time_arg_val(11),
+        get_compile_time_arg_val(12),
+        get_compile_time_arg_val(13),
+        get_compile_time_arg_val(14),
+        get_compile_time_arg_val(15),
+        get_compile_time_arg_val(16),
+        get_compile_time_arg_val(17),
     };
 }
 
@@ -68,7 +79,7 @@ FORCE_INLINE void cumsum_cube_axis_2(
     uint32_t cb_cumsum_stage_0,
     uint32_t cb_axis_2_buffer,
     bool save_last_tile,
-    uint32_t block_depth = 32) {
+    uint32_t block_depth) {
     ReadCBGuard start_cb_read_guard{cb_start, ONE_TILE};
 
     bool enable_reload = false;
@@ -124,8 +135,7 @@ FORCE_INLINE void cumsum_cube_axis_2(
     cb_pop_front(cb_acc, ONE_TILE);
 }
 
-FORCE_INLINE void cumsum_cube_axis_3(
-    uint32_t cb_cumsum_stage_wip, uint32_t cb_cumsum_output, uint32_t block_depth = 32) {
+FORCE_INLINE void cumsum_cube_axis_3(uint32_t cb_cumsum_stage_wip, uint32_t cb_cumsum_output, uint32_t block_depth) {
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard read_cumsum_guard{cb_cumsum_stage_wip, ONE_TILE};
         WriteCBGuard cumsum_output_write_guard{cb_cumsum_output, ONE_TILE};
@@ -151,7 +161,7 @@ FORCE_INLINE void propagate_tile_into_cube(
     uint32_t cb_cumsum_stage_a,
     uint32_t cb_cumsum_stage_b,
     bool save_last_tile,
-    uint32_t block_depth = 32) {
+    uint32_t block_depth) {
     cb_wait_front(cb_axis_2_buffer, ONE_TILE);
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard cb_cumsum_stage_0_guard{cb_cumsum_stage_a, ONE_TILE};
@@ -182,7 +192,7 @@ FORCE_INLINE void propagate_tile_into_cube(
 }
 
 FORCE_INLINE void get_and_propagate_adder_cube(
-    uint32_t cb_cumsum_stage_X, uint32_t cb_axis_3_buffer_read, uint32_t cb_output, uint32_t block_depth = 32) {
+    uint32_t cb_cumsum_stage_X, uint32_t cb_axis_3_buffer_read, uint32_t cb_output, uint32_t block_depth) {
     // there is the necessity to receive a block
 
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
@@ -191,8 +201,12 @@ FORCE_INLINE void get_and_propagate_adder_cube(
         WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};
         tile_regs_acquire();
 
-        add_tiles_init(cb_cumsum_stage_X, cb_output);
-        add_tiles(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG);
+        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
+
+        constexpr uint32_t LAST_ROW_INDEX = TILE_HEIGHT - 1;
+
+        add_tiles_bcast_rows(
+            cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG, LAST_ROW_INDEX);
 
         tile_regs_wait();
         tile_regs_commit();
@@ -232,7 +246,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 // axis 3/4's propagation
                 cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.cumsum_stage_2_cb, block_depth);
                 get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
+                    ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_cb, ctas.output_cb, block_depth);
             } else {
                 cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.output_cb, block_depth);
             }
@@ -241,7 +255,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 // axis 3/4's propagation
                 cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.cumsum_stage_1_cb, block_depth);
                 get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
+                    ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_cb, ctas.output_cb, block_depth);
             } else {
                 cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.output_cb, block_depth);
             }
@@ -256,8 +270,8 @@ namespace NAMESPACE {
 void MAIN {
     constexpr auto ctas{get_ctas()};
 
-    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_height);
 
     for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
         perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);

@@ -15,7 +15,7 @@ using namespace tt::constants;
 using namespace tt;
 
 NLPConcatHeadsProgramFactory::cached_program_t NLPConcatHeadsProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& a = tensor_args.input;
@@ -207,14 +207,14 @@ NLPConcatHeadsProgramFactory::cached_program_t NLPConcatHeadsProgramFactory::cre
 
 void NLPConcatHeadsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
 
     if (shared_vars.in_sharded) {
         UpdateDynamicCircularBufferAddress(program, shared_vars.cb_src0, *src_buffer);

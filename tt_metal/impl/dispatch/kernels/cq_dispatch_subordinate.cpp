@@ -11,8 +11,8 @@
 //  - CQ_DISPATCH_CMD_WAIT: Wait for workers to complete and reset wait count
 //    and instead need a unicast for the go signal
 
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 

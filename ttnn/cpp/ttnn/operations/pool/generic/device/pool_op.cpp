@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/math.hpp>
 #include <utility>
@@ -22,7 +23,7 @@ void validate_pool2d(
     const Pool2DType pool_type,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const MemoryConfig& out_mem_config,
-    const std::optional<const int32_t> divisor_override,
+    const std::optional<const int32_t> /*divisor_override*/,
     const bool return_indices,
     const Layout& output_layout) {
     // check the input tensor
@@ -47,8 +48,8 @@ void validate_pool2d(
         auto kernel_h = sliding_window_config.window_hw.first;
         auto kernel_w = sliding_window_config.window_hw.second;
         TT_FATAL(
-            kernel_h * kernel_w <= 9,
-            "only kernel sizes less than or equal to 9 are supported, got {}x{}",
+            kernel_h * kernel_w <= 32,
+            "only kernel sizes less than or equal to 32 are supported, got {}x{}",
             kernel_h,
             kernel_w);
 
@@ -94,10 +95,10 @@ void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
-    const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    auto& sliding_window_config = op_attr.sliding_window_config_;
-    auto& out_mem_config = op_attr.memory_config_;
-    auto& output_dtype = op_attr.output_dtype_;
+    const operation_attributes_t& op_attr, const tensor_args_t& /*tensor*/) {
+    const auto& sliding_window_config = op_attr.sliding_window_config_;
+    const auto& out_mem_config = op_attr.memory_config_;
+    const auto& output_dtype = op_attr.output_dtype_;
 
     uint32_t out_h = sliding_window_config.get_output_shape()[1];
     uint32_t out_w = sliding_window_config.get_output_shape()[2];
@@ -152,9 +153,8 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
         return {
             create_device_tensor(output_spec_data, tensor.input_tensor_.device()),
             create_device_tensor(output_spec_ind, tensor.input_tensor_.device())};
-    } else {
-        return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
     }
+    return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
 }
 
 tt::stl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
@@ -210,10 +210,13 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t
     return result;
 }
 
-std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke(
+}  // namespace ttnn::operations::pool
+
+namespace ttnn::prim {
+std::vector<ttnn::Tensor> pool2d(
     const Tensor& input_tensor,
-    const sliding_window::SlidingWindowConfig& sliding_window_config,
-    Pool2DType pool_type,
+    const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
+    ttnn::operations::pool::Pool2DType pool_type,
     DataType output_dtype,
     Layout output_layout,
     MemoryConfig memory_config,
@@ -222,8 +225,9 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     std::optional<int32_t> divisor_override,
     bool return_indices,
     uint32_t memory_used) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::pool::Pool2D;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .sliding_window_config_ = sliding_window_config,
             .pool_type_ = pool_type,
             .output_dtype_ = output_dtype,
@@ -234,7 +238,6 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .divisor_override_ = divisor_override,
             .return_indices_ = return_indices,
             .memory_used = memory_used},
-        tensor_args_t{input_tensor}};
+        OperationType::tensor_args_t{input_tensor});
 }
-
-}  // namespace ttnn::operations::pool
+}  // namespace ttnn::prim

@@ -12,8 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn {
-namespace operations {
+namespace ttnn::operations {
 
 using namespace tt::tt_metal;
 
@@ -180,7 +179,7 @@ template <typename OutputTensors = Tensors>
 auto create_override_runtime_arguments_callback(
     KernelHandle reader_kernel_id, KernelHandle writer_kernel_id, uint32_t num_cores, uint32_t core_h) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
-               const void* operation,
+               const void* /*operation*/,
                Program& program,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
@@ -192,11 +191,10 @@ auto create_override_runtime_arguments_callback(
             {
                 uint32_t rt_idx = 0;
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                for (uint32_t idx = 0; idx < input_tensors.size(); idx++) {
-                    runtime_args[rt_idx++] = input_tensors.at(idx).buffer()->address();
+                for (const auto& input_tensor : input_tensors) {
+                    runtime_args[rt_idx++] = input_tensor.buffer()->address();
                 }
-                for (uint32_t idx = 0; idx < optional_input_tensors.size(); idx++) {
-                    const auto& optional_input_tensor = optional_input_tensors.at(idx);
+                for (const auto& optional_input_tensor : optional_input_tensors) {
                     runtime_args[rt_idx++] =
                         optional_input_tensor.has_value() ? optional_input_tensor.value().buffer()->address() : 0;
                 }
@@ -223,7 +221,7 @@ auto create_override_runtime_arguments_callback(
     uint32_t core_h,
     const CallbackArgMap& arg_map) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, arg_map, num_cores, core_h](
-               const void* operation,
+               const void* /*operation*/,
                Program& program,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
@@ -277,5 +275,4 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Shape&
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(
     const ttnn::Shape& shape, uint32_t dim);
 
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations

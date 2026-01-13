@@ -65,7 +65,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     Program program{};
 
     // todo maybe, subdevice
-    auto mesh_device = topk_tensor.device();
+    auto* mesh_device = topk_tensor.device();
     const auto grid = mesh_device->compute_with_storage_grid_size();
     // CoreCoord grid = {1,1};
 
@@ -229,7 +229,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
 void MoeExpertTokenRemapDeviceOperation::Multicore::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& output_mapping_tensor = tensor_return_value.at(0);
@@ -244,9 +244,9 @@ void MoeExpertTokenRemapDeviceOperation::Multicore::override_runtime_arguments(
             range.end_coord());
 
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
-        auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
-        auto& utilized_cores = shared_variables.utilized_cores;
+        const auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
+        const auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
+        const auto& utilized_cores = shared_variables.utilized_cores;
 
         for (const auto& c : utilized_cores) {
             auto& reader_runtime_args = GetRuntimeArgs(program, ternary_reader_kernel_id, c);

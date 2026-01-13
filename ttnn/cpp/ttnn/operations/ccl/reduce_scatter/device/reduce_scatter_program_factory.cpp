@@ -11,7 +11,18 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+
+// Import functions from the new namespace
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    build_line_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    build_ring_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    ring_reduce_scatter_minimal_async_helper_override_runtime_arguments;
 
 namespace ttnn::operations::ccl {
 
@@ -24,7 +35,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     // create semaphores
@@ -62,13 +73,13 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
     tt::tt_metal::Program program{};
 
     // Get mesh and axis related information
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     uint32_t target_ring_size =
         ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
 
@@ -120,17 +131,18 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         barrier_semaphore,
         false,  // since we don't have a persistent intermediate buffer option, this must be false
         operation_attributes.subdevice_id,
-        no_fuse,       // never fusing with this
-        std::nullopt,  // use chunks per sync decision making tree
-        std::nullopt,  // use num workers per link decision making tree
-        std::nullopt,  // use num buffers per channel decision making tree
+        no_fuse,  // never fusing with this
+        operation_attributes.chunks_per_sync,
+        operation_attributes.num_workers_per_link,
+        operation_attributes.num_buffers_per_channel,
         first_coord);  // first core in the subdevice is our offset as we don't use this version for fusions
 
-    return {
-        std::move(program),
-        {.multidevice_semaphores = multidevice_semaphores,
-         .barrier_semaphore = barrier_semaphore,
-         .program_artifacts = reduce_scatter_program_artifacts}};
+    shared_variables_t shared_vars{
+        .multidevice_semaphores = multidevice_semaphores,
+        .barrier_semaphore = barrier_semaphore,
+        .program_artifacts = reduce_scatter_program_artifacts};
+
+    return {std::move(program), std::move(shared_vars)};
 }
 
 void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_arguments(

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -19,7 +19,7 @@ using namespace tt::constants;
 UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& /*output_tensor*/) {
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
     const auto update_idx = operation_attributes.update_idx;
@@ -149,8 +149,8 @@ UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgram
             .set_page_size(output_cb_index, cache_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = cache_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = cache_tensor.buffer();
 
     const uint32_t u_range = std::min(static_cast<uint32_t>(32), Bcache);
     const uint32_t u_count = u_range / granularity;
@@ -291,7 +291,7 @@ void UpdateCacheMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& /*output_tensor*/) {
     auto& program = cached_program.program;
     const auto Wbytes = cached_program.shared_variables.Wbytes;
     const auto Wt = cached_program.shared_variables.Wt;
@@ -305,9 +305,9 @@ void UpdateCacheMultiCoreProgramFactory::override_runtime_arguments(
     uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
     uint32_t cache_tile_idx = update_idx / TILE_HEIGHT * Wt;
 
-    auto src_buffer = tensor_args.input.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
 
-    auto dst_buffer = tensor_args.cache.buffer();
+    auto* dst_buffer = tensor_args.cache.buffer();
 
     if (tensor_args.input.is_sharded()) {
         UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);

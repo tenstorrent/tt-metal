@@ -3,9 +3,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.h>
+#include <cassert>
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -47,7 +47,7 @@ using namespace tt::test_utils::df;
 
 class N300TestDevice {
 public:
-    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()) {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
@@ -82,7 +82,7 @@ public:
     size_t num_devices_;
 
 private:
-    bool device_open;
+    bool device_open{false};
 };
 
 struct ChipSenderReceiverEthCore {
@@ -91,8 +91,8 @@ struct ChipSenderReceiverEthCore {
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device0,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device1,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device0*/,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device1*/,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,
@@ -142,7 +142,7 @@ void run(
     CoreCoord eth_receiver_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
-    std::size_t max_channels_per_direction) {
+    std::size_t /*max_channels_per_direction*/) {
     uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto rt_args = [&]() -> std::vector<uint32_t> {

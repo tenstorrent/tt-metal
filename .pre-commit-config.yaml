@@ -45,9 +45,14 @@ repos:
       args: ["--style=file"]
 - repo: local
   hooks:
-    - id: validate-metalium-api
-      name: validate-metalium-public-apis
-      entry: python3 scripts/validate_metalium_api.py tt_metal/api
+    - id: validate-metalium-includes
+      name: validate-metalium-includes
+      entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
+      language: system
+      pass_filenames: false
+    - id: validate-metalium-deprecation
+      name: validate-metalium-deprecation
+      entry: python3 scripts/validate_api/validate_deprecation.py tt_metal/api origin/main
       language: system
       pass_filenames: false
 - repo: local
@@ -57,6 +62,14 @@ repos:
       entry: python3 scripts/validate_no_global_torch_imports.py
       language: system
       pass_filenames: false
+- repo: local
+  hooks:
+    - id: block-ttnn-pybind-changes
+      name: Prevent edits to frozen pybind11 sources under ttnn
+      entry: python3 scripts/block_ttnn_pybind_changes.py
+      language: system
+      pass_filenames: true
+      files: ^ttnn/
 - repo: local
   hooks:
     - id: convert-notebooks-to-py

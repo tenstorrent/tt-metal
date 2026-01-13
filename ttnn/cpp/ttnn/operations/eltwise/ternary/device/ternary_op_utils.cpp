@@ -149,28 +149,22 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
         case KernelName::ReaderNoBcastTTT:
         case KernelName::ReaderOuterBcastTTT:
             return fmt::format(dataflow, root, "ternary_reader_nosubtilebcast_ttt.cpp");
-        case KernelName::ReaderNoBcastTST: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
+        case KernelName::ReaderNoBcastTST:
         case KernelName::ReaderNoBcastTTS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
-        case KernelName::ReaderOuterBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_outer_bcast.cpp");
+        case KernelName::ReaderOuterBcastTTS:
         case KernelName::ReaderOuterBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_outer_bcast.cpp");
-        case KernelName::ReaderScalarBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
+        case KernelName::ReaderScalarBcastTTS:
         case KernelName::ReaderScalarBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
         case KernelName::ReaderScalarBcastTTT: return fmt::format(dataflow, root, "ternary_reader_scalar_ttt.cpp");
         case KernelName::ReaderColBcastTTT: return fmt::format(dataflow, root, "ternary_reader_colbcast_ttt.cpp");
-        case KernelName::ReaderColBcastTTS: return fmt::format(dataflow, root, "tts_tst_reader_col_bcast.cpp");
+        case KernelName::ReaderColBcastTTS:
         case KernelName::ReaderColBcastTST: return fmt::format(dataflow, root, "tts_tst_reader_col_bcast.cpp");
         case KernelName::ReaderRowBcastTTT: return fmt::format(dataflow, root, "ternary_reader_rowbcast_ttt.cpp");
         case KernelName::ReaderRowBcastTST:
         case KernelName::ReaderRowBcastTTS: return fmt::format(dataflow, root, "tts_tst_reader_row_bcast.cpp");
-        case KernelName::WriterNoBcastTernary: return fmt::format(dataflow, root, "ternary_writer_nobcast.cpp");
-
+        case KernelName::WriterNoBcastTernary:
         case KernelName::WriterNoBcast:
-            return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                   "writer_unary_interleaved_start_id.cpp";
-        case KernelName::WriterColBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                   "writer_unary_interleaved_start_id.cpp";
-
+        case KernelName::WriterColBcastTTT: return fmt::format(dataflow, root, "ternary_writer_nobcast.cpp");
         case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "ternary_sfpu_no_bcast_ttt.cpp");
         case KernelName::ComputeBcastTTT: return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_ttt.cpp");
         case KernelName::ComputeRowBcastTTT: return fmt::format(compute, root, "ternary_sfpu_row_bcast_ttt.cpp");
@@ -496,6 +490,37 @@ TernaryBroadcastType get_broadcast_type(
     }
 
     return TernaryBroadcastType::INVALID_BCAST;
+}
+
+tt::tt_metal::ShardSpec adjust_to_shape(
+    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+    auto ret = shard_spec;
+
+    // Calculate volume of all dimensions EXCEPT the last (width)
+    // This is the "collapsed height" for sharding purposes
+    uint32_t from_volume_except_width = 1;
+    uint32_t to_volume_except_width = 1;
+
+    const int rank = std::max(from_shape.rank(), to_shape.rank());
+
+    // Accumulate all dimensions except the last
+    for (int i = 0; i < rank - 1; ++i) {
+        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
+        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
+        from_volume_except_width *= from_dim;
+        to_volume_except_width *= to_dim;
+    }
+
+    // Get width dimensions
+    uint32_t from_width = from_shape[-1];
+    uint32_t to_width = to_shape[-1];
+
+    // Adjust shard shape based on full volume ratios
+    TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
+    TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
+    return ret;
 }
 
 }  // namespace ttnn::operations::ternary

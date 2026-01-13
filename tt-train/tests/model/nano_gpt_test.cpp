@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <core/ttnn_all_includes.hpp>
+#include <fstream>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
@@ -270,7 +271,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
         // synchronize gradients for multi-device case, no-op if single device
         auto parameters = model->parameters();
         if (!use_tensor_parallel) {
-            ttml::core::distributed::synchronize_parameters(parameters);
+            ttml::core::distributed::synchronize_gradients(parameters);
         }
 
         optimizer->step();

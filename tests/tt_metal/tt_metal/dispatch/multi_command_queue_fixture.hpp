@@ -36,7 +36,7 @@ protected:
         }
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
+        auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
         const ChipId device_id =
@@ -50,7 +50,7 @@ protected:
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
@@ -114,7 +114,7 @@ class UnitMeshMultiCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         this->slow_dispatch_ = false;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
@@ -131,7 +131,7 @@ protected:
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
-        auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
+        auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
         if (enable_remote_chip or

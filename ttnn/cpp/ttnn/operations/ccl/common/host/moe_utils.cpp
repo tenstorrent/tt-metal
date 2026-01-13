@@ -129,7 +129,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
 
     auto applicable_to_coord = [&](const MeshCoordinate& coord,
                                    size_t cluster_axis,
-                                   size_t axis_size,
+                                   size_t /*axis_size*/,
                                    tt::tt_fabric::RoutingDirection direction) -> bool {
         auto boundary_mode = detail::get_boundary_mode(topology);
         int offset = positive_direction(direction) ? 1 : -1;
@@ -143,7 +143,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         // TODO: remove usage of get_device, need api to return correct routing planes accounting for fast dispatch
         // usage should only be active for T3K
         if (mesh_device.is_local(coord)) {
-            auto device = mesh_device.get_device(coord);
+            auto* device = mesh_device.get_device(coord);
             bool is_mmio_capable = device->is_mmio_capable();
             is_mesh_mmio_capable &= is_mmio_capable;
             log_debug(tt::LogOp, "mesh_coordinate: {}, is_mmio_capable: {}", coord, is_mmio_capable);

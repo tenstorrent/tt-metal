@@ -185,3 +185,47 @@ def test_addcmul_with_bcast(device, tor_dtype, ttnn_dtype, hc, ht, hf, wc, wt, w
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+@pytest.mark.parametrize(
+    "value",
+    [
+        1.0,
+        -0.5,
+    ],
+)
+@pytest.mark.parametrize(
+    "a_shape, b_shape, c_shape",
+    [
+        ((1, 2, 1088, 1024), (1, 2, 1, 1024), (1, 2, 1088, 1024)),  # Composite
+        ((1, 2, 1088, 1024), (1, 2, 1, 1), (1, 2, 1088, 1024)),  # Composite
+        ((4, 2, 1088, 1024), (1, 2, 1088, 1024), (1, 1, 1088, 1024)),  # HLK
+    ],
+)
+def test_addcmul_with_bcast_bf8b(device, torch_dtype, ttnn_dtype, a_shape, b_shape, c_shape, value):
+    """
+    Test addcmul: Block format datatype inputs with subtile broadcast use composite Addcmul implementation.
+    """
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn(a_shape, dtype=torch_dtype)
+    torch_input_tensor1 = torch.randn(b_shape, dtype=torch_dtype)
+    torch_input_tensor2 = torch.randn(c_shape, dtype=torch_dtype)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(torch_input_tensor2, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.addcmul(input_tensor, input_tensor1, input_tensor2, value=value)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    golden_fn = ttnn.get_golden_function(ttnn.addcmul)
+    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, value=value)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

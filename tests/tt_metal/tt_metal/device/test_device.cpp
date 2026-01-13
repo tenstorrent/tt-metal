@@ -4,8 +4,8 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -60,7 +60,7 @@ bool l1_ping(
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& grid_size) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (int y = 0; y < grid_size.y; y++) {
@@ -95,7 +95,7 @@ bool dram_ping(
     const size_t& byte_size,
     const size_t& dram_byte_address,
     const unsigned int& num_channels) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (unsigned int channel = 0; channel < num_channels; channel++) {
@@ -212,7 +212,7 @@ TEST_F(MeshDeviceFixture, TensixPingIllegalL1Cores) {
 TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         uint32_t num_l1_banks = mesh_device->allocator()->get_num_banks(BufferType::L1);
         std::vector<uint32_t> host_input(1);
         std::map<uint32_t, uint32_t> bank_id_to_value;
@@ -288,7 +288,7 @@ TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
 TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     auto mesh_device = this->devices_.at(0);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -344,7 +344,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     CoreCoord core{0, 0};
     const auto& mesh_device = devices_.at(0);
-    const auto device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->get_devices()[0];
 
     uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     std::vector<uint32_t> random_vec(1, 0xDEADBEEF);
@@ -393,7 +393,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     std::map<CoreCoord, CoreCoord> logical_to_virtual_map;
 
     auto mesh_device = this->devices_.at(0);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -520,26 +520,19 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
             MetalContext::instance().hal().get_write_alignment(HalMemType::HOST),
         0);
 
-    // Get the pinned memory address that the device can write to
-    uint64_t pinned_memory_device_addr = pinned_memory->get_device_addr(device->id());
-
     // Write source data to L1
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
 
     // Create program and kernel for mesh workload
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    // Compute PCIe NOC0 XY encoding for the MMIO device and split 64-bit PCIe address
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
-    const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
-    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
-    TT_ASSERT(!pcie_cores.empty());
-    auto pcie_xy = pcie_cores.front();
-    uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
+    auto noc_addr = pinned_memory->get_noc_addr(device->id());
+    ASSERT_TRUE(noc_addr.has_value());
+    ASSERT_EQ(noc_addr.value().device_id, device->id());
 
-    uint32_t dst_lo = static_cast<uint32_t>(pinned_memory_device_addr & 0xFFFFFFFFull);
-    uint32_t dst_hi = static_cast<uint32_t>(pinned_memory_device_addr >> 32);
+    uint32_t dst_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull);
+    uint32_t dst_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32);
+    uint32_t pcie_xy_enc = noc_addr.value().pcie_xy_enc;
 
     CreateKernel(
         program,

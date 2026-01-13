@@ -18,10 +18,7 @@
 
 #include <tracy/Tracy.hpp>
 
-namespace tt {
-
-namespace tt_metal {
-namespace operation {
+namespace tt::tt_metal::operation {
 
 using Hash = tt::stl::hash::hash_t;
 
@@ -162,9 +159,11 @@ struct OpPerformanceModelGeneral {
             int size_bytes = t.physical_volume() * t.element_size();
             if (t.memory_config().is_dram()) {
                 return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
-            } else if (t.memory_config().is_l1()) {
+            }
+            if (t.memory_config().is_l1()) {
                 return 1.0f;  // TODO: figure out better modelling scheme for L1->L1 Transfers
-                // return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
+                              // return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024 * 1000 * 1000 *
+                              // 1000;
             }
             return 0.0f;
         };
@@ -223,16 +222,13 @@ struct OpPerformanceModelGeneral {
     }
 
     static int fidelity_multiplier(MathFidelity f) {
-        if (MathFidelity::LoFi == f) {
-            return 1;
-        } else if (MathFidelity::HiFi2 == f) {
-            return 2;
-        } else if (MathFidelity::HiFi3 == f) {
-            return 3;
-        } else if (MathFidelity::HiFi4 == f) {
-            return 4;
+        switch (f) {
+            case MathFidelity::Invalid: return 0;
+            case MathFidelity::LoFi: return 1;
+            case MathFidelity::HiFi2: return 2;
+            case MathFidelity::HiFi3: return 3;
+            case MathFidelity::HiFi4: return 4;
         }
-
         return 0;
     }
 };
@@ -1000,6 +996,9 @@ public:
         attributes_impl_{other.attributes_impl_} {}
 
     DeviceOperation& operator=(const DeviceOperation& other) {
+        if (this == &other) {
+            return *this;
+        }
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;
@@ -1157,6 +1156,4 @@ using MeshWorkloadWithOptionalOutputTensors = CacheableMeshWorkload<OptionalTens
 
 using Operation = std::variant<DeviceOperation<Tensors>, DeviceOperation<OptionalTensors>, ExternalOperation>;
 
-}  // namespace operation
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::operation

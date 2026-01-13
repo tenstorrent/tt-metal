@@ -187,25 +187,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllToA
     vector<uint32_t> packed_output;
     packed_output.reserve(bytes_per_transaction / sizeof(uint32_t));
 
-    bool pcc = false;
+    bool is_equal = false;
 
     for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
         detail::ReadFromDeviceL1(device, sub_logical_core, sub_l1_base_address, bytes_per_transaction, packed_output);
 
         // Results comparison
-        pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-            packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-        if (!pcc) {
-            log_error(LogTest, "PCC Check failed");  // TO-DO: Print the failed core's coordinates here
+        is_equal = (packed_output == packed_golden);
+        if (!is_equal) {
+            log_error(LogTest, "Equality Check failed");  // TO-DO: Print the failed core's coordinates here
             log_info(LogTest, "Golden vector");
             print_vector<uint32_t>(packed_golden);
             log_info(LogTest, "Output vector");
             print_vector<uint32_t>(packed_output);
-            return pcc;
+            return is_equal;
         }
     }
 
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(
@@ -301,7 +300,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_case_id) {
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -358,7 +357,7 @@ void custom_test(
     uint32_t num_of_transactions,
     uint32_t pages_per_transaction,
     uint32_t num_virtual_channels) {
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
@@ -405,7 +404,7 @@ TO-DO:
 /* ======== All to All ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     uint32_t test_case_id = 300;
 
@@ -424,7 +423,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     uint32_t test_case_id = 301;
 

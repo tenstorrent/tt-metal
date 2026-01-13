@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -42,17 +41,29 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    """
+    Override default device fixture for transpose operation.
+    Transpose with sharded configs can cause dispatch core issues, so we use explicit DispatchCoreConfig.
+    """
+    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
+
+
 def run(
     input_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    output_memory_config,
     dim0,
     dim1,
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 

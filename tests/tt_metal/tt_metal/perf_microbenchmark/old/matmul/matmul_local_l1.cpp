@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
@@ -42,6 +42,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 #define LAUNCH
 

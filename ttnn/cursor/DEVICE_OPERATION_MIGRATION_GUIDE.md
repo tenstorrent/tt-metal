@@ -151,11 +151,11 @@ struct Embeddings {
 
 ```cpp
 struct operation_attributes_t {
-    const MemoryConfig output_mem_config;
-    const bool tilized;
-    const EmbeddingsType embeddings_type;
-    const std::optional<uint32_t> pad_token;
-    const DataType output_dtype;
+    MemoryConfig output_mem_config;
+    bool tilized;
+    EmbeddingsType embeddings_type;
+    std::optional<uint32_t> pad_token;
+    DataType output_dtype;
 };
 ```
 
@@ -183,9 +183,9 @@ struct Embedding {
 
 ```cpp
 struct tensor_args_t {
-    const Tensor& input_tensor_arg;
-    const Tensor& weight_arg;
-    const std::optional<Tensor>& optional_output_tensor;
+    Tensor input_tensor_arg;
+    Tensor weight_arg;
+    std::optional<Tensor> optional_output_tensor;
 };
 ```
 
@@ -608,6 +608,11 @@ Great examples of operations migrated to TMP:
 - `update_cache/`, `fill_cache/`, `fused_update_cache/` all demonstrate mesh workload factory pattern
 - Shows how to handle multiple factory variants (tiled vs row_major for fused_update_cache)
 
+**Send Async operations**: `ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/`
+- Demonstrates another mesh workload factory example
+- PRs:
+  - https://github.com/tenstorrent/tt-metal/pull/33005
+
 ---
 
 ## Building and Testing
@@ -690,5 +695,5 @@ ttnn/cpp/ttnn/operations/<operation>/
 │   └── kernels/                              # Kernel files (if any)
 ├── <operation>.hpp                           # Public API wrapper
 ├── <operation>.cpp                           # Public API implementation
-└── <operation>_pybind.cpp                    # Python bindings (if any)
+└── <operation>_nanobind.cpp                    # Python bindings (if any)
 ```

@@ -34,6 +34,7 @@
 // Do we really want to expose Hal like this?
 // This looks like an API level test
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -54,6 +55,8 @@ enum watcher_features_t {
     SanitizeNOCInlineWriteDram,
     SanitizeNOCLinkedTransaction,
     SanitizeL1Overflow,
+    SanitizeEthSrcL1Overflow,
+    SanitizeEthDestL1Overflow,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -73,22 +76,19 @@ uint32_t get_address_for_test(bool use_eth_core, tt::tt_metal::HalL1MemAddrType 
         const auto idle_eth_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, type);
         if (high_address) {
             return std::max(active_eth_addr, idle_eth_addr);
-        } else {
-            return std::min(active_eth_addr, idle_eth_addr);
         }
-    } else {
-        return hal.get_dev_addr(HalProgrammableCoreType::TENSIX, type);
+        return std::min(active_eth_addr, idle_eth_addr);
     }
+    return hal.get_dev_addr(HalProgrammableCoreType::TENSIX, type);
 }
 
 CoreCoord get_core_coord_for_test(const std::shared_ptr<distributed::MeshBuffer>& buffer) {
     if (buffer->device_local_config().buffer_type == tt_metal::BufferType::L1) {
         return buffer->device()->worker_core_from_logical_core(
             buffer->get_backing_buffer()->allocator()->get_logical_core_from_bank_id(0));
-    } else {
-        auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
-        return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
     }
+    auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
+    return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
 }
 
 void RunTestOnCore(
@@ -111,7 +111,7 @@ void RunTestOnCore(
     Program program = Program();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     CoreCoord virtual_core;
@@ -120,7 +120,13 @@ void RunTestOnCore(
     } else {
         virtual_core = device->worker_core_from_logical_core(core);
     }
-    log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
+    log_info(
+        LogTest,
+        "Running test on device {} {} core {} (virtual core {})...",
+        device->id(),
+        (is_eth_core) ? "eth" : "worker",
+        core.str(),
+        virtual_core.str());
 
     // Set up dram buffers
     uint32_t single_tile_size = 2 * 1024;
@@ -159,28 +165,28 @@ void RunTestOnCore(
 
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel;
+    int noc = 0;
     if (is_eth_core) {
         std::map<std::string, std::string> dram_copy_kernel_defines = {
             {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
         };
+        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .defines = dram_copy_kernel_defines};
+        eth_test_common::set_arch_specific_eth_config(config);
+        noc = static_cast<int>(config.noc);
         dram_copy_kernel = tt_metal::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp",
-            core,
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = dram_copy_kernel_defines});
+            program_, "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp", core, config);
     } else {
         std::map<std::string, std::string> dram_copy_kernel_defines = {
             {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
         };
+        tt_metal::DataMovementConfig config{
+            .processor =
+                (use_ncrisc) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = (use_ncrisc) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
+            .defines = dram_copy_kernel_defines};
         dram_copy_kernel = tt_metal::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor =
-                    (use_ncrisc) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = (use_ncrisc) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
-                .defines = dram_copy_kernel_defines});
+            program_, "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp", core, config);
+        noc = static_cast<int>(config.noc);
     }
 
     // Write to the input buffer
@@ -193,7 +199,9 @@ void RunTestOnCore(
     bool use_inline_dw_write = false;
     bool bad_linked_transaction = false;
     uint32_t l1_overflow_addr = 0;
-    switch(feature) {
+    uint32_t eth_src_overflow_addr_words = 0;
+    uint32_t eth_dest_overflow_addr_words = 0;
+    switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
@@ -215,6 +223,8 @@ void RunTestOnCore(
         case SanitizeNOCInlineWriteDram: use_inline_dw_write = true; break;
         case SanitizeNOCLinkedTransaction: bad_linked_transaction = true; break;
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
+        case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
+        case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -235,7 +245,9 @@ void RunTestOnCore(
          buffer_size,
          use_inline_dw_write,
          bad_linked_transaction,
-         l1_overflow_addr});
+         l1_overflow_addr,
+         eth_src_overflow_addr_words,
+         eth_dest_overflow_addr_words});
 
     // Run the kernel, expect an exception here
     try {
@@ -251,17 +263,16 @@ void RunTestOnCore(
 
     // We should be able to find the expected watcher error in the log as well.
     std::string expected;
-    int noc = (use_ncrisc) ? 1 : 0;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
     std::string risc_name = (is_eth_core) ? "erisc" : " brisc";
     if (use_ncrisc) {
         risc_name = "ncrisc";
     }
-    switch(feature) {
+    switch (feature) {
         case SanitizeNOCAddress:
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write {} "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
                 "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
@@ -271,6 +282,7 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
+                noc,
                 buffer_size,
                 buffer_addr,
                 output_buf_noc_xy.str(),
@@ -333,7 +345,7 @@ void RunTestOnCore(
         } break;
         case SanitizeNOCMailboxWrite: {
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast read {} "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (Local L1 "
                 "overwrites mailboxes).",
                 device->id(),
@@ -343,6 +355,7 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
+                noc,
                 buffer_size,
                 buffer_addr,
                 input_buf_noc_xy.str(),
@@ -366,7 +379,7 @@ void RunTestOnCore(
         } break;
         case SanitizeNOCLinkedTransaction: {
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write {} "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (submitting a "
                 "non-mcast transaction when there's a linked transaction).",
                 device->id(),
@@ -376,6 +389,7 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
+                noc,
                 buffer_size,
                 buffer_addr,
                 output_core_virtual_coords.str(),
@@ -392,8 +406,32 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
-                l1_overflow_addr,
-                1);
+                l1_overflow_addr + sizeof(std::uint32_t),
+                sizeof(std::uint32_t));
+        } break;
+        case SanitizeEthSrcL1Overflow: {
+            expected = fmt::format(
+                "Device {} acteth core(x={:2},y={:2}) virtual(x={:2},y={:2}): erisc core overflowed L1 with access to "
+                "{:#x} "
+                "of length 64 (ethernet send with L1 source overflow).",
+                device->id(),
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                (eth_src_overflow_addr_words << 4));
+        } break;
+        case SanitizeEthDestL1Overflow: {
+            expected = fmt::format(
+                "Device {} acteth core(x={:2},y={:2}) virtual(x={:2},y={:2}): erisc core overflowed L1 with access to "
+                "{:#x} "
+                "of length 64 (ethernet send to core with L1 destination overflow).",
+                device->id(),
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                (eth_dest_overflow_addr_words << 4));
         } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -414,7 +452,7 @@ void RunTestEth(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     watcher_features_t feature) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     if (fixture->IsSlowDispatch()) {
         GTEST_SKIP();
     }
@@ -431,7 +469,7 @@ void RunTestIEth(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     watcher_features_t feature) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     if (fixture->IsSlowDispatch()) {
         GTEST_SKIP();
     }
@@ -446,7 +484,7 @@ void RunTestIEth(
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
 void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;
@@ -598,6 +636,22 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeL1Overflow) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             RunTestEth(fixture, mesh_device, SanitizeL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEthSrcL1Overflow) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTestEth(fixture, mesh_device, SanitizeEthSrcL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEthDestL1Overflow) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTestEth(fixture, mesh_device, SanitizeEthDestL1Overflow);
         },
         this->devices_[0]);
 }

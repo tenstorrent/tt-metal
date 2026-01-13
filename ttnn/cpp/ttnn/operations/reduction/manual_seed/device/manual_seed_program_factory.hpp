@@ -39,7 +39,6 @@ struct ManualSeedSingleSeedSingleCoreProgramFactory {
 struct ManualSeedSingleSeedSetCoresProgramFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-        std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
         std::vector<CoreCoord> cores;
     };
 
@@ -54,7 +53,6 @@ struct ManualSeedSingleSeedSetCoresProgramFactory {
 struct ManualSeedSetSeedsSetCoresProgramFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-        std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
         std::vector<CoreCoord> cores;
     };
 

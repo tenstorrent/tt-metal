@@ -17,8 +17,7 @@
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "tt_metal/common/env_lib.hpp"
 
-namespace tt::tt_metal {
-namespace kernel_size_tests {
+namespace tt::tt_metal::kernel_size_tests {
 
 // Fixture for testing with DEFAULT kernel config buffer size (69KB)
 // Sets worker_l1_size = max_worker_l1_size_ - 69KB, resulting in a 69KB kernel config buffer.
@@ -60,7 +59,7 @@ protected:
     void compute_memory_layout() {
         TT_ASSERT(!devices_.empty() && !devices_[0]->get_devices().empty(), "No devices available for testing");
 
-        auto single_device = devices_[0]->get_devices()[0];
+        auto* single_device = devices_[0]->get_devices()[0];
         unreserved_base_ = single_device->allocator()->get_base_allocator_addr(HalMemType::L1);
         auto l1_base = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
         auto l1_size = hal_.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
@@ -266,7 +265,7 @@ TEST_F(KernelSizeTestBigBuffer, BigKernelExecutionCorrectness) {
     distributed::Finish(device->mesh_command_queue());
 
     // Read the result back directly from L1 using device API
-    auto single_device = device->get_devices()[0];
+    auto* single_device = device->get_devices()[0];
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromDeviceL1(
         single_device,
@@ -279,5 +278,4 @@ TEST_F(KernelSizeTestBigBuffer, BigKernelExecutionCorrectness) {
     EXPECT_EQ(result[0], NUM_ADDS) << "Kernel should have performed " << NUM_ADDS << " additions";
 }
 
-}  // namespace kernel_size_tests
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::kernel_size_tests

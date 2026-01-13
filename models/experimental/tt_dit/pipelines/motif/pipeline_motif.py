@@ -15,6 +15,7 @@ import ttnn
 from diffusers import AutoencoderKL
 from diffusers.image_processor import VaeImageProcessor
 from loguru import logger
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ...encoders.clip.encoder_pair import CLIPTokenizerEncoderPair
 from ...encoders.t5.encoder_pair import T5TokenizerEncoderPair
@@ -58,10 +59,8 @@ class MotifPipeline:
         num_links: int,
         height: int = 1024,
         width: int = 1024,
-        model_checkpoint_path: str = "Motif-Technologies/Motif-Image-6B-Preview",
+        checkpoint_name: str = "Motif-Technologies/Motif-Image-6B-Preview",
     ) -> None:
-        self.timing_collector = None
-
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
         self._height = height
@@ -117,13 +116,14 @@ class MotifPipeline:
 
         logger.info("loading models...")
         checkpoint_path = huggingface_hub.hf_hub_download(
-            repo_id=model_checkpoint_path,
+            repo_id=checkpoint_name,
             filename="motif_image_preview.bin",
             subfolder="checkpoints",
             revision="update_new_ckpt",
         )
 
-        vae_checkpoint = "stabilityai/stable-diffusion-3-medium-diffusers"
+        # vae_checkpoint = "stabilityai/stable-diffusion-3-medium-diffusers"
+        vae_checkpoint = "stabilityai/stable-diffusion-3.5-large"
         self._torch_vae = AutoencoderKL.from_pretrained(vae_checkpoint, subfolder="vae")
         assert isinstance(self._torch_vae, AutoencoderKL)
 
@@ -243,8 +243,12 @@ class MotifPipeline:
         topology=ttnn.Topology.Linear,
         width=1024,
         height=1024,
-        model_checkpoint_path="Motif-Technologies/Motif-Image-6B-Preview",
+        checkpoint_name="Motif-Technologies/Motif-Image-6B-Preview",
+        model_checkpoint_path=None,
     ):
+        if model_checkpoint_path is not None:
+            checkpoint_name = model_checkpoint_path
+            logger.warning(f"DEPRECATED: model_checkpoint_path parameter is deprecated. Use checkpoint_name instead.")
         default_config = {
             (2, 4): {
                 "cfg_config": (2, 0),
@@ -300,7 +304,7 @@ class MotifPipeline:
             num_links=num_links,
             width=width,
             height=height,
-            model_checkpoint_path=model_checkpoint_path,
+            checkpoint_name=checkpoint_name,
         )
 
         return pipeline
@@ -314,7 +318,15 @@ class MotifPipeline:
         self.synchronize_devices()
 
     def run_single_prompt(
-        self, prompt, negative_prompt=None, num_inference_steps=40, cfg_scale=5.0, seed=None, traced=True
+        self,
+        prompt,
+        negative_prompt=None,
+        num_inference_steps=40,
+        cfg_scale=5.0,
+        seed=None,
+        traced=True,
+        profiler=None,
+        profiler_iteration=0,
     ):
         return self.__call__(
             prompt_1=[prompt],
@@ -327,6 +339,8 @@ class MotifPipeline:
             cfg_scale=cfg_scale,
             seed=seed,
             traced=traced,
+            profiler=profiler,
+            profiler_iteration=profiler_iteration,
         )
 
     def __call__(
@@ -345,8 +359,9 @@ class MotifPipeline:
         num_inference_steps: int,
         seed: int | None = None,
         traced: bool = False,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> list[Image.Image]:
-        timer = self.timing_collector.reset() if self.timing_collector else None
         prompt_count = len(prompt_1)
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
@@ -355,11 +370,11 @@ class MotifPipeline:
         assert num_images_per_prompt == 1, "generating multiple images is not supported"
         assert prompt_count == 1, "generating multiple images is not supported"
 
-        with timer.time_section("total") if timer else nullcontext():
+        with profiler("total", profiler_iteration) if profiler else nullcontext():
             cfg_enabled = cfg_scale > 1
             logger.info("encoding prompts...")
 
-            with timer.time_section("total_encoding") if timer else nullcontext():
+            with profiler("encoder", profiler_iteration) if profiler else nullcontext():
                 with self.encoder_reshape(self.encoder_device):
                     prompt_embeds1, pooled_prompt_embeds1, prompt_embeds2, pooled_prompt_embeds2 = self._encode_prompts(
                         prompt_1=prompt_1,
@@ -370,6 +385,8 @@ class MotifPipeline:
                         negative_prompt_3=negative_prompt_3,
                         num_images_per_prompt=num_images_per_prompt,
                         cfg_enabled=cfg_enabled,
+                        profiler=profiler,
+                        profiler_iteration=profiler_iteration,
                     )
 
             logger.info("preparing timesteps...")
@@ -463,64 +480,65 @@ class MotifPipeline:
 
             logger.info("denoising...")
 
-            for i, t in enumerate(tqdm.tqdm(timesteps)):
-                with timer.time_step("denoising_step") if timer else nullcontext():
-                    sigma_difference = sigmas[i + 1] - sigmas[i]
+            with profiler("denoising", profiler_iteration) if profiler else nullcontext():
+                for i, t in enumerate(tqdm.tqdm(timesteps)):
+                    with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
+                        sigma_difference = sigmas[i + 1] - sigmas[i]
 
-                    tt_timestep_list = []
-                    tt_sigma_difference_list = []
-                    for submesh_nr, submesh_device in enumerate(self._submesh_devices):
-                        tt_timestep = ttnn.full(
-                            [1, 1],
-                            fill_value=t,
-                            layout=ttnn.TILE_LAYOUT,
-                            dtype=ttnn.float32,
-                            device=submesh_device if not traced else None,
+                        tt_timestep_list = []
+                        tt_sigma_difference_list = []
+                        for submesh_nr, submesh_device in enumerate(self._submesh_devices):
+                            tt_timestep = ttnn.full(
+                                [1, 1],
+                                fill_value=t,
+                                layout=ttnn.TILE_LAYOUT,
+                                dtype=ttnn.float32,
+                                device=submesh_device if not traced else None,
+                            )
+                            tt_timestep_list.append(tt_timestep)
+
+                            tt_sigma_difference = ttnn.full(
+                                [1, 1],
+                                fill_value=sigma_difference,
+                                layout=ttnn.TILE_LAYOUT,
+                                dtype=ttnn.bfloat16,
+                                device=submesh_device if not traced else None,
+                            )
+                            tt_sigma_difference_list.append(tt_sigma_difference)
+
+                            if t >= 1000 * negative_strategy_switch_time:
+                                ttnn.copy_host_to_device_tensor(
+                                    tt_prompt_embeds1_list[submesh_nr],
+                                    tt_prompt_embeds_device_list[submesh_nr],
+                                )
+                                ttnn.copy_host_to_device_tensor(
+                                    tt_pooled_prompt_embeds1_list[submesh_nr],
+                                    tt_pooled_prompt_embeds_device_list[submesh_nr],
+                                )
+                            else:
+                                ttnn.copy_host_to_device_tensor(
+                                    tt_prompt_embeds2_list[submesh_nr],
+                                    tt_prompt_embeds_device_list[submesh_nr],
+                                )
+                                ttnn.copy_host_to_device_tensor(
+                                    tt_pooled_prompt_embeds2_list[submesh_nr],
+                                    tt_pooled_prompt_embeds_device_list[submesh_nr],
+                                )
+
+                        tt_latents_step_list = self._step(
+                            timestep=tt_timestep_list,
+                            latents=tt_latents_step_list,
+                            cfg_enabled=cfg_enabled,
+                            prompt_embeds=tt_prompt_embeds_device_list,
+                            pooled_prompt_embeds=tt_pooled_prompt_embeds_device_list,
+                            cfg_scale=cfg_scale,
+                            sigma_difference=tt_sigma_difference_list,
+                            traced=traced,
                         )
-                        tt_timestep_list.append(tt_timestep)
-
-                        tt_sigma_difference = ttnn.full(
-                            [1, 1],
-                            fill_value=sigma_difference,
-                            layout=ttnn.TILE_LAYOUT,
-                            dtype=ttnn.bfloat16,
-                            device=submesh_device if not traced else None,
-                        )
-                        tt_sigma_difference_list.append(tt_sigma_difference)
-
-                        if t >= 1000 * negative_strategy_switch_time:
-                            ttnn.copy_host_to_device_tensor(
-                                tt_prompt_embeds1_list[submesh_nr],
-                                tt_prompt_embeds_device_list[submesh_nr],
-                            )
-                            ttnn.copy_host_to_device_tensor(
-                                tt_pooled_prompt_embeds1_list[submesh_nr],
-                                tt_pooled_prompt_embeds_device_list[submesh_nr],
-                            )
-                        else:
-                            ttnn.copy_host_to_device_tensor(
-                                tt_prompt_embeds2_list[submesh_nr],
-                                tt_prompt_embeds_device_list[submesh_nr],
-                            )
-                            ttnn.copy_host_to_device_tensor(
-                                tt_pooled_prompt_embeds2_list[submesh_nr],
-                                tt_pooled_prompt_embeds_device_list[submesh_nr],
-                            )
-
-                    tt_latents_step_list = self._step(
-                        timestep=tt_timestep_list,
-                        latents=tt_latents_step_list,
-                        cfg_enabled=cfg_enabled,
-                        prompt_embeds=tt_prompt_embeds_device_list,
-                        pooled_prompt_embeds=tt_pooled_prompt_embeds_device_list,
-                        cfg_scale=cfg_scale,
-                        sigma_difference=tt_sigma_difference_list,
-                        traced=traced,
-                    )
 
             logger.info("decoding image...")
 
-            with timer.time_section("vae_decoding") if timer else nullcontext():
+            with profiler("vae", profiler_iteration) if profiler else nullcontext():
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
 
@@ -706,21 +724,22 @@ class MotifPipeline:
         negative_prompt_3: list[str | None],
         num_images_per_prompt: int,
         cfg_enabled: bool,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        timer = self.timing_collector
-
         no_negative_prompt = [x is None for x in negative_prompt_1]
         negative_prompt_1 = [x if x is not None else "" for x in negative_prompt_1]
         negative_prompt_2 = [x if x is not None else "" for x in negative_prompt_2]
         negative_prompt_3 = [x if x is not None else "" for x in negative_prompt_3]
 
-        with timer.time_section("text_encoding") if timer else nullcontext():
+        with profiler("text_encoding", profiler_iteration) if profiler else nullcontext():
             pos_prompt_embeds, pos_pooled_prompt_embeds = self._text_encoder.encode(
                 prompt_1,
                 prompt_2,
                 prompt_3,
                 num_images_per_prompt=num_images_per_prompt,
-                timing_collector=timer,
+                profiler=profiler,
+                profiler_iteration=profiler_iteration,
             )
 
             neg_prompt_embeds, neg_pooled_prompt_embeds = self._text_encoder.encode(
@@ -728,7 +747,8 @@ class MotifPipeline:
                 negative_prompt_2,
                 negative_prompt_3,
                 num_images_per_prompt=num_images_per_prompt,
-                timing_collector=timer,
+                profiler=profiler,
+                profiler_iteration=profiler_iteration,
             )
 
         if not cfg_enabled:
@@ -811,12 +831,13 @@ class TextEncoder:
         prompts_3: Iterable[str],
         *,
         num_images_per_prompt: int,
-        timing_collector: TimingCollector | None = None,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        with timing_collector.time_section("clip_encoding") if timing_collector else nullcontext():
+        with profiler("clip_encoding", profiler_iteration) if profiler else nullcontext():
             clip_l, pooled_clip_l = self._clip_l.encode(prompts=prompts_1, num_images_per_prompt=num_images_per_prompt)
             clip_g, pooled_clip_g = self._clip_g.encode(prompts=prompts_2, num_images_per_prompt=num_images_per_prompt)
-        with timing_collector.time_section("t5_encoding") if timing_collector else nullcontext():
+        with profiler("t5_encoding", profiler_iteration) if profiler else nullcontext():
             t5 = self._t5.encode(prompts=prompts_3, num_images_per_prompt=num_images_per_prompt)
 
         clip = torch.cat([clip_l, clip_g], dim=-1)

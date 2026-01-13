@@ -17,22 +17,20 @@
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/device.hpp"
 
-namespace tt::tt_metal::operation {
-
-namespace detail {
+namespace tt::tt_metal::operation::detail {
 
 distributed::MeshDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
-    for (auto& input_tensor : input_tensors) {
+    for (const auto& input_tensor : input_tensors) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             return input_tensor.device_storage().get_device();
         }
     }
-    for (auto& optional_input_tensor : optional_input_tensors) {
+    for (const auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value() and optional_input_tensor->storage_type() == StorageType::DEVICE) {
             return optional_input_tensor->device_storage().get_device();
         }
     }
-    auto device = ttnn::GetDefaultDevice();
+    auto* device = ttnn::GetDefaultDevice();
     TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to operation are on device");
     return device;
 }
@@ -59,8 +57,7 @@ Tensor* get_tensor(T& maybe_tensor) {
     return output_tensor;
 }
 
-}  // namespace detail
-}  // namespace tt::tt_metal::operation
+}  // namespace tt::tt_metal::operation::detail
 
 namespace tt::tt_metal::operation {
 

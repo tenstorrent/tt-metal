@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tilize_utils.hpp>
@@ -22,7 +22,7 @@
 
 using namespace tt;
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

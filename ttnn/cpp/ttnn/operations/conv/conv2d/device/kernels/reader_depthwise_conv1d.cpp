@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
-#include "firmware_common.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/compile_time_args.h"
 
 // conv1D reader kernel
 void kernel_main() {

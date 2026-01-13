@@ -6,18 +6,18 @@
 #include <utility>
 
 #include "ttnn/tensor/types.hpp"
-// #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "moe_expert_token_remap_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
 MoeExpertTokenRemapDeviceOperation::program_factory_t MoeExpertTokenRemapDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return Multicore{};
 }
 
 void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& topk_tensor = tensor_args.topk_tensor;
     const auto& metadata_tensor = tensor_args.metadata_tensor;
     const auto& mapping_tensor = tensor_args.mapping_tensor;
@@ -31,7 +31,7 @@ void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(mapping_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Mapping tensor must be uint16");
     TT_FATAL(mapping_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Mapping tensor must be in row major layout");
 
-    auto mesh_device = tensor_args.topk_tensor.device();
+    auto* mesh_device = tensor_args.topk_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     const auto num_devices = mesh_view.num_devices();
@@ -66,7 +66,7 @@ MoeExpertTokenRemapDeviceOperation::spec_return_value_t MoeExpertTokenRemapDevic
     const auto& mapping_shape = tensor_args.mapping_tensor.logical_shape();
     const auto& metadata_shape = tensor_args.metadata_tensor.logical_shape();
 
-    auto mesh_device = tensor_args.topk_tensor.device();
+    auto* mesh_device = tensor_args.topk_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     const auto num_devices = mesh_view.num_devices();
@@ -108,24 +108,25 @@ MoeExpertTokenRemapDeviceOperation::tensor_return_value_t MoeExpertTokenRemapDev
     return {output_mapping_tensor, output_reduced_tensor};
 }
 
-std::
-    tuple<MoeExpertTokenRemapDeviceOperation::operation_attributes_t, MoeExpertTokenRemapDeviceOperation::tensor_args_t>
-    MoeExpertTokenRemapDeviceOperation::invoke(
-        const ttnn::Tensor& topk_tensor,
-        const ttnn::Tensor& mapping_tensor,
-        const ttnn::Tensor& metadata_tensor,
-        const std::optional<ttnn::MemoryConfig>& output_mem_config,
-        const std::optional<ttnn::Tensor>& optional_output_mapping_tensor,
-        const std::optional<ttnn::Tensor>& optional_output_reduced_tensor,
-        const uint32_t reduction_size) {
-    return {
-        operation_attributes_t{.output_mem_config = output_mem_config, .reduction_size = reduction_size},
-        tensor_args_t{
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::MoeExpertTokenRemapDeviceOperation::tensor_return_value_t moe_expert_token_remap(
+    const ttnn::Tensor& topk_tensor,
+    const ttnn::Tensor& mapping_tensor,
+    const ttnn::Tensor& metadata_tensor,
+    const std::optional<ttnn::MemoryConfig>& output_mem_config,
+    const std::optional<ttnn::Tensor>& optional_output_mapping_tensor,
+    const std::optional<ttnn::Tensor>& optional_output_reduced_tensor,
+    uint32_t reduction_size) {
+    using OperationType = ttnn::operations::data_movement::MoeExpertTokenRemapDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{.output_mem_config = output_mem_config, .reduction_size = reduction_size},
+        OperationType::tensor_args_t{
             .topk_tensor = topk_tensor,
             .mapping_tensor = mapping_tensor,
             .metadata_tensor = metadata_tensor,
             .optional_output_mapping_tensor = optional_output_mapping_tensor,
-            .optional_output_reduced_tensor = optional_output_reduced_tensor}};
+            .optional_output_reduced_tensor = optional_output_reduced_tensor});
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <ctype.h>
+#include <cctype>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -17,7 +17,7 @@
 #include <core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
-#include <metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
@@ -30,7 +30,7 @@
 #include "llrt/hal.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "hw/inc/debug/ring_buffer.h"
+#include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -102,7 +102,8 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
 tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& virtual_coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
         return tt::CoreType::WORKER;
-    } else if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
+    }
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
         return tt::CoreType::ETH;
     }
 
@@ -132,16 +133,14 @@ CoreCoord virtual_noc_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCo
     if (coord.x >= grid_size.x || coord.y >= grid_size.y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
-    } else {
-        // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
-        // the system this coordinate belongs to.
-        // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
-        CoreCoord physical_coord = {
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
-        return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
-            device_id, physical_coord);
-    }
+    }  // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
+    // the system this coordinate belongs to.
+    // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
+    CoreCoord physical_coord = {
+        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
+        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+        device_id, physical_coord);
 }
 
 // Helper function to get string rep of noc target.
@@ -404,7 +403,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     if (!dump_data.highest_stack_usage.empty()) {
         fprintf(f, "Stack usage summary:");
         for (auto& [processor, info] : dump_data.highest_stack_usage) {
-            auto processor_name = get_riscv_name(
+            const auto* processor_name = get_riscv_name(
                 processor.core_type,
                 hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type));
             // Threshold of free space for warning.
@@ -448,7 +447,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     // Handle any paused cores, wait for user input.
     if (!dump_data.paused_cores.empty()) {
         string paused_cores_str = "Paused cores: ";
-        for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
+        for (const auto& [virtual_core, processor_index] : dump_data.paused_cores) {
             paused_cores_str += fmt::format(
                 "{}:{}, ",
                 virtual_core.str(),
@@ -464,7 +463,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         }
 
         // Clear all pause flags
-        for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
+        for (const auto& [virtual_core, processor_index] : dump_data.paused_cores) {
             auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
             auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
             auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
@@ -474,10 +473,10 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
             // Clear only the one flag that we saved, in case another one was raised on device
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                pause_data.data(), pause_data.size(), {device_id, virtual_core}, addr);
+                pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
             pause_data.view().flags()[processor_index] = 0;
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                pause_data.data(), pause_data.size(), {device_id, virtual_core}, addr);
+                pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
         }
     }
     fflush(f);
@@ -496,9 +495,14 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
             reader.device_id, logical_coord, core_type);
 
     // Print device id, core coords (logical)
-    string core_type_str = programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH ? "acteth"
-                           : programmable_core_type == HalProgrammableCoreType::IDLE_ETH ? "idleth"
-                                                                                         : "worker";
+    string core_type_str;
+    if (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+        core_type_str = "acteth";
+    } else if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
+        core_type_str = "idleth";
+    } else {
+        core_type_str = "worker";
+    }
     string core_coord_str = fmt::format(
         "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_coord.x,
@@ -525,7 +529,7 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     // Should be ok if we never access past that.
     std::vector<std::byte> l1_read_buf(mailbox_read_size);
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        l1_read_buf.data(), l1_read_buf.size(), {reader.device_id, virtual_coord}, mailbox_addr);
+        l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
     return Core(
         virtual_coord,
         programmable_core_type,
@@ -643,7 +647,6 @@ void WatcherDeviceReader::Core::DumpL1Status() const {
 void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
     auto san = mbox_data_.watcher().sanitize()[noc];
     string error_msg;
-    string error_reason;
 
     switch (san.return_code()) {
         case dev_msgs::DebugSanitizeOK:
@@ -707,6 +710,14 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
         case dev_msgs::DebugSanitizeL1AddrOverflow:
             error_msg = get_l1_target_str(programmable_core_type_, san);
             error_msg += " (read or write past the end of local memory).";
+            break;
+        case dev_msgs::DebugSanitizeEthDestL1AddrOverflow:
+            error_msg = get_l1_target_str(programmable_core_type_, san);
+            error_msg += " (ethernet send to core with L1 destination overflow).";
+            break;
+        case dev_msgs::DebugSanitizeEthSrcL1AddrOverflow:
+            error_msg = get_l1_target_str(programmable_core_type_, san);
+            error_msg += " (ethernet send with L1 source overflow).";
             break;
         default:
             error_msg = fmt::format(
@@ -855,9 +866,9 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
             if (curr_idx == 0) {
                 if (ring_buf_data.wrapped() == 0) {
                     break;  // No wrapping, so no extra data available
-                } else {
-                    curr_idx = ring_buffer_elements - 1;  // Loop
                 }
+                curr_idx = ring_buffer_elements - 1;  // Loop
+
             } else {
                 curr_idx--;
             }
@@ -984,17 +995,17 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
 
     if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
         fprintf(reader_.f, "smsg:");
-        DumpRunState(subordinate_sync.dm1());
-        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() !=
-            ARCH::QUASAR) {  // TODO enable when we have triscs running
-            DumpRunState(subordinate_sync.trisc0());
-            DumpRunState(subordinate_sync.trisc1());
-            DumpRunState(subordinate_sync.trisc2());
+        // TODO once we have triscs running on Quasar, just loop over all RISC cores
+        DumpRunState(subordinate_sync.map()[0]);
+        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+            DumpRunState(subordinate_sync.map()[1]);
+            DumpRunState(subordinate_sync.map()[2]);
+            DumpRunState(subordinate_sync.map()[3]);
         }
         fprintf(reader_.f, " ");
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
         fprintf(reader_.f, "smsg:");
-        DumpRunState(subordinate_sync.dm1());
+        DumpRunState(subordinate_sync.map()[0]);
         fprintf(reader_.f, " ");
     }
 }
@@ -1061,10 +1072,11 @@ void WatcherDeviceReader::Core::DumpStackUsage() const {
         if (usage.min_free()) {
             auto [processor_class, processor_type] =
                 hal.get_processor_class_and_type_from_index(programmable_core_type_, processor_index);
-            HalProcessorIdentifier processor = {programmable_core_type_, processor_class, processor_type};
+            HalProcessorIdentifier processor = {
+                programmable_core_type_, processor_class, static_cast<int>(processor_type)};
             auto& slot = dump_data_.highest_stack_usage[processor];
             if (usage.min_free() <= slot.stack_free) {
-                slot = {virtual_coord_, usage.min_free() - 1, usage.watcher_kernel_id()};
+                slot = {virtual_coord_, static_cast<uint16_t>(usage.min_free() - 1), usage.watcher_kernel_id()};
             }
         }
     }

@@ -224,7 +224,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
 void EmbeddingsRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const embedding::operation_attributes_t& operation_attributes,
+    const embedding::operation_attributes_t& /*operation_attributes*/,
     const embedding::tensor_args_t& tensor_args,
     embedding::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
@@ -235,7 +235,7 @@ void EmbeddingsRMProgramFactory::override_runtime_arguments(
     const auto& cb_out = shared_variables.cb_out;
     const auto& output_sharded = shared_variables.output_sharded;
 
-    auto output_buffer = tensor_return_value.buffer();
+    auto* output_buffer = tensor_return_value.buffer();
     auto output_buffer_address = output_buffer->address();
     auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
     auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();

@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -57,7 +57,7 @@ def test_vae_resnetblock2d(
         torch_resnet = vae.decoder.mid_block.resnets[resnet_id]
     vae_block = "encoder" if is_encoder else "decoder"
 
-    model_config = ModelOptimisations()
+    model_config = VAEModelOptimisations()
     tt_resnet = TtResnetBlock2D(
         device,
         state_dict,

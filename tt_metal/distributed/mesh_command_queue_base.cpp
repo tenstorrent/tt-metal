@@ -226,7 +226,7 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
-        auto& shard_data_transfer = shard_data_transfers[shard_idx];
+        const auto& shard_data_transfer = shard_data_transfers[shard_idx];
         this->write_shard_to_device(
             *buffer, shard_data_transfer.shard_coord, shard_data_transfer.host_data, shard_data_transfer.region);
     };

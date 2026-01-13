@@ -12,40 +12,81 @@ on:
       docker-image:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
         default: "in-service"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
 
 jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.load-test-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_demo_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "demo"
+      - name: Load test matrix
+        id: load-test-matrix
+        run: |
+          set -e
+          # Install yq
+          YQ_VERSION="v4.44.1"
+          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          # Check if the file exists
+          if [ ! -f "$TESTS_YAML_PATH" ]; then
+            echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
+            exit 1
+          fi
+          # Sanitize line endings
+          sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
+          # Convert to JSON
+          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
+          # Filter by model if specified
+          echo "[INFO] Selected model: ${{ inputs.model }}"
+          if [ "${{ inputs.model }}" = "all" ]; then
+            filtered_output="$json_output"
+            echo "[INFO] Loading all tests from YAML"
+          else
+            # Filter tests by model-name field
+            # Include tests where model-name matches OR model-name doesn't exist (always-run tests)
+            filtered_output=$(echo "$json_output" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+            echo "[INFO] Filtered tests by model: ${{ inputs.model }}"
+          fi
+          # Print the JSON output
+          echo "Read contents of $TESTS_YAML_PATH and converted to JSON:"
+          echo "$filtered_output"
+          echo "matrix=${filtered_output}" >> $GITHUB_OUTPUT
+
   t3000-demo-tests:
+    needs: load-test-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "t3k_mixtral_tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 50, owner_id: U03PUAKE719}, # Harry Zhou
-          { name: "t3k_falcon40b_tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 50, owner_id: U053W15B6JF}, #Djordje Ivanovic
-          { name: "t3k_llama3_tests", arch: wormhole_b0, cmd: run_t3000_llama3_tests, timeout: 60, owner_id: U03PUAKE719}, # Miguel Tairum
-          { name: "t3k_qwen25_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
-          { name: "t3k_llama3_vision_tests", arch: wormhole_b0, cmd: run_t3000_llama3_vision_tests, timeout: 45, owner_id: U03FJB5TM5Y}, #Colman Glagovich
-          { name: "t3k_llama3_90b_vision_tests", arch: wormhole_b0, cmd: run_t3000_llama3_90b_vision_tests, timeout: 20, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-          { name: "t3k_llama3_70b_tests", arch: wormhole_b0, cmd: run_t3000_llama3_70b_tests, timeout: 60, owner_id: U03FJB5TM5Y}, #Colman Glagovich
-          { name: "t3k_falcon7b_tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 90, owner_id: U05RWH3QUPM}, #Salar Hosseini
-          { name: "t3k_resnet50_tests", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 50, owner_id: U0837MYG788}, # Marko Radosavljevic
-          { name: "t3k_sentence_bert_tests", arch: wormhole_b0, cmd: run_t3000_sentence_bert_tests, timeout: 75, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Aniruddha Tupe)
-          { name: "t3k sd35_large tests", arch: wormhole_b0, cmd: run_t3000_sd35large_tests, timeout: 60, owner_id: U03FJB5TM5Y}, #Colman Glagovich
-          { name: "t3k flux1-dev tests", arch: wormhole_b0, cmd: run_t3000_flux1_tests, timeout: 60, owner_id: U08TED0JM9D}, #Samuel Adesoye
-          { name: "t3k motif tests", arch: wormhole_b0, cmd: run_t3000_motif_tests, timeout: 25, owner_id: U08TED0JM9D}, #Samuel Adesoye
-          { name: "t3k_mistral_tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 90, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
-          # Temporary: Run Qwen 3 tests last as they update to a newer transformers version.
-          # This requirements and comment removed when https://github.com/tenstorrent/tt-metal/pull/22608 merges.
-          { name: "t3k_qwen3_tests", arch: wormhole_b0, cmd: run_t3000_qwen3_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
-          { name: "t3k_qwen25_vl_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_vl_tests, timeout: 30, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-          { name: "t3k_gemma3_tests", arch: wormhole_b0, cmd: run_t3000_gemma3_tests, timeout: 30, owner_id: U08TJ70UFRT},  # Harry Andrews
-          { name: "t3k_wan2.2_tests", arch: wormhole_b0, cmd: run_t3000_wan22_tests, timeout: 45, owner_id: U03FJB5TM5Y},  #Colman Glagovich
-          { name: "t3k_mochi_tests", arch: wormhole_b0, cmd: run_t3000_mochi_tests, timeout: 60, owner_id: U09ELB03XRU}, # Stephen Osborne
-        ]
-
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
@@ -58,23 +99,31 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        HF_HUB_CACHE: ${{ (matrix.test-group.arch == 'wormhole_b0' && '/mnt/MLPerf/huggingface/hub') || '' }}
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -83,11 +132,11 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
-      - name: Run demo regression tests
+      - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        shell: bash
         run: |
-          source /work/tests/scripts/t3000/run_t3000_demo_tests.sh
+          source tests/scripts/t3000/run_t3000_demo_tests.sh
+          echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
 
       - name: Save environment data
@@ -105,7 +154,7 @@ jobs:
 
       - name: Upload benchmark data
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt

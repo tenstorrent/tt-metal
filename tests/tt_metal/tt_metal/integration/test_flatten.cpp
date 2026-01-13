@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <iostream>
@@ -30,6 +30,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -319,8 +320,6 @@ bool flatten_stress(
 }  // namespace test_flatten
 
 TEST_F(MeshDispatchFixture, TensixFlatten) {
-    // TODO: Re-enable when #7264 is fixed
-    GTEST_SKIP();
     uint32_t num_tiles_r = 2;
     uint32_t num_tiles_c = 2;
     if (!this->IsSlowDispatch()) {

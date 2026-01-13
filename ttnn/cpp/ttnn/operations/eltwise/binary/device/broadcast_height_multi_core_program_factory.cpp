@@ -84,9 +84,9 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
-    auto src0_buffer = a.buffer();
-    auto src1_buffer = b->buffer();
-    auto dst_buffer = output.buffer();
+    auto* src0_buffer = a.buffer();
+    auto* src1_buffer = b->buffer();
+    auto* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -211,7 +211,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
 void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
@@ -231,10 +231,10 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-    auto src_dram_buffer_a = input_tensor_a.buffer();
-    auto src_dram_buffer_b = input_tensor_b->buffer();
+    auto* src_dram_buffer_a = input_tensor_a.buffer();
+    auto* src_dram_buffer_b = input_tensor_b->buffer();
 
-    auto dst_dram_buffer = output_tensor.buffer();
+    auto* dst_dram_buffer = output_tensor.buffer();
 
     const auto ashape = input_tensor_a.padded_shape();
     const auto bshape = input_tensor_b->padded_shape();

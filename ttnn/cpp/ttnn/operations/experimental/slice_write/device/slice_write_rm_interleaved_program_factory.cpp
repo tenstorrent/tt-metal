@@ -13,7 +13,7 @@
 
 #include "slice_write_device_operation_types.hpp"
 #include "tt-metalium/math.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -27,15 +27,14 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& stride,
     uint32_t num_cores_total,
-    uint32_t num_cores,
     uint32_t num_cores_y,
     const CoreRangeSet& core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
@@ -299,7 +298,6 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
         output_tensor_start,
         stride,
         num_cores_total,
-        num_cores,
         num_cores_y,
         core_group_1,
         core_group_2,
@@ -345,7 +343,6 @@ void SliceWriteRMInterleavedProgramFactory::override_runtime_arguments(
         tensor_start,
         stride,
         num_cores_total,
-        num_cores,
         num_cores_y,
         core_group_1,
         core_group_2,

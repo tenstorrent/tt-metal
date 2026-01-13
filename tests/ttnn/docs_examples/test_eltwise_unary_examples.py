@@ -819,6 +819,20 @@ def test_unary_chain(device):
     logger.info(f"Unary chain: {output}")
 
 
+def test_bitcast(device):
+    # Create a tensor with uint16 values
+    tensor = ttnn.from_torch(
+        torch.tensor([[16457, 16429], [32641, 31744]], dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    # Bitcast uint16 to bfloat16 (reinterprets bit pattern)
+    output = ttnn.bitcast(tensor, ttnn.bfloat16)
+    logger.info(f"Bitcast uint16->bfloat16: {output}")
+
+
 def test_identity(device):
     # Create a tensor with specific values
     tensor = ttnn.from_torch(
@@ -1144,63 +1158,110 @@ def test_rdiv(device):
     value = 2
 
     # Compute reverse division (value / tensor)
-    output = ttnn.rdiv(tensor, value, round_mode=None)
+    output = ttnn.rdiv(tensor, value, rounding_mode=None)
     logger.info(f"Reverse division: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_bitwise_left_shift(device):
     # Create tensors with specific integer values
-    tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
-    )
-    tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
-    )
+    tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device)
+    tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device)
 
     # Apply bitwise left shift operation
-    output = ttnn.bitwise_left_shift(tensor1, tensor2)  # CHECK
+    output = ttnn.bitwise_left_shift(tensor1, tensor2)
     logger.info(f"Bitwise left shift: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_bitwise_right_shift(device):
     # Create tensors with specific integer values
-    tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
-    )
-    tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
-    )
+    tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device)
+    tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device)
 
     # Apply bitwise right shift operation
     output = ttnn.bitwise_right_shift(tensor1, tensor2)
-    logger.info(f"Bitwise right shift: {output}")  # Check
+    logger.info(f"Bitwise right shift: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_prelu(device):
     # Create tensors for PReLU activation function
-    tensor1 = ttnn.from_torch(torch.rand([1, 2, 32, 32], dtype=torch.bfloat16), device=device)
-    tensor2 = ttnn.from_torch(torch.tensor([1, 2], dtype=torch.bfloat16), device=device)
-    scalar = 2.0
+    tensor1 = ttnn.from_torch(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    weight = 0.25
 
-    # Apply PReLU activation function
-    output = ttnn.prelu(tensor1, tensor2 / scalar)
+    # Apply PReLU activation function with scalar weight
+    output = ttnn.prelu(tensor1, weight)
     logger.info(f"PReLU: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_remainder(device):
     # Create tensors for remainder operation
     tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[5, 7], [9, 11]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
     tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
-    scalar = 2.0
 
     # Compute the remainder of division
-    output = ttnn.remainder(tensor1, tensor2 / scalar)
+    output = ttnn.remainder(tensor1, tensor2)
     logger.info(f"Remainder: {output}")
+
+
+def test_hardmish(device):
+    # Create a tensor with specific values
+    tensor = ttnn.from_torch(
+        torch.tensor([[-2.0, -1.0], [1.0, 2.0]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # Apply Hard Mish activation function
+    output = ttnn.hardmish(tensor)
+    logger.info(f"Hard Mish: {output}")
+
+
+def test_i1(device):
+    # Create a tensor with specific values
+    tensor = ttnn.from_torch(
+        torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # Compute the modified Bessel function of the first kind of order 1
+    output = ttnn.i1(tensor)
+    logger.info(f"Bessel i1: {output}")
+
+
+def test_var_hw(device):
+    # Create a 4D tensor
+    tensor = ttnn.from_torch(torch.randn(1, 2, 64, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Compute variance across height and width dimensions
+    output = ttnn.var_hw(tensor)
+    logger.info(f"Variance HW: {output}")
+
+
+def test_std_hw(device):
+    # Create a 4D tensor
+    tensor = ttnn.from_torch(torch.randn(1, 2, 64, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Compute standard deviation across height and width dimensions
+    output = ttnn.std_hw(tensor)
+    logger.info(f"Standard Deviation HW: {output}")
+
+
+def test_logical_left_shift(device):
+    # Create a tensor with specific integer values
+    tensor = ttnn.from_torch(torch.tensor([[1, 2], [4, 8]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Perform logical left shift by 2 bits
+    output = ttnn.logical_left_shift(tensor, 2)
+    logger.info(f"Logical left shift: {output}")
+
+
+def test_logical_right_shift(device):
+    # Create tensors for logical right shift
+    tensor = ttnn.from_torch(
+        torch.tensor([[128, 256], [512, 1024]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device
+    )
+    shift_amt = ttnn.from_torch(torch.full((2, 2), 3, dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Perform logical right shift by 3 bits
+    output = ttnn.logical_right_shift(tensor, shift_amt)
+    logger.info(f"Logical right shift: {output}")

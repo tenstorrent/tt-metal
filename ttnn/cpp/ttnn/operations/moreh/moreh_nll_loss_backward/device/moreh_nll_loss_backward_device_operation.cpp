@@ -3,21 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_nll_loss_backward_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss_backward {
 
 MorehNllLossBackwardDeviceOperation::program_factory_t MorehNllLossBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return Factory{};
 }
 
 void MorehNllLossBackwardDeviceOperation::validate_inputs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    auto& target_tensor = tensor_args.target_tensor;
-    auto& output_grad_tensor = tensor_args.output_grad_tensor;
-    auto& weight_tensor = tensor_args.weight_tensor;
-    auto& divisor_tensor = tensor_args.divisor_tensor;
-    auto& input_grad_tensor = tensor_args.input_grad_tensor;
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
+    const auto& target_tensor = tensor_args.target_tensor;
+    const auto& output_grad_tensor = tensor_args.output_grad_tensor;
+    const auto& weight_tensor = tensor_args.weight_tensor;
+    const auto& divisor_tensor = tensor_args.divisor_tensor;
+    const auto& input_grad_tensor = tensor_args.input_grad_tensor;
 
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_FATAL(target_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
@@ -86,7 +87,7 @@ void MorehNllLossBackwardDeviceOperation::validate_on_program_cache_hit(
 }
 
 MorehNllLossBackwardDeviceOperation::spec_return_value_t MorehNllLossBackwardDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad_tensor.has_value()) {
         return {tensor_args.input_grad_tensor->tensor_spec()};
     }
@@ -105,27 +106,28 @@ MorehNllLossBackwardDeviceOperation::tensor_return_value_t MorehNllLossBackwardD
         compute_output_specs(operation_attributes, tensor_args), tensor_args.target_tensor.device());
 }
 
-std::tuple<
-    MorehNllLossBackwardDeviceOperation::operation_attributes_t,
-    MorehNllLossBackwardDeviceOperation::tensor_args_t>
-MorehNllLossBackwardDeviceOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_nll_loss_backward
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_nll_loss_backward::MorehNllLossBackwardDeviceOperation::tensor_return_value_t
+moreh_nll_loss_backward(
     const Tensor& target_tensor,
     const Tensor& output_grad_tensor,
-    const bool reduction_mean,
+    bool reduction_mean,
     const std::optional<Tensor>& weight_tensor,
     const std::optional<Tensor>& input_grad_tensor,
     const std::optional<Tensor>& divisor_tensor,
-    const int32_t ignore_index,
+    int32_t ignore_index,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            reduction_mean,
-            ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
-            memory_config.value_or(target_tensor.memory_config()),
-            init_device_compute_kernel_config(
-                target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, divisor_tensor, input_grad_tensor}};
+    using OperationType = ttnn::operations::moreh::moreh_nll_loss_backward::MorehNllLossBackwardDeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        reduction_mean,
+        ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : static_cast<uint32_t>(ignore_index),
+        memory_config.value_or(target_tensor.memory_config()),
+        init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args =
+        OperationType::tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, divisor_tensor, input_grad_tensor};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
-
-}  // namespace ttnn::operations::moreh::moreh_nll_loss_backward
+}  // namespace ttnn::prim

@@ -10,8 +10,6 @@ import math
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
 
 def validate_indices(input_tensor, torch_indices, ttnn_indices, kernel_size, stride, padding, dilation, dtype):
     """
@@ -131,6 +129,7 @@ def run_max_pool2d_with_indices(
     ceil_mode=False,
     memory_config=None,
     run_twice=False,
+    dram_slice_config=None,
 ):
     kernel_size = [kernel_h, kernel_w]
     stride = [stride_h, stride_w]
@@ -189,6 +188,7 @@ def run_max_pool2d_with_indices(
         deallocate_input=False,
         reallocate_halo_output=True,
         return_indices=True,
+        dram_slice_config=dram_slice_config,
     )
 
     if run_twice:

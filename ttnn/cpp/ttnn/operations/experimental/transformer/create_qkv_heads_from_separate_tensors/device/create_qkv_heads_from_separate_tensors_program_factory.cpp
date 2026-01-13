@@ -131,7 +131,7 @@ CreateQKVHeadsSeparateTensorsProgramFactory::cached_program_t CreateQKVHeadsSepa
 
 void CreateQKVHeadsSeparateTensorsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt::tt_metal;
@@ -145,11 +145,11 @@ void CreateQKVHeadsSeparateTensorsProgramFactory::override_runtime_arguments(
     auto& output_k = std::get<1>(tensor_return_value);
     auto& output_v = std::get<2>(tensor_return_value);
 
-    auto in0_buffer = input_tensor_q.buffer();
-    auto in1_buffer = input_tensor_kv.buffer();
-    auto out0_buffer = output_q.buffer();
-    auto out1_buffer = output_k.buffer();
-    auto out2_buffer = output_v.buffer();
+    auto* in0_buffer = input_tensor_q.buffer();
+    auto* in1_buffer = input_tensor_kv.buffer();
+    auto* out0_buffer = output_q.buffer();
+    auto* out1_buffer = output_k.buffer();
+    auto* out2_buffer = output_v.buffer();
 
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_in0_id, *in0_buffer);
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_in1_id, *in1_buffer);

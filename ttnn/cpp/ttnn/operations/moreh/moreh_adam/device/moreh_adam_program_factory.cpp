@@ -15,10 +15,10 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    auto& param_in = tensor_args.param_in;
-    auto& grad = tensor_args.grad;
-    auto& exp_avg_in = tensor_args.exp_avg_in;
-    auto& exp_avg_sq_in = tensor_args.exp_avg_sq_in;
+    const auto& param_in = tensor_args.param_in;
+    const auto& grad = tensor_args.grad;
+    const auto& exp_avg_in = tensor_args.exp_avg_in;
+    const auto& exp_avg_sq_in = tensor_args.exp_avg_sq_in;
 
     auto& output_tensors = output_tensor;
 
@@ -111,10 +111,10 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         TensorAccessorArgs(*max_exp_avg_sq_out.value().buffer()).append_to(writer_compile_time_args);
     }
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
         "reader_moreh_adam.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
         "writer_moreh_adam.cpp";
 
@@ -144,7 +144,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
 
     const std::vector<uint32_t> compute_args_group_1{num_tiles_per_core_group_1};
 
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
         "moreh_adam.cpp";
 
@@ -267,17 +267,17 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
     auto& compute_kernel_1_id = cached_program.shared_variables.compute_kernel_group1_id;
     auto& compute_kernel_2_id = cached_program.shared_variables.compute_kernel_group2_id;
 
-    auto param_in_buffer = tensor_args.param_in.buffer();
-    auto grad_buffer = tensor_args.grad.buffer();
-    auto exp_avg_in_buffer = tensor_args.exp_avg_in.buffer();
-    auto exp_avg_sq_in_buffer = tensor_args.exp_avg_sq_in.buffer();
-    auto max_exp_avg_sq_in_buffer =
+    auto* param_in_buffer = tensor_args.param_in.buffer();
+    auto* grad_buffer = tensor_args.grad.buffer();
+    auto* exp_avg_in_buffer = tensor_args.exp_avg_in.buffer();
+    auto* exp_avg_sq_in_buffer = tensor_args.exp_avg_sq_in.buffer();
+    auto* max_exp_avg_sq_in_buffer =
         tensor_args.max_exp_avg_sq_in.has_value() ? tensor_args.max_exp_avg_sq_in->buffer() : nullptr;
 
-    auto param_out_buffer = tensor_return_value.at(0)->buffer();
-    auto exp_avg_out_buffer = tensor_return_value.at(1)->buffer();
-    auto exp_avg_sq_out_buffer = tensor_return_value.at(2)->buffer();
-    auto max_exp_avg_sq_out_buffer = operation_attributes.amsgrad ? tensor_return_value.at(3)->buffer() : nullptr;
+    auto* param_out_buffer = tensor_return_value.at(0)->buffer();
+    auto* exp_avg_out_buffer = tensor_return_value.at(1)->buffer();
+    auto* exp_avg_sq_out_buffer = tensor_return_value.at(2)->buffer();
+    auto* max_exp_avg_sq_out_buffer = operation_attributes.amsgrad ? tensor_return_value.at(3)->buffer() : nullptr;
 
     auto& core_group_1 = cached_program.shared_variables.core_group_1;
     auto& core_group_2 = cached_program.shared_variables.core_group_2;

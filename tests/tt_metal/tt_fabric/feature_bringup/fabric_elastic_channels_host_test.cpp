@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.h>
+#include <cassert>
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -66,7 +66,7 @@ struct WorkerTimingStats {
 
 class N300TestDevice {
 public:
-    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()) {
         tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
@@ -101,7 +101,7 @@ public:
     size_t num_devices_;
 
 private:
-    bool device_open;
+    bool device_open{false};
 };
 
 struct TestConfig {
@@ -279,7 +279,7 @@ void build(
         config.fabric_mcast_factor  // FABRIC_MCAST_FACTOR
     };
 
-    auto erisc_kernel_name =
+    const auto* erisc_kernel_name =
         "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channels_erisc_forward_worker_traffic.cpp";
     log_info(tt::LogAlways, "Erisc kernel name: {}", erisc_kernel_name);
     local_erisc_kernel = tt_metal::CreateKernel(
@@ -544,7 +544,7 @@ void run_test(
     if (config.n_workers > 0) {
         log_info(tt::LogAlways, "Worker Timing Stats:");
 
-        for (auto& [resources, label] :
+        for (const auto& [resources, label] :
              {std::make_pair(&test_resources.local_device, "Local Device"),
               std::make_pair(&test_resources.remote_device, "Remote Device")}) {
             for (size_t i = 0; i < config.n_workers; i++) {
@@ -594,7 +594,8 @@ TestResources create_test_resources(
     resources.local_device.eth_core = eth_sender_core;
     resources.remote_device.eth_core = eth_receiver_core;
 
-    for (auto& device_resource_reference : {std::ref(resources.local_device), std::ref(resources.remote_device)}) {
+    for (const auto& device_resource_reference :
+         {std::ref(resources.local_device), std::ref(resources.remote_device)}) {
         auto& device_resource = device_resource_reference.get();
         auto& worker_cores = device_resource.worker_cores;
         auto& worker_cores_vec = device_resource.worker_cores_vec;
@@ -817,28 +818,26 @@ int main(int argc, char** argv) {
         log_info(tt::LogAlways, "Pipe mode finished: {}/{} test cases successful", successful_tests, test_count);
         return (successful_tests == test_count && test_count > 0) ? 0 : -1;
 
-    } else {
-        // Traditional CLI mode: single test from command line arguments
-        TestConfig config{};
-        try {
-            config = parse_cli_config(argc, argv);
+    }  // Traditional CLI mode: single test from command line arguments
+    TestConfig config{};
+    try {
+        config = parse_cli_config(argc, argv);
 
-            // Align packet size if needed
-            if (config.packet_size % 16 != 0) {
-                log_warning(tt::LogTest, "Packet size is not aligned to 16 bytes. Aligning to 16 bytes.");
-                config.packet_size = tt::align(config.packet_size, 16);
-            }
-
-            validate_test_config(config);
-
-        } catch (const std::exception& e) {
-            log_error(tt::LogTest, "Configuration error: {}", e.what());
-            log_info(tt::LogTest, "For pipe mode, use: {} --pipe-mode", argv[0]);
-            return -1;
+        // Align packet size if needed
+        if (config.packet_size % 16 != 0) {
+            log_warning(tt::LogTest, "Packet size is not aligned to 16 bytes. Aligning to 16 bytes.");
+            config.packet_size = tt::align(config.packet_size, 16);
         }
 
-        // Run single test case
-        int result = run_test_case(config, test_fixture);
-        return result;
+        validate_test_config(config);
+
+    } catch (const std::exception& e) {
+        log_error(tt::LogTest, "Configuration error: {}", e.what());
+        log_info(tt::LogTest, "For pipe mode, use: {} --pipe-mode", argv[0]);
+        return -1;
     }
+
+    // Run single test case
+    int result = run_test_case(config, test_fixture);
+    return result;
 }

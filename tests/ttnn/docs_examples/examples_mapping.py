@@ -45,7 +45,6 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Matrix Multiplication
     "ttnn.matmul": matrix_multiplication.test_matmul,
     "ttnn.linear": matrix_multiplication.test_linear,
-    # "ttnn.matmul_batched_weights": matrix_multiplication.test_matmul_batched_weights, # Lack of example
     "ttnn.addmm": matrix_multiplication.test_addmm,
     "ttnn.sparse_matmul": matrix_multiplication.test_sparse_matmul,
     # Pointwise Unary
@@ -56,6 +55,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.asinh": eltwise_unary.test_asinh,
     "ttnn.atan": eltwise_unary.test_atan,
     "ttnn.atanh": eltwise_unary.test_atanh,
+    "ttnn.bitcast": eltwise_unary.test_bitcast,
     "ttnn.bitwise_not": eltwise_unary.test_bitwise_not,
     "ttnn.bitwise_left_shift": eltwise_unary.test_bitwise_left_shift,
     "ttnn.bitwise_right_shift": eltwise_unary.test_bitwise_right_shift,
@@ -89,8 +89,10 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.hardsigmoid": eltwise_unary.test_hardsigmoid,
     "ttnn.hardswish": eltwise_unary.test_hardswish,
     "ttnn.hardtanh": eltwise_unary.test_hardtanh,
+    "ttnn.hardmish": eltwise_unary.test_hardmish,
     "ttnn.heaviside": eltwise_unary.test_heaviside,
     "ttnn.i0": eltwise_unary.test_i0,
+    "ttnn.i1": eltwise_unary.test_i1,
     "ttnn.identity": eltwise_unary.test_identity,
     "ttnn.isfinite": eltwise_unary.test_isfinite,
     "ttnn.isinf": eltwise_unary.test_isinf,
@@ -142,6 +144,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.softsign": eltwise_unary.test_softsign,
     "ttnn.sqrt": eltwise_unary.test_sqrt,
     "ttnn.square": eltwise_unary.test_square,
+    "ttnn.std_hw": eltwise_unary.test_std_hw,
     "ttnn.swiglu": eltwise_unary.test_swiglu,
     "ttnn.swish": eltwise_unary.test_swish,
     "ttnn.tan": eltwise_unary.test_tan,
@@ -152,6 +155,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.triu": eltwise_unary.test_triu,
     "ttnn.trunc": eltwise_unary.test_trunc,
     "ttnn.unary_chain": eltwise_unary.test_unary_chain,
+    "ttnn.var_hw": eltwise_unary.test_var_hw,
     # Complex Unary
     "ttnn.real": complex_unary.test_real,
     "ttnn.imag": complex_unary.test_imag,
@@ -261,6 +265,8 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.logical_and": pointwise_binary.test_logical_and,
     "ttnn.logical_or": pointwise_binary.test_logical_or,
     "ttnn.logical_xor": pointwise_binary.test_logical_xor,
+    "ttnn.logical_left_shift": eltwise_unary.test_logical_left_shift,
+    "ttnn.logical_right_shift": eltwise_unary.test_logical_right_shift,
     "ttnn.bitwise_and": pointwise_binary.test_bitwise_and,
     "ttnn.bitwise_or": pointwise_binary.test_bitwise_or,
     "ttnn.bitwise_xor": pointwise_binary.test_bitwise_xor,
@@ -337,8 +343,11 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.var": reduction.test_var,
     "ttnn.argmax": reduction.test_argmax,
     "ttnn.prod": reduction.test_prod,
+    "ttnn.sampling": reduction.test_sampling,
     "ttnn.topk": reduction.test_topk,
     "ttnn.cumsum": reduction.test_cumsum,
+    "ttnn.ema": reduction.test_ema,
+    "ttnn.moe": reduction.test_moe,
     "ttnn.manual_seed": reduction.test_manual_seed,
     # Data movement
     "ttnn.concat": data_movement.test_concat,
@@ -361,7 +370,11 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Normalization
     "ttnn.group_norm": normalization.test_group_norm,
     "ttnn.layer_norm": normalization.test_layer_norm,
+    "ttnn.layer_norm_pre_all_gather": normalization.test_layernorm_distributed,
+    "ttnn.layer_norm_post_all_gather": normalization.test_layernorm_distributed,
     "ttnn.rms_norm": normalization.test_rms_norm,
+    "ttnn.rms_norm_pre_all_gather": normalization.test_rms_norm_distributed,
+    "ttnn.rms_norm_post_all_gather": normalization.test_rms_norm_distributed,
     "ttnn.batch_norm": normalization.test_batch_norm,
     "ttnn.softmax": normalization.test_softmax,
     "ttnn.scale_mask_softmax": normalization.test_scale_mask_softmax,
@@ -369,11 +382,8 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.scale_mask_softmax_in_place": normalization.test_scale_mask_softmax_in_place,
     "ttnn.scale_causal_mask_hw_dims_softmax_in_place": normalization.test_scale_causal_mask_hw_dims_softmax_in_place,
     # Normalization Program Configs
-    # "ttnn.SoftmaxProgramConfig": normalization.test_softmax_program_config, # Lack of example
     "ttnn.SoftmaxDefaultProgramConfig": normalization.test_softmax_default_program_config,
-    "ttnn.SoftmaxShardedMultiCoreProgramConfig": normalization.test_softmax_sharded_multi_core_program_config,
-    # Moreh Operations
-    # "ttnn.moreh_sum": moreh.test_moreh_sum, # Lack of example
+    "ttnn.SoftmaxShardedMultiCoreProgramConfig": normalization.test_scale_mask_softmax_in_place,
     # Transformers
     # "ttnn.transformer.split_query_key_value_and_split_heads": transformer.test_split_query_key_value_and_split_heads, # Lack of example
     # "ttnn.transformer.concatenate_heads": transformer.test_concatenate_heads, # Lack of example

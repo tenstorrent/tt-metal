@@ -35,7 +35,7 @@ target_sources(
         generic/device/pool_op.cpp
         generic/generic_pools.cpp
         global_avg_pool/global_avg_pool.cpp
-        grid_sample/device/grid_sample_op.cpp
+        grid_sample/device/grid_sample_device_operation.cpp
         grid_sample/device/grid_sample_bilinear_program_factory.cpp
         grid_sample/device/grid_sample_nearest_program_factory.cpp
         grid_sample/device/grid_sample_utils.cpp

@@ -34,6 +34,8 @@
 
 namespace tt::tt_metal {
 
+void on_dispatch_timeout_detected();
+
 namespace {
 
 bool wrap_ge(uint32_t a, uint32_t b) {
@@ -77,8 +79,7 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
-    device_id(device_id), bypass_enable(false), bypass_buffer_write_offset(0) {
+SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) : device_id(device_id) {
     this->completion_byte_addrs.resize(num_hw_cqs);
     this->prefetcher_cores.resize(num_hw_cqs);
     this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -262,7 +263,7 @@ void SystemMemoryManager::set_bypass_mode(const bool enable, const bool clear) {
     }
 }
 
-bool SystemMemoryManager::get_bypass_mode() { return this->bypass_enable; }
+bool SystemMemoryManager::get_bypass_mode() const { return this->bypass_enable; }
 
 std::vector<uint32_t>& SystemMemoryManager::get_bypass_data() { return this->bypass_buffer; }
 
@@ -285,13 +286,20 @@ uint32_t SystemMemoryManager::get_completion_queue_limit(const uint8_t cq_id) co
 uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) const {
     if (this->bypass_enable) {
         return this->bypass_buffer_write_offset;
-    } else {
-        return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
     }
+    return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id) const {
     return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
+}
+
+void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
+    // The completion queue follows issue queue in contiguous memory
+    // get_issue_queue_limit() returns absolute device address where the issue queue ends.
+    // We subtract channel_offset (absolute device channel base) to get relative offset,
+    // then add it to cq_sysmem_start (host channel base) to get host virtual address
+    return (void*)(this->cq_sysmem_start + (this->get_issue_queue_limit(cq_id) - this->channel_offset));
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_id) const {
@@ -400,7 +408,6 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-
     this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
@@ -447,11 +454,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         };
 
         // Handler for timeout
-        auto fetch_on_timeout = [&]() {
-            // Serialize Inspector RPC data before throwing
-            log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
-            Inspector::serialize_rpc();
-
+        auto fetch_on_timeout = []() {
+            MetalContext::instance().on_dispatch_timeout_detected();
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
@@ -504,9 +508,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     auto on_timeout = [&exit_condition]() {
         exit_condition.store(true);
 
-        // Serialize Inspector RPC data before throwing
-        log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
-        Inspector::serialize_rpc();
+        MetalContext::instance().on_dispatch_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };

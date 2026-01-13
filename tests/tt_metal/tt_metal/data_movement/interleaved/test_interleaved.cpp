@@ -181,18 +181,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     }
 
     // Results comparison
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal = (packed_output == packed_golden);
 
-    if (!pcc) {
-        log_error(tt::LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(tt::LogTest, "Equality Check failed");
         log_info(tt::LogTest, "Golden vector");
         print_vector(unpack_vector<bfloat16, uint32_t>(packed_golden));
         log_info(tt::LogTest, "Output vector");
         print_vector(unpack_vector<bfloat16, uint32_t>(packed_output));
     }
 
-    return pcc;
+    return is_equal;
 }
 }  // namespace unit_tests::dm::interleaved_page
 
@@ -250,7 +249,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageCoreLocati
 
     // Cores
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     auto grid_size = device->compute_with_storage_grid_size();
     log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
     for (unsigned int x = 0; x < grid_size.x; x++) {
@@ -531,7 +530,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageCoreLocation
 
     // Cores
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     auto grid_size = device->compute_with_storage_grid_size();
     log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
     for (unsigned int x = 0; x < grid_size.x; x++) {

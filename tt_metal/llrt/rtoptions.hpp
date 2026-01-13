@@ -15,8 +15,10 @@
 #include <filesystem>
 #include <map>
 #include <set>
+#include <unordered_set>
 #include <string>
 #include <vector>
+#include <atomic>
 #include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
@@ -24,10 +26,9 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
-namespace tt {
-
-namespace llrt {
+namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
 enum class EnvVarID;
 
@@ -73,16 +74,16 @@ struct TargetSelection {
 };
 
 struct WatcherSettings {
-    bool enabled = false;
-    bool dump_all = false;
-    bool append = false;
-    bool auto_unpause = false;
-    bool noinline = false;
+    std::atomic<bool> enabled = false;
+    std::atomic<bool> dump_all = false;
+    std::atomic<bool> append = false;
+    std::atomic<bool> auto_unpause = false;
+    std::atomic<bool> noinline = false;
     bool phys_coords = false;
     bool text_start = false;
     bool skip_logging = false;
     bool noc_sanitize_linked_transaction = false;
-    int interval_ms = 0;
+    std::atomic<int> interval_ms = 0;
 };
 
 struct InspectorSettings {
@@ -93,7 +94,38 @@ struct InspectorSettings {
     std::string rpc_server_host = "localhost";
     uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
+    bool serialize_on_dispatch_timeout = true;
     std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
+};
+
+template <typename T>
+struct FabricTelemetrySelection {
+    bool monitor_all = true;
+    std::unordered_set<T> ids;
+
+    bool matches(T value) const { return monitor_all || ids.count(value) > 0; }
+
+    void set_monitor_all(bool value) {
+        monitor_all = value;
+        if (monitor_all) {
+            ids.clear();
+        }
+    }
+};
+
+struct FabricTelemetrySettings {
+    static constexpr uint8_t kAllStatsMask =
+        static_cast<uint8_t>(DynamicStatistics::ROUTER_STATE) | static_cast<uint8_t>(DynamicStatistics::BANDWIDTH) |
+        static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_TX) | static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_RX);
+
+    bool enabled = false;
+    FabricTelemetrySelection<uint32_t> chips;
+    FabricTelemetrySelection<uint32_t> channels;
+    FabricTelemetrySelection<uint32_t> eriscs;
+    uint8_t stats_mask = kAllStatsMask;
+    bool is_telemetry_enabled(uint32_t phys_chip_id, uint32_t channel_id, uint32_t risc_id) const {
+        return chips.matches(phys_chip_id) && channels.matches(channel_id) && eriscs.matches(risc_id);
+    }
 };
 
 class RunTimeOptions {
@@ -101,6 +133,8 @@ class RunTimeOptions {
 
     bool is_cache_dir_env_var_set = false;
     std::string cache_dir_;
+
+    std::string logs_dir_ = (std::filesystem::current_path() / "").string();
 
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
@@ -119,6 +153,10 @@ class RunTimeOptions {
 
     InspectorSettings inspector_settings;
 
+    bool lightweight_kernel_asserts = false;
+
+    bool enable_llk_asserts = false;
+
     // Fabric profiling settings
     struct FabricProfilingSettings {
         bool enable_rx_ch_fwd = false;
@@ -126,7 +164,7 @@ class RunTimeOptions {
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
-    bool test_mode_enabled = false;
+    std::atomic<bool> test_mode_enabled = false;
 
     bool profiler_enabled = false;
     bool profile_dispatch_cores = false;
@@ -135,10 +173,15 @@ class RunTimeOptions {
     bool profiler_trace_profiler = false;
     bool profiler_trace_tracking = false;
     bool profiler_cpp_post_process = false;
+    bool profiler_sum = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
     std::string profiler_noc_events_report_path;
+    bool profiler_disable_dump_to_files = false;
+    bool profiler_disable_push_to_tracy = false;
+    std::optional<uint32_t> profiler_program_support_count = std::nullopt;
+    bool experimental_device_debug_dump_enabled = false;
 
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
@@ -150,6 +193,7 @@ class RunTimeOptions {
 
     bool skip_loading_fw = false;
 
+    bool jit_analytics_enabled = false;
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
 
@@ -192,7 +236,7 @@ class RunTimeOptions {
     uint32_t arc_debug_buffer_size = 0;
 
     // Force disables using DMA for reads and writes
-    bool disable_dma_ops = false;
+    std::atomic<bool> disable_dma_ops = false;
 
     // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
@@ -220,6 +264,7 @@ class RunTimeOptions {
 
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
+    FabricTelemetrySettings fabric_telemetry_settings;
 
     // Mock cluster initialization using a provided cluster descriptor
     std::string mock_cluster_desc_path;
@@ -228,6 +273,8 @@ class RunTimeOptions {
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
     // Timeout duration for operations
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
+    // Command to run when a dispatch timeout occurs
+    std::string dispatch_timeout_command_to_execute;
 
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
@@ -248,6 +295,9 @@ class RunTimeOptions {
     // Disable XIP dump
     bool disable_xip_dump = false;
 
+    // Dump JIT build commands to stdout for debugging
+    bool dump_build_commands = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -258,6 +308,10 @@ public:
 
     bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
     const std::string& get_cache_dir() const;
+
+    // Returns the logs directory for generated output (dprint, watcher, profiler, etc.)
+    // Uses TT_METAL_LOGS_PATH if set, otherwise defaults to current working directory
+    const std::string& get_logs_dir() const;
 
     bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
     const std::string& get_kernel_dir() const;
@@ -271,21 +325,25 @@ public:
 
     // Info from watcher environment variables, setters included so that user
     // can override with a SW call.
-    bool get_watcher_enabled() const { return watcher_settings.enabled; }
-    void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
+    bool get_watcher_enabled() const { return watcher_settings.enabled.load(std::memory_order_relaxed); }
+    void set_watcher_enabled(bool enabled) { watcher_settings.enabled.store(enabled, std::memory_order_relaxed); }
     // Return a hash of which watcher features are enabled
     uint32_t get_watcher_hash() const;
-    int get_watcher_interval() const { return watcher_settings.interval_ms; }
-    void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
-    int get_watcher_dump_all() const { return watcher_settings.dump_all; }
-    void set_watcher_dump_all(bool dump_all) { watcher_settings.dump_all = dump_all; }
-    int get_watcher_append() const { return watcher_settings.append; }
-    void set_watcher_append(bool append) { watcher_settings.append = append; }
-    int get_watcher_auto_unpause() const { return watcher_settings.auto_unpause; }
-    void set_watcher_auto_unpause(bool auto_unpause) { watcher_settings.auto_unpause = auto_unpause; }
-    int get_watcher_noinline() const { return watcher_settings.noinline; }
-    void set_watcher_noinline(bool noinline) { watcher_settings.noinline = noinline; }
-    int get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
+    int get_watcher_interval() const { return watcher_settings.interval_ms.load(std::memory_order_relaxed); }
+    void set_watcher_interval(int interval_ms) {
+        watcher_settings.interval_ms.store(interval_ms, std::memory_order_relaxed);
+    }
+    bool get_watcher_dump_all() const { return watcher_settings.dump_all.load(std::memory_order_relaxed); }
+    void set_watcher_dump_all(bool dump_all) { watcher_settings.dump_all.store(dump_all, std::memory_order_relaxed); }
+    bool get_watcher_append() const { return watcher_settings.append.load(std::memory_order_relaxed); }
+    void set_watcher_append(bool append) { watcher_settings.append.store(append, std::memory_order_relaxed); }
+    bool get_watcher_auto_unpause() const { return watcher_settings.auto_unpause.load(std::memory_order_relaxed); }
+    void set_watcher_auto_unpause(bool auto_unpause) {
+        watcher_settings.auto_unpause.store(auto_unpause, std::memory_order_relaxed);
+    }
+    bool get_watcher_noinline() const { return watcher_settings.noinline.load(std::memory_order_relaxed); }
+    void set_watcher_noinline(bool noinline) { watcher_settings.noinline.store(noinline, std::memory_order_relaxed); }
+    bool get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
     void set_watcher_phys_coords(bool phys_coords) { watcher_settings.phys_coords = phys_coords; }
     bool get_watcher_text_start() const { return watcher_settings.text_start; }
     void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
@@ -294,6 +352,9 @@ public:
     bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
     const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
     uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
+    bool get_serialize_inspector_on_dispatch_timeout() const {
+        return inspector_settings.serialize_on_dispatch_timeout;
+    }
     bool get_watcher_noc_sanitize_linked_transaction() const {
         return watcher_settings.noc_sanitize_linked_transaction;
     }
@@ -309,6 +370,12 @@ public:
     bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
     bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
+
+    bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
+    void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
+
+    bool get_llk_asserts() const { return enable_llk_asserts; }
+    void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
@@ -436,8 +503,8 @@ public:
     // (test mode = false). We need to catch for gtesting, since an unhandled exception will kill
     // the gtest (and can't catch an exception from the server thread in main thread), but by
     // default we should throw so that the user can see the exception as soon as it happens.
-    bool get_test_mode_enabled() const { return test_mode_enabled; }
-    void set_test_mode_enabled(bool enable) { test_mode_enabled = enable; }
+    bool get_test_mode_enabled() const { return test_mode_enabled.load(std::memory_order_relaxed); }
+    void set_test_mode_enabled(bool enable) { test_mode_enabled.store(enable, std::memory_order_relaxed); }
 
     bool get_profiler_enabled() const { return profiler_enabled; }
     bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
@@ -446,10 +513,18 @@ public:
     bool get_profiler_trace_tracking() const { return profiler_trace_tracking; }
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
     bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
+    bool get_profiler_sum() const { return profiler_sum; }
+    std::optional<uint32_t> get_profiler_program_support_count() const { return profiler_program_support_count; }
+    void set_profiler_program_support_count(uint32_t profiler_program_support_count) {
+        this->profiler_program_support_count = profiler_program_support_count;
+    }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
+    bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
+    bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
+    bool get_experimental_device_debug_dump_enabled() const { return experimental_device_debug_dump_enabled; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
@@ -468,6 +543,9 @@ public:
     bool get_tracy_mid_run_push() const { return tracy_mid_run_push; }
 
     bool get_skip_loading_fw() const { return skip_loading_fw; }
+
+    bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
+    void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
@@ -514,11 +592,11 @@ public:
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
-    uint32_t get_arc_debug_buffer_size() { return arc_debug_buffer_size; }
+    uint32_t get_arc_debug_buffer_size() const { return arc_debug_buffer_size; }
     void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
-    bool get_disable_dma_ops() const { return disable_dma_ops; }
-    void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
+    bool get_disable_dma_ops() const { return disable_dma_ops.load(std::memory_order_relaxed); }
+    void set_disable_dma_ops(bool disable) { disable_dma_ops.store(disable, std::memory_order_relaxed); }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
 
@@ -545,6 +623,7 @@ public:
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+    const FabricTelemetrySettings& get_fabric_telemetry_settings() const { return fabric_telemetry_settings; }
 
     // If true, enables code profiling for receiver channel forward operations
     bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
@@ -563,6 +642,7 @@ public:
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+    std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
@@ -574,6 +654,8 @@ public:
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
     bool get_disable_xip_dump() const { return disable_xip_dump; }
+
+    bool get_dump_build_commands() const { return dump_build_commands; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
@@ -592,6 +674,7 @@ private:
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFabricTelemetryEnv(const char* value);
     void HandleEnvVar(
         EnvVarID id, const char* value);  // Handle single env var (value usually non-null, see cpp for details)
     void InitializeFromEnvVars();         // Initialize all environment variables from table
@@ -611,14 +694,10 @@ private:
     const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
     const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
     std::set<std::string> watcher_disabled_features;
-    bool watcher_feature_disabled(const std::string& name) const {
-        return watcher_disabled_features.find(name) != watcher_disabled_features.end();
-    }
+    bool watcher_feature_disabled(const std::string& name) const { return watcher_disabled_features.contains(name); }
 };
 
 // Function declarations for operation timeout and synchronization
 std::chrono::duration<float> get_timeout_duration_for_operations();
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt

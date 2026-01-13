@@ -332,7 +332,7 @@ class CMakeBuild(build_ext):
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
             "ttnn/kernel/*",
-            "ttnn/operations/normalization/kernel_util/compute/*",
+            "ttnn/operations/normalization/kernel_util/**/*",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
@@ -349,7 +349,6 @@ class CMakeBuild(build_ext):
             "fabric/mesh_graph_descriptors/*.textproto",
             "fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
             "fabric/impl/kernels/tt_fabric_mux.cpp",
-            "lite_fabric/hw/**/*",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
             "impl/dispatch/kernels/**/*",

@@ -8,7 +8,7 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 
 namespace ttnn::operations::normalization {
@@ -48,16 +48,17 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    return tt::tt_metal::operation::run(
-               LayerNorm{
-                   .norm_type = LayerNormType::RMSNORM,
-                   .eps = epsilon,
-                   .output_mem_config = output_memory_config,
-                   .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
-                   .compute_kernel_config = kernel_config_val},
-               {input_tensor},
-               {residual_input_tensor, weight, bias, std::nullopt})
-        .at(0);
+    return ttnn::prim::layer_norm(
+        input_tensor,
+        epsilon,
+        weight,
+        bias,
+        residual_input_tensor,
+        output_memory_config,
+        program_config.value_or(create_program_config(input_tensor.shard_spec())),
+        kernel_config_val,
+        std::nullopt,  // dtype
+        LayerNormType::RMSNORM);
 }
 
 }  // namespace ttnn::operations::normalization

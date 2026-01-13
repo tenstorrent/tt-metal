@@ -28,7 +28,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto device = output_grad.device();
+    auto* device = output_grad.device();
     auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -258,7 +258,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
 void MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGradFactory::
     override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
+        const operation_attributes_t& /*operation_attributes*/,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& outputs) {
     auto reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
@@ -266,13 +266,13 @@ void MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBe
     auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    auto output_grad_buffer = tensor_args.output_grad.buffer();
-    auto input_buffer = tensor_args.input.buffer();
-    auto mean_buffer = tensor_args.mean.buffer();
-    auto rstd_buffer = tensor_args.rstd.buffer();
+    auto* output_grad_buffer = tensor_args.output_grad.buffer();
+    auto* input_buffer = tensor_args.input.buffer();
+    auto* mean_buffer = tensor_args.mean.buffer();
+    auto* rstd_buffer = tensor_args.rstd.buffer();
 
-    auto gamma_grad_buffer = outputs[0]->buffer();
-    auto beta_grad_buffer = outputs[1]->buffer();
+    auto* gamma_grad_buffer = outputs[0]->buffer();
+    auto* beta_grad_buffer = outputs[1]->buffer();
 
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
