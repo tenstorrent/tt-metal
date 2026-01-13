@@ -10,7 +10,11 @@
 #define TOPOLOGY_SOLVER_INTERNAL_TPP
 
 #include <algorithm>
+#include <sstream>
 #include <unordered_set>
+
+#include <fmt/format.h>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric::detail {
 
@@ -144,13 +148,47 @@ ConstraintIndexData<TargetNode, GlobalNode> build_constraint_index_data(
             // Convert GlobalNode set to index vector
             std::vector<size_t> restricted_indices;
             restricted_indices.reserve(valid_it->second.size());
+            std::vector<GlobalNode> missing_nodes;
             for (const auto& global_node : valid_it->second) {
                 auto idx_it = graph_data.global_to_idx.find(global_node);
                 if (idx_it != graph_data.global_to_idx.end()) {
                     restricted_indices.push_back(idx_it->second);
+                } else {
+                    missing_nodes.push_back(global_node);
                 }
             }
             std::sort(restricted_indices.begin(), restricted_indices.end());
+
+            // Log warning if constraint nodes are missing from the graph
+            if (!missing_nodes.empty()) {
+                std::stringstream missing_nodes_str;
+                bool first = true;
+                for (const auto& node : missing_nodes) {
+                    if (!first) {
+                        missing_nodes_str << ", ";
+                    }
+                    first = false;
+                    missing_nodes_str << node;
+                }
+
+                log_warning(
+                    tt::LogFabric,
+                    "Topology solver: {} constraint node(s) for target node {} are not present in the global graph. "
+                    "These nodes will be ignored. Missing nodes: {}",
+                    missing_nodes.size(),
+                    i,
+                    missing_nodes_str.str());
+
+                // Warn if all constraint nodes are missing (empty restricted_indices)
+                if (restricted_indices.empty()) {
+                    log_warning(
+                        tt::LogFabric,
+                        "Topology solver: All constraint nodes for target node {} are missing from the global graph. "
+                        "This target node will have no restrictions.",
+                        i);
+                }
+            }
+
             constraint_data.restricted_global_indices[i] = std::move(restricted_indices);
         }
 
@@ -160,13 +198,38 @@ ConstraintIndexData<TargetNode, GlobalNode> build_constraint_index_data(
             // Convert GlobalNode set to index vector
             std::vector<size_t> preferred_indices;
             preferred_indices.reserve(preferred_it->second.size());
+            std::vector<GlobalNode> missing_nodes;
             for (const auto& global_node : preferred_it->second) {
                 auto idx_it = graph_data.global_to_idx.find(global_node);
                 if (idx_it != graph_data.global_to_idx.end()) {
                     preferred_indices.push_back(idx_it->second);
+                } else {
+                    missing_nodes.push_back(global_node);
                 }
             }
             std::sort(preferred_indices.begin(), preferred_indices.end());
+
+            // Log warning if preferred constraint nodes are missing from the graph
+            if (!missing_nodes.empty()) {
+                std::stringstream missing_nodes_str;
+                bool first = true;
+                for (const auto& node : missing_nodes) {
+                    if (!first) {
+                        missing_nodes_str << ", ";
+                    }
+                    first = false;
+                    missing_nodes_str << node;
+                }
+
+                log_warning(
+                    tt::LogFabric,
+                    "Topology solver: {} preferred constraint node(s) for target node {} are not present in the global "
+                    "graph. These nodes will be ignored. Missing nodes: {}",
+                    missing_nodes.size(),
+                    i,
+                    missing_nodes_str.str());
+            }
+
             constraint_data.preferred_global_indices[i] = std::move(preferred_indices);
         }
     }

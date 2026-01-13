@@ -525,4 +525,70 @@ TEST_F(TopologySolverTest, ConstraintIndexDataEmpty) {
     EXPECT_TRUE(constraint_data.preferred_global_indices.empty());
 }
 
+TEST_F(TopologySolverTest, ConstraintIndexDataMissingNodes) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create graphs with only some nodes
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Global graph only has nodes 10 and 11, but NOT 20 or 30
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    // Note: nodes 20 and 30 are NOT in the global graph
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    auto graph_data = build_graph_index_data(target_graph, global_graph);
+
+    // Create constraints using trait constraints that reference nodes NOT in the global graph
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Use trait constraints to allow multiple valid mappings
+    // Target 1: can map to nodes with trait "group1" (which includes 10 (exists) and 20 (missing))
+    std::map<TestTargetNode, std::string> target_traits = {{1, "group1"}, {2, "group2"}};
+    std::map<TestGlobalNode, std::string> global_traits = {
+        {10, "group1"},   // Exists in graph
+        {20, "group1"},   // Missing from graph
+        {11, "group2"},   // Exists in graph
+        {30, "group2"}};  // Missing from graph
+    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+
+    // Add preferred constraints with missing nodes
+    constraints.add_preferred_constraint(1, 20);  // Node 20 is NOT in global graph
+    constraints.add_preferred_constraint(2, 11);  // Node 11 exists
+
+    auto constraint_data = build_constraint_index_data(constraints, graph_data);
+
+    // Target 1 (index 0): should only have node 10 (index 0) in restricted indices
+    // Node 20 should be filtered out since it's not in the global graph
+    EXPECT_EQ(constraint_data.restricted_global_indices[0].size(), 1u);
+    EXPECT_EQ(constraint_data.restricted_global_indices[0][0], 0u);  // Global 10 (index 0)
+
+    // Target 1 preferred: should be empty since node 20 is missing
+    EXPECT_TRUE(constraint_data.preferred_global_indices[0].empty());
+
+    // Target 2 (index 1): should only have node 11 (index 1) in restricted indices
+    // Node 30 should be filtered out since it's not in the global graph
+    EXPECT_EQ(constraint_data.restricted_global_indices[1].size(), 1u);
+    EXPECT_EQ(constraint_data.restricted_global_indices[1][0], 1u);  // Global 11 (index 1)
+
+    // Target 2 preferred: should only have node 11 (index 1)
+    EXPECT_EQ(constraint_data.preferred_global_indices[1].size(), 1u);
+    EXPECT_EQ(constraint_data.preferred_global_indices[1][0], 1u);  // Global 11 (index 1)
+
+    // Verify is_valid_mapping behavior
+    // Target 1 can only map to Global 10 (index 0)
+    EXPECT_TRUE(constraint_data.is_valid_mapping(0, 0));   // Target 1 -> Global 10: valid
+    EXPECT_FALSE(constraint_data.is_valid_mapping(0, 1));  // Target 1 -> Global 11: invalid (restricted to 10 only)
+
+    // Target 2 can only map to Global 11 (index 1)
+    EXPECT_FALSE(constraint_data.is_valid_mapping(1, 0));  // Target 2 -> Global 10: invalid (restricted to 11 only)
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 1));   // Target 2 -> Global 11: valid
+}
+
 }  // namespace tt::tt_fabric
