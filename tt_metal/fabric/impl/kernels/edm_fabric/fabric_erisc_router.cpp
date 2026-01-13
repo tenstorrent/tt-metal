@@ -444,7 +444,7 @@ constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, MAX_NUM_SE
     return turn_statuses;
 }
 
-// Map downstream direction to compact array index [0-2], exclsuding my_direction
+// Map downstream direction to compact array index [0-2], excluding my_direction
 // This function assumes 2D fabric where routers don't forward to themselves
 // Examples:
 // - EAST router  (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2, Z(4)->3
@@ -2464,7 +2464,9 @@ FORCE_INLINE void initialize_fabric_telemetry() {
 }
 
 void kernel_main() {
+#if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
+#endif
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
     // Initialize fabric telemetry early to ensure valid values before router starts
@@ -2484,7 +2486,9 @@ void kernel_main() {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
+#if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::TXQ_INITIALIZED);
+#endif
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
@@ -2523,7 +2527,9 @@ void kernel_main() {
         }(std::make_index_sequence<6>{});
     }
 
+#if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED);
+#endif
 
     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
         clear_code_profiling_buffer(code_profiling_buffer_base_addr);
@@ -2543,26 +2549,16 @@ void kernel_main() {
     ///////////////////////
     // Common runtime args:
     ///////////////////////
-    const size_t local_sender_channel_0_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_1_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_2_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_3_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_4_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_5_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_6_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_7_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    // 9th channel for Z routers if Z router is enabled
-    const size_t local_sender_channel_8_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_0_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_1_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_2_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_3_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_4_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_5_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_6_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_7_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    // 9th channel for Z routers if Z router is enabled
-    const size_t local_sender_channel_8_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
+    // Read sender channel connection semaphore addresses (9 channels: 8 base + 1 for Z routers)
+    std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_semaphore_addrs;
+    for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
+        local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
+    }
+    // Read sender channel connection buffer index IDs (9 channels: 8 base + 1 for Z routers)
+    std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_buffer_index_ids;
+    for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
+        local_sender_channel_connection_buffer_index_ids[i] = get_arg_val<uint32_t>(arg_idx++);
+    }
 
     // downstream EDM VC0 connection info
     const auto has_downstream_edm_vc0_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
@@ -2628,32 +2624,11 @@ void kernel_main() {
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
     const auto downstream_vc1_noc_interface_buffer_index_local_addr = 0;
 
-    // Read MAX_NUM_SENDER_CHANNELS teardown semaphores (host packs builder_config::num_max_sender_channels = 8)
-    const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_teardown_from_edm_1 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_teardown_from_edm_2 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_teardown_from_edm_3 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_teardown_from_edm_4 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_teardown_from_edm_5 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_teardown_from_edm_6 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_teardown_from_edm_7 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_teardown_from_edm_8 = get_arg_val<uint32_t>(arg_idx++);  // 9th channel for Z routers
-    ////////////////////////
-    // Sender runtime args
-    ////////////////////////
-    // Read MAX_NUM_SENDER_CHANNELS sender worker semaphore pointers (host packs builder_config::num_max_sender_channels
-    // = 8)
-    auto sender0_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    auto sender1_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    auto sender2_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    auto sender3_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    auto sender4_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    auto sender5_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    auto sender6_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    auto sender7_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    auto sender8_worker_semaphore_ptr =
-        reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));  // 9th channel for Z routers
-
+    // Read teardown semaphores (MAX_NUM_SENDER_CHANNELS channels)
+    std::array<size_t, MAX_NUM_SENDER_CHANNELS> my_sem_for_teardown_from_edm;
+    for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
+        my_sem_for_teardown_from_edm[i] = get_arg_val<uint32_t>(arg_idx++);
+    }
     ///////////////////////////////////////////////
     // Local tensix (relay) connection runtime args
     // UDM mode only - packed at end of runtime args
@@ -2678,54 +2653,21 @@ void kernel_main() {
         }
     }
 
-    const size_t local_sender_channel_0_connection_buffer_index_addr =
-        local_sender_channel_0_connection_buffer_index_id;
     //  initialize the statically allocated "semaphores"
-    if constexpr (is_sender_channel_serviced[0]) {
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 0;
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 0;
-        *sender0_worker_semaphore_ptr = 0;
-    }
-    if constexpr (is_sender_channel_serviced[1]) {
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_semaphore_addr) = 0;
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_buffer_index_id) = 0;
-        *sender1_worker_semaphore_ptr = 0;
-    }
-    if constexpr (is_sender_channel_serviced[2]) {
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_2_connection_semaphore_addr) = 0;
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_2_connection_buffer_index_id) = 0;
-        *sender2_worker_semaphore_ptr = 0;
-    }
-    if constexpr (is_2d_fabric) {
-        if constexpr (is_sender_channel_serviced[3]) {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_3_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_3_connection_buffer_index_id) = 0;
-            *sender3_worker_semaphore_ptr = 0;
-        }
-        if constexpr (is_sender_channel_serviced[4]) {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_4_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_4_connection_buffer_index_id) = 0;
-            *sender4_worker_semaphore_ptr = 0;
-        }
-        if constexpr (is_sender_channel_serviced[5]) {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_5_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_5_connection_buffer_index_id) = 0;
-            *sender5_worker_semaphore_ptr = 0;
-        }
-        if constexpr (is_sender_channel_serviced[6]) {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_6_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_6_connection_buffer_index_id) = 0;
-            *sender6_worker_semaphore_ptr = 0;
-        }
-        if constexpr (is_sender_channel_serviced[7]) {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_7_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_7_connection_buffer_index_id) = 0;
-            *sender7_worker_semaphore_ptr = 0;
-        }
-    }
+    [&]<size_t... Is>(std::index_sequence<Is...>) {
+        (([&]<size_t I>() {
+             if constexpr (is_sender_channel_serviced[I]) {
+                 *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_semaphore_addrs[I]) = 0;
+                 *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_ids[I]) = 0;
+             }
+         }.template operator()<Is>()),
+         ...);
+    }(std::make_index_sequence<NUM_SENDER_CHANNELS>{});
     asm volatile("nop");
 
+#if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::STARTED);
+#endif
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
     asm volatile("nop");
 
@@ -2744,17 +2686,7 @@ void kernel_main() {
     // local_sender_channel_free_slots_stream_ids;
 
     const auto& local_sem_for_teardown_from_downstream_edm =
-        take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
-                my_sem_for_teardown_from_edm_0,
-                my_sem_for_teardown_from_edm_1,
-                my_sem_for_teardown_from_edm_2,
-                my_sem_for_teardown_from_edm_3,
-                my_sem_for_teardown_from_edm_4,
-                my_sem_for_teardown_from_edm_5,
-                my_sem_for_teardown_from_edm_6,
-                my_sem_for_teardown_from_edm_7,
-            });
+        take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(my_sem_for_teardown_from_edm);
 
     // create the remote receiver channel buffers using multi-pool system
     auto remote_receiver_channels = tt::tt_fabric::MultiPoolEthChannelBuffers<
@@ -2779,16 +2711,7 @@ void kernel_main() {
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
-                local_sender_channel_0_connection_semaphore_addr,
-                local_sender_channel_1_connection_semaphore_addr,
-                local_sender_channel_2_connection_semaphore_addr,
-                local_sender_channel_3_connection_semaphore_addr,
-                local_sender_channel_4_connection_semaphore_addr,
-                local_sender_channel_5_connection_semaphore_addr,
-                local_sender_channel_6_connection_semaphore_addr,
-                local_sender_channel_7_connection_semaphore_addr,
-                local_sender_channel_8_connection_semaphore_addr});
+            local_sender_channel_connection_semaphore_addrs);
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
@@ -2812,7 +2735,9 @@ void kernel_main() {
         tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
+#if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED);
+#endif
 
     // TODO: change to TMP.
     std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, VC0_DOWNSTREAM_EDM_SIZE>
@@ -2998,7 +2923,9 @@ void kernel_main() {
         }
     }
 
+#if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE);
+#endif
 
     // initialize the local receiver channel buffers
     local_receiver_channels.init<channel_pools_args>(
@@ -3114,8 +3041,9 @@ void kernel_main() {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
-
+#if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE);
+#endif
     // if enable the tensix extension, then before open downstream connection, need to wait for downstream tensix ready
     // for connection.
     if constexpr (num_ds_or_local_tensix_connections) {
@@ -3172,9 +3100,9 @@ void kernel_main() {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
-
+#if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::VCS_OPENED);
-
+#endif
     if constexpr (is_receiver_channel_serviced[0] and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
@@ -3223,7 +3151,9 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
+#if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED);
+#endif
 
     WAYPOINT("FSCW");
     wait_for_static_connection_to_ready(
@@ -3234,7 +3164,9 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
+#if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
+#endif
 
     //////////////////////////////
     //////////////////////////////
@@ -3262,14 +3194,6 @@ void kernel_main() {
         port_direction_table,
         local_sender_channel_free_slots_stream_ids);
     WAYPOINT("LPDN");
-
-    // we force these values to a non-zero value so that if we run the fabric back to back,
-    // and we can reliably probe from host that this kernel has initialized properly.
-    // Sender channel 0 is always for local worker in both 1D and 2D
-    *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 99;
-    *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 99;
-    *sender0_worker_semaphore_ptr = 99;
-
     // make sure all the noc transactions are acked before re-init the noc counters
     teardown(
         termination_signal_ptr,
