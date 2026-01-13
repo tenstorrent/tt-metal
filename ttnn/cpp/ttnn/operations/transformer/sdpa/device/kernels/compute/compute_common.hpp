@@ -319,8 +319,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
     uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
 #else
-    uint32_t dst_tiles = cols;
-    uint32_t granularity = 1;
+    uint32_t dst_tiles = 1;
+    uint32_t granularity = cols;
 #endif
 
     uint32_t in0_index = 0;
