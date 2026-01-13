@@ -10,7 +10,7 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
-// Forward declaration for fmt
+// Include fmt formatting support
 #include <fmt/format.h>
 
 namespace tt::tt_fabric {
