@@ -8,5 +8,5 @@
 
 namespace ttnn::operations::experimental::transformer {
 namespace nb = nanobind;
-void bind_dit_layernorm_distributed(nb::module_& mod);
+void bind_dit_layernorm_post_all_gather(nb::module_& mod);
 }  // namespace ttnn::operations::experimental::transformer
