@@ -16,6 +16,7 @@ void kernel_main() {
     // Run-time arguments
     uint32_t argidx = 0;
     const auto core_id = get_arg_val<uint32_t>(argidx++);
+    const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w0_addr = get_arg_val<uint32_t>(argidx++);
     const auto w1_addr = get_arg_val<uint32_t>(argidx++);
@@ -76,8 +77,7 @@ void kernel_main() {
 
     // DRAM Reading constants
     const uint32_t dram_bank_id = core_id;
-    const uint32_t vchannel = ((core_id >= 6) ? 2 : 0) + (core_id & 0x1);
-    const uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, w0_addr);
+    const uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, /*bank_address_offset=*/0);
     uint32_t curr_trid = 1;
     uint32_t prev_trid = 2;
 
@@ -197,18 +197,4 @@ void kernel_main() {
     cb_push_back(cb_r2c_w2, w2_tiles_per_txn);
 
     //-------------------------------------------------------------------------
-    // // Read W2 from DRAM into CB
-    // uint32_t w2_tile_id_h_start = w2_tile_id_start;
-    // for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {
-    //     uint32_t w2_tile_id = w2_tile_id_h_start;
-    //     for (uint32_t j = 0; j < num_w2_tiles_w; ++j) {
-    //         cb_reserve_back(cb_r2c_w2, 1);
-    //         uint32_t cb_r2c_w2_addr = get_write_ptr(cb_r2c_w2);
-    //         noc_async_read_tile(w2_tile_id, w2_accessor, cb_r2c_w2_addr);
-    //         noc_async_read_barrier();
-    //         cb_push_back(cb_r2c_w2, 1);
-    //         w2_tile_id += w2_stride_w;
-    //     }
-    //     w2_tile_id_h_start += w2_stride_h;
-    // }
 }
