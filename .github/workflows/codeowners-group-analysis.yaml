@@ -102,27 +102,34 @@ jobs:
               
               if [ "$TOKEN_TEST_CODE" = "401" ]; then
                 echo "Token validation failed (HTTP 401). Token is invalid, expired, or revoked."
+                # Fail the workflow to force attention to the token issue
+                echo "::error::ORG_READ_GITHUB_TOKEN secret is invalid or expired. Please regenerate the token with 'read:org' scope."
               else
                 echo "Token validates (HTTP $TOKEN_TEST_CODE) but lacks organization access. Check token scopes include 'read:org'."
+                # Fail the workflow to force attention to the token scope issue
+                echo "::error::ORG_READ_GITHUB_TOKEN secret is valid but lacks required 'read:org' organization scope. Please update the token scopes or regenerate the token with 'read:org' scope."
               fi
-              
-              # Fail the workflow to force attention to the token issue
-              echo "::error::ORG_READ_GITHUB_TOKEN secret is invalid or expired. Please regenerate the token with 'read:org' scope."
               exit 1
             elif [ "$MEMBERSHIP_HTTP_CODE" = "403" ]; then
-              # Check if this is rate limiting or permission issue
-              RATE_LIMIT_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                                         -H "Accept: application/vnd.github.v3+json" \
-                                         "$MEMBERSHIP_API")
+              # Check if this is rate limiting or permission issue by examining the rate limit endpoint
+              # This endpoint doesn't count against the quota and provides definitive rate limit info
+              RATE_LIMIT_INFO=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                     -H "Accept: application/vnd.github.v3+json" \
+                                     "https://api.github.com/rate_limit")
               
-              if echo "$RATE_LIMIT_RESPONSE" | grep -q "rate limit"; then
+              CORE_REMAINING=$(echo "$RATE_LIMIT_INFO" | jq -r '.resources.core.remaining // -1' 2>/dev/null)
+              
+              if [ "$CORE_REMAINING" = "0" ]; then
+                RESET_TIME=$(echo "$RATE_LIMIT_INFO" | jq -r '.resources.core.reset // ""' 2>/dev/null)
                 echo "⚠️  WARNING: GitHub API rate limit exceeded (HTTP 403)"
-                echo "::warning::GitHub API rate limit exceeded. The workflow will retry automatically."
-                # Don't fail, let it retry
+                echo "Rate limit will reset at: $(date -r "$RESET_TIME" 2>/dev/null || echo "$RESET_TIME")"
+                echo "::warning::GitHub API rate limit exceeded. Subsequent jobs will be skipped (should-run=false). Please re-run this workflow after the rate limit resets."
+                # Don't fail; mark should-run=false so subsequent jobs are skipped. Manual re-run is required.
                 echo "should-run=false" >> $GITHUB_OUTPUT
               else
                 echo "❌ CRITICAL: ORG_READ_GITHUB_TOKEN lacks required permissions (HTTP 403)"
                 echo "The token must have 'read:org' scope to check organization membership."
+                echo "Rate limit remaining: $CORE_REMAINING (not rate limited)"
                 echo "::error::ORG_READ_GITHUB_TOKEN lacks 'read:org' permission. Please regenerate the token with proper scopes."
                 exit 1
               fi
