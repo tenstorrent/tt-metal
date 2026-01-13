@@ -26,6 +26,7 @@ Optimizations over baseline:
 import math
 from typing import Dict, Optional, Tuple
 
+import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import GemmaConfig
@@ -34,6 +35,7 @@ from models.experimental.pi0.common.configs import GemmaConfig
 # ============================================================================
 # RMSNorm (TTNN - Optimized)
 # ============================================================================
+
 
 def rms_norm_ttnn(
     x: ttnn.Tensor,
@@ -65,6 +67,7 @@ def rms_norm_ttnn(
 # ============================================================================
 # Rotary Position Embeddings (TTNN Meta Format)
 # ============================================================================
+
 
 def precompute_freqs_cis_meta_format(
     head_dim: int,
@@ -151,6 +154,7 @@ def precompute_freqs_cis_meta_format(
 # ============================================================================
 # Multi-Query Attention (TTNN - Optimized)
 # ============================================================================
+
 
 class GemmaAttentionTTNN:
     """
@@ -344,6 +348,7 @@ class GemmaAttentionTTNN:
 # GeGLU MLP (TTNN)
 # ============================================================================
 
+
 class GemmaMLPTTNN:
     """
     Gemma MLP with GeGLU activation using TTNN.
@@ -361,22 +366,34 @@ class GemmaMLPTTNN:
     def __init__(
         self,
         config: GemmaConfig,
-        weights: Dict[str, ttnn.Tensor],
+        weights: Dict[str, torch.Tensor],
         device: ttnn.Device,
     ):
         """
-        Initialize MLP with TTNN weights.
+        Initialize MLP with weights.
 
         Args:
             config: Gemma configuration
-            weights: TTNN weight tensors
+            weights: PyTorch weight tensors (will be converted to TTNN)
             device: TTNN device
         """
         self.config = config
         self.device = device
-        self.gate_proj = weights["mlp.gate_proj.weight"]
-        self.up_proj = weights["mlp.up_proj.weight"]
-        self.down_proj = weights["mlp.down_proj.weight"]
+
+        # Convert weights to TTNN if they're PyTorch tensors
+        def to_ttnn(w):
+            if isinstance(w, torch.Tensor):
+                return ttnn.from_torch(
+                    w.T.contiguous(),  # Transpose for linear
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                )
+            return w
+
+        self.gate_proj = to_ttnn(weights["mlp.gate_proj.weight"])
+        self.up_proj = to_ttnn(weights["mlp.up_proj.weight"])
+        self.down_proj = to_ttnn(weights["mlp.down_proj.weight"])
 
         # Chunk size must be tile-aligned (multiple of 32)
         # 256 = 32 × 8, optimal for 64-core auto-sharding (4 tokens/core)
@@ -384,7 +401,7 @@ class GemmaMLPTTNN:
         # With auto-sharding across 64 cores = ~64KB per core (fits L1)
         self.chunk_size = 256
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x) -> ttnn.Tensor:
         """
         Forward pass using chunked processing with auto L1 sharding.
 
@@ -395,15 +412,30 @@ class GemmaMLPTTNN:
         4. Accumulate results in L1, concatenate at end
 
         Args:
-            x: TTNN input tensor [batch, seq, hidden] or [batch, 1, seq, hidden]
+            x: Input tensor [batch, seq, hidden] or [batch, 1, seq, hidden] (PyTorch or TTNN)
 
         Returns:
             TTNN output tensor [batch, seq, hidden] or [batch, 1, seq, hidden]
         """
+        # Convert PyTorch to TTNN if needed
+        was_torch = isinstance(x, torch.Tensor)
+        if was_torch:
+            x = ttnn.from_torch(
+                x,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+
         batch_size = x.shape[0]
-        is_4d = len(x.shape) == 4
-        seq_len = x.shape[2] if is_4d else x.shape[1]
-        hidden = x.shape[-1]
+        was_3d = len(x.shape) == 3
+
+        # Always work with 4D tensors (ttnn.slice requires 4D coordinates)
+        if was_3d:
+            x = ttnn.reshape(x, [batch_size, 1, x.shape[1], x.shape[2]])
+
+        seq_len = x.shape[2]
+        hidden = x.shape[3]
 
         # Calculate number of chunks (tile-aligned)
         num_chunks = (seq_len + self.chunk_size - 1) // self.chunk_size
@@ -418,19 +450,13 @@ class GemmaMLPTTNN:
             needs_chunk_padding = actual_chunk_size < self.chunk_size
             padded_chunk_size = self.chunk_size if needs_chunk_padding else actual_chunk_size
 
-            # Slice input chunk
-            if is_4d:
-                x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [batch_size, 1, chunk_end, hidden])
-            else:
-                x_chunk = ttnn.slice(x, [0, chunk_start, 0], [batch_size, chunk_end, hidden])
+            # Slice input chunk (always 4D)
+            x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [batch_size, 1, chunk_end, hidden])
 
             # Pad chunk if needed for tile alignment
             if needs_chunk_padding:
                 pad_amount = padded_chunk_size - actual_chunk_size
-                if is_4d:
-                    x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
-                else:
-                    x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, pad_amount), (0, 0)), value=0.0)
+                x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
 
             # Gate and up projections - use bfloat8_b for 2x memory savings
             # Let matmul auto-compute L1 sharding
@@ -455,27 +481,29 @@ class GemmaMLPTTNN:
 
             # Slice back to actual size if padded
             if needs_chunk_padding:
-                if is_4d:
-                    output_chunk = ttnn.slice(
-                        output_chunk, [0, 0, 0, 0], [batch_size, 1, actual_chunk_size, hidden]
-                    )
-                else:
-                    output_chunk = ttnn.slice(output_chunk, [0, 0, 0], [batch_size, actual_chunk_size, hidden])
+                output_chunk = ttnn.slice(output_chunk, [0, 0, 0, 0], [batch_size, 1, actual_chunk_size, hidden])
 
             output_chunks.append(output_chunk)
 
-        # Concatenate all chunks along sequence dimension
+        # Concatenate all chunks along sequence dimension (always 4D now)
         if len(output_chunks) == 1:
             output = output_chunks[0]
         else:
             output = output_chunks[0]
             for i in range(1, len(output_chunks)):
-                dim = 2 if is_4d else 1
-                output = ttnn.concat([output, output_chunks[i]], dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+                output = ttnn.concat([output, output_chunks[i]], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(output_chunks[i])
 
         # Move final output to L1
         output = ttnn.to_memory_config(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # Reshape back to 3D if input was 3D
+        if was_3d:
+            output = ttnn.reshape(output, [batch_size, seq_len, hidden])
+
+        # Convert back to PyTorch if input was PyTorch
+        if was_torch:
+            output = ttnn.to_torch(output)
 
         return output
 
@@ -483,6 +511,7 @@ class GemmaMLPTTNN:
 # ============================================================================
 # Full Transformer Block (TTNN)
 # ============================================================================
+
 
 class GemmaBlockTTNN:
     """
@@ -520,9 +549,7 @@ class GemmaBlockTTNN:
         self.input_layernorm_weight = weights["input_layernorm.weight"]
         self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
 
-        self.attention = GemmaAttentionTTNN(
-            config, weights, layer_idx, device, cos_meta, sin_meta
-        )
+        self.attention = GemmaAttentionTTNN(config, weights, layer_idx, device, cos_meta, sin_meta)
         self.mlp = GemmaMLPTTNN(config, weights, device)
 
     def forward(
