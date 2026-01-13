@@ -19,6 +19,8 @@ namespace ckernel {
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
  *
+ * @tparam data_format Template argument specifying the data type. Supported types: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
+ *
  * | Argument              | Description                                                              | Type     | Valid Range                                           | Required |
  * |-----------------------|--------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst0                 | The index of the tile in DST register buffer to use as condition operand | uint32_t | Must be less than the size of the DST register buffer | True     |
@@ -27,20 +29,9 @@ namespace ckernel {
  * | odst                  | The index of the tile in DST register buffer to use as output            | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <DataFormat data_format>
 ALWI void where_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
-    MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, DataFormat::Float16_b>(idst0, idst1, idst2, odst)));
-}
-
-ALWI void where_fp32_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
-    MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, DataFormat::Float32>(idst0, idst1, idst2, odst)));
-}
-
-ALWI void where_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
-    MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, DataFormat::Int32>(idst0, idst1, idst2, odst)));
-}
-
-ALWI void where_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
-    MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, DataFormat::UInt32>(idst0, idst1, idst2, odst)));
+    MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, data_format>(idst0, idst1, idst2, odst)));
 }
 
 /**

@@ -11,13 +11,18 @@
 namespace ckernel {
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_binary_sfpu_rsub_int32_init() {
+inline void llk_math_eltwise_binary_sfpu_rsub_int_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8>
 inline void llk_math_eltwise_binary_sfpu_rsub_int(
     uint32_t dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    static_assert(
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
+        "Unsupported data format for rsub_int");
+    constexpr InstrModLoadStore INSTRUCTION_MODE =
+        (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_rsub_int<APPROXIMATE, INSTRUCTION_MODE, ITERATIONS>,
         dst_index0,
@@ -25,4 +30,5 @@ inline void llk_math_eltwise_binary_sfpu_rsub_int(
         odst,
         vector_mode);
 }
+
 }  // namespace ckernel
