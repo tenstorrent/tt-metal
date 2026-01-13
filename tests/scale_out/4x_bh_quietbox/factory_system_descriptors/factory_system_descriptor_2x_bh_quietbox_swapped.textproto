@@ -1,5 +1,5 @@
 hosts {
-  hostname: "qb-03"
+  hostname: "forge-qbae-01"
   hall: "SC_Floor_5"
   aisle: "A"
   rack: 1
@@ -7,7 +7,7 @@ hosts {
   motherboard: "SIENAD8-2L2T"
 }
 hosts {
-  hostname: "qb-04"
+  hostname: "forge-qbae-02"
   hall: "SC_Floor_5"
   aisle: "A"
   rack: 1
