@@ -43,8 +43,10 @@ void kernel_main() {
         // Map output coordinates to input coordinates using fixed-point arithmetic
         // src_y = floor(y_out * reciprocal_scale_h) = floor(y_out / scale_h)
         // src_x = floor(x_out * reciprocal_scale_w) = floor(x_out / scale_w)
-        const uint32_t src_y = static_cast<uint32_t>(fixed_mul(y_out, reciprocal_scale_h_fixed));
-        const uint32_t src_x = static_cast<uint32_t>(fixed_mul(x_out, reciprocal_scale_w_fixed));
+        const uint32_t src_y =
+            static_cast<uint32_t>(fixed_point_arithmetic::fixed_mul(y_out, reciprocal_scale_h_fixed));
+        const uint32_t src_x =
+            static_cast<uint32_t>(fixed_point_arithmetic::fixed_mul(x_out, reciprocal_scale_w_fixed));
 
         // Clamp source coordinates to valid range
         const uint32_t clamped_src_y = (src_y < input_height) ? src_y : (input_height - 1);
