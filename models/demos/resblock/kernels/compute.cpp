@@ -6,6 +6,8 @@
 
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_unary/relu.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
 /**
@@ -34,8 +36,7 @@ void matmul_with_relu_block(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint3
 
     tile_regs_commit();
 
-    // cb_pop_front(cb_a, num_tiles); // Don't pop front here because we need to use the input again for the next
-    // operation
+    // cb_pop_front(cb_a, num_tiles); // Don't pop here because we need to use the input again for next stage
     cb_pop_front(cb_b, num_tiles);
 
     tile_regs_wait();
@@ -46,6 +47,10 @@ void matmul_with_relu_block(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint3
 }
 
 void matmul_with_bias_block(uint32_t cb_a, uint32_t cb_b, uint32_t cb_bias, uint32_t cb_out, uint32_t num_tiles) {
+    constexpr uint32_t MATMUL_ACC_REG_ID = 0;
+    constexpr uint32_t BIAS_REG_ID = 1;
+    constexpr uint32_t OUTPUT_REG_ID = 2;
+
     cb_wait_front(cb_a, num_tiles);
     cb_wait_front(cb_b, num_tiles);
     cb_wait_front(cb_bias, num_tiles);
@@ -53,11 +58,16 @@ void matmul_with_bias_block(uint32_t cb_a, uint32_t cb_b, uint32_t cb_bias, uint
 
     tile_regs_acquire();
 
+    init_sfpu(cb_a, cb_out);  // hangs if we put this at the beginning of the program (or before the binary operation)
+    mm_init_short(cb_a, cb_b);
     for (uint32_t k = 0; k < num_tiles; k++) {
-        matmul_tiles(cb_a, cb_b, k, k, 0);
+        matmul_tiles(cb_a, cb_b, k, k, MATMUL_ACC_REG_ID);
     }
-    // TODO: Add bias here!
-    // Can we do this in-place?
+    copy_tile_init(cb_bias);  // hangs if we put this at the beginning of the program
+    copy_tile(cb_bias, 0, BIAS_REG_ID);
+
+    add_binary_tile_init();
+    add_binary_tile(MATMUL_ACC_REG_ID, BIAS_REG_ID, OUTPUT_REG_ID);
 
     tile_regs_commit();
 
@@ -66,7 +76,7 @@ void matmul_with_bias_block(uint32_t cb_a, uint32_t cb_b, uint32_t cb_bias, uint
     cb_pop_front(cb_bias, num_tiles);
 
     tile_regs_wait();
-    pack_tile(0, cb_out);
+    pack_tile(OUTPUT_REG_ID, cb_out);
     tile_regs_release();
 
     cb_push_back(cb_out, num_tiles);
@@ -84,9 +94,10 @@ void MAIN {
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
-
     mm_block_init(in0_cb, weight0_cb, out_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
     relu_tile_init();
+
+    // copy_tile_init(in0_cb);
 
     matmul_with_relu_block(in0_cb, weight0_cb, interm_cb, num_tiles_k);
     matmul_with_bias_block(interm_cb, weight1_cb, in0_cb, out_cb, num_tiles_k);
