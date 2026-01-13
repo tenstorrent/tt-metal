@@ -89,12 +89,11 @@ FORCE_INLINE DataType* tile_col_offset(DataType* indices_address, uint32_t col) 
 
 void kernel_main() {
     DPRINT << "Writer tilizer started" << ENDL();
-    constexpr uint32_t input_tensor_cb_id = get_named_compile_time_arg_val("input_tensor_cb_id");
     constexpr uint32_t indices_tensor_cb_id = get_named_compile_time_arg_val("indices_tensor_cb_id");
     constexpr uint32_t mapping_tensor_cb_id = get_named_compile_time_arg_val("mapping_tensor_cb_id");
     constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
-    constexpr uint32_t e_d_buffer_id = get_named_compile_time_arg_val("e_d_buffer_id");
     constexpr uint32_t tilizer_input_cb_id = get_named_compile_time_arg_val("tilizer_input_cb_id");
+    constexpr uint32_t tilizer_output_cb_id = get_named_compile_time_arg_val("tilizer_output_cb_id");
 
     constexpr uint32_t input_pages = get_named_compile_time_arg_val("input_pages");
     constexpr uint32_t indices_pages = get_named_compile_time_arg_val("indices_pages");
@@ -103,41 +102,30 @@ void kernel_main() {
     constexpr uint32_t input_page_size = get_named_compile_time_arg_val("input_page_size");
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t mapping_page_size = get_named_compile_time_arg_val("mapping_page_size");
-    constexpr uint32_t metadata_page_size = get_named_compile_time_arg_val("metadata_page_size");
     constexpr uint32_t output_page_size = get_named_compile_time_arg_val("output_page_size");
 
     constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
-    constexpr uint32_t tokens_per_device = get_named_compile_time_arg_val("tokens_per_device");
+    constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
 
     constexpr uint32_t mesh_rows = get_named_compile_time_arg_val("mesh_rows");
     constexpr uint32_t mesh_cols = get_named_compile_time_arg_val("mesh_cols");
 
     constexpr uint32_t aligned_indices_page_size = get_named_compile_time_arg_val("aligned_indices_page_size");
     constexpr uint32_t aligned_mapping_page_size = get_named_compile_time_arg_val("aligned_mapping_page_size");
-    constexpr uint32_t aligned_metadata_page_size = get_named_compile_time_arg_val("aligned_metadata_page_size");
+    constexpr uint32_t aligned_output_page_size = get_named_compile_time_arg_val("aligned_output_page_size");
 
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr uint32_t cluster_axis = get_named_compile_time_arg_val("cluster_axis");
-    constexpr uint32_t max_indices_pages_per_packet = get_named_compile_time_arg_val("max_indices_pages_per_packet");
 
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
 
-    // Multicast coordinates for signaling sender cores that E-D buffer is ready
-    constexpr uint32_t sender_mcast_start_x = get_named_compile_time_arg_val("sender_mcast_start_x");
-    constexpr uint32_t sender_mcast_start_y = get_named_compile_time_arg_val("sender_mcast_start_y");
-    constexpr uint32_t sender_mcast_end_x = get_named_compile_time_arg_val("sender_mcast_end_x");
-    constexpr uint32_t sender_mcast_end_y = get_named_compile_time_arg_val("sender_mcast_end_y");
-    // Multicast coordinates for signaling tilizer cores that E-D table computation is complete
+    // Multicast coordinates for signaling tilizer cores
     constexpr uint32_t tilizer_mcast_start_x = get_named_compile_time_arg_val("tilizer_mcast_start_x");
     constexpr uint32_t tilizer_mcast_start_y = get_named_compile_time_arg_val("tilizer_mcast_start_y");
     constexpr uint32_t tilizer_mcast_end_x = get_named_compile_time_arg_val("tilizer_mcast_end_x");
     constexpr uint32_t tilizer_mcast_end_y = get_named_compile_time_arg_val("tilizer_mcast_end_y");
     constexpr uint32_t num_tilizer_cores = get_named_compile_time_arg_val("num_tilizer_cores");
-    constexpr uint32_t num_sender_cores = get_named_compile_time_arg_val("num_sender_cores");
-    constexpr uint32_t ed_buffer_ready_semaphore_id = get_named_compile_time_arg_val("ed_buffer_ready_semaphore_id");
-    constexpr uint32_t ed_table_computed_semaphore_id =
-        get_named_compile_time_arg_val("ed_table_computed_semaphore_id");
 
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
@@ -149,150 +137,28 @@ void kernel_main() {
     constexpr uint32_t dispatch_index =
         axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
 
-    uint32_t ed_addr = get_read_ptr(e_d_buffer_id);
     uint32_t rt_args_idx = 0;
-    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);           // 0
-    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);         // 1
-    uint32_t output_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);    // 2
-    uint32_t indices_sent_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);  // 3
-    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 4
-    bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);         // 5
+    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);     // 0
+    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);   // 1
+    uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);    // 2
+    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);   // 3
+    bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 4
 
-    constexpr auto output_args = TensorAccessorArgs<0>();
-    constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    constexpr auto output_scores_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
-    constexpr auto mapping_args = TensorAccessorArgs<output_scores_args.next_compile_time_args_offset()>();
-
-    const auto output_tensor_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
-    const auto metadata_tensor_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
-    // scores and indices tensors use same page size
-    const auto output_scores_tensor_addr_gen =
-        TensorAccessor(output_scores_args, output_scores_tensor_address, indices_page_size);
+    // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output
+    // We need to chain through to get the correct offset for mapping (index 3)
+    constexpr auto input_args = TensorAccessorArgs<0>();
+    constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
+    constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
 
-    // read in the mapping tensor
-    for (uint32_t mapping_page = 0; mapping_page < mapping_pages; mapping_page++) {
-        cb_reserve_back(mapping_tensor_cb_id, 1);
-        noc_async_read_page(mapping_page, mapping_tensor_addr_gen, get_write_ptr(mapping_tensor_cb_id));
-        noc_async_read_barrier();
-        cb_push_back(mapping_tensor_cb_id, 1);
-    }
-
-    uint16_t* devices_for_experts = (uint16_t*)get_read_ptr(mapping_tensor_cb_id);
-    // l1_alignment is in bytes, but ed_table is uint32_t*, so we need to divide by sizeof(uint32_t)
-    // to get the correct stride for pointer arithmetic
-    constexpr uint32_t entries_per_l1_alignment = l1_alignment / sizeof(uint32_t);
-
-    // POST-PROCESSING STAGE:
-    // Only drain_tilizer_cores do the ground truth computation, matching the reader_tilizer
-    // which only pushes CB pages for drain cores after waiting for the all-gather semaphore.
-
-    if (is_drain_tilizer_core) {
-        // Read in metadata into indices cb and update the ground truth E-D table offset into the second half of the
-        // E-D buffer. We iterate through all source devices' metadata, counting how many tokens will arrive at each
-        // local expert from each source device.
-        constexpr uint32_t tile_height = 32;
-
-        uint32_t base_ed_table_offset = ed_addr + experts_per_device * dispatch_devices * l1_alignment;
-        volatile tt_l1_ptr uint32_t* ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_ed_table_offset);
-
-        for (uint32_t device_id = 0; device_id < dispatch_devices; device_id++) {
-            uint32_t tokens_processed = 0;
-            uint32_t indices_page = 0;
-
-            while (tokens_processed < tokens_per_device) {
-                cb_wait_front(indices_tensor_cb_id, 1);
-                uint16_t* indices_ptr = (uint16_t*)get_read_ptr(indices_tensor_cb_id);
-
-                // Process tokens within this tile, but don't exceed tokens_per_device
-                uint32_t tile_row = 0;
-                while (tile_row < tile_height && tokens_processed < tokens_per_device) {
-                    uint16_t* token_ptr = tile_row_offset(indices_ptr, tile_row);
-                    for (uint32_t k = 0; k < selected_experts_k; k++) {
-                        uint16_t expert_chosen = tile_col_offset(token_ptr, k)[0];
-                        uint16_t d = devices_for_experts[expert_chosen];
-                        if (d == linearized_mesh_coord) {
-                            uint32_t local_expert = expert_chosen % experts_per_device;
-                            ed_table[(local_expert * dispatch_devices + device_id) * entries_per_l1_alignment]++;
-                        }
-                    }
-                    tile_row++;
-                    tokens_processed++;
-                }
-
-                cb_pop_front(indices_tensor_cb_id, 1);
-                indices_page++;
-            }
-        }
-
-        // Set local semaphore and multicast to signal E-D table computation is complete
-        uint32_t ed_computed_sem_addr = get_semaphore(ed_table_computed_semaphore_id);
-        volatile tt_l1_ptr uint32_t* ed_computed_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ed_computed_sem_addr);
-        noc_semaphore_set(ed_computed_sem_ptr, 1);
-
-        // Only multicast if there are other tilizer cores to send to
-        // When num_tilizer_cores == 1 (only drain core), loopback_src will hang
-        if constexpr (num_tilizer_cores > 1) {
-            // Multicast the E-D table data to all tilizer cores
-            uint32_t ed_table_size = experts_per_device * dispatch_devices * l1_alignment;
-
-            uint64_t tilizer_mcast_noc_addr = get_safe_multicast_noc_addr(
-                tilizer_mcast_start_x,
-                tilizer_mcast_start_y,
-                tilizer_mcast_end_x,
-                tilizer_mcast_end_y,
-                base_ed_table_offset);
-            noc_async_write_multicast_loopback_src(
-                base_ed_table_offset, tilizer_mcast_noc_addr, ed_table_size, num_tilizer_cores);
-            noc_async_write_barrier();
-
-            uint64_t sem_mcast_addr = get_safe_multicast_noc_addr(
-                tilizer_mcast_start_x,
-                tilizer_mcast_start_y,
-                tilizer_mcast_end_x,
-                tilizer_mcast_end_y,
-                ed_computed_sem_addr);
-            noc_semaphore_set_multicast_loopback_src(ed_computed_sem_addr, sem_mcast_addr, num_tilizer_cores);
-            noc_async_write_barrier();
-        }
-        // When num_tilizer_cores == 1, data is already local, no multicast needed
-    }
-
-    // Tilizer cores wait for the E-D table computation to be complete
-    uint32_t ed_computed_sem_addr = get_semaphore(ed_table_computed_semaphore_id);
-    noc_semaphore_wait((uint32_t*)ed_computed_sem_addr, 1);
-
-    // iterate through the ground truth E-D table and compute how many chunks are processed total to know the total
-    // number of loops
-    uint32_t base_ed_table_offset = ed_addr + experts_per_device * dispatch_devices * l1_alignment;
-    volatile tt_l1_ptr uint32_t* ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_ed_table_offset);
-    uint32_t total_chunks = 0;
-    for (uint32_t local_expert = 0; local_expert < experts_per_device; local_expert++) {
-        for (uint32_t src_dev = 0; src_dev < dispatch_devices; src_dev++) {
-            total_chunks += (ed_table[(local_expert * dispatch_devices + src_dev) * entries_per_l1_alignment] +
-                             tokens_per_chunk - 1) /
-                            tokens_per_chunk;
-        }
-    }
-    DPRINT << "total_chunks=" << total_chunks << ENDL();
-
-    // Pass total_chunks to compute kernel via CB
-    constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
-    cb_reserve_back(total_chunks_cb_id, 1);
-    volatile tt_l1_ptr uint32_t* total_chunks_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(total_chunks_cb_id));
-    *total_chunks_ptr = total_chunks;
-    cb_push_back(total_chunks_cb_id, 1);
+    // TODO: Wait for reader_tilizer to populate E-T buffer, then compute total_chunks
 
     // Wait for compute kernel to push tilized output
-    constexpr uint32_t tilizer_output_cb_id = get_named_compile_time_arg_val("tilizer_output_cb_id");
-    constexpr uint32_t tiles_per_chunk = get_named_compile_time_arg_val("tiles_per_chunk");
-    for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
-        cb_wait_front(tilizer_output_cb_id, tiles_per_chunk);
-        // TODO: Write tilized tiles to output/matmul cores here
-        print_tile_rows(tilizer_output_cb_id, 0, true);
-        print_tile_rows(tilizer_output_cb_id, 223, true);
-        cb_pop_front(tilizer_output_cb_id, tiles_per_chunk);
-    }
+    // constexpr uint32_t tilizer_output_cb_id = get_named_compile_time_arg_val("tilizer_output_cb_id");
+    // constexpr uint32_t tiles_per_chunk = get_named_compile_time_arg_val("tiles_per_chunk");
+    // for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
+    //     // cb_wait_front(tilizer_output_cb_id, tiles_per_chunk);
+    //     // cb_pop_front(tilizer_output_cb_id, tiles_per_chunk);
+    // }
 }
