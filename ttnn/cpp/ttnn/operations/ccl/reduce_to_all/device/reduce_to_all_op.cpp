@@ -181,11 +181,6 @@ ReduceToAllOp::ReduceToAll::cached_mesh_workload_t ReduceToAllOp::ReduceToAll::c
         std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor_l, coord, -1, topology, std::nullopt);
 
-        if (coord == operation_attributes.root_coord) {
-            if (forward_coord.has_value() == 0 || backward_coord.has_value() == 0) {
-                TT_FATAL(false, "Root device must have both forward and backward neighbors in reduce_to_all op");
-            }
-        }
         if (topology == tt::tt_fabric::Topology::Ring) {
             if (forward_coord.has_value() == 0 || backward_coord.has_value() == 0) {
                 TT_FATAL(

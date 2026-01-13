@@ -70,8 +70,6 @@ void kernel_main() {
     constexpr uint32_t input_num_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(11);
     constexpr uint32_t packet_size_bytes = get_compile_time_arg_val(12);
-    constexpr uint32_t device_idx = get_compile_time_arg_val(13);
-    DPRINT << "device_idx: " << (uint32_t)device_idx << "\n";
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -85,8 +83,6 @@ void kernel_main() {
     const uint32_t core_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t current_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t current_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    // Handoff semaphore to signal Writer2 when Reader2 disconnects from mux
-    const uint32_t reader2_to_writer2_handoff_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     const uint8_t sender_num_hops = 1;
 
@@ -226,7 +222,7 @@ void kernel_main() {
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
         DPRINT << "waiting for 7 termination signals\n";
-        noc_semaphore_wait(termination_sync_ptr, 7);
+        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         DPRINT << "terminated mux\n";
     } else {
