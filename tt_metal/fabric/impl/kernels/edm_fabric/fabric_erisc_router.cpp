@@ -523,14 +523,13 @@ template <
     typename WorkerInterfaceT,
     typename ReceiverPointersT
 >
-//    typename ReceiverChannelT>
 FORCE_INLINE void send_next_data(
     SenderChannelT& sender_buffer_channel,
     WorkerInterfaceT& sender_worker_interface,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
-    auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
 
+    auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
