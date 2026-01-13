@@ -20,7 +20,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
-#include "api/debug/dprint.h"
 
 namespace NAMESPACE {
 
@@ -81,28 +80,14 @@ void MAIN {
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
-            PACK(
-                DPRINT << "start of process tiles across width in blocks on tile_row: " << tile_row
-                       << " col_tile: " << col_tile << ENDL());
-
             // 1) x_minus_mean
             reconfig_data_format(cb_inp, cb_stats_reduced);
             pack_reconfig_data_format(cb_intermediate);
             sub_bcast_cols_init_short(cb_inp, cb_stats_reduced);
             cb_wait_front(cb_inp, block_size);
-            UNPACK(DPRINT << "wait_front cb_inp on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL());
             cb_reserve_back(cb_intermediate, block_size);
-            PACK(
-                DPRINT << "reserve_back cb_intermediate on tile_row: " << tile_row << " col_tile: " << col_tile
-                       << ENDL());
-            UNPACK(
-                DPRINT << "reserve_back cb_intermediate on tile_row: " << tile_row << " col_tile: " << col_tile
-                       << ENDL());
             tile_regs_acquire();
-
-            PACK(DPRINT << "tile_regs_wait on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL());
             tile_regs_wait();
-            PACK(DPRINT << "tile_regs_wait done on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL());
             for (uint32_t i = 0; i < block_size; i++) {
                 sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, i, 0, i);
                 pack_tile(i, cb_intermediate);
@@ -111,21 +96,14 @@ void MAIN {
             tile_regs_release();
             cb_pop_front(cb_inp, block_size);
             cb_push_back(cb_intermediate, block_size);
-            UNPACK(DPRINT << "pop_front cb_inp on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL());
-            PACK(DPRINT << "pop_front cb_inp on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL());
+
             // 2) normalize: (x-mean) * inv_std
             constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate : cb_out;
             reconfig_data_format(cb_intermediate, cb_recip_sqrt_var);
             pack_reconfig_data_format(norm_target_cb);
             mul_bcast_cols_init_short(cb_intermediate, cb_recip_sqrt_var);
             cb_wait_front(cb_intermediate, block_size);
-            UNPACK(
-                DPRINT << "wait_front cb_intermediate on tile_row: " << tile_row << " col_tile: " << col_tile
-                       << ENDL());
             cb_wait_front(cb_recip_sqrt_var, 1);
-            UNPACK(
-                DPRINT << "wait_front cb_recip_sqrt_var on tile_row: " << tile_row << " col_tile: " << col_tile
-                       << ENDL());
             tile_regs_acquire();
             for (uint32_t i = 0; i < block_size; i++) {
                 mul_tiles_bcast_cols(cb_intermediate, cb_recip_sqrt_var, i, 0, i);
@@ -135,21 +113,14 @@ void MAIN {
             // Note that compute and pack are separated because it's possible that
             // norm_target_cb == cb_intermediate (in the case of no gamma/beta), so this
             // must be able to support in-place operations.
-            UNPACK(
-                DPRINT << "pop_front cb_intermediate on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL());
             cb_pop_front(cb_intermediate, block_size);
             cb_reserve_back(norm_target_cb, block_size);
-            UNPACK(
-                DPRINT << "reserve_back norm_target_cb on tile_row: " << tile_row << " col_tile: " << col_tile
-                       << ENDL());
             tile_regs_wait();
             for (uint32_t i = 0; i < block_size; i++) {
                 pack_tile(i, norm_target_cb);
             }
             tile_regs_release();
             cb_push_back(norm_target_cb, block_size);
-            UNPACK(
-                DPRINT << "push_back norm_target_cb on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL());
 
             // 3) optional gamma
             if constexpr (do_gamma) {
