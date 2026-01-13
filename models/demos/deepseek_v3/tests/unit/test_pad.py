@@ -58,9 +58,9 @@ def test_pad_deepseek(mesh_device, test_config, dtype, layout, enable_trace):
     torch_ref = torch.nn.functional.pad(torch_input, sum([[0, pd] for pd in reversed(shape_diff)], []), value=pad_value)
 
     coords = list(tt_outputs.tensor_topology().mesh_coords())
-    view = mesh_device.get_view()
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
     for coord, tt_out in zip(coords, ttnn.get_device_tensors(tt_outputs)):
-        if not view.is_local(coord):
+        if view is not None and not view.is_local(coord):
             continue
         torch_out = ttnn.to_torch(tt_out)
         eq, output = comp_equal(torch_out, torch_ref)

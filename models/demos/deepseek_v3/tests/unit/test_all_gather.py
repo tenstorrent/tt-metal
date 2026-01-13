@@ -93,11 +93,11 @@ def test_deepseek(mesh_device, shape_dtype_buffer_type_shard_spec, layout, dim, 
 
     tt_output_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
     coords = list(tt_output_tensor.tensor_topology().mesh_coords())
-    view = mesh_device.get_view()
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
     per_device_batch = torch_reference.shape[0] // math.prod(mesh_device.shape)
     torch_reference_slices = torch_reference.split(per_device_batch, dim=0)
     for device_idx, (coord, tt_out) in enumerate(zip(coords, ttnn.get_device_tensors(tt_output_tensor))):
-        if not view.is_local(coord):
+        if view is not None and not view.is_local(coord):
             continue
         eq, mess = comp_equal(torch_reference_slices[device_idx], ttnn.to_torch(tt_out))
         assert eq, mess
