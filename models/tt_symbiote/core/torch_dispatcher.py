@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+
 def handle_view(func, args, kwargs):
     """Handle view operation."""
     return args[0].reshape(args[1])
