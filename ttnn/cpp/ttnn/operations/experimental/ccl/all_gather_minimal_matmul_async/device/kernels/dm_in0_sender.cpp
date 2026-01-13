@@ -34,16 +34,17 @@ void kernel_main() {
     constexpr uint32_t is_injector_core_forward = get_compile_time_arg_val(21);
     constexpr uint32_t num_devices = get_compile_time_arg_val(22);
     constexpr uint32_t my_rank = get_compile_time_arg_val(23);
+    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(24);
 
 #ifdef USE_MUX
-    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(24);
-    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(25);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(26);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(27);
-    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(28);
-    constexpr uint32_t ct_arg_count = 29;
+    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(25);
+    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(26);
+    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(27);
+    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(28);
+    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(29);
+    constexpr uint32_t ct_arg_count = 30;
 #else
-    constexpr uint32_t ct_arg_count = 24;
+    constexpr uint32_t ct_arg_count = 25;
 #endif
 
     // Load input/output addresses and range parameters
@@ -51,6 +52,7 @@ void kernel_main() {
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in3_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_dest_backward_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_dest_backward_noc_y = get_arg_val<uint32_t>(argidx++);
@@ -143,6 +145,15 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
 #endif
 
+#ifdef READ_FROM_LOCAL_INPUT
+#ifdef FUSE_BIAS
+    constexpr auto in3_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
+#else
+    constexpr auto in3_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#endif
+    const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
+#endif
+
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
     *(in0_valid_semaphore_addr_ptr) = VALID;
@@ -231,6 +242,12 @@ void kernel_main() {
                         in0_shape,
                         in0_start_address,
                         in0_tile_size,
+#ifdef READ_FROM_LOCAL_INPUT
+                        in3_reader,
+                        my_rank * (padded_K_tiles / num_devices),
+                        (my_rank + 1) * (padded_K_tiles / num_devices) - 1,
+                        padded_K_tiles / num_devices,
+#endif
                         m_tile,
                         m_tile_end,
                         k_block * K_block_tiles,
