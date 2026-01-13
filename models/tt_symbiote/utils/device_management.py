@@ -60,7 +60,7 @@ def set_device(obj, device, register_forward_hook=True):
                     continue
                 try:
                     value = getattr(current_obj, attr_name)
-                except:
+                except Exception as e:
                     continue
                 if isinstance(value, TTNNModule):
                     value.to_device(device)
@@ -82,7 +82,7 @@ def set_device(obj, device, register_forward_hook=True):
                     continue
                 try:
                     value = getattr(current_obj, attr_name)
-                except:
+                except Exception as e:
                     continue
                 if isinstance(value, TTNNModule):
                     value.to_device(device)
