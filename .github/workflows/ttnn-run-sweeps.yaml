@@ -12,6 +12,7 @@ on:
           - ALL SWEEPS (Nightly)
           - ALL SWEEPS (Comprehensive)
           - ALL SWEEPS (Model Traced)
+          - ALL SWEEPS (Lead Models)
           - add
           - ccl.generality.all_broadcast
           - ccl.generality.all_gather
@@ -612,9 +613,9 @@ on:
 
   schedule:
     - cron: "30 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:30 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
-    - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
-    - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
+    - cron: "0 4 * * 3, 6" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
     - cron: "0 4 * * *" # This cron schedule runs the workflow at 4:00 AM UTC daily (model traced runs)
+    - cron: "0 3 * * *" # This cron schedule runs the workflow at 3:00 AM UTC daily (lead model runs)
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name }}
 
