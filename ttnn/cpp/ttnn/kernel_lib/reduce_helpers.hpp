@@ -639,6 +639,8 @@ ALWI void reduce(
                 uint32_t current_chunk = chunk_end - wt;
                 uint32_t tiles_in_chunk = Ht * current_chunk;
 
+                // 19 8 + 8 + 3
+
                 // STREAMING_BATCHED: wait for entire chunk upfront
                 if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
                     cb_wait_front(icb, tiles_in_chunk);
