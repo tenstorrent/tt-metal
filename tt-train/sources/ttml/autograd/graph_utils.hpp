@@ -31,6 +31,11 @@ std::vector<NodeId> get_links(Tensors&&... tensors) {
     return links;
 }
 
+/**
+ * @brief Check if any of the input tensors requires gradients.
+ * @param tensors The input tensors.
+ * @return True if any of the input tensors requires gradients, false otherwise.
+ */
 template <typename... Tensors>
 bool any_requires_grad(Tensors&&... tensors) {
     static_assert(core::are_same_type<Tensors...>(), "All nodes must have the same type!");
@@ -47,6 +52,17 @@ bool any_requires_grad(Tensors&&... tensors) {
     return requires_grad;
 }
 
+/**
+ * @brief Add a backward node to the graph.
+ * @param grad_function The gradient function to add.
+ * @param output The output tensor.
+ * @param tensors The input tensors.
+ * @return The node id of the added node.
+ * This function helps implement branch pruning autograd optimization.
+ * Node is added only if any of the input tensors requires gradients.
+ * In other words, if all inputs of the operation do not require gradients, then we don't need to propagate gradients
+ * through this operation. Note: ctx().add_backward_node adds a node unconditionally.
+ */
 template <typename... Tensors>
 std::optional<NodeId> add_backward_node(GradFunction&& grad_function, const TensorPtr& output, Tensors&&... tensors) {
     static_assert(core::are_same_type<Tensors...>(), "All nodes must have the same type!");
