@@ -66,7 +66,7 @@ void convert_to_sign_mag(std::vector<int8_t>& vec) {
             }
             temp = (~temp) + 1;
             temp = temp | 0x80;
-            vec[i] = temp;
+            i = temp;
         }
     }
 }
