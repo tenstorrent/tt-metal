@@ -321,17 +321,6 @@ def test_reduce_to_all_with_trace(bh_2d_mesh_device):
     profiler.end("reduce-to-root-trace")
     signpost("stop")
 
-    # Get timing results
-    warmup_time = profiler.get_duration("reduce-to-root-warmup")
-    trace_time = profiler.get_duration("reduce-to-root-trace")
-    time_per_iter = trace_time / num_perf_iters
-
-    print(f"\n=== Performance Results ===")
-    print(f"Warmup time ({num_warmup_iters} iters): {warmup_time * 1000:.3f} ms")
-    print(f"Trace time ({num_perf_iters} iters): {trace_time * 1000:.3f} ms")
-    print(f"Time per iteration: {time_per_iter * 1000:.3f} ms")
-    print(f"Throughput: {1.0 / time_per_iter:.1f} iters/sec")
-
     # Verify the output from the last trace execution
     print("\nVerifying trace output...")
     output_l_torch = ttnn.to_torch(out_l_trace, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))

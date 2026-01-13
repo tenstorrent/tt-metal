@@ -179,12 +179,10 @@ void kernel_main() {
 
     cb_pop_front(packet_cb_id, 1);
 
-    // Disconnect from mux to allow Reader1 to use the same channel
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     DPRINT << "after fabric_client_disconnect\n";
 
     // Writer1 uses forward mux - signal the forward mux termination master (Reader2)
-    // Writer1 never is the termination master for forward mux, so just signal
     {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
@@ -197,7 +195,6 @@ void kernel_main() {
 
     DPRINT << "round2\n";
     // ROUND 2: wait for compute and write output
-
     // receives l, m, s tensors from the compute kernel and writes to the final output buffers
     constexpr uint32_t onetile = 1;
     write_data(

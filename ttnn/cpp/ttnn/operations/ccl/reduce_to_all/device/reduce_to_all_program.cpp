@@ -75,6 +75,13 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     std::optional<ttnn::MeshCoordinate>& backward_coord,
     ReduceToAllOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
+    // Reduce to all : reduce to root scheme 3 (with Ring)
+    // The output of the SDPA reduction is avaialble an on all devices at the end
+    // Round 1:
+    // devices 0-1 and devices 2-3 exchange their local data and compute the partial reduction locally
+    // Round 2:
+    // devices 0-3 and devices 1-2 exchange their partial reductions and compute the final result locally
+
     auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
@@ -87,17 +94,13 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     const auto& output_tensor_s = output_tensors.at(1)[1];
     const auto& output_tensor_m = output_tensors.at(1)[2];
 
-    // check which device is this one based on coordinates
+    constexpr auto num_links = 2;
     auto* device = input_tensor_l.device();
     auto mesh_shape = mesh_device->shape();
-    bool is_root_device = false;
     bool is_root2_device = false;
     bool is_sender_device = false;
     bool is_leftmost = false;
-    if (device_coordinate == root_coord) {
-        // this is the root device
-        is_root_device = true;
-    } else if (device_coordinate != root_coord && backward_coord.has_value() && backward_coord.value() == root_coord) {
+    if (device_coordinate != root_coord && backward_coord.has_value() && backward_coord.value() == root_coord) {
         // this is the intermediate device
         is_root2_device = true;
     } else if (forward_coord.has_value() && forward_coord.value() == root_coord) {
@@ -121,15 +124,62 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     const auto& shard_spec = input_tensor_l.shard_spec().value();
     const auto& shard_grid = shard_spec.grid;
 
-    // Get all cores from the shard grid
+    // Get all cores from the shard grid (data cores)
     std::vector<CoreCoord> all_coord_cores;
     for (const auto& core_range : shard_grid.ranges()) {
         auto cores = corerange_to_cores(core_range, std::nullopt);
         all_coord_cores.insert(all_coord_cores.end(), cores.begin(), cores.end());
     }
-    // const CoreRangeSet all_cores = shard_grid;
-    // all_cores should be now the shard grid and another set of cores same size as shard grid
-    const auto all_worker_cores = {
+
+    /* Automate core selection logic
+    // Determine mux cores early so we can exclude them from worker core selection
+    std::vector<CoreCoord> mux_cores_for_exclusion = {
+        CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};
+    if (operation_attributes.input_mux_cores.has_value()) {
+        mux_cores_for_exclusion = operation_attributes.input_mux_cores.value();
+    }
+    CoreRangeSet mux_cores_set = CoreRangeSet(mux_cores_for_exclusion);
+
+    // Get full compute grid and find available cores (excluding shard and mux cores)
+    auto compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreRangeSet full_grid(CoreRange({0, 0}, {compute_grid.x - 1, compute_grid.y - 1}));
+    CoreRangeSet available_cores = full_grid.subtract(shard_grid).subtract(mux_cores_set);
+
+    // Pick 8 cores from available_cores for non_shard_cores
+    const uint32_t num_non_shard_cores_needed = all_coord_cores.size();  // Same size as shard grid
+    auto available_cores_vec = corerange_to_cores(available_cores, std::nullopt, true);
+    TT_FATAL(
+        available_cores_vec.size() >= num_non_shard_cores_needed,
+        "Not enough available cores for non_shard_cores. Need {} but only {} available.",
+        num_non_shard_cores_needed,
+        available_cores_vec.size());
+    std::vector<CoreCoord> non_shard_cores_vec(
+        available_cores_vec.begin(), available_cores_vec.begin() + num_non_shard_cores_needed);
+    const CoreRangeSet non_shard_grid = CoreRangeSet(non_shard_cores_vec);
+
+    // Construct all_worker_cores: interleave data cores and non-shard cores per link
+    // Format: 4 data cores (link 1), 4 non-shard cores (link 1), 4 data cores (link 2), 4 non-shard cores (link 2)
+    const uint32_t cores_per_link = all_coord_cores.size() / num_links;
+    std::vector<CoreCoord> all_worker_cores_vec;
+    all_worker_cores_vec.reserve(all_coord_cores.size() + non_shard_cores_vec.size());
+
+    // Link 1: first half of data cores + first half of non-shard cores
+    all_worker_cores_vec.insert(
+        all_worker_cores_vec.end(), all_coord_cores.begin(), all_coord_cores.begin() + cores_per_link);
+    all_worker_cores_vec.insert(
+        all_worker_cores_vec.end(), non_shard_cores_vec.begin(), non_shard_cores_vec.begin() + cores_per_link);
+
+    // Link 2: second half of data cores + second half of non-shard cores
+    all_worker_cores_vec.insert(
+        all_worker_cores_vec.end(), all_coord_cores.begin() + cores_per_link, all_coord_cores.end());
+    all_worker_cores_vec.insert(
+        all_worker_cores_vec.end(), non_shard_cores_vec.begin() + cores_per_link, non_shard_cores_vec.end());
+
+    const CoreRangeSet all_cores = CoreRangeSet(all_worker_cores_vec);
+    */
+
+    // hardcoding cores gives better perf
+    const auto all_worker_cores_vec = {
         CoreCoord(0, 0),
         CoreCoord(0, 1),
         CoreCoord(0, 2),
@@ -147,7 +197,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         CoreCoord(1, 6),
         CoreCoord(1, 7)};
 
-    const CoreRangeSet all_cores = CoreRangeSet(all_worker_cores);
+    const CoreRangeSet all_cores = CoreRangeSet(all_worker_cores_vec);
 
     const auto non_shard_cores = {
         CoreCoord(0, 4),
@@ -429,8 +479,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     const uint32_t num_workers_per_direction = 8;
     const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
-    std::vector<CoreCoord> mux_cores = {
-        CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};  // to be modified based on device type
+    std::vector<CoreCoord> mux_cores = {CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};
 
     if (operation_attributes.input_mux_cores.has_value()) {
         mux_cores = operation_attributes.input_mux_cores.value();
@@ -460,7 +509,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     } scale_union{};
     scale_union.f = scale_fp32;
     uint32_t scale_val = scale_union.u;
-    uint32_t loop_size = is_root_device ? 2 : 1;
+    uint32_t round = 0;
 
     auto compute_kernel_configuration = ttnn::init_device_compute_kernel_config(
         input_tensor_l.device()->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
@@ -552,15 +601,35 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         mux_kernel_config,
         writer_ct_args2);
 
-    compute_ct_args = {compute_out_cb_l, compute_cb_l,      compute_cb_2_l,    compute_cb_s,     compute_cb_2_m,
-                       compute_cb_m,     compute_out_cb_m,  cb_exp_max_diff_2, compute_cb_2_s,   cb_exp_max_diff,
-                       compute_out_cb_s, cb_m_temp,         cb_s_temp,         cb_s1_temp,       cb_s2_temp,
-                       cb_l1_temp,       cb_l2_temp,        scale_val,         Sq_chunk_t,       vDHt,
-                       loop_size,        intermediate_cb_l, intermediate_cb_s, intermediate_cb_m};
+    compute_ct_args = {
+        compute_out_cb_l,
+        compute_cb_l,
+        compute_cb_2_l,
+        compute_cb_s,
+        compute_cb_2_m,
+        compute_cb_m,
+        compute_out_cb_m,
+        cb_exp_max_diff_2,
+        compute_cb_2_s,
+        cb_exp_max_diff,
+        compute_out_cb_s,
+        cb_m_temp,
+        cb_s_temp,
+        cb_s1_temp,
+        cb_s2_temp,
+        cb_l1_temp,
+        cb_l2_temp,
+        scale_val,
+        Sq_chunk_t,
+        vDHt,
+        round,
+        intermediate_cb_l,
+        intermediate_cb_s,
+        intermediate_cb_m};
 
     // devices 0 and 2:
-    // fw: reader and writer 1:
-    // bw: reader and writer 2
+    // shard grid: fw: reader and writer 1:
+    // non shard grid: bw: reader and writer 2
     if ((is_sender_device && is_leftmost) || is_root2_device) {
         reader_kernel1 = tt::tt_metal::CreateKernel(
             program,
@@ -586,10 +655,11 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             non_shard_grid,
             tt::tt_metal::WriterDataMovementConfig(writer_ct_args2));
 
-        // compute_kernel2 handles Round 2 compute, runs with reader1/writer1 on shard_grid
+        // handles Round 2 compute, runs with reader1/writer1 on shard_grid
+        compute_ct_args[20] = 1;  // round 2
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute_kernel2.cpp",
+            "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute_kernel.cpp",
             shard_grid,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
@@ -598,10 +668,11 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                 .compile_args = compute_ct_args,
             });
 
-        // compute_kernel1 handles Round 1 compute, runs with reader2/writer2 on non_shard_grid
+        // handles Round 1 compute, runs with reader2/writer2 on non_shard_grid
+        compute_ct_args[20] = 0;
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute_kernel1.cpp",
+            "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute_kernel.cpp",
             non_shard_grid,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
@@ -611,8 +682,8 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             });
     } else {
         // devices 1 and 3:
-        // fw: reader and writer 2
-        // bw: reader and writer 1
+        // shard grid: fw: reader and writer 2
+        // non shard grid: bw: reader and writer 1
         reader_kernel1 = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/reader1.cpp",
@@ -637,9 +708,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             shard_grid,
             tt::tt_metal::WriterDataMovementConfig(writer_ct_args2));
 
+        compute_ct_args[20] = 0;  // round 1
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute_kernel1.cpp",
+            "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute_kernel.cpp",
             shard_grid,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
@@ -647,9 +719,11 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_ct_args,
             });
+
+        compute_ct_args[20] = 1;  // round 2
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute_kernel2.cpp",
+            "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute_kernel.cpp",
             non_shard_grid,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
@@ -661,10 +735,9 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // set runtime args
 
     // Split cores into links - divide all cores evenly between links
-    constexpr auto num_links = 2;
     std::vector<CoreCoord> cores1;
     std::vector<CoreCoord> cores2;
-    std::vector<CoreRangeSet> cores_per_link;
+    std::vector<CoreRangeSet> cores_per_link_set;
     std::vector<CoreRangeSet> worker_cores_per_link;
 
     // Split cores evenly: first half to link 1, second half to link 2
@@ -680,40 +753,34 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     std::vector<CoreCoord> cores_link_2(all_coord_cores.begin() + cores_per_link_count, all_coord_cores.end());
     std::vector<std::vector<CoreCoord>> cores_link_vec = {cores_link_1, cores_link_2};
 
-    cores_per_link.push_back(CoreRangeSet(cores_link_1));
-    cores_per_link.push_back(CoreRangeSet(cores_link_2));
+    cores_per_link_set.push_back(CoreRangeSet(cores_link_1));
+    cores_per_link_set.push_back(CoreRangeSet(cores_link_2));
 
     // worker cores per link
-    const uint32_t num_worker_cores = all_worker_cores.size();
+    const uint32_t num_worker_cores = all_worker_cores_vec.size();
     const uint32_t worker_cores_per_link_count = num_worker_cores / num_links;
     std::vector<CoreCoord> worker_cores_link_1(
-        all_worker_cores.begin(), all_worker_cores.begin() + worker_cores_per_link_count);
+        all_worker_cores_vec.begin(), all_worker_cores_vec.begin() + worker_cores_per_link_count);
     std::vector<CoreCoord> worker_cores_link_2(
-        all_worker_cores.begin() + worker_cores_per_link_count, all_worker_cores.end());
+        all_worker_cores_vec.begin() + worker_cores_per_link_count, all_worker_cores_vec.end());
 
     worker_cores_per_link.push_back(CoreRangeSet(worker_cores_link_1));
     worker_cores_per_link.push_back(CoreRangeSet(worker_cores_link_2));
 
     // Set termination master to the first core of each link
-    // With the mux split (Reader1/Writer2 use backward, Writer1/Reader2 use forward),
-    // we need separate termination masters for each mux direction:
-    // - backward_mux_term_master[link] = first 4 cores' termination master (Reader1 will terminate)
-    // - forward_mux_term_master[link] = second 4 cores' termination master (Reader2 will terminate)
+    // separate termination masters for each mux direction:
+    // - backward_mux_term_master[link] = Reader1 will terminate
+    // - forward_mux_term_master[link] = Reader2 will terminate
     uint32_t num_worker_cores_per_link_per_dir = 4;
     std::vector<CoreCoord> termination_masters = {
         worker_cores_link_1[0],
         worker_cores_link_2[0],
         worker_cores_link_1[num_worker_cores_per_link_per_dir],
         worker_cores_link_2[num_worker_cores_per_link_per_dir]};
-    // Backward mux termination masters (index 0 for link 0, 1 for link 1)
-    // Forward mux termination masters (index 2 for link 0, 3 for link 1)
+
     auto get_bwd_mux_term_master = [&](uint32_t link_idx) { return termination_masters[link_idx]; };
     auto get_fwd_mux_term_master = [&](uint32_t link_idx) { return termination_masters[link_idx + 2]; };
-    CoreCoord termination_master = termination_masters[0];
 
-    // Create shared termination sync semaphores for each mux direction
-    // These semaphores are created on the termination master's core and shared by all workers using that mux
-    // Index 0,1: backward mux for link 0,1; Index 2,3: forward mux for link 0,1
     std::vector<uint32_t> shared_term_sync_sems;
     for (size_t i = 0; i < termination_masters.size(); i++) {
         shared_term_sync_sems.push_back(CreateSemaphore(program, {termination_masters[i]}, 0));
@@ -724,7 +791,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     uint32_t mux_core_offset = 0;
 
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
-        // uint32_t start_idx = link_idx == 0 ? 0 : 2;
         for (uint32_t dir = 0; dir < 2; dir++) {
             CoreCoord mux_logical_core = all_mux_cores[mux_core_offset++];
             std::vector<uint32_t> mux_rt_args = {};
@@ -761,11 +827,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             auto current_core_x = current_core.x;
             auto current_core_y = current_core.y;
 
-            termination_master = termination_masters[link_idx + 2 * (core_idx / num_worker_cores_per_link_per_dir)];
-
-            // Get termination masters for each mux direction
-            // Backward mux: terminated by Reader1 (first 4 cores), master = termination_masters[link_idx]
-            // Forward mux: terminated by Reader2 (second 4 cores), master = termination_masters[link_idx + 2]
             CoreCoord bwd_mux_term_master = get_bwd_mux_term_master(link_idx);
             CoreCoord fwd_mux_term_master = get_fwd_mux_term_master(link_idx);
 
@@ -792,8 +853,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         round1_intermediate_tensor.buffer()->address(),
                         coord_semaphore.address()};
 
-                    // Reader1 uses BACKWARD mux (Round2: receives from D3->D0, D1->D2)
-                    // Use bwd_mux_term_master for backward mux termination coordination
                     fabric_mux_rt_args(
                         c == bwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -842,8 +901,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
 
                     // For D0/D2 second 4 cores, Writer2 needs to signal the paired Reader1 on first 4 cores
-                    // The paired Reader1 is at core_idx - num_worker_cores_per_link_per_dir (i.e., core 0-0 for core
-                    // 0-4)
                     auto& worker_cores_for_link = (link_idx == 0) ? worker_cores_link_1 : worker_cores_link_2;
                     auto paired_reader1_core = worker_cores_for_link[core_idx - num_worker_cores_per_link_per_dir];
                     auto paired_reader1_noc = mesh_device->worker_core_from_logical_core(paired_reader1_core);
@@ -860,8 +917,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         core_noc_y,
                         current_core_x,
                         current_core_y};
-                    // Reader2 uses FORWARD mux (Round1: receives from D1->D0, D3->D2)
-                    // Use fwd_mux_term_master for forward mux termination coordination
+
                     fabric_mux_rt_args(
                         c == fwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -873,7 +929,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(fwd_mux_term_master),
                         get_fwd_mux_term_sem(link_idx),
                         reader_runtime_args);
-                    // Use paired_reader1_noc for device_semaphore target instead of data core
+
                     writer_runtime_args = {
                         bw_intermediate_tensor.buffer()->address(),
                         semaphore_round2_bw.address(),
@@ -883,11 +939,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         current_core_y,
                         round1_intermediate_tensor.buffer()->address(),
                         coord_semaphore.address(),
-                        core_noc_x,  // Data core for round1 intermediate tensor write
+                        core_noc_x,
                         core_noc_y,
                     };
-                    // Writer2 uses BACKWARD mux (Round2: sends D0->D3, D2->D1)
-                    // Use bwd_mux_term_master for backward mux termination coordination
+
                     fabric_mux_rt_args(
                         c == bwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -908,16 +963,11 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                 // devices 1 and 3:
                 if (core_idx < num_worker_cores_per_link_per_dir) {
                     // first 4 cores: reader/writer 2
-                    // Reader2: receives barrier in Round1 from fwd neighbor (D0->D1, D2->D3) - uses BACKWARD mux
-                    // Writer2: sends data in Round2 to fwd neighbor (D1->D2, D3->D0) - uses FORWARD mux
                     CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
 
-                    // For D1/D3 first 4 cores, Writer2 needs to signal the paired Reader1 on second 4 cores
-                    // The paired Reader1 is at core_idx + num_worker_cores_per_link_per_dir (i.e., core 0-4 for core
-                    // 0-0)
                     auto& worker_cores_for_link = (link_idx == 0) ? worker_cores_link_1 : worker_cores_link_2;
                     auto paired_reader1_core = worker_cores_for_link[core_idx + num_worker_cores_per_link_per_dir];
                     auto paired_reader1_noc = mesh_device->worker_core_from_logical_core(paired_reader1_core);
@@ -934,8 +984,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         core_noc_y,
                         current_core_x,
                         current_core_y};
-                    // Reader2 uses BACKWARD mux (Round1: receives from D0->D1, D2->D3)
-                    // Use bwd_mux_term_master for backward mux termination coordination
+
                     fabric_mux_rt_args(
                         c == bwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -947,7 +996,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(bwd_mux_term_master),
                         get_bwd_mux_term_sem(link_idx),
                         reader_runtime_args);
-                    // Use paired_reader1_noc for device_semaphore target instead of data core
+
                     writer_runtime_args = {
                         fw_intermediate_tensor.buffer()->address(),
                         semaphore_round2_fw.address(),
@@ -957,11 +1006,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         current_core_y,
                         round1_intermediate_tensor.buffer()->address(),
                         coord_semaphore.address(),
-                        core_noc_x,  // Data core for round1 intermediate tensor write
+                        core_noc_x,
                         core_noc_y,
                     };
-                    // Writer2 uses FORWARD mux (Round2: sends D1->D2, D3->D0)
-                    // Use fwd_mux_term_master for forward mux termination coordination
+
                     fabric_mux_rt_args(
                         c == fwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -979,8 +1027,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                     cores2.push_back(c);
                 } else {
                     // second 4 cores: reader/writer 1
-                    // Writer1: sends data in Round1 to bwd neighbor (D1->D0, D3->D2) - uses BACKWARD mux
-                    // Reader1: receives data in Round2 from fwd neighbor (D2->D1, D0->D3) - uses FORWARD mux
                     CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
@@ -999,8 +1045,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         round1_intermediate_tensor.buffer()->address(),
                         coord_semaphore.address()};
 
-                    // Reader1 uses FORWARD mux (Round2: receives from D2->D1, D0->D3)
-                    // Use fwd_mux_term_master for forward mux termination coordination
                     fabric_mux_rt_args(
                         c == fwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -1022,8 +1066,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         output_tensor_l.buffer()->address(),
                         output_tensor_s.buffer()->address(),
                         output_tensor_m.buffer()->address()};
-                    // Writer1 uses BACKWARD mux (Round1: sends D1->D0, D3->D2)
-                    // Use bwd_mux_term_master for backward mux termination coordination
+
                     fabric_mux_rt_args(
                         c == bwd_mux_term_master,
                         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -1083,10 +1126,10 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
             reader_runtime_args[0] = input_tensor_l.buffer()->address();
             reader_runtime_args[1] = input_tensor_s.buffer()->address();
             reader_runtime_args[2] = input_tensor_m.buffer()->address();
-            // D0/D2 uses fw_intermediate (index 0), D1/D3 uses bw_intermediate (index 1)
+            // D0/D2 uses fw_intermediate, D1/D3 uses bw_intermediate
             reader_runtime_args[7] = shared_variables.is_device_0_2 ? intermediate_tensors[0].buffer()->address()
                                                                     : intermediate_tensors[1].buffer()->address();
-            // D0/D2 uses semaphore_round2_fw (index 2), D1/D3 uses semaphore_round2_bw (index 3)
+            // D0/D2 uses semaphore_round2_fw , D1/D3 uses semaphore_round2_bw
             reader_runtime_args[8] = shared_variables.is_device_0_2 ? shared_variables.semaphores[2].address()
                                                                     : shared_variables.semaphores[3].address();
             reader_runtime_args[9] = intermediate_tensors[2].buffer()->address();
@@ -1095,10 +1138,10 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
             // Update writer1 runtime args
             auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel1);
             auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-            // D0/D2 uses fw_intermediate (index 0), D1/D3 uses bw_intermediate (index 1)
+            // D0/D2 uses fw_intermediate, D1/D3 uses bw_intermediate
             writer_runtime_args[0] = shared_variables.is_device_0_2 ? intermediate_tensors[0].buffer()->address()
                                                                     : intermediate_tensors[1].buffer()->address();
-            // D0/D2 uses semaphore_round1_fw (index 0), D1/D3 uses semaphore_round1_bw (index 1)
+            // D0/D2 uses semaphore_round1_fw, D1/D3 uses semaphore_round1_bw
             writer_runtime_args[1] = shared_variables.is_device_0_2 ? shared_variables.semaphores[0].address()
                                                                     : shared_variables.semaphores[1].address();
             writer_runtime_args[6] = output_tensors_l[0].buffer()->address();
@@ -1113,20 +1156,20 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
             reader_runtime_args[0] = input_tensor_l.buffer()->address();
             reader_runtime_args[1] = input_tensor_s.buffer()->address();
             reader_runtime_args[2] = input_tensor_m.buffer()->address();
-            // D0/D2 uses bw_intermediate (index 1), D1/D3 uses fw_intermediate (index 0)
+            // D0/D2 uses bw_intermediate, D1/D3 uses fw_intermediate
             reader_runtime_args[3] = shared_variables.is_device_0_2 ? intermediate_tensors[1].buffer()->address()
                                                                     : intermediate_tensors[0].buffer()->address();
-            // D0/D2 uses semaphore_round1_bw (index 1), D1/D3 uses semaphore_round1_fw (index 0)
+            // D0/D2 uses semaphore_round1_bw, D1/D3 uses semaphore_round1_fw
             reader_runtime_args[4] = shared_variables.is_device_0_2 ? shared_variables.semaphores[1].address()
                                                                     : shared_variables.semaphores[0].address();
 
             // Update writer2 runtime args
             auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel2);
             auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-            // D0/D2 uses bw_intermediate (index 1), D1/D3 uses fw_intermediate (index 0)
+            // D0/D2 uses bw_intermediate, D1/D3 uses fw_intermediate
             writer_runtime_args[0] = shared_variables.is_device_0_2 ? intermediate_tensors[1].buffer()->address()
                                                                     : intermediate_tensors[0].buffer()->address();
-            // D0/D2 uses semaphore_round2_bw (index 3), D1/D3 uses semaphore_round2_fw (index 2)
+            // D0/D2 uses semaphore_round2_bw, D1/D3 uses semaphore_round2_fw
             writer_runtime_args[1] = shared_variables.is_device_0_2 ? shared_variables.semaphores[3].address()
                                                                     : shared_variables.semaphores[2].address();
             writer_runtime_args[6] = intermediate_tensors[2].buffer()->address();

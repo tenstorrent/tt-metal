@@ -44,8 +44,7 @@ inline OutputCBs reduce_fct(
     uint32_t cb_l1_temp,
     uint32_t cb_l2_temp,
     uint32_t Sq_chunk_t,
-    uint32_t vDHt,
-    uint32_t loop_size) {
+    uint32_t vDHt) {
     constexpr int mode = VectorMode::R;
     const uint32_t out_tiles = Sq_chunk_t * vDHt;
 
@@ -113,7 +112,7 @@ constexpr uint32_t cb_l2_temp = get_compile_time_arg_val(16);             // tem
 constexpr uint32_t scale_fp32 = get_compile_time_arg_val(17);
 constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(18);
 constexpr uint32_t vDHt = get_compile_time_arg_val(19);
-constexpr uint32_t loop_size = get_compile_time_arg_val(20);
+constexpr uint32_t round = get_compile_time_arg_val(20);
 constexpr uint32_t int_l_cb = get_compile_time_arg_val(21);
 constexpr uint32_t int_s_cb = get_compile_time_arg_val(22);
 constexpr uint32_t int_m_cb = get_compile_time_arg_val(23);
@@ -156,20 +155,37 @@ void MAIN {
         cb_l1_temp,
         cb_l2_temp,
         Sq_chunk_t,
-        vDHt,
-        loop_size);
+        vDHt);
 
-    // Move results to output cbs
-    move_block<true>(output_cbs.l_cb, cb_out_o, out_chunk_tiles);
-    move_block<true>(output_cbs.m_cb, cb_cur_max, Sq_chunk_t);
-    move_block<true>(output_cbs.s_cb, cb_cur_sum, Sq_chunk_t);
+    if (round == 0) {
+        // Move results to output cbs
+        move_block<true>(output_cbs.l_cb, cb_out_o, out_chunk_tiles);
+        move_block<true>(output_cbs.m_cb, cb_cur_max, Sq_chunk_t);
+        move_block<true>(output_cbs.s_cb, cb_cur_sum, Sq_chunk_t);
 
-    // pop front all the input cbs from first reduction
-    cb_pop_front(cb_m_in, Sq_chunk_t);
-    cb_pop_front(cb_prev_max, Sq_chunk_t);
-    cb_pop_front(cb_prev_sum, Sq_chunk_t);
-    cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
-    DPRINT << "end of compute 1\n";
+        // pop front all the input cbs from first reduction
+        cb_pop_front(cb_m_in, Sq_chunk_t);
+        cb_pop_front(cb_prev_max, Sq_chunk_t);
+        cb_pop_front(cb_prev_sum, Sq_chunk_t);
+        cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
+        DPRINT << "end of compute 1\n";
+    } else {
+        // final division
+        move_block<false>(output_cbs.s_cb, cb_s_temp, Sq_chunk_t);
+        recip_block_inplace<vector_mode>(cb_s_temp, Sq_chunk_t);
+        mul_block_bcast_cols_inplace(output_cbs.l_cb, cb_s_temp, Sq_chunk_t, vDHt);
+
+        move_block<true>(output_cbs.l_cb, cb_out_o, out_chunk_tiles);
+        move_block<true>(output_cbs.m_cb, cb_cur_max, Sq_chunk_t);
+        move_block<true>(output_cbs.s_cb, cb_cur_sum, Sq_chunk_t);
+
+        // pop front all the input cbs from second reduction
+        cb_pop_front(cb_m_in, Sq_chunk_t);
+        cb_pop_front(cb_prev_max, Sq_chunk_t);
+        cb_pop_front(cb_prev_sum, Sq_chunk_t);
+        cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
+        DPRINT << "end of compute 2\n";
+    }
 }
 
 }  // namespace NAMESPACE

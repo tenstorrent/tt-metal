@@ -22,9 +22,9 @@ using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
-    // COMBINED ROUND1 + ROUND2:
-    // below send output to neighbor device
-    // add within the kernel: writing the same data to intermediate tensors
+    // Round1: writing partial reduction to intermediate tensors
+    // Round 2: send data to neighbor device
+
     DPRINT << "Start of writer 2 kernel\n";
 
     constexpr uint32_t fabric_ct_idx = get_compile_time_arg_val(0);
@@ -82,10 +82,7 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // device 2 writer receives data from compute kernel and sends it to device 1
-
-    const uint32_t new_payload_size_bytes =
-        payload_size_bytes + 2 * aligned_page_size_bytes;  // add the extra size for s and m
+    const uint32_t new_payload_size_bytes = payload_size_bytes + 2 * aligned_page_size_bytes;
 
     cb_reserve_back(packet_cb_id, 1);
     const uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
@@ -110,8 +107,7 @@ void kernel_main() {
 
     DPRINT << "after preparing packet data\n";
 
-    // Write Round 1 results to the data core's L1 (where the sharded tensor lives)
-    // data_core_noc_x/y are the coordinates of the data core for this shard
+    // Write Round 1 data to data core's intermediate shard
     uint64_t round1_interm_noc_addr = get_noc_addr(data_core_noc_x, data_core_noc_y, round1_interm_tensor_addr);
     noc_async_write(packet_base_addr, round1_interm_noc_addr, new_payload_size_bytes);
     noc_async_write_barrier();
@@ -180,13 +176,11 @@ void kernel_main() {
     mux_connection.send_payload_without_header_non_blocking_from_address(packet_base_addr, new_payload_size_bytes);
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
 
-    // Disconnect from mux to allow Reader1 to use the same channel
     DPRINT << "after sending data to receiver\n";
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     DPRINT << "after fabric client disconnect\n";
 
-    // Writer2 uses backward mux - signal the backward mux termination master (Reader1)
-    // Writer2 never is the termination master for backward mux, so just signal
+    // Writer2 uses backward mux - signal the backward mux termination master (Reader1)l
     {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
