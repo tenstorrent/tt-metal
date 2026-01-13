@@ -99,7 +99,7 @@ def test_whisper3(device):
     )
     dataset = load_dataset("distil-whisper/librispeech_long", "clean", split="validation")
     sample = dataset[0]["audio"]
-
+    DispatchManager.clear_timings()
     result = pipe(sample, return_timestamps=True)
     print(result["text"])
     DispatchManager.save_stats_to_file("whisper_timing_stats.csv")
