@@ -108,7 +108,7 @@ def tt_all_reduce(
             dim=dim,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=num_reduce_scatter_links,
+            num_links=1,  # num_reduce_scatter_links,
             memory_config=memory_config,
             intermediate_memory_config=rs_memory_config,
             topology=topology,

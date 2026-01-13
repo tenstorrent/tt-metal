@@ -428,6 +428,7 @@ class TTSampling(LightweightModule):
             if self.sub_core_grids is not None
             else None,
             output_tensor=tt_out_tok,
+            seed=123,
         )
 
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)

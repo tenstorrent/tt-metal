@@ -302,17 +302,27 @@ def prepare_generator_args(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            50,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {
-                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
-                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
-                "frequency_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "presence_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "repetition_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
-            },  # sampling_params (non-uniform)
+                "temperature": torch.ones(32).tolist(),
+                "top_p": torch.ones(32).tolist(),
+                "top_k": (32 * torch.ones(32)).tolist(),
+                "frequency_penalty": torch.ones(32).tolist(),
+                "presence_penalty": torch.ones(32).tolist(),
+                "repetition_penalty": torch.ones(32).tolist(),
+                "seed": (456 * torch.ones(32).to(torch.int32)).tolist(),
+                # "seed": torch.linspace(0, 31, steps=32, dtype=torch.int32).tolist(), # int32 values from 0 to 31 inclusive
+            },
+            # {
+            #     "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
+            #     "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
+            #     "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+            #     "frequency_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
+            #     "presence_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
+            #     "repetition_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
+            # },  # sampling_params (non-uniform)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -328,7 +338,7 @@ def prepare_generator_args(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            100,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {
@@ -343,7 +353,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
-            None,  # num_layers, if None -> defaults to all layers
+            1,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
         (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
@@ -1001,6 +1011,7 @@ def test_demo_text(
                 temperature=sampling_params["temperature"],
                 top_k=sampling_params["top_k"],
                 top_p=sampling_params["top_p"],
+                seed=sampling_params["seed"] if "seed" in sampling_params else None,
                 frequency_penalty=sampling_params["frequency_penalty"]
                 if "frequency_penalty" in sampling_params
                 else 0.0,
@@ -1044,6 +1055,7 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
+                save_logits_to_host=True,
             )
             if prefill_sampling_params is not None:
                 prefilled_token, prefill_log_probs = prefill_out
@@ -1113,6 +1125,7 @@ def test_demo_text(
                 sampling_params=device_sampling_params,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
+                iteration=iteration,
             )
 
             # Get the next token

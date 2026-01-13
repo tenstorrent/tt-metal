@@ -553,7 +553,7 @@ class Attention(LightweightModule):
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     all_gather_core_grid_offset=(0, 4),
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                    num_links=self.model_config["ATTN_AGMM_CONFIG"]["num_links"],
+                    num_links=1,  # self.model_config["ATTN_AGMM_CONFIG"]["num_links"],
                     memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
                     memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
                     program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],

@@ -76,11 +76,13 @@ def _apply_prefill_sampling_state(
     *,
     sampling_params: SamplingParams,
     prompt_tokens: torch.Tensor | None,
+    empty_slots: list[int],
 ):
-    sampling_module = getattr(model_instance, "sampling_prefill", None)
+    sampling_module = getattr(model_instance, "sampling", None)
     assert sampling_module is not None, "Sampling module not found in model for sampling on device."
     sampling_module.reset_sampling_params(sampling_params)
-    sampling_module.reset_seed(sampling_params.seed)
+    sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
+    sampling_module.seed_manager.get_new_values(empty_slots)
     if prompt_tokens is not None:
         sampling_module.reset_prompt_tokens(prompt_tokens)
     sampling_module.reset_output_state()
@@ -305,6 +307,7 @@ class Generator:
         enable_trace=True,
         model_id_warmup=None,
         sampling_params: SamplingParams | None = None,
+        save_logits_to_host=False,
         **kwargs,
     ):
         self.mode = "prefill"
@@ -392,6 +395,7 @@ class Generator:
                     self.model[model_id],
                     sampling_params=per_request_params,
                     prompt_tokens=prefill_ids[:, :seq_len].repeat(32, 1),
+                    empty_slots=empty_slots,
                 )
 
             if enable_trace_current_prompt:
@@ -420,9 +424,16 @@ class Generator:
                     model_id=model_id,
                     **local_kwargs,
                 )
+            if save_logits_to_host:
+                # get logits from device to host with Concat2D mesh_composer using ttnn.to_torch
+                torch_logits = ttnn.to_torch(
+                    logits, mesh_composer=ttnn.ConcatMeshToTensor(self.model[model_id].mesh_device, dim=-1)
+                )
+                # save logits to file
+                torch.save(torch_logits, f"prefill_logits_{idx}.pt")
             # Defer blocking work to a second phase so other sub-meshes can keep running
             if sampling_enabled:
-                tt_tokens, tt_log_probs = self.model[model_id].sampling_prefill.sample(
+                tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
                     logits,
                     enable_trace=False,
                 )
@@ -589,7 +600,10 @@ class Generator:
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        save_logits_to_host=False,
+        iteration=0,
     ):
+        enable_trace = False
         mode_switched = False
         if self.mode != "decode":
             self.mode = "decode"
@@ -638,8 +652,8 @@ class Generator:
                 sampling_module = getattr(self.model[i], "sampling", None)
                 assert sampling_module is not None, "Sampling module not found in model for sampling on device."
                 sampling_module.reset_sampling_params(formatted_params)
+                sampling_module.seed_manager.get_new_values()
                 if reset_batch:
-                    sampling_module.reset_seed(formatted_params.seed)
                     sampling_module.reset_prompt_tokens(prompt_chunks[i])
                     sampling_module.reset_output_state(output_chunks[i])
 
@@ -649,6 +663,7 @@ class Generator:
             "page_table": page_table,
             "kv_cache": kv_cache,
             "sampling_on_device": sampling_on_device,
+            "iteration": iteration,
         }
 
         if enable_trace:
@@ -668,6 +683,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         sampling_on_device=False,
+        iteration=0,
     ):
         """
         Performs text decode step.
@@ -701,6 +717,7 @@ class Generator:
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 sampling_on_device=sampling_on_device,
+                iteration=iteration,
             )
             tt_output.append((tt_logits_i, tt_log_probs_i))
 

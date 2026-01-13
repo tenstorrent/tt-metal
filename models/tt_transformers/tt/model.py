@@ -135,11 +135,6 @@ class Transformer(LightweightModule):
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
         self._supports_on_device_sampling = self.args.vocab_size // sampling_splits <= 64 * 1024
         if self._supports_on_device_sampling:
-            self.sampling_prefill = SamplingGenerator(
-                args=args,
-                mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
-            )
             self.sampling = SamplingGenerator(
                 args=args,
                 mesh_device=mesh_device,
@@ -423,6 +418,7 @@ class Transformer(LightweightModule):
         kv_cache=None,
         sampling_on_device=False,
         capture_sampling_trace=False,
+        iteration=0,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -440,6 +436,10 @@ class Transformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+
+        # get logits from device to host with Concat2D mesh_composer using ttnn.to_torch
+        torch_logits = ttnn.to_torch(tt_logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+        torch.save(torch_logits, f"decode_logits_{iteration}.pt")
 
         if sampling_on_device and self.sampling is not None:
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)

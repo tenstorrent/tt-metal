@@ -79,7 +79,7 @@ class DistributedNorm(LightweightModule):
                 persistent_output_buffer=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=self.args.model_config[self.ag_config_key]["num_links"]
+                num_links=1  # self.args.model_config[self.ag_config_key]["num_links"]
                 if self.ag_config_key and mode == "decode"
                 else 1,
                 topology=self.args.ccl_topology(),
