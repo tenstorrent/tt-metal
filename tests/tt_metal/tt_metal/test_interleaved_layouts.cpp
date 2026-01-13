@@ -38,7 +38,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "common/tt_backend_api_types.hpp"
-#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
