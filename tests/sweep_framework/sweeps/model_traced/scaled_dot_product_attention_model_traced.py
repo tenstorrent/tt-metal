@@ -50,13 +50,10 @@ def invalidate_vector(test_vector) -> tuple:
     Filter out configs that are known to cause timeouts or resource issues.
     """
     input_shape = test_vector.get("input_shape")
-    input_a_memory_config = test_vector.get("input_a_memory_config")
 
     # If we have shape info, check for very large configs
     if isinstance(input_shape, dict):
         shape_q = input_shape.get("input_a") or input_shape.get("self")
-        shape_k = input_shape.get("input_b") or input_shape.get("other")
-        shape_v = input_shape.get("input_c")
 
         # Calculate approximate memory requirement
         if shape_q and isinstance(shape_q, (list, tuple)) and len(shape_q) >= 4:

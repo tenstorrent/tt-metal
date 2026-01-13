@@ -39,6 +39,7 @@ def run(
     input_a_layout,
     input_a_memory_config,
     input_b_memory_config=None,
+    program_config=None,
     *,
     device,
     **kwargs,
@@ -75,7 +76,22 @@ def run(
 
     # Op call
     start_time = start_measuring_time()
-    stats = ttnn.rms_norm_pre_all_gather(input_tensor)
+
+    # Parse program_config if provided (from traced JSON)
+    if program_config and isinstance(program_config, dict):
+        # Create LayerNormShardedMultiCoreProgramConfig from dict
+        compute_grid = program_config.get("compute_with_storage_grid_size", {})
+        ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid.get("x", 1), compute_grid.get("y", 1)),
+            subblock_w=program_config.get("subblock_w", 1),
+            block_h=program_config.get("block_h", 1),
+            block_w=program_config.get("block_w", 1),
+            inplace=bool(program_config.get("inplace", 0)),
+        )
+        stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=ttnn_program_config)
+    else:
+        stats = ttnn.rms_norm_pre_all_gather(input_tensor)
+
     output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats, epsilon=eps, weight=weight_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
