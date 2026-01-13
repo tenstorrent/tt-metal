@@ -38,18 +38,27 @@ BuildEnvManager& BuildEnvManager::get_instance() {
 
 BuildEnvManager::BuildEnvManager() {
     // Initialize build_state_indices_
-    uint32_t index = 0;
+    uint32_t kernel_index = 0;
+    uint32_t firmware_index = 0;
     const auto& hal = MetalContext::instance().hal();
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
-    build_state_indices_.resize(programmable_core_type_count);
+    kernel_build_state_indices_.resize(programmable_core_type_count);
+    firmware_build_state_indices_.resize(programmable_core_type_count);
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
         uint32_t processor_class_count =
             hal.get_processor_classes_count(hal.get_programmable_core_type(programmable_core));
-        build_state_indices_[programmable_core].resize(processor_class_count);
+        kernel_build_state_indices_[programmable_core].resize(processor_class_count);
+        firmware_build_state_indices_[programmable_core].resize(processor_class_count);
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-            uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
-            build_state_indices_[programmable_core][processor_class] = {index, processor_types_count};
-            index += processor_types_count;
+            const uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
+            kernel_build_state_indices_[programmable_core][processor_class] = {kernel_index, processor_types_count};
+            kernel_index += processor_types_count;
+
+            const uint32_t processor_class_num_fw_binaries =
+                hal.get_processor_class_num_fw_binaries(programmable_core, processor_class);
+            firmware_build_state_indices_[programmable_core][processor_class] = {
+                firmware_index, processor_class_num_fw_binaries};
+            firmware_index += processor_class_num_fw_binaries;
         }
     }
 }
@@ -207,42 +216,59 @@ const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
 
 const JitBuildState& BuildEnvManager::get_firmware_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
-    // On Quasar, all DM processors share the same firmware binary, so there is only a single firmware build state.
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR &&
-        processor_class == static_cast<uint32_t>(HalProcessorClassType::DM)) {
-        TT_ASSERT(get_device_build_env(device_id).firmware_build_states.size() == 1);
-        return get_device_build_env(device_id).firmware_build_states[0];
-    }
-
-    const uint32_t state_idx = get_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
+    const uint32_t state_idx =
+        get_build_index_and_state_count(programmable_core, processor_class, true).first + processor_id;
     return get_device_build_env(device_id).firmware_build_states[state_idx];
 }
 
 const JitBuildState& BuildEnvManager::get_kernel_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
-    uint32_t state_idx = get_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
+    const uint32_t state_idx =
+        get_build_index_and_state_count(programmable_core, processor_class, false).first + processor_id;
     return get_device_build_env(device_id).kernel_build_states[state_idx];
 }
 
 JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class) {
-    auto [b_id, count] = get_build_index_and_state_count(programmable_core, processor_class);
+    auto [b_id, count] = get_build_index_and_state_count(programmable_core, processor_class, false);
     const auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
     return {kernel_build_states.begin() + b_id, static_cast<size_t>(count)};
 }
 
-BuildIndexAndTypeCount BuildEnvManager::get_build_index_and_state_count(
-    uint32_t programmable_core, uint32_t processor_class) {
-    const std::lock_guard<std::mutex> lock(this->lock);
+BuildIndexAndTypeCount BuildEnvManager::get_kernel_build_index_and_state_count(
+    uint32_t programmable_core, uint32_t processor_class) const {
     TT_ASSERT(
-        programmable_core < build_state_indices_.size(),
-        "Programmable core type {} is not included in the FW or Kernel build state",
+        programmable_core < kernel_build_state_indices_.size(),
+        "Programmable core type {} is not included in the Kernel build state",
         programmable_core);
     TT_ASSERT(
-        processor_class < build_state_indices_[programmable_core].size(),
-        "Processor class type {} is not included in the FW or Kernel build state",
+        processor_class < kernel_build_state_indices_[programmable_core].size(),
+        "Processor class type {} is not included in the Kernel build state",
         processor_class);
-    return build_state_indices_[programmable_core][processor_class];
+    return kernel_build_state_indices_[programmable_core][processor_class];
+}
+
+BuildIndexAndTypeCount BuildEnvManager::get_firmware_build_index_and_state_count(
+    uint32_t programmable_core, uint32_t processor_class) const {
+    TT_ASSERT(
+        programmable_core < firmware_build_state_indices_.size(),
+        "Programmable core type {} is not included in the Firmware build state",
+        programmable_core);
+    TT_ASSERT(
+        processor_class < firmware_build_state_indices_[programmable_core].size(),
+        "Processor class type {} is not included in the Firmware build state",
+        processor_class);
+    return firmware_build_state_indices_[programmable_core][processor_class];
+}
+
+BuildIndexAndTypeCount BuildEnvManager::get_build_index_and_state_count(
+    uint32_t programmable_core, uint32_t processor_class, bool is_fw) {
+    const std::lock_guard<std::mutex> lock(this->lock);
+    if (is_fw) {
+        return get_firmware_build_index_and_state_count(programmable_core, processor_class);
+    } else {
+        return get_kernel_build_index_and_state_count(programmable_core, processor_class);
+    }
 }
 
 void BuildEnvManager::build_firmware(ChipId device_id) {
