@@ -10,78 +10,68 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-/**
- * Each core computes: output[M=1, N=1] = in0[M=1, K] @ weight0[K, N=1]
- * where M and N are in tiles, and K is the inner dimension.
- *
- * Both in0 and weight0 are fully available in L1 (sharded tensors).
- *
- * The computation accumulates across the K dimension:
- * for k in range(K):
- *     output += in0[:, k] @ weight0[k, :]
- */
-namespace NAMESPACE {
-
-void matmul_with_relu_block(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint32_t num_tiles) {
-    cb_wait_front(cb_a, num_tiles);
-    cb_wait_front(cb_b, num_tiles);
-    cb_reserve_back(cb_out, num_tiles);
+template <uint32_t CbA, uint32_t CbB, uint32_t CbOut, uint32_t NumTiles>
+FORCE_INLINE void matmul_with_relu_block() {
+    cb_wait_front(CbA, NumTiles);
+    cb_wait_front(CbB, NumTiles);
+    cb_reserve_back(CbOut, NumTiles);
 
     tile_regs_acquire();
 
-    for (uint32_t k = 0; k < num_tiles; k++) {
-        matmul_tiles(cb_a, cb_b, k, k, 0);
+    for (uint32_t k = 0; k < NumTiles; k++) {
+        matmul_tiles(CbA, CbB, k, k, 0);
     }
     relu_tile(0);
 
     tile_regs_commit();
 
-    // cb_pop_front(cb_a, num_tiles); // Don't pop here because we need to use the input again for next stage
-    cb_pop_front(cb_b, num_tiles);
+    // cb_pop_front(CbA, NumTiles); // Don't pop here because we need to use the input again for next stage
+    cb_pop_front(CbB, NumTiles);
 
     tile_regs_wait();
-    pack_tile(0, cb_out);
+    pack_tile(0, CbOut);
     tile_regs_release();
 
-    cb_push_back(cb_out, num_tiles);
+    cb_push_back(CbOut, NumTiles);
 }
 
-void matmul_with_bias_block(uint32_t cb_a, uint32_t cb_b, uint32_t cb_bias, uint32_t cb_out, uint32_t num_tiles) {
-    constexpr uint32_t MATMUL_ACC_REG_ID = 0;
-    constexpr uint32_t BIAS_REG_ID = 1;
-    constexpr uint32_t OUTPUT_REG_ID = 2;
+constexpr uint32_t MATMUL_ACC_REG_ID = 0;
+constexpr uint32_t BIAS_REG_ID = 1;
 
-    cb_wait_front(cb_a, num_tiles);
-    cb_wait_front(cb_b, num_tiles);
-    cb_wait_front(cb_bias, num_tiles);
-    cb_reserve_back(cb_out, num_tiles);
+template <uint32_t CbA, uint32_t CbB, uint32_t CbBias, uint32_t CbOut, uint32_t NumTiles>
+FORCE_INLINE void matmul_with_bias_block() {
+    cb_wait_front(CbA, NumTiles);
+    cb_wait_front(CbB, NumTiles);
+    cb_wait_front(CbBias, NumTiles);
+    cb_reserve_back(CbOut, NumTiles);
 
     tile_regs_acquire();
 
-    init_sfpu(cb_a, cb_out);  // hangs if we put this at the beginning of the program (or before the binary operation)
-    mm_init_short(cb_a, cb_b);
-    for (uint32_t k = 0; k < num_tiles; k++) {
-        matmul_tiles(cb_a, cb_b, k, k, MATMUL_ACC_REG_ID);
+    init_sfpu(CbA, CbOut);  // Hangs if we put this at the beginning of the program
+    mm_init_short(CbA, CbB);
+    for (uint32_t k = 0; k < NumTiles; k++) {
+        matmul_tiles(CbA, CbB, k, k, MATMUL_ACC_REG_ID);
     }
-    copy_tile_init(cb_bias);  // hangs if we put this at the beginning of the program
-    copy_tile(cb_bias, 0, BIAS_REG_ID);
+    copy_tile_init(CbBias);  // Hangs if we put this at the beginning of the program
+    copy_tile(CbBias, 0, BIAS_REG_ID);
 
     add_binary_tile_init();
-    add_binary_tile(MATMUL_ACC_REG_ID, BIAS_REG_ID, OUTPUT_REG_ID);
+    add_binary_tile(MATMUL_ACC_REG_ID, BIAS_REG_ID, MATMUL_ACC_REG_ID);  // Accumulate the bias into the matmul result
 
     tile_regs_commit();
 
-    cb_pop_front(cb_a, num_tiles);
-    cb_pop_front(cb_b, num_tiles);
-    cb_pop_front(cb_bias, num_tiles);
+    cb_pop_front(CbA, NumTiles);
+    cb_pop_front(CbB, NumTiles);
+    cb_pop_front(CbBias, NumTiles);
 
     tile_regs_wait();
-    pack_tile(OUTPUT_REG_ID, cb_out);
+    pack_tile(MATMUL_ACC_REG_ID, CbOut);
     tile_regs_release();
 
-    cb_push_back(cb_out, num_tiles);
+    cb_push_back(CbOut, NumTiles);
 }
 
+namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t in0_cb = get_compile_time_arg_val(0);
     constexpr uint32_t weight0_cb = get_compile_time_arg_val(1);
@@ -97,9 +87,7 @@ void MAIN {
     mm_block_init(in0_cb, weight0_cb, out_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
     relu_tile_init();
 
-    // copy_tile_init(in0_cb);
-
-    matmul_with_relu_block(in0_cb, weight0_cb, interm_cb, num_tiles_k);
-    matmul_with_bias_block(interm_cb, weight1_cb, in0_cb, out_cb, num_tiles_k);
+    matmul_with_relu_block<in0_cb, weight0_cb, interm_cb, num_tiles_k>();
+    matmul_with_bias_block<interm_cb, weight1_cb, in0_cb, out_cb, num_tiles_k>();
 }
 }  // namespace NAMESPACE
