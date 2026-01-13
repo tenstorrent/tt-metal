@@ -186,13 +186,10 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
-
-    const uint32_t block_size = get_block_size(qWt, 4U);
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
