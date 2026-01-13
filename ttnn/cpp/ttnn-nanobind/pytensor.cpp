@@ -384,6 +384,8 @@ PyDType get_py_tensor_type_info(const nb::object& py_tensor) {
             return PyDType::UINT8;
         } else if (py_dtype.equal(torch.attr("bool"))) {
             return PyDType::BOOL;
+        } else if (py_dtype.equal(torch.attr("uint16"))) {
+            return PyDType::UINT16;
         } else {
             TT_THROW(
                 "Unsupported torch tensor dtype: {}. Cannot map provided torch type to the host buffer data type.",
