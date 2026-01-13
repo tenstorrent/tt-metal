@@ -395,7 +395,7 @@ jobs:
 
       - name: 📀 Install vLLM
         run: |
-          pip3 install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu
+          uv pip3 install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: 📂 Create output directory
         run: |
