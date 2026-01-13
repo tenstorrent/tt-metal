@@ -43,7 +43,7 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
@@ -67,7 +67,7 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<PermuteDeviceOperation::tensor_return_value_t>
 PermuteDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+    const operation_attributes_t& /*op_attr*/, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input_tensor = inputs.input_tensor;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output, false, 0, true);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(

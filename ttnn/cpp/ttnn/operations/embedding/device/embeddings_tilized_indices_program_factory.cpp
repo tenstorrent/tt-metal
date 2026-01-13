@@ -208,7 +208,7 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
 
 void EmbeddingsTilizedIndicesProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const embedding::operation_attributes_t& operation_attributes,
+    const embedding::operation_attributes_t& /*operation_attributes*/,
     const embedding::tensor_args_t& tensor_args,
     embedding::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;

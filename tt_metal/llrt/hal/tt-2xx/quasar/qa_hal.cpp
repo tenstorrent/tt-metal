@@ -70,26 +70,24 @@ public:
         if (params.processor_class == HalProcessorClassType::DM) {
             if (params.is_fw) {
                 flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_DM_FIRMWARE_BASE);
-                flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_DM_FIRMWARE_SIZE);
-                flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
-                flags += fmt::format(" -Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format(" -Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
-                flags += fmt::format(" -Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format(" -Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_FIRMWARE_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             } else {
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_DM_KERNEL_BASE);  // this is for legacy kernels
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
                 flags += fmt::format(
-                    "-Wl,--defsym=__kn_text={} ",
-                    MEM_DM_KERNEL_BASE +
-                        (MEM_DM_KERNEL_SIZE * params.processor_id));  // this needs to include offset per kernel
-                flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
-                flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE);
-                flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
-                flags += fmt::format(" -Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format(" -Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
-                flags += fmt::format(" -Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
+                    "-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
+                flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
+                flags += fmt::format(
+                    "-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE + (params.processor_id * MEM_DM_LOCAL_SIZE));
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
             }
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
             if (params.is_fw) {
@@ -143,7 +141,9 @@ public:
                     case 12:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC0_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC0_FIRMWARE_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC0_GLOBAL_BASE);
+                        flags += fmt::format(
+                            " -Wl,--defsym=__fw_data={} ",
+                            MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * params.processor_id / 4);
                         flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC0_GLOBAL_BASE);
                         break;
                     case 1:
@@ -152,7 +152,9 @@ public:
                     case 13:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC1_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC1_FIRMWARE_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC1_GLOBAL_BASE);
+                        flags += fmt::format(
+                            " -Wl,--defsym=__fw_data={} ",
+                            MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * params.processor_id / 4);
                         flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC1_GLOBAL_BASE);
                         break;
                     case 2:
@@ -161,7 +163,9 @@ public:
                     case 14:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC2_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC2_FIRMWARE_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC2_GLOBAL_BASE);
+                        flags += fmt::format(
+                            " -Wl,--defsym=__fw_data={} ",
+                            MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * params.processor_id / 4);
                         flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC2_GLOBAL_BASE);
                         break;
                     case 3:
@@ -170,13 +174,17 @@ public:
                     case 15:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC3_KERNEL_BASE);
                         flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC3_FIRMWARE_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC3_GLOBAL_BASE);
+                        flags += fmt::format(
+                            " -Wl,--defsym=__fw_data={} ",
+                            MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * params.processor_id / 4);
                         flags += fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC3_GLOBAL_BASE);
                         break;
                     default: TT_THROW("Invalid processor id {}", params.processor_id);
                 }
                 flags += fmt::format(" -Wl,--defsym=__data_size={} ", MEM_TRISC_GLOBAL_SIZE);
-                flags += fmt::format(" -Wl,--defsym=__fw_tls={} ", MEM_TRISC_LOCAL_BASE);
+                flags += fmt::format(
+                    " -Wl,--defsym=__fw_tls={} ",
+                    MEM_TRISC_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE * params.processor_id / 4);
                 flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                 flags += fmt::format(" -Wl,--defsym=__min_stack={} ", MEM_TRISC_STACK_MIN_SIZE);
             }

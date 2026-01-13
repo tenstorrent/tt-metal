@@ -131,7 +131,7 @@
 
 #define MEM_NOC_COUNTER_SIZE 4
 #define MEM_NOC_COUNTER_L1_SIZE (5 * 2 * 2 * MEM_NOC_COUNTER_SIZE)
-#define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
+#define MEM_NOC_COUNTER_BASE (MEM_TRISC3_KERNEL_BASE + MEM_TRISC_KERNEL_SIZE)
 
 // Fabric transaction counters (similar to NoC counters)
 // 3 barrier types × 8 DMs × 4 bytes = 160 bytes (Quasar has 8 DMs)
