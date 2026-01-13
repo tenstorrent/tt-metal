@@ -131,7 +131,7 @@ int main(int argc, char** argv) {
     std::vector<ElementType> host_buffer_max(max_transfer_size / ElementSize);
     auto available_device_ids = MetalContext::instance().get_cluster().all_chip_ids();
 
-    TT_ASSERT(available_device_ids.contains(0));
+    TT_FATAL(available_device_ids.contains(0), "Device 0 not available");
     std::vector<ChipId> device_ids = {0};
 
     if (available_device_ids.contains(1)) {

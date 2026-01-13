@@ -1252,7 +1252,7 @@ void test_multi_sender_single_recv(
     std::size_t data_size,
     std::size_t num_interations,
     bool split_reducer) {
-    TT_ASSERT(link_indices.size() == 3, "Link indices must be of size 3");
+    TT_FATAL(link_indices.size() == 3, "Link indices must be of size 3");
     // Used to setup fabric connections
     const uint32_t sender_0_physical_device_id = sender_0->get_device(MeshCoordinate(0, 0))->id();
     const uint32_t sender_1_physical_device_id = sender_1->get_device(MeshCoordinate(0, 0))->id();
