@@ -31,36 +31,6 @@ using Tensors = std::vector<Tensor>;
 using OptionalTensors = std::vector<std::optional<Tensor>>;
 using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
 
-template <typename OutputTensors = Tensors>
-using OverrideRuntimeArgumentsCallback = std::function<void(
-    const void* operation, Program&, const Tensors&, const OptionalConstTensors&, const OutputTensors&)>;
-
-template <typename OutputTensors = Tensors>
-struct CacheableProgram {
-    Program program;
-    std::optional<OverrideRuntimeArgumentsCallback<OutputTensors>> override_runtime_arguments_callback = std::nullopt;
-};
-
-template <typename OutputTensors = Tensors>
-using OverrideRuntimeArgumentsWorkloadCallback = std::function<void(
-    const void* operation,
-    distributed::MeshWorkload&,
-    const Tensors&,
-    const OptionalConstTensors&,
-    const OutputTensors&)>;
-
-template <typename OutputTensors = Tensors>
-struct CacheableMeshWorkload {
-    distributed::MeshWorkload workload;
-
-    // Either one of these callbacks can be set, but not both.
-    // TODO: #19569 - `per_program_callbacks` is used to assist old infra migration, which relied on per-program
-    // callbacks. This needs to be removed
-    std::optional<OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>> workload_callback = std::nullopt;
-    std::unordered_map<ttnn::MeshCoordinateRange, OverrideRuntimeArgumentsCallback<OutputTensors>>
-        per_program_callbacks;
-};
-
 template <typename... Args>
 struct last_type;
 
@@ -265,9 +235,4 @@ struct ExternalOperation {
     tt::stl::reflection::Attributes attributes() const { return this->attributes_; }
 };
 
-using ProgramWithCallbacks = CacheableProgram<Tensors>;
-using ProgramWithOptionalOutputTensors = CacheableProgram<OptionalTensors>;
-
-using MeshWorkloadWithCallbacks = CacheableMeshWorkload<Tensors>;
-using MeshWorkloadWithOptionalOutputTensors = CacheableMeshWorkload<OptionalTensors>;
 }  // namespace tt::tt_metal::operation
