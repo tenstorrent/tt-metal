@@ -175,19 +175,19 @@ inline void log_operation(
 
 template <typename device_operation_t>
 inline void log_operation(
-    std::size_t device_id,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args,
-    tt::stl::hash::hash_t program_hash,
-    bool program_cache_hit) {}
+    std::size_t /*device_id*/,
+    const typename device_operation_t::operation_attributes_t& /*operation_attributes*/,
+    const typename device_operation_t::tensor_args_t& /*tensor_args*/,
+    tt::stl::hash::hash_t /*program_hash*/,
+    bool /*program_cache_hit*/) {}
 
 #endif
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
-    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
-    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
-    typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    [[maybe_unused]] const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload) {
     mesh_device_operation_utils::set_runtime_id(workload);

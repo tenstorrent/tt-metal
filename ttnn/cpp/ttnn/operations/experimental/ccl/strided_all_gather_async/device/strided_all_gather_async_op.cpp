@@ -23,7 +23,7 @@ void StridedAllGatherAsync::validate_on_program_cache_hit(
 }
 
 void StridedAllGatherAsync::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensors_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensors_args*/) {}
 
 StridedAllGatherAsync::spec_return_value_t StridedAllGatherAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {

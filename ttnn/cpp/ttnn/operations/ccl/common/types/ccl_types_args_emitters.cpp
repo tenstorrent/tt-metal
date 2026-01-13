@@ -219,7 +219,7 @@ bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
     return shard_grid_transposed;
 }
 
-void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix) {
+void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(const Tensor& t, const std::string& prefix) {
     auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
     [[maybe_unused]] const auto& [shard_grid_start, shard_grid_end] =
         shard_grid_from_shard_spec(t.shard_spec().value());
