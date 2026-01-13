@@ -1139,7 +1139,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // Emit pool data via multi-pool coordinator (steps 1-4 of schema: special tag, num_pools, pool_types, individual
     // pool CT args)
-    config.multi_pool_allocator->emit_ct_args(ct_args, num_sender_channels, num_receiver_channels);
+    auto num_used_sender_channels =
+        z_router_enabled ? actual_sender_channels_per_vc_.value()[0] + actual_sender_channels_per_vc_.value()[1]
+                         : num_sender_channels;
+    config.multi_pool_allocator->emit_ct_args(
+        ct_args, num_used_sender_channels, num_receiver_channels, z_router_enabled);
 
     // Emit channel-to-pool mappings (steps 5-8 of schema)
     ct_args.push_back(0xabaddad8);
@@ -1155,7 +1159,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         {config.remote_channels_allocator}, {FabricChannelPoolType::STATIC});
 
     // Emit remote channel pool data via multi-pool coordinator
-    remote_multi_pool_allocator.emit_ct_args(ct_args, 0, num_receiver_channels);
+    remote_multi_pool_allocator.emit_ct_args(ct_args, 0, num_receiver_channels, false);
 
     config.remote_channel_to_pool_mapping->emit_ct_args(ct_args);
 
