@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::indexed_fill {
 
 IndexedFillDeviceOperation::program_factory_t IndexedFillDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::IndexedFillProgramFactory{};
 }
 
@@ -64,7 +64,7 @@ IndexedFillDeviceOperation::tensor_return_value_t IndexedFillDeviceOperation::cr
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<IndexedFillDeviceOperation::tensor_return_value_t>
 IndexedFillDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input_tensor = tensor_args.batch_id;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(

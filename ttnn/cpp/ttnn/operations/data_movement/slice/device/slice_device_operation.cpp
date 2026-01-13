@@ -261,7 +261,7 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>
 SliceDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, const Tensor& output) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args, const Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = output;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, true);

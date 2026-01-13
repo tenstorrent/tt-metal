@@ -898,7 +898,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
 }
 
 tt_metal::Program create_program_single_core(
-    tt_metal::distributed::MeshDevice* device,
+    tt_metal::distributed::MeshDevice* /*device*/,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1119,10 +1119,10 @@ tt_metal::Program create_program(
     uint32_t out_subblock_w,
     uint32_t per_core_Mt,
     uint32_t per_core_Nt,
-    uint32_t in0_cb_addr,
-    uint32_t in1_cb_addr,
+    uint32_t /*in0_cb_addr*/,
+    uint32_t /*in1_cb_addr*/,
     uint32_t in2_cb_addr,
-    uint32_t out_cb_addr,
+    uint32_t /*out_cb_addr*/,
     uint32_t in0_addr,
     uint32_t in1_addr,
     uint32_t out_addr,
@@ -1394,7 +1394,7 @@ std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val
 }
 
 template <typename T>
-std::vector<T> get_row_slice(std::vector<T> data, int start_row_index, int num_rows, int rows, int cols) {
+std::vector<T> get_row_slice(std::vector<T> data, int start_row_index, int num_rows, int /*rows*/, int cols) {
     std::vector<T> result;
     for (int i = start_row_index * cols; i < (start_row_index + num_rows) * cols; i++) {
         result.push_back(data.at(i));
@@ -1426,9 +1426,9 @@ void prepare_inputs(
     uint32_t in0_addr,
     uint32_t in1_addr,
     uint32_t in2_cb_addr,
-    bool dtype,
+    bool /*dtype*/,
     std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
-    std::vector<std::vector<float>>& in1_bfp8_unpack_slice) {
+    std::vector<std::vector<float>>& /*in1_bfp8_unpack_slice*/) {
     bool pass = true;
     auto in0_vec = generate_fp32_random(Mt * Kt * constants::TILE_HW);
     std::vector<uint32_t> in2(single_tile_size / sizeof(uint32_t), 0);
@@ -1583,9 +1583,9 @@ bool validation(
     uint32_t in0_block_w,
     uint32_t out_addr,
     uint32_t single_tile_size,
-    bool fp32_dest_acc_en,
+    bool /*fp32_dest_acc_en*/,
     std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
-    std::vector<std::vector<float>>& in1_bfp8_unpack_slice) {
+    std::vector<std::vector<float>>& /*in1_bfp8_unpack_slice*/) {
     auto zero_vector = [](uint32_t r, uint32_t c) {
         std::vector<float> vec(r * c, (float)0);
         return vec;
