@@ -7,7 +7,7 @@ import math
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed
+from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed, float_to_uint32
 
 
 class RMSNormSingleCore:
@@ -71,6 +71,7 @@ class RMSNormSingleCore:
         HALF_16x32_TILE = ttnn.Tile((16, 32))
         is_16x32_tile = (input_shape[1] // FULL_32x32_TILE.tile_shape[1]) % FULL_32x32_TILE.tile_shape[0] != 0
         interpreted_tile = HALF_16x32_TILE if is_16x32_tile else FULL_32x32_TILE
+        num_faces = interpreted_tile.num_faces
         tile_height, tile_width = interpreted_tile.tile_shape
 
         # Calculate single tile size in bytes (bfloat16 = 2 bytes per element)
@@ -87,7 +88,7 @@ class RMSNormSingleCore:
         core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
 
         # Calculate runtime args
-        epsilon_packed = float_to_bfloat16_packed(epsilon)
+        epsilon_packed = float_to_uint32(epsilon)
 
         # Compute 1/sqrt(num_elements) for RMS reduction
         inv_sqrt_numel = 1.0 / math.sqrt(float(numel))
@@ -121,7 +122,7 @@ class RMSNormSingleCore:
             tile=tile_descriptor,
         )
         scalars_cb_descriptor = ttnn.CBDescriptor(
-            total_size=2 * cb_page_size,
+            total_size=cb_page_size,
             core_ranges=core_grid,
             format_descriptors=[scalars_cb_format],
         )
@@ -158,12 +159,12 @@ class RMSNormSingleCore:
             scalars_cb,
             gamma_cb,
             num_tiles,
-            is_16x32_tile,
+            num_faces,
         ]
 
         # Runtime args: epsilon + scalar (no buffer addresses since CBs are backed by sharded tensors)
         reader_rt_args = []
-        reader_rt_args.append((ttnn.CoreCoord(0, 0), [epsilon_packed, scalar_packed]))
+        reader_rt_args.append((core, [scalar_packed]))
 
         reader_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_reader.cpp",
@@ -198,17 +199,17 @@ class RMSNormSingleCore:
             output_cb,
             1 if fp32_dest_acc_en else 0,
             num_tiles,
-            0,  # epsilon_index
-            1,  # scalar_index
             1 if rsqrt_fast_approx else 0,
         ]
+        compute_rt_args = []
+        compute_rt_args.append((core, [epsilon_packed]))
 
         compute_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_compute.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_grid,
             compile_time_args=compute_compile_time_args,
-            runtime_args=[],
+            runtime_args=compute_rt_args,
             config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
