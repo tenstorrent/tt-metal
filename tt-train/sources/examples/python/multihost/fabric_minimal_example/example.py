@@ -11,7 +11,7 @@ import click
 import ttnn
 import ttml
 import numpy as np
-from ttml.common.config import get_config, DeviceConfig
+from ttml.common.config import load_config, DeviceConfig
 from ttml.common.utils import initialize_device
 
 
@@ -23,7 +23,7 @@ from ttml.common.utils import initialize_device
     default="training_shakespeare_tinyllama_tensor_parallel_3tier_fabric.yaml",
 )
 def main(config: str):
-    yaml_config = get_config(config)
+    yaml_config = load_config(config)
 
     # Initialize distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
