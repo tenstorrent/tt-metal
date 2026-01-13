@@ -69,19 +69,15 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-      - name: Start from older commit and initial ccache setup
+      - name: Initial ccache setup
         run: |
           echo "========================================="
-          echo "=== Starting from older commit for natural progression ==="
+          echo "=== Initial ccache configuration ===="
           echo "========================================="
           echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          git rev-parse HEAD > /tmp/ttnn_newer_commit.txt  # Save original HEAD first
-          echo "Moving to older commit (HEAD~1) to start test"
-          git checkout HEAD~1
-          echo "Starting from commit: $(git rev-parse --short=10 HEAD)"
-          git rev-parse HEAD > /tmp/ttnn_older_commit.txt
+          git rev-parse HEAD > /tmp/ttnn_commit.txt
           echo ""
-          echo "=== TTNN RUN 1 (older commit): Initial ccache configuration ===="
+          echo "=== TTNN RUN 1: Initial ccache configuration ===="
           ccache --show-config | head -40
           echo ""
           echo "=== Redis Remote Storage Configuration ==="
@@ -249,9 +245,9 @@ jobs:
           echo ""
           echo "=== Comparing Run 1 vs Run 2 ===="
           echo "--- Git commits (should be different) ---"
-          echo "Run 1 commit: $(cat /tmp/ttnn_commit.txt | cut -c1-10)"
+          echo "Run 1 commit: $(cat /tmp/ttnn_run1_git_commit.txt | cut -c1-10)"
           echo "Run 2 commit: $(cat /tmp/ttnn_run2_git_commit.txt | cut -c1-10)"
-          if ! diff -u /tmp/ttnn_commit.txt /tmp/ttnn_run2_git_commit.txt; then
+          if ! diff -u /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run2_git_commit.txt; then
             echo "✅ Git commits are different as expected (testing cross-commit behavior)"
           else
             echo "❌ ERROR: Git commits should be different!"
@@ -301,23 +297,23 @@ jobs:
             echo "ℹ️  No cache activity detected"
           fi
 
-      - name: Return to older commit and clear kernel caches for Run 3
+      - name: Return to original commit for Run 3
         run: |
           echo ""
           echo "========================================="
-          echo "=== Preparing TTNN RUN 3: Return to older commit ===="
+          echo "=== Preparing TTNN RUN 3: Return to original commit ===="
           echo "========================================="
           echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          echo "Returning to older commit to test cache consistency"
-          git checkout $(cat /tmp/ttnn_older_commit.txt)
-          echo "Back to older commit: $(git rev-parse --short=10 HEAD)"
+          echo "Returning to original commit to test cross-commit cache hits"
+          git checkout $(cat /tmp/ttnn_original_commit.txt)
+          echo "Back to original commit: $(git rev-parse --short=10 HEAD)"
           echo ""
           echo "Clearing kernel binaries for third test"
           rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
           echo ""
-          echo "=== Current ccache stats before Run 3 (back to older commit) ===="
+          echo "=== Current ccache stats before Run 3 (back to original commit) ===="
           ccache -s
 
       - name: Run TTNN tests (Third run - back to original commit)
@@ -746,11 +742,11 @@ jobs:
         run: |
           echo ""
           echo "=========================================="
-          echo "=== Preparing TTNN RUN 3: Return to original commit ===="
+          echo "=== Preparing tt-train RUN 3: Return to original commit ===="
           echo "=========================================="
           echo "Current commit: $(git rev-parse --short=10 HEAD)"
           echo "Returning to original commit to test cross-commit cache hits"
-          git checkout $(cat /tmp/ttnn_original_commit.txt)
+          git checkout $(cat /tmp/tt_train_original_commit.txt)
           echo "Back to original commit: $(git rev-parse --short=10 HEAD)"
           echo ""
           echo "Clearing kernel binaries for third test"
