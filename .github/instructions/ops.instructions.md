@@ -4,7 +4,7 @@ applyTo: "ttnn/cpp/ttnn/operations/**"
 
 For TT-NN Operations code:
 
-I'd like you to comment on the PR after you compile the following instructions into a single comment:
+Add a comment on the PR after you do the following:
 
 - Identify the list of operations that is affected by the code changes.
 - Use the following list to identify which models are affected by the OP change.
@@ -271,3 +271,5 @@ I'd like you to comment on the PR after you compile the following instructions i
 
 - Identify Action Workflows that run the models that were impacted by the changes. Add the links to these workflows using url prefix 
 https://github.com/tenstorrent/tt-metal/actions/workflows/
+
+Put all of this information together in a single comment on the PR.
