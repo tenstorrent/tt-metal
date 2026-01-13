@@ -457,7 +457,7 @@ jobs:
         with:
           runner-label: ${{ inputs.runner-label }}
       - name: Download Flux.1-dev model weights from LFC
-        if: ${{ (inputs.extra-tag == 'pipeline-yyz2-lfc' || inputs.extra-tag == 'pipeline-perf') && contains(matrix.test-group.name, 'Flux.1-dev') }}
+        if: ${{ inputs.extra-tag == 'pipeline-yyz2-lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
         timeout-minutes: 15
         run: |
           set -e
