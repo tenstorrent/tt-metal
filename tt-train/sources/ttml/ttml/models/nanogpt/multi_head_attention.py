@@ -6,20 +6,17 @@
 
 from typing import Optional
 
-import numpy as np
-import ml_dtypes  # Used for bfloat16 type in fallback initialization
-
-import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter, RunMode
+from ttml.modules import AbstractModuleBase, LinearLayer, RunMode
 
 
 class MultiHeadAttention(AbstractModuleBase):
-    """Multi-head attention layer implemented in Python using ttml operations.
+    """Multi-head attention layer using C++ LinearLayer for better performance.
 
-    This implementation uses ttml operations to build attention from scratch.
-    For better performance, consider using the C++ MultiHeadAttention module
-    if it becomes available through the Python API.
+    This implementation uses C++ LinearLayer modules which provide:
+    - Optimized forward/backward passes
+    - Pickle support for checkpoint save/load
+    - Proper parameter registration for optimizer integration
     """
 
     def __init__(
@@ -45,24 +42,11 @@ class MultiHeadAttention(AbstractModuleBase):
         # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
         # Note: scaling by 1/sqrt(head_dim) is handled inside scaled_dot_product_attention
 
-        # Use Python Parameters for checkpoint compatibility
-        # Note: C++ LinearLayer could be used for better performance but doesn't
-        # integrate with Python checkpoint save/load. Using Python Parameters ensures
-        # all weights are properly serialized.
-        self._use_cpp_layers = False
+        # QKV projection: embedding_dim -> embedding_dim * 3 (no bias for attention projections)
+        self.qkv = LinearLayer(embedding_dim, embedding_dim * 3, False)
 
-        # QKV projection: embedding_dim -> embedding_dim * 3
-        # Linear weights must be in TILE layout
-        qkv_shape = (1, 1, embedding_dim * 3, embedding_dim)
-        qkv_np = np.random.normal(0.0, 0.02, size=qkv_shape).astype(ml_dtypes.bfloat16)
-        qkv_tensor = ttml.autograd.Tensor.from_numpy(qkv_np, layout=ttnn.Layout.TILE)
-        self.qkv = Parameter(qkv_tensor)
-
-        # Output projection: embedding_dim -> embedding_dim
-        out_shape = (1, 1, embedding_dim, embedding_dim)
-        out_np = np.random.normal(0.0, 0.02, size=out_shape).astype(ml_dtypes.bfloat16)
-        out_tensor = ttml.autograd.Tensor.from_numpy(out_np, layout=ttnn.Layout.TILE)
-        self.out_proj = Parameter(out_tensor)
+        # Output projection: embedding_dim -> embedding_dim (no bias)
+        self.out_proj = LinearLayer(embedding_dim, embedding_dim, False)
 
     # train() and eval() are inherited from AbstractModuleBase
 
@@ -78,11 +62,8 @@ class MultiHeadAttention(AbstractModuleBase):
         Returns:
             Output tensor after attention
         """
-        # QKV projection
-        if self._use_cpp_layers:
-            qkv = self.qkv_layer(x)
-        else:
-            qkv = ttml.ops.linear.linear(x, self.qkv.tensor, None)
+        # QKV projection using C++ LinearLayer
+        qkv = self.qkv(x)
 
         # Split into heads using ttml's heads_creation
         # Output: query, key, value each have shape (B, H, S, head_dim)
@@ -103,11 +84,8 @@ class MultiHeadAttention(AbstractModuleBase):
         # Fuse heads back
         attention_out = ttml.ops.multi_head_utils.heads_fusion(attn_out)
 
-        # Output projection
-        if self._use_cpp_layers:
-            out = self.out_layer(attention_out)
-        else:
-            out = ttml.ops.linear.linear(attention_out, self.out_proj.tensor, None)
+        # Output projection using C++ LinearLayer
+        out = self.out_proj(attention_out)
 
         # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:

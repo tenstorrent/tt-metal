@@ -300,8 +300,8 @@ class TestMultiHeadAttention:
 
         attention = MultiHeadAttention(embedding_dim, num_heads, dropout=0.0)
 
-        qkv_np = attention.qkv.tensor.to_numpy(ttnn.DataType.FLOAT32)
-        out_np = attention.out_proj.tensor.to_numpy(ttnn.DataType.FLOAT32)
+        qkv_np = attention.qkv.get_weight_numpy()
+        out_np = attention.out_proj.get_weight_numpy()
 
         # QKV projection: embedding_dim -> embedding_dim * 3
         assert qkv_np.shape == (1, 1, embedding_dim * 3, embedding_dim)
@@ -363,9 +363,11 @@ class TestMultiHeadAttention:
         loss.backward(False)
 
         # Check gradients exist
-        assert attention.qkv.tensor.is_grad_initialized(), "qkv should have gradient"
         assert (
-            attention.out_proj.tensor.is_grad_initialized()
+            attention.qkv.get_weight().is_grad_initialized()
+        ), "qkv should have gradient"
+        assert (
+            attention.out_proj.get_weight().is_grad_initialized()
         ), "out_proj should have gradient"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()

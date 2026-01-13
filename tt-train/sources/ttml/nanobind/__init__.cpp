@@ -58,8 +58,7 @@ NB_MODULE(_ttml, m) {
     ttml::nanobind::core::py_module(m_core);
     ttml::nanobind::optimizers::py_module(m_optimizers);
 
-    // Add MeshDevice as non-owning
-    nb::class_<tt::tt_metal::distributed::MeshDevice>(m, "MeshDevice");
+    // MeshDevice binding is owned by ttnn; avoid re-registering here to prevent duplicate nanobind types.
 }
 
 }  // namespace ttml::nanobind

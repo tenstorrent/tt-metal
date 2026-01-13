@@ -31,11 +31,7 @@ namespace ttml::nanobind::core {
 void py_module_types(nb::module_& m) {
     m.def_submodule("distributed");
     auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
-    // Expose TensorToMesh so functions returning unique_ptr<TensorToMesh> can be converted
-    nb::class_<ttnn::distributed::TensorToMesh>(py_distributed, "TensorToMesh");
-    // Expose MeshToTensor composer for composing distributed tensors back to single tensor
-    nb::class_<ttnn::distributed::MeshToTensor>(py_distributed, "MeshToTensor");
-    nb::class_<ttnn::distributed::MeshComposerConfig>(py_distributed, "MeshComposerConfig");
+    // Rely on TTNN module to own distributed type registrations to avoid duplicates.
     // Expose SocketManager
     nb::class_<ttml::core::distributed::SocketManager>(py_distributed, "SocketManager");
     // Expose SocketType enum

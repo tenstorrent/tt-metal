@@ -3,12 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/function.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
+#include <core/ttnn_all_includes.hpp>
+
 #include "autograd/autocast_tensor.hpp"
+#include "autograd/tensor.hpp"
 #include "modules/grouped_query_attention.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
@@ -78,6 +84,63 @@ void py_module(nb::module_& m) {
                 return ttml::nanobind::util::make_numpy_tensor(w->get_value(autograd::PreferredPrecision::FULL));
             },
             "Get weight as numpy tensor");
+
+        // Pickle support for LinearLayer
+        py_linear_layer.def(
+            "__getstate__",
+            [](const LinearLayer& layer) {
+                // Get parameters from the layer
+                auto params = layer.parameters();
+
+                // Extract weight tensor
+                auto weight_it = params.find(layer.get_name() + "/weight");
+                if (weight_it == params.end()) {
+                    throw std::runtime_error("LinearLayer weight not found in parameters");
+                }
+                auto weight_numpy = ttml::nanobind::util::make_numpy_tensor(
+                    weight_it->second->get_value(autograd::PreferredPrecision::FULL));
+
+                // Check for bias
+                auto bias_it = params.find(layer.get_name() + "/bias");
+                bool has_bias = (bias_it != params.end());
+
+                nb::dict state;
+                state["weight"] = weight_numpy;
+                state["has_bias"] = has_bias;
+                if (has_bias) {
+                    auto bias_numpy = ttml::nanobind::util::make_numpy_tensor(
+                        bias_it->second->get_value(autograd::PreferredPrecision::FULL));
+                    state["bias"] = bias_numpy;
+                }
+
+                return state;
+            },
+            "Serialize LinearLayer state for pickling");
+
+        py_linear_layer.def(
+            "__setstate__",
+            [](LinearLayer& layer, nb::dict state) {
+                // Extract weight from state
+                auto weight_numpy = nb::cast<nb::ndarray<nb::numpy>>(state["weight"]);
+                bool has_bias = nb::cast<bool>(state["has_bias"]);
+
+                // Create weight tensor from numpy
+                auto weight_tensor = autograd::create_tensor(ttml::nanobind::util::make_metal_tensor(
+                    weight_numpy, tt::tt_metal::Layout::TILE, std::nullopt, nullptr));
+
+                if (has_bias) {
+                    // Create bias tensor from numpy
+                    auto bias_numpy = nb::cast<nb::ndarray<nb::numpy>>(state["bias"]);
+                    auto bias_tensor = autograd::create_tensor(ttml::nanobind::util::make_metal_tensor(
+                        bias_numpy, tt::tt_metal::Layout::TILE, std::nullopt, nullptr));
+
+                    // Use placement new to reconstruct the layer in-place
+                    new (&layer) LinearLayer(weight_tensor, bias_tensor);
+                } else {
+                    new (&layer) LinearLayer(weight_tensor, false);
+                }
+            },
+            "Deserialize LinearLayer state from pickle");
     }
 }
 
