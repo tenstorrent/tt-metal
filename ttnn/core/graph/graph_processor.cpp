@@ -294,21 +294,6 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 
 node_id GraphProcessor::add_tensor(const Tensor& t) {
     const auto& storage = t.storage();
-    tt::tt_metal::Buffer* buffer = std::visit(
-        [&t]<typename T>(const T& storage) -> tt::tt_metal::Buffer* {
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (storage.mesh_buffer) {
-                    // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
-                    // It has an ID different from the "backing" buffer that was used to perform the allocation.
-                    // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
-                    // buffer.
-                    return storage.mesh_buffer->get_backing_buffer();
-                }
-                return t.buffer();
-            }
-            return nullptr;
-        },
-        storage);
 
     // TODO #32045: Remove the check for INVALID_TENSOR_ID since IDs are assigned in the constructor.
     std::uint64_t tensor_id = t.tensor_id;
@@ -329,6 +314,49 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         {kTensorId, fmt::format("{}", tensor_id)},
     };
 
+    // Extract placement information from tensor topology if available
+    const auto& topology = t.tensor_topology();
+    const auto& placements = topology.placements();
+
+    // Check if this tensor has meaningful placement info (not default single replicate)
+    if (placements.size() > 0) {
+        // Format placements as a string (e.g., "[PlacementShard(3)]" or "[PlacementReplicate()]")
+        std::ostringstream placement_str;
+        placement_str << "[";
+        for (size_t i = 0; i < placements.size(); ++i) {
+            if (i > 0) {
+                placement_str << ", ";
+            }
+            std::visit(
+                [&](const auto& placement) {
+                    using T = std::decay_t<decltype(placement)>;
+                    if constexpr (std::is_same_v<T, tt::tt_metal::distributed::MeshMapperConfig::Shard>) {
+                        placement_str << "PlacementShard(" << placement.dim << ")";
+                    } else if constexpr (std::is_same_v<T, tt::tt_metal::distributed::MeshMapperConfig::Replicate>) {
+                        placement_str << "PlacementReplicate()";
+                    }
+                },
+                placements[i]);
+        }
+        placement_str << "]";
+        params["placement"] = placement_str.str();
+
+        // Also add distribution shape
+        // Also add distribution shape
+        const auto& dist_shape = topology.distribution_shape();
+        size_t num_dims = dist_shape.dims();
+        std::ostringstream dist_shape_str;
+        dist_shape_str << "[";
+        for (size_t i = 0; i < num_dims; ++i) {
+            if (i > 0) {
+                dist_shape_str << ", ";
+            }
+            dist_shape_str << dist_shape[i];
+        }
+        dist_shape_str << "]";
+        params["distribution_shape"] = dist_shape_str.str();
+    }
+
     if (!tensor_id_to_counter.contains(tensor_id)) {
         int stacking_level = static_cast<int>(current_op_id.size()) - 1;
         graph.push_back(Vertex{
@@ -340,15 +368,47 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         tensor_id_to_counter[tensor_id] = tensor_counter;
     }
 
-    if (buffer == nullptr) {
-        log_debug(
-            tt::LogAlways,
-            "Tensor doesn't have buffer, but storage is {}",
-            graph_demangle(get_type_in_var(t.storage()).name()));
-    } else {
-        node_id buffer_node_id = add_buffer(buffer);
-        graph[buffer_node_id].connections.push_back(tensor_counter);
-    }
+    // Handle buffers - check if this is a mesh buffer and add all device buffers
+    std::visit(
+        [&]<typename T>(const T& storage) {
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
+                if (storage.mesh_buffer) {
+                    // For mesh buffers, iterate through all devices and add their buffers
+                    auto mesh_device = storage.mesh_buffer->device();
+                    auto mesh_shape = mesh_device->shape();
+
+                    // Add actual mesh device shape (2D) to tensor params
+                    size_t num_mesh_dims = mesh_shape.dims();
+                    std::ostringstream mesh_shape_str;
+                    mesh_shape_str << "[";
+                    for (size_t i = 0; i < num_mesh_dims; ++i) {
+                        if (i > 0) {
+                            mesh_shape_str << ", ";
+                        }
+                        mesh_shape_str << mesh_shape[i];
+                    }
+                    mesh_shape_str << "]";
+                    graph[tensor_counter].params["mesh_device_shape"] = mesh_shape_str.str();
+
+                    // Create a coordinate range spanning the entire mesh
+                    tt::tt_metal::distributed::MeshCoordinateRange coord_range(mesh_shape);
+
+                    // Iterate through all coordinates in the mesh
+                    for (const auto& coord : coord_range) {
+                        Buffer* device_buffer = storage.mesh_buffer->get_device_buffer(coord);
+                        if (device_buffer) {
+                            node_id buffer_node_id = add_buffer(device_buffer);
+                            graph[buffer_node_id].connections.push_back(tensor_counter);
+                        }
+                    }
+                } else if (t.buffer()) {
+                    // Single device buffer
+                    node_id buffer_node_id = add_buffer(t.buffer());
+                    graph[buffer_node_id].connections.push_back(tensor_counter);
+                }
+            }
+        },
+        storage);
 
     return tensor_counter;
 }
