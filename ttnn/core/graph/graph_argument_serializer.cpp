@@ -282,7 +282,10 @@ std::string graph_demangle(const std::string_view name) {
     return ret_val;
 }
 
-GraphArgumentSerializer::GraphArgumentSerializer() { initialize(); }
+GraphArgumentSerializer::GraphArgumentSerializer() {
+    // DO NOT call initialize() here!
+    // initialize() must be called explicitly at runtime, after all static objects are constructed
+}
 
 GraphArgumentSerializer& GraphArgumentSerializer::instance() {
     static GraphArgumentSerializer new_instance;
@@ -553,6 +556,9 @@ void GraphArgumentSerializer::register_type() {
 }
 
 std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::any>& span) {
+    // By the time to_list() is called, all static objects have been constructed
+    instance().initialize();
+
     std::vector<std::string> result;
     for (const auto& element : span) {
         if (!element.has_value()) {
@@ -580,6 +586,19 @@ std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::a
 }
 
 void GraphArgumentSerializer::initialize() {
+    // Make initialize() idempotent - safe to call multiple times
+    if (initialized_) {
+        return;  // Already initialized, nothing to do
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // CRITICAL: Execute all queued operation-specific registrations FIRST
+    // This must happen before any graph capture can start
+    // Operations self-register via TTNN_REGISTER_GRAPH_ARG macro in their headers
+    // ═══════════════════════════════════════════════════════════════════════════════
+    GraphArgumentRegistrationQueue::instance().execute_all();
+
+    // Now register core types
     GraphArgumentSerializer::register_type<bool>();
     GraphArgumentSerializer::register_type<int>();
     GraphArgumentSerializer::register_type<unsigned int>();
@@ -651,15 +670,11 @@ void GraphArgumentSerializer::initialize() {
     // xy_pair
     GraphArgumentSerializer::register_type<tt::xy_pair>();
 
-    // ═══════════════════════════════════════════════════════════════════════════════
-    // Execute all queued operation-specific registrations
-    // Operations self-register via TTNN_REGISTER_GRAPH_ARG macro in their headers
-    // No manual calls needed - fully automatic and scalable
-    // ═══════════════════════════════════════════════════════════════════════════════
-
-    GraphArgumentRegistrationQueue::instance().execute_all();
-
     // Note: std::nullopt_t is already handled specially and cannot be registered as a template parameter
+    // Note: Operation-specific types are auto-registered at the START of initialize() via execute_all()
+
+    // Mark as initialized
+    initialized_ = true;
 }
 
 }  // namespace ttnn::graph

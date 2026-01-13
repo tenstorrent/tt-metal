@@ -64,5 +64,6 @@ private:
     void initialize();
 
     std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction> map;
+    bool initialized_ = false;  // Safety flag to catch premature usage
 };
 }  // namespace ttnn::graph

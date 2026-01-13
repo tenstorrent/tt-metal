@@ -17,24 +17,33 @@ public:
 
     // Get the queue singleton (safe, constructed on first use)
     static GraphArgumentRegistrationQueue& instance() {
-        static GraphArgumentRegistrationQueue queue;
-        return queue;
+        // Use a pointer with manual initialization to avoid destruction order issues
+        static GraphArgumentRegistrationQueue* queue = new GraphArgumentRegistrationQueue();
+        return *queue;
     }
 
     // Add a registration function to the queue
-    void enqueue(RegistrationFunc func) { registrations_.push_back(std::move(func)); }
+    void enqueue(RegistrationFunc func) {
+        if (!registrations_) {
+            registrations_ = new std::vector<RegistrationFunc>();
+        }
+        registrations_->push_back(std::move(func));
+    }
 
     // Execute all queued registrations (called by GraphArgumentSerializer::initialize())
     void execute_all() {
-        for (auto& func : registrations_) {
+        if (!registrations_) {
+            return;  // No registrations yet
+        }
+        for (auto& func : *registrations_) {
             func();
         }
-        registrations_.clear();
+        registrations_->clear();
     }
 
 private:
     GraphArgumentRegistrationQueue() = default;
-    std::vector<RegistrationFunc> registrations_;
+    std::vector<RegistrationFunc>* registrations_ = nullptr;
 };
 
 // Helper for static registration
