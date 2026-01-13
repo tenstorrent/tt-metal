@@ -133,11 +133,9 @@ void kernel_main() {
                 Sk_chunk_t,
                 q_chunk,
                 0,
-                ring_iter_needs_global_n_mask,
-                ring_iter_needs_local_n_mask,
+                ring_iter_needs_global_n_mask || ring_iter_needs_local_n_mask,
                 ring_iter_needs_joint_n_mask,
-                global_n_within_ring_iter,
-                local_padded_N,
+                ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
                 L);
 
             const bool is_joint_q = q_chunk >= num_local_q_chunks;

@@ -913,10 +913,8 @@ void generate_mask(
     const uint32_t chunk_start_t_in_q_chunks,
     const bool generate_mask_0,
     const bool generate_mask_1,
-    const bool generate_mask_2,
     const uint32_t unpadded_Sk_mask_0,
-    const uint32_t unpadded_Sk_mask_1,
-    const uint32_t unpadded_Sk_mask_2) {
+    const uint32_t unpadded_Sk_mask_1) {
     if constexpr (is_causal || sliding_window_size > 0) {
         uint32_t offset_q_chunk = q_chunk;
         if constexpr (is_chunked) {
@@ -948,9 +946,6 @@ void generate_mask(
         }
         if (generate_mask_1) {
             generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_1);
-        }
-        if (generate_mask_2) {
-            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk_mask_2);
         }
     }
 }
