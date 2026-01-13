@@ -3,6 +3,7 @@
 
 # External third-party dependencies (not Tenstorrent code)
 -*/.cpmcache/*
+-*/third_party/tracy/*
 
 # NOTE: tt_metal/third_party/umd IS scanned - it's Tenstorrent code
 # UMD simulation is disabled via TT_UMD_BUILD_SIMULATION=FALSE in the preset
