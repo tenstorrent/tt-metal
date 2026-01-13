@@ -125,12 +125,13 @@ inline NcoresWHsb compute_ncores_wh_sb(
     }
     // single_block_size = n * single_sblock_size
     // Conditions: (1) single_sblock_size < single_block_size_limit
-    //             (2) Maximize total_blocks_size (computed as with single_block_size)
+    //             (2) Maximize total_blocks_sb (computed as with single_block_size)
     //             (3) Minimize n (prefer smaller n for tie-breaker)
     //             (4) blocks_row_cliff < single_sblock_size_limit
     uint32_t single_block_size = 0;
     uint32_t opt_n = 0;
     uint32_t single_sblock_size = 0;
+    uint32_t opt_ncores_sb = 0;
     for (uint32_t candidate_sblock_size = single_block_size_limit - 1; candidate_sblock_size >= 1;
          --candidate_sblock_size) {
         uint32_t max_n = (width_tiles + candidate_sblock_size - 1) / candidate_sblock_size;
@@ -138,15 +139,15 @@ inline NcoresWHsb compute_ncores_wh_sb(
             uint32_t tmp_single_block_size = n * candidate_sblock_size;
             uint32_t total_blocks_width_sb = tt::div_up(width_tiles, tmp_single_block_size);
             uint32_t total_blocks_height_sb = tt::div_up(height_tiles, tmp_single_block_size);
-            uint32_t total_blocks_size_sb = total_blocks_width_sb * total_blocks_height_sb;
+            uint32_t total_blocks_sb = total_blocks_width_sb * total_blocks_height_sb;
             uint32_t full_cores_per_row = width_tiles / tmp_single_block_size;
             uint32_t cliff_nblocks_row = width_tiles - full_cores_per_row * tmp_single_block_size;
-            // Select for max total_blocks_size, for tie-break: prefer smaller n
-            if (total_blocks_size_sb <= grid_area && cliff_nblocks_row < single_block_size_limit &&
-                (opt_n == 0 || total_blocks_size_sb > single_sblock_size ||
-                 (total_blocks_size_sb == single_sblock_size && n < opt_n))) {
+            // Select for max total_blocks_sb, for tie-break: prefer smaller n
+            if (total_blocks_sb <= grid_area && cliff_nblocks_row < single_block_size_limit &&
+                (opt_n == 0 || total_blocks_sb > opt_ncores_sb || (total_blocks_sb == opt_ncores_sb && n < opt_n))) {
                 opt_n = n;
-                single_sblock_size = total_blocks_size_sb;
+                opt_ncores_sb = total_blocks_sb;
+                single_sblock_size = candidate_sblock_size;
                 single_block_size = tmp_single_block_size;
             }
         }

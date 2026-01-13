@@ -117,16 +117,17 @@ void kernel_main() {
                 this_block_num_rows = total_num_rows - start_row_id;
             }
             if (this_block_num_rows > 0) {
-                read_block(
-                    this_block_num_rows,
-                    start_row_id,
-                    start_column_id,
-                    width_size,
-                    size_2d,
-                    element_size,
-                    single_block_size_row_arg,
-                    sblock_width_size,
-                    single_sblock_size_row_arg);
+                for (uint32_t m = 0; m < width_size; m += sblock_width_size) {
+                    uint32_t start_column_id_u = start_column_id + m;
+                    read_block(
+                        this_block_num_rows,
+                        start_row_id,
+                        start_column_id_u /*start_column_id*/,
+                        sblock_width_size /*width_size*/,
+                        size_2d,
+                        element_size,
+                        single_sblock_size_row_arg /*single_block_size_row_arg*/);
+                }
             }
             start_row_id += tile_height;
         }
