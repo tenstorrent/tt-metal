@@ -44,10 +44,10 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
         std::vector<Tensor>& persistent_output_buffer,
         int32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-        const uint32_t cluster_axis,
+        uint32_t cluster_axis,
         const MeshDevice& mesh_device,
-        const ttnn::ccl::Topology topology,
-        const uint32_t num_links,
+        ttnn::ccl::Topology topology,
+        uint32_t num_links,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 };
