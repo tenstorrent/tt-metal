@@ -7,6 +7,8 @@
 
 void kernel_main() {
     // Compile time arguments
+    constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
+
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto w1_args = TensorAccessorArgs<w0_args.next_compile_time_args_offset()>();
@@ -70,21 +72,23 @@ void kernel_main() {
     const uint32_t w1_tile_id_start = (core_id < 8) ? (5 * core_id) : (5 * 8 + 6 * (core_id - 8));
     const uint32_t w2_tile_id_start = (core_id < 8) ? (19 * core_id) : (19 * 8 + 18 * (core_id - 8));
 
-    // Write from cb_c2w_elt
-    for (uint32_t i = 0; i < num_elt_tiles; ++i) {
-        cb_wait_front(cb_c2w_elt, 1);
-        cb_pop_front(cb_c2w_elt, 1);
-    }
+    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        // Write from cb_c2w_elt
+        for (uint32_t i = 0; i < num_elt_tiles; ++i) {
+            cb_wait_front(cb_c2w_elt, 1);
+            cb_pop_front(cb_c2w_elt, 1);
+        }
 
-    // Read to cb_r2c_in2
-    for (uint32_t i = 0; i < num_in2_tiles; ++i) {
-        cb_reserve_back(cb_r2c_in2, 1);
-        cb_push_back(cb_r2c_in2, 1);
-    }
+        // Read to cb_r2c_in2
+        for (uint32_t i = 0; i < num_in2_tiles; ++i) {
+            cb_reserve_back(cb_r2c_in2, 1);
+            cb_push_back(cb_r2c_in2, 1);
+        }
 
-    // Write from cb_c2w_mm2
-    for (uint32_t i = 0; i < num_mm2_tiles; ++i) {
-        cb_wait_front(cb_c2w_mm2, 1);
-        cb_pop_front(cb_c2w_mm2, 1);
+        // Write from cb_c2w_mm2
+        for (uint32_t i = 0; i < num_mm2_tiles; ++i) {
+            cb_wait_front(cb_c2w_mm2, 1);
+            cb_pop_front(cb_c2w_mm2, 1);
+        }
     }
 }

@@ -7,6 +7,8 @@
 
 void kernel_main() {
     // Compile time arguments
+    constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
+
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto w1_args = TensorAccessorArgs<w0_args.next_compile_time_args_offset()>();
@@ -96,105 +98,105 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Read W0 with pipelined reads
     //-------------------------------------------------------------------------
-
     uint32_t w0_read_offset = 0;
+    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        noc_async_read_one_packet_set_state</*use_vc=*/true>(
+            /*src_noc_addr=*/dram_noc_addr, /*size=*/w0_w1_bytes_per_txn, /*vc=*/vchannel);
 
-    noc_async_read_one_packet_set_state</*use_vc=*/true>(
-        /*src_noc_addr=*/dram_noc_addr, /*size=*/w0_w1_bytes_per_txn, /*vc=*/vchannel);
+        for (uint32_t txn = 0; txn < w0_w1_txns; ++txn) {
+            // Issue reads with current trid
+            cb_reserve_back(cb_r2c_w0, w0_w1_tiles_per_txn);
+            uint32_t write_addr = get_write_ptr(cb_r2c_w0);
 
-    for (uint32_t txn = 0; txn < w0_w1_txns; ++txn) {
-        // Issue reads with current trid
-        cb_reserve_back(cb_r2c_w0, w0_w1_tiles_per_txn);
-        uint32_t write_addr = get_write_ptr(cb_r2c_w0);
+            noc_async_read_set_trid(curr_trid);
+            noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+                /*src_base_addr=*/dram_noc_addr, /*src_addr=*/w0_read_offset, /*dest_addr=*/write_addr, curr_trid);
 
-        noc_async_read_set_trid(curr_trid);
-        noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-            /*src_base_addr=*/dram_noc_addr, /*src_addr=*/w0_read_offset, /*dest_addr=*/write_addr, curr_trid);
+            // After first block: wait for OTHER trid, push
+            if (txn > 0) {
+                noc_async_read_barrier_with_trid(prev_trid);
+                cb_push_back(cb_r2c_w0, w0_w1_tiles_per_txn);
+            }
 
-        // After first block: wait for OTHER trid, push
-        if (txn > 0) {
-            noc_async_read_barrier_with_trid(prev_trid);
-            cb_push_back(cb_r2c_w0, w0_w1_tiles_per_txn);
+            // Swap trids
+            std::swap(curr_trid, prev_trid);
+
+            // Increment read offset
+            w0_read_offset += w0_w1_bytes_per_txn;
         }
 
-        // Swap trids
-        std::swap(curr_trid, prev_trid);
+        // Final cleanup
+        noc_async_read_barrier_with_trid(prev_trid);
+        cb_push_back(cb_r2c_w0, w0_w1_tiles_per_txn);
 
-        // Increment read offset
-        w0_read_offset += w0_w1_bytes_per_txn;
-    }
+        //-------------------------------------------------------------------------
+        // Read W1 with pipelined reads
+        //-------------------------------------------------------------------------
+        uint32_t w1_read_offset = w0_read_offset;
 
-    // Final cleanup
-    noc_async_read_barrier_with_trid(prev_trid);
-    cb_push_back(cb_r2c_w0, w0_w1_tiles_per_txn);
+        noc_async_read_one_packet_set_state</*use_vc=*/true>(
+            /*src_noc_addr=*/dram_noc_addr, /*size=*/w0_w1_bytes_per_txn, /*vc=*/vchannel);
 
-    //-------------------------------------------------------------------------
-    // Read W1 with pipelined reads
-    //-------------------------------------------------------------------------
-    uint32_t w1_read_offset = w0_read_offset;
+        for (uint32_t txn = 0; txn < w0_w1_txns; ++txn) {
+            // Issue reads with current trid
+            cb_reserve_back(cb_r2c_w1, w0_w1_tiles_per_txn);
+            uint32_t write_addr = get_write_ptr(cb_r2c_w1);
 
-    noc_async_read_one_packet_set_state</*use_vc=*/true>(
-        /*src_noc_addr=*/dram_noc_addr, /*size=*/w0_w1_bytes_per_txn, /*vc=*/vchannel);
+            noc_async_read_set_trid(curr_trid);
+            noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+                /*src_base_addr=*/dram_noc_addr, /*src_addr=*/w1_read_offset, /*dest_addr=*/write_addr, curr_trid);
 
-    for (uint32_t txn = 0; txn < w0_w1_txns; ++txn) {
-        // Issue reads with current trid
-        cb_reserve_back(cb_r2c_w1, w0_w1_tiles_per_txn);
-        uint32_t write_addr = get_write_ptr(cb_r2c_w1);
+            // After first block: wait for OTHER trid, push
+            if (txn > 0) {
+                noc_async_read_barrier_with_trid(prev_trid);
+                cb_push_back(cb_r2c_w1, w0_w1_tiles_per_txn);
+            }
 
-        noc_async_read_set_trid(curr_trid);
-        noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-            /*src_base_addr=*/dram_noc_addr, /*src_addr=*/w1_read_offset, /*dest_addr=*/write_addr, curr_trid);
+            // Swap trids
+            std::swap(curr_trid, prev_trid);
 
-        // After first block: wait for OTHER trid, push
-        if (txn > 0) {
-            noc_async_read_barrier_with_trid(prev_trid);
-            cb_push_back(cb_r2c_w1, w0_w1_tiles_per_txn);
+            // Increment read offset
+            w1_read_offset += w0_w1_bytes_per_txn;
         }
 
-        // Swap trids
-        std::swap(curr_trid, prev_trid);
+        // Final cleanup
+        noc_async_read_barrier_with_trid(prev_trid);
+        cb_push_back(cb_r2c_w1, w0_w1_tiles_per_txn);
 
-        // Increment read offset
-        w1_read_offset += w0_w1_bytes_per_txn;
-    }
+        //-------------------------------------------------------------------------
+        // Read W2 with pipelined reads
+        //-------------------------------------------------------------------------
+        uint32_t w2_read_offset = w1_read_offset;
 
-    // Final cleanup
-    noc_async_read_barrier_with_trid(prev_trid);
-    cb_push_back(cb_r2c_w1, w0_w1_tiles_per_txn);
+        noc_async_read_one_packet_set_state</*use_vc=*/true>(
+            /*src_noc_addr=*/dram_noc_addr, /*size=*/w2_tiles_per_txn, /*vc=*/vchannel);
 
-    //-------------------------------------------------------------------------
-    // Read W2 with pipelined reads
-    //-------------------------------------------------------------------------
-    uint32_t w2_read_offset = w1_read_offset;
+        for (uint32_t txn = 0; txn < w2_txns; ++txn) {
+            // Issue reads with current trid
+            cb_reserve_back(cb_r2c_w2, w2_tiles_per_txn);
+            uint32_t write_addr = get_write_ptr(cb_r2c_w2);
 
-    noc_async_read_one_packet_set_state</*use_vc=*/true>(
-        /*src_noc_addr=*/dram_noc_addr, /*size=*/w2_tiles_per_txn, /*vc=*/vchannel);
+            noc_async_read_set_trid(curr_trid);
+            noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+                /*src_base_addr=*/dram_noc_addr, /*src_addr=*/w2_read_offset, /*dest_addr=*/write_addr, curr_trid);
 
-    for (uint32_t txn = 0; txn < w2_txns; ++txn) {
-        // Issue reads with current trid
-        cb_reserve_back(cb_r2c_w2, w2_tiles_per_txn);
-        uint32_t write_addr = get_write_ptr(cb_r2c_w2);
+            // After first block: wait for OTHER trid, push
+            if (txn > 0) {
+                noc_async_read_barrier_with_trid(prev_trid);
+                cb_push_back(cb_r2c_w2, w2_tiles_per_txn);
+            }
 
-        noc_async_read_set_trid(curr_trid);
-        noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-            /*src_base_addr=*/dram_noc_addr, /*src_addr=*/w2_read_offset, /*dest_addr=*/write_addr, curr_trid);
+            // Swap trids
+            std::swap(curr_trid, prev_trid);
 
-        // After first block: wait for OTHER trid, push
-        if (txn > 0) {
-            noc_async_read_barrier_with_trid(prev_trid);
-            cb_push_back(cb_r2c_w2, w2_tiles_per_txn);
+            // Increment read offset
+            w2_read_offset += w2_bytes_per_txn;
         }
 
-        // Swap trids
-        std::swap(curr_trid, prev_trid);
-
-        // Increment read offset
-        w2_read_offset += w2_bytes_per_txn;
+        // Final cleanup
+        noc_async_read_barrier_with_trid(prev_trid);
+        cb_push_back(cb_r2c_w2, w2_tiles_per_txn);
     }
-
-    // Final cleanup
-    noc_async_read_barrier_with_trid(prev_trid);
-    cb_push_back(cb_r2c_w2, w2_tiles_per_txn);
 
     //-------------------------------------------------------------------------
 }

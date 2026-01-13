@@ -24,8 +24,7 @@ void bind_moe(nb::module_& mod) {
             w1_tensor: Weight tensor for second matmul
             w2_tensor: Weight tensor for third matmul
             output_tensor: Output tensor (sharded)
-            math_fidelity: Math fidelity (LoFi or HiFi4). Default: LoFi
-            fp32_dest_acc_en: Enable FP32 destination accumulation. Default: True
+            num_experts: Number of experts
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
@@ -34,6 +33,7 @@ void bind_moe(nb::module_& mod) {
             nb::arg("w1_tensor"),
             nb::arg("w2_tensor"),
             nb::arg("output_tensor"),
+            nb::arg("num_experts"),
         });
 }
 
