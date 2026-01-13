@@ -48,7 +48,7 @@ ttnn::operations::experimental::dropout::DropoutDeviceOperation::tensor_return_v
     uint32_t seed,
     bool use_per_device_seed,
     DataType output_dtype,
-    const MemoryConfig& output_memory_config = MemoryConfig(),
+    const std::optional<MemoryConfig>& output_memory_config = std::nullopt,
     const std::optional<Tensor>& preallocated_output = std::nullopt);
 
 }  // namespace ttnn::prim

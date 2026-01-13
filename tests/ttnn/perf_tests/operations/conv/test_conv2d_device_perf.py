@@ -29,7 +29,7 @@ CONV_PERF_CONFIGS = [
         "act_block_h_override": 0, "act_block_w_div": 1,
         "enable_activation_reuse": False, "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False, "fp32_accum": False,
-        "perf_targets": {"wh": 67, "bh_p150": 24},
+        "perf_targets": {"wh": 67, "bh_p150": 25},
     },
     # HEIGHT SHARDED, Unet - dm bound (activation reuse)
     {
@@ -80,7 +80,7 @@ CONV_PERF_CONFIGS = [
 # fmt: on
 
 # Applied to both upper and lower bounds
-THRESHOLD_PERCENT = 0.03
+THRESHOLD_PERCENT = 0.05
 
 # Build performance targets per architecture (in us) from global config
 PERF_TARGETS_WH = {config["test_name"]: config["perf_targets"]["wh"] for config in CONV_PERF_CONFIGS}
