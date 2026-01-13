@@ -33,6 +33,61 @@ PCC_REQUIRED = 0.99
 PCC_REQUIRED_KVPE = 0.999
 
 
+def expand_test_cases_with_position_ids_ranges(base_cases):
+    """
+    Expand test cases where position_ids ranges are expanded into individual test cases.
+
+    Args:
+        base_cases: List of tuples (mode, seq_len, batch_size_per_row, decode_position_ids)
+            where decode_position_ids can be:
+            - None: random position_ids
+            - int: single position_id
+            - tuple(start, end): range from start to end (inclusive), step=1
+            - tuple(start, end, step): range from start to end (inclusive) with given step
+
+    Returns:
+        List of expanded test cases with individual position_ids
+
+    Examples:
+        >>> base_cases = [
+        ...     ("decode", 1, 32, None),  # Random position_ids
+        ...     ("decode", 1, 32, 1024),  # Single position_id: 1024
+        ...     ("decode", 1, 32, (4096, 4100, 2)),  # Range with step=2: 4096, 4098, 4100
+        ... ]
+        >>> expand_test_cases_with_position_ids_ranges(base_cases)
+        [
+            ("decode", 1, 32, None),
+            ("decode", 1, 32, 1024),
+            ("decode", 1, 32, 4096),
+            ("decode", 1, 32, 4098),
+            ("decode", 1, 32, 4100),
+        ]
+    """
+    expanded_cases = []
+    for mode, seq_len, batch_size_per_row, decode_position_ids in base_cases:
+        if isinstance(decode_position_ids, tuple):
+            if len(decode_position_ids) == 2:
+                # Expand range into individual position_ids with step=1
+                start, end = decode_position_ids
+                step = 1
+            elif len(decode_position_ids) == 3:
+                # Expand range into individual position_ids with given step
+                start, end, step = decode_position_ids
+            else:
+                raise ValueError(
+                    f"Invalid range format: {decode_position_ids}. Expected (start, end) or (start, end, step)"
+                )
+
+            # Expand range with step
+            for pos_id in range(start, end + 1, step):
+                expanded_cases.append((mode, seq_len, batch_size_per_row, pos_id))
+        else:
+            # Keep as is (None or int)
+            expanded_cases.append((mode, seq_len, batch_size_per_row, decode_position_ids))
+
+    return expanded_cases
+
+
 def get_cache_on_host(tt_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
     """
     Get the KVPE cache on the host from the TTNN cache.
@@ -59,7 +114,16 @@ def generate_reference_io(
     batch_size: int,
     mode: str,
     state_dict: dict[str, torch.Tensor],
+    decode_position_id: int | None = None,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Generate reference input/output for testing.
+
+    Args:
+        decode_position_id: Configuration for position_ids generation (only used in decode mode):
+            - None: Generate random position_ids in range [0, max_seq_len - 1)
+            - int: Use this specific position for all batches
+    """
     if module_path is None:
         reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
         state_dict = add_inv_scale_to_state_dict(
@@ -77,7 +141,18 @@ def generate_reference_io(
     if mode == "prefill":
         position_ids_or_seq_lens = torch.tensor([seq_len])
     else:
-        position_ids = position_ids_or_seq_lens = torch.randint(0, hf_config.max_seq_len - 1, (batch_size,))
+        # Handle decode_position_ids for decode mode
+        if decode_position_id is None:
+            # Generate random position_ids
+            position_ids = position_ids_or_seq_lens = torch.randint(
+                0, hf_config.max_seq_len - 1, (batch_size,), dtype=torch.int32
+            )
+        else:
+            # Must be an int, use that value for all batches
+            assert isinstance(
+                decode_position_id, int
+            ), f"decode_position_id must be int or None, got {type(decode_position_id)}"
+            position_ids = position_ids_or_seq_lens = torch.ones(batch_size, dtype=torch.int32) * decode_position_id
     reference_output, input_cache, output_cache = run_reference_with_attention(
         reference_model, torch_input, position_ids_or_seq_lens, layer_idx, hf_config, mode, zeroed_cache=True
     )
@@ -170,6 +245,7 @@ def run_test_forward_pass_mla1d(
     module_path,
     force_recalculate_weight_config,
     state_dict,
+    decode_position_ids: int | None = None,
 ):
     # Check params
     if mode == "prefill":
@@ -180,7 +256,15 @@ def run_test_forward_pass_mla1d(
     # Get reference IO
     logger.info("Setting up reference IO")
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
-        model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode, state_dict
+        model_path,
+        module_path,
+        hf_config_short,
+        layer_idx,
+        seq_len,
+        batch_size,
+        mode,
+        state_dict,
+        decode_position_ids,
     )
 
     # Set up page config
@@ -301,6 +385,7 @@ def run_test_forward_pass_mla2d(
     module_path,
     force_recalculate_weight_config,
     state_dict,
+    decode_position_ids: int | None = None,
 ):
     # Check params
     if mode == "prefill":
@@ -313,7 +398,15 @@ def run_test_forward_pass_mla2d(
     # Get reference IO
     logger.info("Setting up reference IO")
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
-        model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode, state_dict
+        model_path,
+        module_path,
+        hf_config_short,
+        layer_idx,
+        seq_len,
+        batch_size,
+        mode,
+        state_dict,
+        decode_position_ids,
     )
 
     # Set up page config
@@ -408,12 +501,30 @@ def run_test_forward_pass_mla2d(
         ), f"MLA output for decode {batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
 
 
+# Base test cases - ranges will be expanded into individual test cases
+# see documentation for expand_test_cases_with_position_ids_ranges for more details
+_BASE_TEST_CASES = [
+    # mode, seq_len, batch_size_per_row, decode_position_ids
+    ("decode", 1, USERS_PER_ROW, None),
+    # ("decode", 1, USERS_PER_ROW, (4096, 8192, 32)), # Example.
+] + [
+    ("prefill", seq_len, 1, None) for seq_len in PREFILL_SEQ_LENS
+]  # decode_position_ids is not applicable for prefill
+
+# Expand ranges into individual position_ids for pytest
+_EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(_BASE_TEST_CASES)
+
+
 @pytest.mark.parametrize(
-    "mode, seq_len, batch_size_per_row",
-    [
-        ("decode", 1, USERS_PER_ROW),
-    ]
-    + [("prefill", seq_len, 1) for seq_len in PREFILL_SEQ_LENS],
+    "mode, seq_len, batch_size_per_row, decode_position_ids",
+    _EXPANDED_TEST_CASES,
+    ids=lambda val: (
+        f"mode_{val[0]}_seq{val[1]}_batch{val[2]}_pos{val[3]}"
+        if val[3] is not None
+        else f"mode_{val[0]}_seq{val[1]}_batch{val[2]}_random"
+    )
+    if isinstance(val, tuple)
+    else str(val),
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -436,6 +547,7 @@ def test_forward_pass(
     mode,
     seq_len,
     batch_size_per_row,
+    decode_position_ids,
     hf_config_short,
     cache_path,
     mesh_device,
@@ -456,6 +568,10 @@ def test_forward_pass(
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0
 
+    # Only use decode_position_ids for decode mode
+    if mode != "decode":
+        decode_position_ids = None
+
     test_closure(
         layer_idx,
         mode,
@@ -469,6 +585,7 @@ def test_forward_pass(
         module_path,
         force_recalculate_weight_config,
         state_dict,
+        decode_position_ids,
     )
 
 
