@@ -53,7 +53,7 @@ struct WorkerMemMap {
 
 // Utility function reused across tests to get address params
 WorkerMemMap generate_worker_mem_map(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology topology) {
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
@@ -1663,8 +1663,8 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
 
     // Check topology and fabric config
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-    [[maybe_unused]] const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    assert(
+    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    ASSERT_TRUE(
         (topology == Topology::Linear || topology == Topology::Ring) &&
         (fabric_config == tt_fabric::FabricConfig::FABRIC_1D ||
          fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING));
@@ -1874,7 +1874,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1, RoutingDire
 
 TEST_F(Galaxy1x32Fabric1DFixture, TestUnicastRaw_AllHops) {
     const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-    TT_ASSERT(num_devices == 32, "1x32 mesh required for this test");
+    ASSERT_EQ(num_devices, 32) << "1x32 mesh required for this test";
     for (uint32_t hops = 1; hops < num_devices; hops++) {
         RunTestUnicastRaw(this, hops, RoutingDirection::E);
     }

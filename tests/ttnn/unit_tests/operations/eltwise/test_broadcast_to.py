@@ -47,7 +47,16 @@ input_bcast_shape_pairs = [
 @pytest.mark.parametrize("shape_and_broadcast_spec", input_bcast_shape_pairs)
 def test_broadcast_to(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
     shape, broadcast_shape = shape_and_broadcast_spec
+
+    # For float32, use values that expose TF32 precision loss (require >10 mantissa bits)
+    # TF32 has only 10 mantissa bits vs FP32's 23 bits
+    # if dtype_pt == torch.float32:
+    # Use values with many significant digits that will lose precision in TF32
+    # Example: 1.23456789 requires more than 10 mantissa bits for exact representation
+    # torch_input_tensor = torch.randn(shape, dtype=dtype_pt) * 1000000.0 + 1.23456789
+    # else:
     torch_input_tensor = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(shape)
+
     torch_result = torch_input_tensor.broadcast_to(broadcast_shape)
 
     input_tensor = ttnn.from_torch(

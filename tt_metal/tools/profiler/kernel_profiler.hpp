@@ -125,7 +125,9 @@ __attribute__((noinline)) void init_profiler(
     defined(COMPILE_FOR_BRISC)
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
-
+    if constexpr (NON_DROPPING) {
+        profiler_control_buffer[DROPPED_ZONES] = 0;
+    }
     if (runCounter == 0) {
         for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
             for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
@@ -609,13 +611,31 @@ inline __attribute__((always_inline)) void flush_to_dram_if_full(uint32_t additi
     }
 }
 
-template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
-inline __attribute__((always_inline)) void timeStampedData(uint64_t data) {
-    if (bufferHasRoom<dispatch>()) {
-        mark_time_at_index_inlined(wIndex, get_const_id(data_id, TS_DATA));
+template <
+    uint32_t data_id,
+    DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH,
+    PacketTypes packet_type = kernel_profiler::PacketTypes::TS_DATA,
+    typename... Args>
+inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args... trailers) {
+    constexpr uint32_t total_data_count = 1 + sizeof...(trailers);
+    constexpr uint32_t expected_size = kernel_profiler::TimestampedDataSize<packet_type>::size;
+
+    static_assert(
+        expected_size == 0 || total_data_count == expected_size,
+        "Number of arguments does not match expected size for this PacketType");
+
+    constexpr uint32_t additional_slots = sizeof...(trailers);
+
+    if (bufferHasRoom<dispatch>(additional_slots)) {
+        mark_time_at_index_inlined(wIndex, get_const_id(data_id, packet_type));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+
         profiler_data_buffer[myRiscID].data[wIndex++] = data >> 32;
         profiler_data_buffer[myRiscID].data[wIndex++] = (data << 32) >> 32;
+
+        ((profiler_data_buffer[myRiscID].data[wIndex++] = trailers >> 32,
+          profiler_data_buffer[myRiscID].data[wIndex++] = (trailers << 32) >> 32),
+         ...);
     }
 }
 
@@ -771,7 +791,7 @@ __attribute__((noinline)) void trace_only_init() {
 
 // null macros when noc tracing is disabled
 #define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
-#define RECORD_NOC_EVENT_WITH_ID(type, noc_id, addrgen, num_bytes, vc)
+#define RECORD_NOC_EVENT_WITH_ID(type, noc_id, addrgen, offset, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 

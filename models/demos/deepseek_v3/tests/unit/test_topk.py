@@ -20,6 +20,7 @@ SUB_CORE_GRIDS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.Co
 K_VALUE = 32
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "shape",
     [
@@ -76,6 +77,7 @@ def test_topk_single_device(shape, dtype, device):
     assert cosine_sim > 0.99, f"Cosine similarity {cosine_sim} is less than 0.99"
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "shape",

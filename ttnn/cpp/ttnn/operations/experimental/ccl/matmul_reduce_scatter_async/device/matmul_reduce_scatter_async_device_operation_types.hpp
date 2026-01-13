@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async {
 
@@ -19,14 +19,14 @@ using ReduceScatterMinimalAsyncParams =
 
 struct operation_attributes_t {
     ReduceScatterMinimalAsyncParams reduce_scatter_params;
-    operations::matmul::Matmul matmul_struct;
+    ttnn::operations::matmul::operation_attributes_t matmul_struct;
     CoreCoord reduce_scatter_core_grid_offset;
     std::vector<IDevice*> devices;
 
     // Constructor required because operation structs are not default constructible.
     operation_attributes_t(
         ReduceScatterMinimalAsyncParams reduce_scatter_params,
-        operations::matmul::Matmul matmul_struct,
+        ttnn::operations::matmul::operation_attributes_t matmul_struct,
         CoreCoord reduce_scatter_core_grid_offset,
         std::vector<IDevice*> devices) :
         reduce_scatter_params(std::move(reduce_scatter_params)),

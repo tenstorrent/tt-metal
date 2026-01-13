@@ -74,7 +74,8 @@ std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress> TestProgressMoni
     return device_progress;
 }
 
-DeviceProgress TestProgressMonitor::poll_device_senders(const MeshCoordinate& coord, const TestDevice& test_device) {
+DeviceProgress TestProgressMonitor::poll_device_senders(
+    const MeshCoordinate& /*coord*/, const TestDevice& test_device) {
     DeviceProgress progress;
     progress.device_id = test_device.get_node_id();
 
