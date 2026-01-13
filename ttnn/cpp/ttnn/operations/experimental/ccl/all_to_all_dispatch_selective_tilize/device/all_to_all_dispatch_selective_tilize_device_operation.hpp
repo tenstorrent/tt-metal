@@ -13,9 +13,6 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/global_semaphore.hpp"
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <vector>
 
@@ -24,26 +21,19 @@ namespace ttnn::operations::experimental::ccl {
 struct AllToAllDispatchSelectiveTilizeDeviceOperation {
     struct operation_attributes_t {
         const std::optional<uint32_t> axis;
-        const uint32_t num_links;
-        const tt::tt_fabric::Topology topology;
         const uint32_t tokens_per_chunk;
-        const std::optional<CoreRangeSet> all_to_all_dispatch_core_range_set;
         const std::optional<CoreRangeSet> selective_tilize_core_range_set;
+        const std::optional<CoreRangeSet> matmul_core_range_set;
+        const std::optional<CoreRangeSet> combine_core_range_set;
         static constexpr auto attribute_names = std::forward_as_tuple(
             "axis",
-            "num_links",
-            "topology",
             "tokens_per_chunk",
-            "all_to_all_dispatch_core_range_set",
-            "selective_tilize_core_range_set");
+            "selective_tilize_core_range_set",
+            "matmul_core_range_set",
+            "combine_core_range_set");
         auto attribute_values() const {
             return std::forward_as_tuple(
-                axis,
-                num_links,
-                topology,
-                tokens_per_chunk,
-                all_to_all_dispatch_core_range_set,
-                selective_tilize_core_range_set);
+                axis, tokens_per_chunk, selective_tilize_core_range_set, matmul_core_range_set, combine_core_range_set);
         };
     };
     struct tensor_args_t {
@@ -53,22 +43,17 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         const Tensor expert_mapping_tensor;
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 3>;
+    using spec_return_value_t = ttnn::TensorSpec;
 
-    using tensor_return_value_t = std::array<Tensor, 3>;
+    using tensor_return_value_t = Tensor;
 
     struct AllToAllDispatchSelectiveTilizeSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle ternary_reader_kernel_id;
-            tt::tt_metal::KernelHandle binary_writer_kernel_id;
             tt::tt_metal::KernelHandle selective_tilize_kernel_id;
+            tt::tt_metal::KernelHandle writer_tilizer_kernel_id;
             tt::tt_metal::KernelHandle compute_tilizer_kernel_id;
-            std::vector<CoreCoord> cores;
             std::vector<CoreCoord> selective_tilize_cores;
-            const GlobalSemaphore init_semaphore;
-            const GlobalSemaphore cross_device_semaphore;
-            const GlobalSemaphore indices_sent_semaphore;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -83,10 +68,7 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
             const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const GlobalSemaphore& init_semaphore,
-            const GlobalSemaphore& cross_device_semaphore,
-            const GlobalSemaphore& indices_sent_semaphore);
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,
@@ -120,11 +102,10 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         const ttnn::Tensor& expert_scores_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis,
-        uint32_t num_links,
-        tt::tt_fabric::Topology topology,
         uint32_t tokens_per_chunk,
-        const std::optional<CoreRangeSet>& all_to_all_dispatch_core_range_set,
-        const std::optional<CoreRangeSet>& selective_tilize_core_range_set);
+        const std::optional<CoreRangeSet>& selective_tilize_core_range_set,
+        const std::optional<CoreRangeSet>& matmul_core_range_set,
+        const std::optional<CoreRangeSet>& combine_core_range_set);
 };
 }  // namespace ttnn::operations::experimental::ccl
 

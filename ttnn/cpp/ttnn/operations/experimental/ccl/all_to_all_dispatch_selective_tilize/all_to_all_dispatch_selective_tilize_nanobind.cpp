@@ -49,7 +49,7 @@ void bind_all_to_all_dispatch_selective_tilize(nb::module_& mod) {
             selective_tilize_core_range_set (ttnn.CoreRangeSet, optional): the core range set for selective tilize cores. Defaults to `None`, which uses a default single core at (0,1).
 
         Returns:
-            Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor, the metadata tensor, and the tilized scores tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The metadata tensor is used to track the expert indices.
+            Tuple[ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor and the metadata tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The metadata tensor is used to track the expert indices.
 
             output_tensor: The output tensor is expected to be [1, B*D[A], S, H] per device if output_concat_dim is 1 or [1, B, S*D[A], H] per device if output_concat_dim is 2, sharded fully such that we have [D, B*D[A], S, H] or [D, B, S*D[A], H] total when gathered along dimension 0. Each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device. The tensor is expected to be in Row Major, Interleaved format.
             expert_metadata_tensor: The metadata tensor is expected to be [1, B*D[A], S, K] per device if output_concat_dim is 1 or [1, B, S*D[A], K] per device if output_concat_dim is 2, replicated across all devices. Each row contains the all the expert indices selected for each token on the mesh. This is equivalent to an all-gather of the expert indices. The tensor is expected to be in Row Major, Interleaved format.
@@ -78,22 +78,20 @@ void bind_all_to_all_dispatch_selective_tilize(nb::module_& mod) {
                const ttnn::Tensor& expert_scores_tensor,
                const ttnn::Tensor& expert_mapping_tensor,
                const std::optional<uint32_t> cluster_axis,
-               const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology,
                uint32_t tokens_per_chunk,
-               const std::optional<CoreRangeSet>& all_to_all_dispatch_core_range_set,
-               const std::optional<CoreRangeSet>& selective_tilize_core_range_set) {
+               const std::optional<CoreRangeSet>& selective_tilize_core_range_set,
+               const std::optional<CoreRangeSet>& matmul_core_range_set,
+               const std::optional<CoreRangeSet>& combine_core_range_set) {
                 return self(
                     input_tensor,
                     expert_indices_tensor,
                     expert_scores_tensor,
                     expert_mapping_tensor,
                     cluster_axis,
-                    num_links,
-                    topology,
                     tokens_per_chunk,
-                    all_to_all_dispatch_core_range_set,
-                    selective_tilize_core_range_set);
+                    selective_tilize_core_range_set,
+                    matmul_core_range_set,
+                    combine_core_range_set);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
@@ -101,11 +99,10 @@ void bind_all_to_all_dispatch_selective_tilize(nb::module_& mod) {
             nb::arg("expert_mapping_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology") = nb::none(),
             nb::arg("tokens_per_chunk") = 32,
-            nb::arg("all_to_all_dispatch_core_range_set") = nb::none(),
-            nb::arg("selective_tilize_core_range_set") = nb::none()});
+            nb::arg("selective_tilize_core_range_set") = nb::none(),
+            nb::arg("matmul_core_range_set") = nb::none(),
+            nb::arg("combine_core_range_set") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

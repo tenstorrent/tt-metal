@@ -14,34 +14,26 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchSelectiveTilize::invoke(
+ttnn::Tensor ExecuteAllToAllDispatchSelectiveTilize::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
-    std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology,
     uint32_t tokens_per_chunk,
-    const std::optional<CoreRangeSet>& all_to_all_dispatch_core_range_set,
-    const std::optional<CoreRangeSet>& selective_tilize_core_range_set) {
-    auto* mesh_device = input_tensor.device();
-
-    uint32_t num_links_ = num_links.value_or(::ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
-    log_debug(tt::LogOp, "num_links: {}", num_links_);
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
-
+    const std::optional<CoreRangeSet>& selective_tilize_core_range_set,
+    const std::optional<CoreRangeSet>& matmul_core_range_set,
+    const std::optional<CoreRangeSet>& combine_core_range_set) {
     return ttnn::prim::all_to_all_dispatch_selective_tilize(
         input_tensor,
         expert_indices_tensor,
         expert_scores_tensor,
         expert_mapping_tensor,
         axis,
-        num_links_,
-        topology_,
         tokens_per_chunk,
-        all_to_all_dispatch_core_range_set,
-        selective_tilize_core_range_set);
+        selective_tilize_core_range_set,
+        matmul_core_range_set,
+        combine_core_range_set);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

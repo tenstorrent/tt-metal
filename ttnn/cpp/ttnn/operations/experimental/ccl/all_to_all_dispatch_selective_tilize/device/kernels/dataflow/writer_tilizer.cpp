@@ -87,44 +87,6 @@ FORCE_INLINE DataType* tile_col_offset(DataType* indices_address, uint32_t col) 
     return (DataType*)(indices_address + offset);
 }
 
-// DEBUG: Print E-D table contents
-template <uint32_t ExpertsPerDevice, uint32_t DispatchDevices, uint32_t EntriesPerL1Alignment>
-void print_ed_table(volatile tt_l1_ptr uint32_t* ed_table, uint32_t device_id, const char* label) {
-    // Invalidate L1 cache to see updates from remote writes
-    invalidate_l1_cache();
-
-    DPRINT << "=== E-D Table: " << label << " (device " << device_id << ") ===" << ENDL();
-    for (uint32_t local_expert = 0; local_expert < ExpertsPerDevice; local_expert++) {
-        DPRINT << "Expert " << local_expert << ": [";
-        for (uint32_t src_dev = 0; src_dev < DispatchDevices; src_dev++) {
-            // Each entry is l1_alignment bytes apart, access first uint32 of each entry
-            uint32_t entry_idx = (local_expert * DispatchDevices + src_dev) * EntriesPerL1Alignment;
-            uint32_t val = ed_table[entry_idx];
-            DPRINT << val;
-            if (src_dev < DispatchDevices - 1) {
-                DPRINT << ", ";
-            }
-        }
-        DPRINT << "]" << ENDL();
-    }
-    DPRINT << "---" << ENDL();
-}
-
-template <uint32_t experts_per_device, uint32_t dispatch_devices, uint32_t entries_per_l1_alignment>
-void poll_ed_table_loop(volatile tt_l1_ptr uint32_t* ed_table, uint32_t linearized_mesh_coord) {
-    uint32_t poll_iteration = 0;
-    while (true) {
-        DPRINT << "Poll #" << poll_iteration << ENDL();
-        print_ed_table<experts_per_device, dispatch_devices, entries_per_l1_alignment>(
-            ed_table, linearized_mesh_coord, "polling");
-
-        poll_iteration++;
-        // Small delay between polls to avoid flooding DPRINT
-        for (volatile uint32_t delay = 0; delay < 100000; delay++) {
-        }
-    }
-}
-
 void kernel_main() {
     DPRINT << "Writer tilizer started" << ENDL();
     constexpr uint32_t input_tensor_cb_id = get_named_compile_time_arg_val("input_tensor_cb_id");

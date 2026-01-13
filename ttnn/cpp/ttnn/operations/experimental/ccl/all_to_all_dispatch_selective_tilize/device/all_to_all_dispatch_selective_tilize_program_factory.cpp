@@ -7,11 +7,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
@@ -26,13 +22,13 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
+uint32_t get_num_pages_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
 
-uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
+uint32_t get_page_size_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
 
-uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
+uint32_t get_aligned_page_size_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
 
-uint32_t get_num_rows(const ttnn::Tensor& tensor) {
+uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
     auto hidden_size = tensor.logical_shape()[-1];
     TT_FATAL(logical_volume % hidden_size == 0, "Logical volume must be divisible by hidden size");
@@ -50,31 +46,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto* mesh_device = tensor_args.input_tensor.device();
-
-    // Default worker core range - single core for now
-    CoreRangeSet worker_core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    CoreRangeSet indices_sent_core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 1), CoreCoord(0, 1)));
-
-    auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
-    auto final_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
-    auto indices_sent_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, indices_sent_core_range_set, 0);
-    tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
-
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(
-            operation_attributes,
-            coord,
-            tensor_args,
-            tensor_return_value,
-            tensor_coords,
-            init_barrier_semaphore,
-            final_barrier_semaphore,
-            indices_sent_semaphore);
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -88,10 +61,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& cross_device_semaphore,
-    const GlobalSemaphore& indices_sent_semaphore) {
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::Program program{};
 
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
@@ -102,33 +72,19 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto input_scores_tensor = tensor_args.expert_scores_tensor;
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
 
-    const auto& output_tensor = tensor_return_value.at(0);
-    const auto& metadata_tensor = tensor_return_value.at(1);
-    const auto& output_scores_tensor = tensor_return_value.at(2);
-
-    auto num_links = operation_attributes.num_links;
-    auto topology = operation_attributes.topology;
+    const auto& output_tensor = tensor_return_value;
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-    uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
-    uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
     uint32_t linearized_mesh_coord = ::ttnn::operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
 
     log_debug(
         tt::LogOp,
-        "\nCreating all to all dispatch selective tilize program for mesh coordinate: ({}, {}) with mesh id: {} "
-        "chip id: {} linearized mesh coord: {}",
+        "Creating selective tilize program for mesh coordinate: ({}, {}) linearized: {}",
         mesh_coordinate[0],
         mesh_coordinate[1],
-        src_mesh_id,
-        src_chip_id,
         linearized_mesh_coord);
-
-    const auto [neighbors, directions] =
-        ::ttnn::operations::ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
     auto input_shape = input_tensor.tensor_spec().logical_shape();
     auto indices_shape = indices_tensor.tensor_spec().logical_shape();
@@ -141,24 +97,24 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             : mesh_view.num_devices();
 
     uint32_t hidden_size = input_shape[-1];
+    uint32_t batch_per_device = input_shape[0];
     uint32_t batch_size = input_shape[0] * dispatch_devices;
 
-    uint32_t tokens_per_device = detail::get_num_rows(input_tensor);
+    uint32_t tokens = detail::get_num_rows_st(input_tensor);
     uint32_t selected_experts_k = indices_shape[-1];
     uint32_t experts = mapping_shape[-1];
     uint32_t experts_per_device = tt::div_up(experts, num_devices);
 
-    auto input_page_size = detail::get_page_size(input_tensor);
-    auto indices_page_size = detail::get_page_size(indices_tensor);
-    auto mapping_page_size = detail::get_page_size(mapping_tensor);
-    auto output_page_size = detail::get_page_size(output_tensor);
-    auto metadata_page_size = detail::get_page_size(metadata_tensor);
+    auto input_page_size = detail::get_page_size_st(input_tensor);
+    auto indices_page_size = detail::get_page_size_st(indices_tensor);
+    auto mapping_page_size = detail::get_page_size_st(mapping_tensor);
+    auto output_page_size = detail::get_page_size_st(output_tensor);
 
-    auto input_pages = detail::get_num_pages(input_tensor);
-    auto indices_pages = detail::get_num_pages(indices_tensor);
-    auto mapping_pages = detail::get_num_pages(mapping_tensor);
-    auto output_pages = detail::get_num_pages(output_tensor);
-    auto metadata_pages = detail::get_num_pages(metadata_tensor);
+    auto input_pages = detail::get_num_pages_st(input_tensor);
+    auto indices_pages = detail::get_num_pages_st(indices_tensor);
+    auto mapping_pages = detail::get_num_pages_st(mapping_tensor);
+    auto scores_pages = detail::get_num_pages_st(input_scores_tensor);
+    auto output_pages = detail::get_num_pages_st(output_tensor);
 
     auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices_tensor.dtype());
@@ -166,27 +122,21 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto scores_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_scores_tensor.dtype());
 
     // input sharded buffer
-    uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
+    [[maybe_unused]] uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
     // full indices buffer
     uint32_t indices_tensor_cb_id = tt::CBIndex::c_1;
     // full mapping buffer
     uint32_t mapping_tensor_cb_id = tt::CBIndex::c_2;
-    // client interface
-    uint32_t packet_header_cb_id = tt::CBIndex::c_3;
-    // book-keeping buffer to avoid sending the same token multiple times
-    uint32_t send_preparation_buffer_id = tt::CBIndex::c_4;
     // full scores buffer
-    uint32_t scores_tensor_cb_id = tt::CBIndex::c_5;
-    // E-D buffer
-    uint32_t e_d_buffer_id = tt::CBIndex::c_6;
+    uint32_t scores_tensor_cb_id = tt::CBIndex::c_3;
+    // E-T buffer
+    uint32_t e_t_buffer_id = tt::CBIndex::c_4;
     // Tilizer input buffer for tokens to be tilized (row-major from reader)
-    uint32_t tilizer_input_cb_id = tt::CBIndex::c_7;
+    uint32_t tilizer_input_cb_id = tt::CBIndex::c_5;
     // Tilizer output buffer for tilized tokens (from compute to writer)
-    uint32_t tilizer_output_cb_id = tt::CBIndex::c_8;
-    // Sync CB for passing total_chunks from writer to compute
-    uint32_t total_chunks_cb_id = tt::CBIndex::c_9;
+    uint32_t tilizer_output_cb_id = tt::CBIndex::c_6;
 
-    uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
+    uint32_t aligned_input_page_size = detail::get_aligned_page_size_st(input_tensor);
     log_debug(
         tt::LogOp,
         "input shape: {}, input_pages: {}, input_page_size: {}, aligned_input_page_size: {}",
@@ -195,7 +145,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         input_page_size,
         aligned_input_page_size);
 
-    uint32_t aligned_indices_page_size = detail::get_aligned_page_size(indices_tensor);
+    uint32_t aligned_indices_page_size = detail::get_aligned_page_size_st(indices_tensor);
     log_debug(
         tt::LogOp,
         "indices shape: {}, indices_pages: {}, indices_page_size: {}, aligned_indices_page_size: {}",
@@ -204,7 +154,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         indices_page_size,
         aligned_indices_page_size);
 
-    uint32_t aligned_mapping_page_size = detail::get_aligned_page_size(mapping_tensor);
+    uint32_t aligned_mapping_page_size = detail::get_aligned_page_size_st(mapping_tensor);
     log_debug(
         tt::LogOp,
         "mapping shape: {}, mapping_pages: {}, mapping_page_size: {}, aligned_mapping_page_size: {}",
@@ -213,7 +163,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         mapping_page_size,
         aligned_mapping_page_size);
 
-    uint32_t aligned_output_page_size = detail::get_aligned_page_size(output_tensor);
+    uint32_t aligned_output_page_size = detail::get_aligned_page_size_st(output_tensor);
     log_debug(
         tt::LogOp,
         "output shape: {}, output_pages: {}, output_page_size: {}, aligned_output_page_size: {}",
@@ -222,61 +172,11 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         output_page_size,
         aligned_output_page_size);
 
-    uint32_t aligned_metadata_page_size = detail::get_aligned_page_size(metadata_tensor);
-    log_debug(
-        tt::LogOp,
-        "metadata shape: {}, metadata_pages: {}, metadata_page_size: {}, aligned_metadata_page_size: {}",
-        metadata_tensor.logical_shape(),
-        metadata_pages,
-        metadata_page_size,
-        aligned_metadata_page_size);
+    CoreRangeSet selective_tilize_core_range_set = operation_attributes.selective_tilize_core_range_set.value();
 
-    constexpr uint32_t buffering_factor = 2;
-    constexpr uint32_t num_packet_headers = 6;
-
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-
-    // Use core ranges from operation attributes, or defaults if not provided
-    CoreRangeSet worker_core_range_set = operation_attributes.all_to_all_dispatch_core_range_set.value_or(
-        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))));
-    CoreRangeSet selective_tilize_core_range_set = operation_attributes.selective_tilize_core_range_set.value_or(
-        CoreRangeSet(CoreRange(CoreCoord(0, 1), CoreCoord(0, 1))));
-
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    uint32_t num_cores = worker_core_range_set.num_cores();
-    TT_FATAL(num_cores == num_links, "Number of cores must be equal to number of links");
-    TT_FATAL(
-        selective_tilize_core_range_set.num_cores() >= num_links,
-        "Number of selective tilize cores must be greater than or equal to number of links");
-    TT_FATAL(
-        selective_tilize_core_range_set.num_cores() % num_links == 0,
-        "Number of selective tilize cores must be divisible by number of links");
+    uint32_t num_cores = selective_tilize_core_range_set.num_cores();
     uint32_t subtoken_bytes_aligned = tt::align(tt::div_up(aligned_input_page_size, num_cores), dram_alignment);
-    uint32_t subtoken_units_of_work = tt::div_up(aligned_input_page_size, subtoken_bytes_aligned);
-    uint32_t max_indices_pages_per_packet = fabric_max_packet_size / aligned_indices_page_size;
-
-    // split each token of H=7168 (hidden size) into subtoken_units_of_work subtokens, and have each core send part of
-    // the token
-    auto
-        [num_tokens_cores,
-         all_tokens_cores,
-         subtoken_cores_group_1,
-         subtoken_cores_group_2,
-         subtoken_units_per_core_g1,
-         subtoken_units_per_core_g2] = tt::tt_metal::split_work_to_cores(worker_core_range_set, subtoken_units_of_work);
-
-    auto
-        [num_indices_cores,
-         all_indices_cores,
-         indices_cores_group_1,
-         indices_cores_group_2,
-         indices_units_per_core_g1,
-         indices_units_per_core_g2] = tt::tt_metal::split_work_to_cores(worker_core_range_set, indices_pages);
-
-    uint32_t max_subtoken_size =
-        std::max(subtoken_units_per_core_g1, subtoken_units_per_core_g2) * subtoken_bytes_aligned;
-
-    auto sender_core_grid = all_tokens_cores.merge(all_indices_cores);
+    [[maybe_unused]] uint32_t subtoken_units_of_work = tt::div_up(aligned_input_page_size, subtoken_bytes_aligned);
 
     // Split token subregions across tilizer cores (similar to sender subtoken splitting)
     // Each tilizer core handles a portion of the hidden dimension for each token
@@ -296,24 +196,17 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t max_tilizer_subtoken_size =
         std::max(tilizer_units_per_core_g1, tilizer_units_per_core_g2) * tilizer_subtoken_bytes_aligned;
 
-    auto full_grid = sender_core_grid.merge(selective_tilize_core_range_set);
+    uint32_t num_tilizer_cores = selective_tilize_core_range_set.num_cores();
+    auto selective_tilize_cores = corerange_to_cores(selective_tilize_core_range_set, std::nullopt, true);
+    constexpr uint32_t buffering_factor = 2;
+    uint32_t tokens_per_chunk = operation_attributes.tokens_per_chunk;
 
-    // Create semaphores for synchronizing the tilizer and fabric kernels
-    // tilizer needs to finish zero-buffering the E-D buffer before the fabric kernels can send their init semaphores
-    auto ed_buffer_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, full_grid, INVALID);
+    // Create semaphores for synchronizing the drain tilizer to non-drain tilizers
+    auto e_t_buffer_ready_semaphore_id =
+        tt::tt_metal::CreateSemaphore(program, selective_tilize_core_range_set, INVALID);
     // Semaphore for drain tilizer to signal non-drain tilizers that E-D table computation is complete
-    auto ed_table_computed_semaphore_id = tt::tt_metal::CreateSemaphore(program, selective_tilize_core_range_set, 0);
-
-    auto sender_cores = corerange_to_cores(sender_core_grid);
-    auto selective_tilize_cores = corerange_to_cores(selective_tilize_core_range_set);
-    uint32_t num_tilizer_cores = selective_tilize_cores.size();
-    uint32_t num_sender_cores = sender_cores.size();
-
-    // Get the bounding box of sender cores for multicast from tilizer
-    // The tilizer will multicast a semaphore increment to all sender cores after zeroing E-D buffer
-    auto sender_bbox = sender_core_grid.bounding_box();
-    CoreCoord sender_mcast_start_logical = sender_bbox.start_coord;
-    CoreCoord sender_mcast_end_logical = sender_bbox.end_coord;
+    // auto combine_and_matmul_core_range_set =
+    // operation_attributes.matmul_core_range_set.merge(operation_attributes.combine_core_range_set)
 
     // Get the bounding box of tilizer cores for multicast from drain tilizer to non-drain tilizers
     // Used for E-D table computed signal
@@ -321,14 +214,21 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     CoreCoord tilizer_mcast_start_logical = tilizer_bbox.start_coord;
     CoreCoord tilizer_mcast_end_logical = tilizer_bbox.end_coord;
 
-    // Get device for this mesh coordinate to convert logical to physical coordinates
-    auto* device = mesh_device->get_device(mesh_coordinate);
+    auto matmul_bbox = operation_attributes.matmul_core_range_set.value().bounding_box();
+    CoreCoord matmul_mcast_start_logical = matmul_bbox.start_coord;
+    CoreCoord matmul_mcast_end_logical = matmul_bbox.end_coord;
+
+    auto combine_bbox = operation_attributes.combine_core_range_set.value().bounding_box();
+    CoreCoord combine_mcast_start_logical = combine_bbox.start_coord;
+    CoreCoord combine_mcast_end_logical = combine_bbox.end_coord;
 
     // Convert to physical NOC coordinates
-    auto sender_mcast_start_physical = device->worker_core_from_logical_core(sender_mcast_start_logical);
-    auto sender_mcast_end_physical = device->worker_core_from_logical_core(sender_mcast_end_logical);
-    auto tilizer_mcast_start_physical = device->worker_core_from_logical_core(tilizer_mcast_start_logical);
-    auto tilizer_mcast_end_physical = device->worker_core_from_logical_core(tilizer_mcast_end_logical);
+    auto tilizer_mcast_start_physical = mesh_device->worker_core_from_logical_core(tilizer_mcast_start_logical);
+    auto tilizer_mcast_end_physical = mesh_device->worker_core_from_logical_core(tilizer_mcast_end_logical);
+    auto matmul_mcast_start_physical = mesh_device->worker_core_from_logical_core(matmul_mcast_start_logical);
+    auto matmul_mcast_end_physical = mesh_device->worker_core_from_logical_core(matmul_mcast_end_logical);
+    auto combine_mcast_start_physical = mesh_device->worker_core_from_logical_core(combine_mcast_start_logical);
+    auto combine_mcast_end_physical = mesh_device->worker_core_from_logical_core(combine_mcast_end_logical);
 
     // For NOC 0: start = (min_x, min_y), end = (max_x, max_y)
     // For NOC 1: coordinates are swapped
@@ -336,85 +236,43 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // Or we can determine the NOC here and swap if needed
     // For simplicity, we pass the NOC 0 ordering (start < end) and the kernel will use NOC 0
 
-    // Create circular buffers
-    // IMPORTANT: E-D buffer MUST be created FIRST on BOTH core ranges so it's at the SAME L1 base
-    // address on both sender and tilizer cores. The sender cores send NOC writes to the tilizer
-    // cores' E-D table using their own CB address, so both must match.
-    // Creating on separate non-overlapping ranges avoids the CB allocator intersection issues.
     tt::tt_metal::create_cb(
-        e_d_buffer_id,
-        program,
-        sender_core_grid,
-        experts_per_device * dispatch_devices * l1_alignment,  // E-D table page size
-        3,  // Page 0: ed_table (incremented), Page 1: ground truth table, Page 2: temp buffer for mcast
-        tt::DataFormat::UInt32);
-    tt::tt_metal::create_cb(
-        e_d_buffer_id,
+        e_t_buffer_id,
         program,
         selective_tilize_core_range_set,
-        experts_per_device * dispatch_devices * l1_alignment,  // E-D table page size
-        3,  // Page 0: ed_table (incremented), Page 1: ground truth table, Page 2: temp buffer for mcast
+        tokens * sizeof(uint32_t),  // total tokens * sizeof(uint32_t)
+        experts_per_device,         // number of experts on the device
         tt::DataFormat::UInt32);
 
-    // Store subtokens of the input tensor in a circular buffer (sender cores only)
-    tt::tt_metal::create_cb(
-        input_tensor_cb_id, program, sender_core_grid, max_subtoken_size, buffering_factor, input_data_format);
-
-    // Store entire indices tensor in a circular buffer
-    // Create separately on each core range to avoid allocator intersection issues
-    tt::tt_metal::create_cb(
-        indices_tensor_cb_id,
-        program,
-        sender_core_grid,
-        aligned_indices_page_size,
-        buffering_factor * max_indices_pages_per_packet,  // double buffer buffer packets
-        indices_data_format);
+    // Assume indices tensor is sharded in L1
     tt::tt_metal::create_cb(
         indices_tensor_cb_id,
         program,
         selective_tilize_core_range_set,
         aligned_indices_page_size,
-        buffering_factor * max_indices_pages_per_packet,  // double buffer buffer packets
-        indices_data_format);
+        indices_pages,  // double buffer buffer packets
+        indices_data_format,
+        indices_tensor.buffer());
 
-    // Store entire scores tensor in a circular buffer (sender cores only)
+    // Assume scores tensor is sharded in L1
     tt::tt_metal::create_cb(
         scores_tensor_cb_id,
         program,
-        sender_core_grid,
+        selective_tilize_core_range_set,
         aligned_indices_page_size,
-        buffering_factor * max_indices_pages_per_packet,  // double buffer buffer packets
-        scores_data_format);
+        scores_pages,
+        scores_data_format,
+        input_scores_tensor.buffer());
 
-    // Store entire mapping tensor in a circular buffer
-    // Create separately on each core range to avoid allocator intersection issues
-    tt::tt_metal::create_cb(
-        mapping_tensor_cb_id, program, sender_core_grid, aligned_mapping_page_size, mapping_pages, mapping_data_format);
+    // For each batch's tokens, we need to read the relevant experts from the mapping tensor
+    // For in range (tokens) every time tokens/batch increments, read in new mapping tensor page
     tt::tt_metal::create_cb(
         mapping_tensor_cb_id,
         program,
         selective_tilize_core_range_set,
         aligned_mapping_page_size,
-        mapping_pages,
+        2,
         mapping_data_format);
-
-    // Store send preparation buffer in a circular buffer (sender cores only)
-    tt::tt_metal::create_cb(
-        send_preparation_buffer_id,
-        program,
-        sender_core_grid,
-        tokens_per_device * sizeof(uint8_t),
-        num_devices,
-        tt::DataFormat::UInt8);
-
-    // Store packet header buffer in a circular buffer (sender cores only)
-    tt::tt_metal::create_cb(
-        packet_header_cb_id,
-        program,
-        sender_core_grid,
-        packet_header_size_bytes,
-        num_packet_headers,
-        tt::DataFormat::RawUInt32);
 
     // Tilizer input buffer: holds subtokens for tokens_per_chunk tokens, double-buffered
     // Each tilizer core reads its subtoken portion of incoming tokens
@@ -423,7 +281,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         program,
         selective_tilize_core_range_set,
         max_tilizer_subtoken_size,
-        operation_attributes.tokens_per_chunk * 1,  // double-buffered tokens_per_chunk
+        operation_attributes.tokens_per_chunk * buffering_factor,  // double-buffered tokens_per_chunk
         input_data_format);
 
     // Tilizer output buffer: holds tilized output from compute kernel
@@ -432,76 +290,43 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // tile_width_bytes = TILE_WIDTH * element_size
     // tiles_per_chunk = max_tilizer_subtoken_size / tile_width_bytes
     constexpr uint32_t TILE_WIDTH = 32;
-    uint32_t element_size = input_tensor.element_size();
-    uint32_t bfp8_tile_size = 1088 * sizeof(uint8_t);
-    uint32_t tile_width_bytes = TILE_WIDTH * element_size;
+    // uint32_t element_size = input_tensor.element_size();
+    // uint32_t bfp8_tile_size = 1088 * sizeof(uint8_t);
+    uint32_t tile_width_bytes = TILE_WIDTH * input_tensor.element_size();
     uint32_t tiles_per_chunk = max_tilizer_subtoken_size / tile_width_bytes;
     tt::tt_metal::create_cb(
         tilizer_output_cb_id,
         program,
         selective_tilize_core_range_set,
-        bfp8_tile_size,
+        tokens_per_chunk * tile_width_bytes,
         tiles_per_chunk * buffering_factor,  // double-buffered
-        tt::DataFormat::Bfp8_b);
-
-    // Sync CB for passing total_chunks from writer to compute
-    // One page with one uint32_t value, aligned to l1_alignment
-    tt::tt_metal::create_cb(
-        total_chunks_cb_id,
-        program,
-        selective_tilize_core_range_set,
-        l1_alignment,  // page_size: minimum L1 alignment
-        1,             // just one page
-        tt::DataFormat::UInt32);
-
-    std::vector<uint32_t> dest_mesh_id, dest_chip_id;
-    for (const auto& coord : tensor_coords.coords()) {
-        auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
-        dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
-    }
-    log_debug(tt::LogOp, "dest_chip_id: {}", ::ttnn::operations::ccl::common::stringify(dest_chip_id));
-    log_debug(tt::LogOp, "dest_mesh_id: {}", ::ttnn::operations::ccl::common::stringify(dest_mesh_id));
-    log_debug(tt::LogOp, "directions: {}", ::ttnn::operations::ccl::common::stringify(directions));
-    uint32_t num_connections =
-        std::count_if(directions.begin(), directions.end(), [](bool direction) { return direction; });
+        input_data_format);
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
-        {"input_tensor_cb_id", input_tensor_cb_id},
-        {"indices_tensor_cb_id", indices_tensor_cb_id},
-        {"mapping_tensor_cb_id", mapping_tensor_cb_id},
-        {"packet_header_cb_id", packet_header_cb_id},
-        {"send_preparation_buffer_id", send_preparation_buffer_id},
-        {"scores_tensor_cb_id", scores_tensor_cb_id},
-        {"e_d_buffer_id", e_d_buffer_id},
         {"tilizer_input_cb_id", tilizer_input_cb_id},
-
-        {"tilizer_subtoken_bytes_aligned", tilizer_subtoken_bytes_aligned},
-
+        {"tilizer_output_cb_id", tilizer_output_cb_id},
+        {"indices_tensor_cb_id", indices_tensor_cb_id},
+        {"scores_tensor_cb_id", scores_tensor_cb_id},
+        {"mapping_tensor_cb_id", mapping_tensor_cb_id},
         {"input_pages", input_pages},
         {"indices_pages", indices_pages},
         {"mapping_pages", mapping_pages},
+        {"scores_pages", scores_pages},
         {"output_pages", output_pages},
-        {"metadata_pages", metadata_pages},
 
         {"input_page_size", input_page_size},
         {"indices_page_size", indices_page_size},
         {"mapping_page_size", mapping_page_size},
         {"output_page_size", output_page_size},
-        {"metadata_page_size", metadata_page_size},
 
         {"num_devices", num_devices},
         {"hidden_size", hidden_size},
         {"batch_size", batch_size},
+        {"batch_per_device", batch_per_device},
         {"selected_experts_k", selected_experts_k},
         {"experts", experts},
-        {"tokens_per_device", tokens_per_device},
+        {"tokens", tokens},
 
-        {"num_links", num_links},
-        {"topology", (uint32_t)topology},
-
-        {"src_mesh_id", src_mesh_id},
-        {"src_chip_id", (uint32_t)src_chip_id},
         {"mesh_rows", mesh_view.num_rows()},
         {"mesh_cols", mesh_view.num_cols()},
 
@@ -509,79 +334,62 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"aligned_indices_page_size", aligned_indices_page_size},
         {"aligned_mapping_page_size", aligned_mapping_page_size},
         {"aligned_output_page_size", aligned_output_page_size},
-        {"aligned_metadata_page_size", aligned_metadata_page_size},
-
-        {"fabric_max_packet_size", (uint32_t)fabric_max_packet_size},
 
         {"l1_alignment", l1_alignment},
         {"dram_alignment", dram_alignment},
-        {"metadata_alignment", metadata_tensor.buffer()->is_dram() ? dram_alignment : l1_alignment},
-        {"scores_alignment", input_scores_tensor.buffer()->is_dram() ? dram_alignment : l1_alignment},
-        {"output_alignment", output_tensor.buffer()->is_dram() ? dram_alignment : l1_alignment},
         {"linearized_mesh_coord", linearized_mesh_coord},
         {"cluster_axis", (uint32_t)operation_attributes.axis.value()},
-        {"max_indices_pages_per_packet", max_indices_pages_per_packet},
-        {"num_connections", num_connections},
 
-        // Multicast coordinates for tilizer to sender core synchronization
-        {"sender_mcast_start_x", (uint32_t)sender_mcast_start_physical.x},
-        {"sender_mcast_start_y", (uint32_t)sender_mcast_start_physical.y},
-        {"sender_mcast_end_x", (uint32_t)sender_mcast_end_physical.x},
-        {"sender_mcast_end_y", (uint32_t)sender_mcast_end_physical.y},
         // Multicast coordinates for drain tilizer to non-drain tilizer synchronization
         {"tilizer_mcast_start_x", (uint32_t)tilizer_mcast_start_physical.x},
         {"tilizer_mcast_start_y", (uint32_t)tilizer_mcast_start_physical.y},
         {"tilizer_mcast_end_x", (uint32_t)tilizer_mcast_end_physical.x},
         {"tilizer_mcast_end_y", (uint32_t)tilizer_mcast_end_physical.y},
+        {"matmul_mcast_start_x", (uint32_t)matmul_mcast_start_physical.x},
+        {"matmul_mcast_start_y", (uint32_t)matmul_mcast_start_physical.y},
+        {"matmul_mcast_end_x", (uint32_t)matmul_mcast_end_physical.x},
+        {"matmul_mcast_end_y", (uint32_t)matmul_mcast_end_physical.y},
+        {"combine_mcast_start_x", (uint32_t)combine_mcast_start_physical.x},
+        {"combine_mcast_start_y", (uint32_t)combine_mcast_start_physical.y},
+        {"combine_mcast_end_x", (uint32_t)combine_mcast_end_physical.x},
+        {"combine_mcast_end_y", (uint32_t)combine_mcast_end_physical.y},
         {"num_tilizer_cores", num_tilizer_cores},
-        {"num_sender_cores", num_sender_cores},
-        {"ed_buffer_ready_semaphore_id", ed_buffer_ready_semaphore_id},
-        {"ed_table_computed_semaphore_id", ed_table_computed_semaphore_id},
-        {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
-        {"tilizer_output_cb_id", tilizer_output_cb_id},
+        {"num_mm_cores", operation_attributes.matmul_core_range_set.value().num_cores()},
+        {"num_combine_cores", operation_attributes.combine_core_range_set.value().num_cores()},
         {"tiles_per_chunk", tiles_per_chunk},
-        {"total_chunks_cb_id", total_chunks_cb_id},
+        {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
+        {"e_t_buffer_ready_semaphore_id", e_t_buffer_ready_semaphore_id},
     };
 
     std::vector<uint32_t> compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_scores_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(input_scores_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_scores_tensor.buffer()).append_to(compile_time_args);
-
-    std::vector<uint32_t> selective_tilize_compile_time_args = {};
-    // Add output tensor, output_scores_tensor, metadata_tensor
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(selective_tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(selective_tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_scores_tensor.buffer()).append_to(selective_tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(selective_tilize_compile_time_args);
 
     tt::tt_metal::KernelHandle selective_tilize_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
         "reader_tilizer.cpp",
         selective_tilize_core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(selective_tilize_compile_time_args, {}, named_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(compile_time_args, {}, named_compile_time_args));
 
     tt::tt_metal::KernelHandle writer_tilizer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
         "writer_tilizer.cpp",
         selective_tilize_core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(selective_tilize_compile_time_args, {}, named_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(compile_time_args, {}, named_compile_time_args));
 
     // Compute kernel compile-time args for tilization
     // These are positional args: tilizer_input_cb_id, tilizer_output_cb_id, tiles_per_chunk,
     //   tokens_per_chunk, total_chunks_cb_id
-    std::vector<uint32_t> compute_tilizer_compile_time_args = {
-        tilizer_input_cb_id,
-        tilizer_output_cb_id,
-        tiles_per_chunk,
-        operation_attributes.tokens_per_chunk,
-        total_chunks_cb_id,
+    std::unordered_map<std::string, uint32_t> compute_tilizer_named_compile_time_args = {
+        {"tilizer_input_cb_id", tilizer_input_cb_id},
+        {"tilizer_output_cb_id", tilizer_output_cb_id},
+        {"tiles_per_chunk", tiles_per_chunk},
+        {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
     };
 
     tt::tt_metal::KernelHandle compute_tilizer_kernel_id = tt::tt_metal::CreateKernel(
@@ -589,64 +397,28 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/compute/"
         "compute_tilizer.cpp",
         selective_tilize_core_range_set,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_tilizer_compile_time_args});
-
-    std::map<std::string, std::string> reader_defines = {};
-
-    tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
-        "reader_all_to_all_dispatch_selective_tilize.cpp",
-        sender_core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(compile_time_args, reader_defines, named_compile_time_args));
-
-    // Code-gen a mesh-position to fabric chip ID array for the writer kernel
-    // Code-gen a mesh-position to mesh-id array for the writer kernel
-    // Code-gen a direction array that is set to true when a direction has a valid connection (when a neighbor exists or
-    // if it's along a valid cluster axis)
-    std::map<std::string, std::string> writer_defines = {
-        {"DEST_CHIP_ID", ::ttnn::operations::ccl::common::stringify(dest_chip_id)},
-        {"DEST_MESH_ID", ::ttnn::operations::ccl::common::stringify(dest_mesh_id)},
-        {"DIRECTIONS", ::ttnn::operations::ccl::common::stringify(directions)}};
-
-    // sum directions that are true using std::count_if
-
-    tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
-        "writer_all_to_all_dispatch_selective_tilize.cpp",
-        sender_core_grid,
-        tt::tt_metal::WriterDataMovementConfig(compile_time_args, writer_defines, named_compile_time_args));
+        tt::tt_metal::ComputeConfig{.named_compile_args = compute_tilizer_named_compile_time_args});
 
     std::vector<uint32_t> selective_tilize_runtime_args = {
-        output_tensor.buffer()->address(),           // 0
-        metadata_tensor.buffer()->address(),         // 1
-        output_scores_tensor.buffer()->address(),    // 2
-        (uint32_t)indices_sent_semaphore.address(),  // 3
-        mapping_tensor.buffer()->address(),          // 4
+        input_tensor.buffer()->address(),         // 0
+        indices_tensor.buffer()->address(),       // 1
+        input_scores_tensor.buffer()->address(),  // 2
+        mapping_tensor.buffer()->address(),       // 3
     };
 
-    uint32_t is_drain_tilizer_core_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 5
+    [[maybe_unused]] uint32_t is_drain_tilizer_core_idx = selective_tilize_runtime_args.size();
+    selective_tilize_runtime_args.push_back(0);  // 4: is_drain_tilizer_core
 
     // Add work split runtime args for tilizer cores
     uint32_t tilizer_subtoken_offset_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 6: tilizer_subtoken_offset
+    selective_tilize_runtime_args.push_back(0);  // 5: tilizer_subtoken_offset
     uint32_t tilizer_subtoken_size_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 7: tilizer_subtoken_size
+    selective_tilize_runtime_args.push_back(0);  // 6: tilizer_subtoken_size
 
     std::vector<CoreCoord> drain_tilizer_cores;
     uint32_t tilizer_subtoken_offset = 0;
 
     for (uint32_t i = 0; i < num_tilizer_cores; i++) {
-        // Only first num_links tilizer cores are drain cores (one per link/sender)
-        if (i < num_links) {
-            selective_tilize_runtime_args.at(is_drain_tilizer_core_idx) = 1;
-            drain_tilizer_cores.push_back(selective_tilize_cores.at(i));
-        } else {
-            selective_tilize_runtime_args.at(is_drain_tilizer_core_idx) = 0;
-        }
-
         // Set work split parameters based on which group the core is in
         if (tilizer_cores_group_1.contains(selective_tilize_cores.at(i))) {
             selective_tilize_runtime_args.at(tilizer_subtoken_offset_idx) = tilizer_subtoken_offset;
@@ -674,103 +446,14 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             program, writer_tilizer_kernel_id, selective_tilize_cores.at(i), selective_tilize_runtime_args);
     }
 
-    std::vector<uint32_t> reader_runtime_args = {
-        input_tensor.buffer()->address(),            // 0
-        indices_tensor.buffer()->address(),          // 1
-        mapping_tensor.buffer()->address(),          // 2
-        output_tensor.buffer()->address(),           // 3
-        metadata_tensor.buffer()->address(),         // 4
-        (uint32_t)cross_device_semaphore.address(),  // 5
-        (uint32_t)init_semaphore.address(),          // 6
-        input_scores_tensor.buffer()->address(),     // 7
-        output_scores_tensor.buffer()->address(),    // 8
-        (uint32_t)indices_sent_semaphore.address(),  // 9
-    };
-
-    uint32_t subtoken_offset_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
-    uint32_t subtoken_size_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
-    uint32_t indices_start_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
-    uint32_t indices_end_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
-    uint32_t drain_tilize_core_noc_x_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
-    uint32_t drain_tilize_core_noc_y_idx = reader_runtime_args.size();
-    reader_runtime_args.push_back(0);
-
-    uint32_t link_id = 0;
-    uint32_t subtoken_offset = 0;
-    uint32_t indices_start = 0;
-
-    for (uint32_t i = 0; i < sender_cores.size(); i++) {
-        if (subtoken_cores_group_1.contains(sender_cores.at(i))) {
-            reader_runtime_args.at(subtoken_offset_idx) = subtoken_offset;
-            uint32_t subtoken_size = subtoken_units_per_core_g1 * subtoken_bytes_aligned;
-            if (subtoken_offset + subtoken_size > aligned_input_page_size) {
-                subtoken_size = aligned_input_page_size - subtoken_offset;
-            }
-            reader_runtime_args.at(subtoken_size_idx) = subtoken_size;
-            subtoken_offset += reader_runtime_args.at(subtoken_size_idx);
-            auto drain_tilize_core = drain_tilizer_cores.at(i);
-            auto worker_core = mesh_device->worker_core_from_logical_core(drain_tilize_core);
-            reader_runtime_args.at(drain_tilize_core_noc_x_idx) = worker_core.x;
-            reader_runtime_args.at(drain_tilize_core_noc_y_idx) = worker_core.y;
-        } else if (subtoken_cores_group_2.contains(sender_cores.at(i))) {
-            reader_runtime_args.at(subtoken_offset_idx) = subtoken_offset;
-            uint32_t subtoken_size = subtoken_units_per_core_g2 * subtoken_bytes_aligned;
-            if (subtoken_offset + subtoken_size > aligned_input_page_size) {
-                subtoken_size = aligned_input_page_size - subtoken_offset;
-            }
-            reader_runtime_args.at(subtoken_size_idx) = subtoken_size;
-            subtoken_offset += reader_runtime_args.at(subtoken_size_idx);
-            auto drain_tilize_core = drain_tilizer_cores.at(i);
-            auto worker_core = mesh_device->worker_core_from_logical_core(drain_tilize_core);
-            reader_runtime_args.at(drain_tilize_core_noc_x_idx) = worker_core.x;
-            reader_runtime_args.at(drain_tilize_core_noc_y_idx) = worker_core.y;
-        }
-
-        if (indices_cores_group_1.contains(sender_cores.at(i))) {
-            reader_runtime_args.at(indices_start_idx) = indices_start;
-            reader_runtime_args.at(indices_end_idx) =
-                std::min(indices_start + indices_units_per_core_g1, indices_pages);
-            indices_start = reader_runtime_args.at(indices_end_idx);
-        } else if (indices_cores_group_2.contains(sender_cores.at(i))) {
-            reader_runtime_args.at(indices_start_idx) = indices_start;
-            reader_runtime_args.at(indices_end_idx) =
-                std::min(indices_start + indices_units_per_core_g2, indices_pages);
-            indices_start = reader_runtime_args.at(indices_end_idx);
-        }
-
-        std::vector<uint32_t> writer_runtime_args = reader_runtime_args;
-
-        for (const auto& neighbor_coordinate : neighbors) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                mesh_device->get_fabric_node_id(neighbor_coordinate),
-                link_id,
-                program,
-                sender_cores.at(i),
-                writer_runtime_args);
-        }
-
-        tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(i), reader_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_cores.at(i), writer_runtime_args);
-        link_id++;
-    }
-
     return {
         std::move(program),
-        {.ternary_reader_kernel_id = ternary_reader_kernel_id,
-         .binary_writer_kernel_id = binary_writer_kernel_id,
-         .selective_tilize_kernel_id = selective_tilize_kernel_id,
-         .compute_tilizer_kernel_id = compute_tilizer_kernel_id,
-         .cores = sender_cores,
-         .selective_tilize_cores = selective_tilize_cores,
-         .init_semaphore = init_semaphore,
-         .cross_device_semaphore = cross_device_semaphore,
-         .indices_sent_semaphore = indices_sent_semaphore}};
+        {
+            .selective_tilize_kernel_id = selective_tilize_kernel_id,
+            .writer_tilizer_kernel_id = writer_tilizer_kernel_id,
+            .compute_tilizer_kernel_id = compute_tilizer_kernel_id,
+            .selective_tilize_cores = selective_tilize_cores,
+        }};
 }
 
 void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeSparse::override_runtime_arguments(
@@ -780,53 +463,15 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        const auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
-        const auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
         const auto& selective_tilize_kernel_id = shared_variables.selective_tilize_kernel_id;
-        const auto& cores = shared_variables.cores;
-
-        const auto& output_tensor = tensor_return_value.at(0);
-        const auto& metadata_tensor = tensor_return_value.at(1);
-        const auto& output_scores_tensor = tensor_return_value.at(2);
-
-        for (const auto& core : cores) {
-            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
-            auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
-
-            // Update reader runtime args to match create_at layout:
-            // 0: input_tensor, 1: indices_tensor, 2: mapping_tensor, 3: output_tensor,
-            // 4: metadata_tensor, 5: cross_device_semaphore, 6: init_semaphore,
-            // 7: input_scores_tensor, 8: output_scores_tensor, 9: indices_sent_semaphore
-            reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
-            reader_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
-            reader_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
-            reader_runtime_args.at(3) = output_tensor.buffer()->address();
-            reader_runtime_args.at(4) = metadata_tensor.buffer()->address();
-            reader_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
-            reader_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
-            reader_runtime_args.at(7) = tensor_args.expert_scores_tensor.buffer()->address();
-            reader_runtime_args.at(8) = output_scores_tensor.buffer()->address();
-            reader_runtime_args.at(9) = (uint32_t)shared_variables.indices_sent_semaphore.address();
-
-            writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
-            writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
-            writer_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
-            writer_runtime_args.at(3) = output_tensor.buffer()->address();
-            writer_runtime_args.at(4) = metadata_tensor.buffer()->address();
-            writer_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
-            writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
-            writer_runtime_args.at(7) = tensor_args.expert_scores_tensor.buffer()->address();
-            writer_runtime_args.at(8) = output_scores_tensor.buffer()->address();
-            writer_runtime_args.at(9) = (uint32_t)shared_variables.indices_sent_semaphore.address();
-        }
 
         for (const auto& core : shared_variables.selective_tilize_cores) {
             auto& selective_tilize_runtime_args =
                 tt::tt_metal::GetRuntimeArgs(program, selective_tilize_kernel_id, core);
-            selective_tilize_runtime_args.at(0) = output_tensor.buffer()->address();
-            selective_tilize_runtime_args.at(1) = metadata_tensor.buffer()->address();
-            selective_tilize_runtime_args.at(2) = output_scores_tensor.buffer()->address();
-            selective_tilize_runtime_args.at(3) = (uint32_t)shared_variables.indices_sent_semaphore.address();
+            selective_tilize_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
+            selective_tilize_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
+            selective_tilize_runtime_args.at(2) = tensor_args.expert_scores_tensor.buffer()->address();
+            selective_tilize_runtime_args.at(3) = tensor_args.expert_mapping_tensor.buffer()->address();
         }
     }
 }
