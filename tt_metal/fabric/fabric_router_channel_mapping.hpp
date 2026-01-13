@@ -28,9 +28,8 @@ enum class BuilderType : uint8_t {
  * Z_ROUTER: Vertical Z router for inter-device connectivity
  */
 enum class RouterVariant : uint8_t {
-    MESH = 0,               // Only for mesh horizontal routers
-    Z_ROUTER = 1,           // Only for Z routers
-    MESH_AND_Z_ROUTER = 2,  // For mesh horizontal routers on a device that has a Z router
+    MESH = 0,      // Mesh horizontal routers
+    Z_ROUTER = 1,  // Z routers
 };
 
 struct LogicalSenderChannelKey {
@@ -85,7 +84,8 @@ public:
         Topology topology,
         bool downstream_is_tensix_builder,
         RouterVariant variant,
-        const IntermeshVCConfig* intermesh_config);
+        const IntermeshVCConfig* intermesh_config,
+        bool has_z_on_device = false);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
@@ -114,11 +114,6 @@ public:
     bool is_z_router() const;
 
     /**
-     * Check if this is a mesh router with Z router support
-     */
-    bool is_mesh_and_z_router() const;
-
-    /**
      * Check if this is a standard mesh router
      */
     bool is_mesh_router() const;
@@ -128,6 +123,7 @@ private:
     bool downstream_is_tensix_builder_;
     RouterVariant variant_;
     const IntermeshVCConfig* intermesh_vc_config_ = nullptr;
+    bool has_z_on_device_ = false;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;

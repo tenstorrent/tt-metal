@@ -14,11 +14,13 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
     Topology topology,
     bool downstream_is_tensix_builder,
     RouterVariant variant,
-    const IntermeshVCConfig* intermesh_config) :
+    const IntermeshVCConfig* intermesh_config,
+    bool has_z_on_device) :
     topology_(topology),
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
     variant_(variant),
-    intermesh_vc_config_(intermesh_config) {
+    intermesh_vc_config_(intermesh_config),
+    has_z_on_device_(has_z_on_device) {
     initialize_mappings();
 }
 
@@ -107,11 +109,11 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
         // Standard mesh router VC1: create if intermesh VC is required
         // Both inter-mesh and intra-mesh routers have VC1
         if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc1) {
-            // Determine sender count based on router variant
-            // MESH: 3 sender channels (3 mesh directions only, no Z on device)
-            // MESH_AND_Z_ROUTER: 4 sender channels (3 mesh directions + 1 for Z router)
-            // This keeps MESH_AND_Z at 8 total: 4 VC0 + 4 VC1 = 8
-            uint32_t mesh_vc1_sender_count = is_mesh_and_z_router() ? 4 : 3;
+            // Determine sender count based on whether device has Z router
+            // Mesh with Z: 4 sender channels (3 mesh directions + 1 for Z router connection)
+            // Mesh without Z: 3 sender channels (3 mesh directions only)
+            // This keeps mesh+Z at 8 total: 4 VC0 + 4 VC1 = 8
+            uint32_t mesh_vc1_sender_count = has_z_on_device_ ? 4 : 3;
 
             uint32_t mesh_vc1_base_sender_channel = builder_config::num_sender_channels_2d_mesh;
             constexpr uint32_t mesh_vc1_receiver_channel = 1;
@@ -134,8 +136,6 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
 bool FabricRouterChannelMapping::is_z_router() const {
     return variant_ == RouterVariant::Z_ROUTER;
 }
-
-bool FabricRouterChannelMapping::is_mesh_and_z_router() const { return variant_ == RouterVariant::MESH_AND_Z_ROUTER; }
 
 bool FabricRouterChannelMapping::is_mesh_router() const { return variant_ == RouterVariant::MESH; }
 
