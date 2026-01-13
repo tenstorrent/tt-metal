@@ -8,7 +8,7 @@ This test compares the TTNN implementation from tt/ against the
 PyTorch reference implementation from reference/.
 
 Config:
-    - Checkpoint: /home/ubuntu/work/sdawle_pi0/torch_checkpoint/pi0_base
+    - Checkpoint: $TT_METAL_HOME/models/experimental/pi0/weights/pi0_base
     - Full denoising: 10 steps
     - Batch size: 1
 
@@ -17,6 +17,7 @@ Usage:
 """
 
 import sys
+import os
 import time
 from pathlib import Path
 
@@ -41,7 +42,10 @@ from models.experimental.pi0.common.weight_loader import PI0WeightLoader
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-CHECKPOINT_PATH = "/home/ubuntu/work/sdawle_pi0/torch_checkpoint/pi0_base"
+TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
+if not TT_METAL_HOME:
+    raise EnvironmentError("TT_METAL_HOME environment variable is not set")
+CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights/pi0_base")
 BATCH_SIZE = 1
 SEED = 42
 PCC_THRESHOLD = 0.93  # Account for BFloat16 precision and hardware non-determinism
@@ -283,4 +287,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

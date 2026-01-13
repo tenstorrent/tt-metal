@@ -10,6 +10,7 @@ Usage:
 """
 
 import sys
+import os
 import time
 from pathlib import Path
 
@@ -35,7 +36,10 @@ from models.experimental.pi0.common.weight_loader import PI0WeightLoader
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-CHECKPOINT_PATH = "/home/ubuntu/work/sdawle_pi0/torch_checkpoint/pi0_base"
+TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
+if not TT_METAL_HOME:
+    raise EnvironmentError("TT_METAL_HOME environment variable is not set")
+CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights/pi0_base")
 LIBERO_IMAGES_DIR = DEMO_DIR / "sample_images" / "libero"
 
 # LIBERO task prompts (from the benchmark)

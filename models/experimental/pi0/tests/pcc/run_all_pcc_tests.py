@@ -6,6 +6,7 @@ Usage:
     python run_all_pcc_tests.py
 """
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -157,7 +158,10 @@ def test_siglip(device, use_pretrained: bool) -> float:
 
     if use_pretrained:
         config = create_siglip_config()
-        checkpoint_path = "/home/ubuntu/work/sdawle_pi0/torch_checkpoint/pi0_base"
+        tt_metal_home = os.environ.get("TT_METAL_HOME")
+        if not tt_metal_home:
+            raise EnvironmentError("TT_METAL_HOME environment variable is not set")
+        checkpoint_path = os.path.join(tt_metal_home, "models/experimental/pi0/weights/pi0_base")
         weight_loader = PI0WeightLoader(checkpoint_path)
         weights = weight_loader.get_vlm_vision_weights()
     else:
