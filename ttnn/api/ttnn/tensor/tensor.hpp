@@ -284,7 +284,7 @@ private:
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
-void memcpy(
+void copy_tensor_to_host_from_device(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
