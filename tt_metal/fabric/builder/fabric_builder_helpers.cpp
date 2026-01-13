@@ -42,16 +42,14 @@ eth_chan_directions get_sender_channel_direction(eth_chan_directions my_directio
 }
 
 std::pair<eth_chan_directions, eth_chan_directions> get_perpendicular_directions(eth_chan_directions direction) {
+    if (direction == eth_chan_directions::Z) {
+        TT_FATAL(false, "Internal error: In get_perpendicular_directions, Z direction is not supported");
+    }
     if (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST) {
         // E/W -> perpendicular are N/S
         return {eth_chan_directions::NORTH, eth_chan_directions::SOUTH};
-    } else if (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH) {
-        // N/S -> perpendicular are E/W
-        return {eth_chan_directions::EAST, eth_chan_directions::WEST};
-    } else {
-        // Z -> perpendicular concept doesn't apply, return E/W as default
-        return {eth_chan_directions::EAST, eth_chan_directions::WEST};
-    }
+    }  // N/S -> perpendicular are E/W
+    return {eth_chan_directions::EAST, eth_chan_directions::WEST};
 }
 
 std::vector<eth_chan_directions> get_all_other_directions(eth_chan_directions direction, bool exclude_z) {
