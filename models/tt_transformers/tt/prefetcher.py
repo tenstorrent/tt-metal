@@ -17,9 +17,9 @@ class PrefetcherCoreConfig:
 
     Architecture layout:
     - Blackhole: Left sender column=0, Right sender column=7
-                 Left receiver columns=1-6, Right receiver columns=8-12
+                 Left receiver columns=1-6, Right receiver columns=8-10
     - Wormhole:  Left sender column=0, Right sender column=4
-                 Left receiver columns=1-4, Right receiver columns=5-8
+                 Left receiver columns=1-3, Right receiver columns=5-6
     """
 
     num_receiver_cores: int
