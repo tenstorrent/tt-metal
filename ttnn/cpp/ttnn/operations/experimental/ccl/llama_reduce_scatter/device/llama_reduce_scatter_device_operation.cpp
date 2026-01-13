@@ -59,7 +59,7 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
 }
 
 void LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {

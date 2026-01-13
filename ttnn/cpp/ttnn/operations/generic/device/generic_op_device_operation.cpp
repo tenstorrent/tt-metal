@@ -16,10 +16,10 @@ GenericOpDeviceOperation::program_factory_t GenericOpDeviceOperation::select_pro
 }
 
 void GenericOpDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 void GenericOpDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 GenericOpDeviceOperation::spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {

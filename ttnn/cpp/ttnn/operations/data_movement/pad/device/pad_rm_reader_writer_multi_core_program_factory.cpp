@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement::pad::program {
 
 namespace {
 inline void log_rt_args(const CoreCoord& core, std::vector<uint32_t>& args) {
-    for ([[maybe_unused]] auto v : args) {
+    for (auto v : args) {
         log_debug(tt::LogOp, "{},{} :: {}", core.x, core.y, v);
     }
 }
