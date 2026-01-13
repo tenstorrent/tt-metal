@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cassert>
 #include <fmt/base.h>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
