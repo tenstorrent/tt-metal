@@ -4,7 +4,6 @@
 
 #include "common/device_fixture.hpp"
 
-#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <vector>
@@ -14,7 +13,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-logger/tt-logger.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -38,7 +36,7 @@ TEST_F(MeshDeviceSingleCardFixture, DataflowCb) {
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     int num_cbs = 1;
-    assert(num_tiles % num_cbs == 0);
+    ASSERT_EQ(num_tiles % num_cbs, 0) << "num_tiles must be divisible by num_cbs";
     int num_tiles_per_cb = num_tiles / num_cbs;
 
     uint32_t cb0_index = 0;

@@ -12,6 +12,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/rsqrt.h"
+#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
 
 template <
     uint32_t input_cb,
@@ -21,11 +22,9 @@ template <
     uint32_t output_cb,
     bool fp32_acc,
     uint32_t num_tiles,
-    uint32_t epsilon_index,
-    uint32_t scalar_index,
     bool rsqrt_fast_approx,
     bool pop_input>
-void compute_rmsnorm() {
+void compute_rmsnorm(uint32_t epsilon) {
     // TODO: #32998: Fuse this without having to spill output of square to interm cb
     {
         // Square the input
@@ -48,17 +47,14 @@ void compute_rmsnorm() {
         tile_regs_acquire();
         // TODO: #32998: Instead of accumulating to index 0, accumulate to num_tiles + 1 once bcast reuse is supported
         for (uint32_t i = 0; i < num_tiles; i++) {
-            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR, fp32_acc>(interm_cb, scalars_cb, i, scalar_index, 0);
+            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR, fp32_acc>(interm_cb, scalars_cb, i, 0, 0);
         }
     }
     // TODO: #32998: Avoid having to spill 1/RMS to interm cb
     {
-        // Add epsilon
-        binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(scalars_cb);
-        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(scalars_cb, epsilon_index, 0);
-        // Calculate the 1/RMS
-        // TODO: #32998: Use index num_tiles + 1 once bcast reuse is supported
-        rsqrt_tile<false, rsqrt_fast_approx>(0);
+        // TODO: We can move this to the beginning of the function since this is the only sfpu op we use
+        add_rsqrt_tile_init();
+        add_rsqrt_tile<rsqrt_fast_approx, VectorMode::RC_custom, 1>(0, epsilon);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, interm_cb);
@@ -106,26 +102,15 @@ void MAIN {
     constexpr uint32_t output_cb = get_compile_time_arg_val(4);
     constexpr bool fp32_acc = get_compile_time_arg_val(5);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t epsilon_index = get_compile_time_arg_val(7);
-    constexpr uint32_t scalar_index = get_compile_time_arg_val(8);
-    constexpr bool rsqrt_fast_approx = get_compile_time_arg_val(9);
+    constexpr bool rsqrt_fast_approx = get_compile_time_arg_val(7);
+
+    uint32_t epsilon = get_arg_val<uint32_t>(0);
 
     // Init block done only once
     binary_op_init_common(input_cb, input_cb, output_cb);
-    cb_wait_front(scalars_cb, 2);
+    cb_wait_front(scalars_cb, 1);
     cb_wait_front(gamma_cb, num_tiles);  // we don't pop, only wait once and reuse
-    rsqrt_tile_init();                   // this is the only sfpu op we use, so we init once
-    compute_rmsnorm<
-        input_cb,
-        scalars_cb,
-        interm_cb,
-        gamma_cb,
-        output_cb,
-        fp32_acc,
-        num_tiles,
-        epsilon_index,
-        scalar_index,
-        rsqrt_fast_approx,
-        true>();
+    compute_rmsnorm<input_cb, scalars_cb, interm_cb, gamma_cb, output_cb, fp32_acc, num_tiles, rsqrt_fast_approx, true>(
+        epsilon);
 }
 }  // namespace NAMESPACE
