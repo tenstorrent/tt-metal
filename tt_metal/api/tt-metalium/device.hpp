@@ -178,6 +178,7 @@ public:
 
     // return false if compile fails (mainly come from Nebula on TG)
     virtual bool compile_fabric() = 0;
+    virtual std::vector<std::vector<CoreCoord>> get_fabric_program_cores() const = 0;
     virtual void configure_fabric() = 0;
     virtual void init_fabric() = 0;
     // Puts device into reset

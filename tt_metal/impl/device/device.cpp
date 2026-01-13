@@ -386,6 +386,12 @@ void Device::configure_fabric() {
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
+std::vector<std::vector<tt::tt_metal::CoreCoord>> Device::get_fabric_program_cores() const {
+    if (fabric_program_ == nullptr) {
+        return {};
+    }
+    return fabric_program_->impl().logical_cores();
+}
 // backward compatibility
 void Device::init_fabric() {
     this->compile_fabric();

@@ -24,6 +24,7 @@ set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/cluster_config.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/deployment_descriptor/schemas/deployment.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/validation/schemas/ethernet_link_metrics.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_manager/schemas/fabric_status.proto
 )
 
 set(GENERATED_PROTO_SRCS)
@@ -35,6 +36,7 @@ endforeach()
 # Ensure protobufs are generated before compiling the executable
 add_custom_target(scaleout_generated_protos DEPENDS ${GENERATED_PROTO_SRCS})
 add_dependencies(run_cluster_validation scaleout_generated_protos)
+add_dependencies(run_fabric_manager scaleout_generated_protos)
 
 # TODO: Should refactor into an API directory
 target_sources(

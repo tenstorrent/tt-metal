@@ -15,6 +15,8 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -61,6 +63,12 @@ struct FabricStatus {
     tt::tt_fabric::FabricUDMMode fabric_udm_mode = tt::tt_fabric::FabricUDMMode::DISABLED;
     tt::tt_fabric::FabricManagerMode fabric_manager = tt::tt_fabric::FabricManagerMode::DEFAULT;
 
+    // Mesh configuration
+    tt::tt_metal::distributed::MeshShape mesh_shape = tt::tt_metal::distributed::MeshShape(0, 0);
+
+    // Fabric program cores information - maps device ID to its cores (per core type)
+    std::map<tt::ChipId, std::vector<std::vector<tt::tt_metal::CoreCoord>>> fabric_program_cores;
+
     // Additional status info
     uint32_t num_active_ethernet_channels = 0;
     std::vector<std::string> active_hosts;
@@ -69,5 +77,9 @@ struct FabricStatus {
 
 FabricStatus get_fabric_status();
 void log_fabric_status_to_file(const FabricStatus& status, const std::filesystem::path& output_path);
+
+// Protobuf serialization functions
+void write_fabric_status_textproto(const FabricStatus& status, const std::filesystem::path& output_path);
+void write_fabric_status_binary(const FabricStatus& status, const std::filesystem::path& output_path);
 
 }  // namespace tt::scaleout_tools

@@ -240,6 +240,7 @@ public:
     void init_command_queue_host() override;
     void init_command_queue_device() override;
     bool compile_fabric() override;
+    std::vector<std::vector<tt::tt_metal::CoreCoord>> get_fabric_program_cores() const override;
     void configure_fabric() override;
     void init_fabric() override;
     bool close() override;
