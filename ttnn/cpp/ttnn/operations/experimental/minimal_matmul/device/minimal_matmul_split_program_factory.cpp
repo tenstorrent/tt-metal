@@ -218,11 +218,32 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
 
-    log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
-    log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
-    log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
-    log_debug(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
-    log_debug(tt::LogOp, "N_tiles_per_chunk: {}", N_tiles_per_chunk);
+    log_info(tt::LogOp, "=== minimal_matmul_split configuration ===");
+    log_info(tt::LogOp, "M_tiles: {}, K_tiles: {}, N_tiles: {}", M_tiles, K_tiles, N_tiles);
+    log_info(
+        tt::LogOp,
+        "padded_M_tiles: {}, padded_K_tiles: {}, padded_N_tiles: {}",
+        padded_M_tiles,
+        padded_K_tiles,
+        padded_N_tiles);
+    log_info(tt::LogOp, "Grid size: {}x{}", grid_size.x, grid_size.y);
+    log_info(tt::LogOp, "transpose_core_grid: {}", transpose_core_grid);
+    log_info(
+        tt::LogOp,
+        "in0_parallel_axis_cores: {}, in1_parallel_axis_cores: {}",
+        in0_parallel_axis_cores,
+        in1_parallel_axis_cores);
+    log_info(tt::LogOp, "M_tiles_per_core: {}, N_tiles_per_core: {}", M_tiles_per_core, N_tiles_per_core);
+    log_info(
+        tt::LogOp,
+        "M_block_tiles: {}, K_block_tiles: {}, N_block_tiles: {}",
+        M_block_tiles,
+        K_block_tiles,
+        N_block_tiles);
+    log_info(tt::LogOp, "M_blocks_per_core: {}, N_blocks_per_core: {}", M_blocks_per_core, N_blocks_per_core);
+    log_info(tt::LogOp, "N_tiles_per_chunk: {}, chunks: {}", N_tiles_per_chunk, operation_attributes.chunks);
+    log_info(
+        tt::LogOp, "in0_is_output_writer: {}, in1_is_output_writer: {}", !transpose_core_grid, transpose_core_grid);
 
     uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -527,6 +548,19 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
+
+        log_debug(
+            tt::LogOp,
+            "Core ({},{}) [id={}]: in0_idx={}, in1_idx={}, M=[{},{}), N=[{},{})",
+            core.x,
+            core.y,
+            core_id,
+            in0_idx,
+            in1_idx,
+            M_start_tile,
+            M_end_tile,
+            N_start_tile,
+            N_end_tile);
 
         uint32_t defer_write_k_block = core.y * k_blocks_per_core;
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);

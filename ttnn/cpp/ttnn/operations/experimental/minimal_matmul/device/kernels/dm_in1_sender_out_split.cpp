@@ -121,40 +121,39 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        // Determine which output chunk this block belongs to
-                        uint32_t chunk_idx = defer_write_n_tile / N_tiles_per_chunk;
-                        uint32_t n_in_chunk = defer_write_n_tile % N_tiles_per_chunk;
+                        // Write block tile-by-tile, one M-row at a time (matching compute kernel output pattern)
+                        for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
+                            uint32_t m_tile_idx = defer_write_m_tile + m_id;
+                            if (m_tile_idx >= defer_write_m_tile_end) {
+                                break;
+                            }
 
-                        if (chunk_idx == 0) {
-                            write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                                out0_reader,
-                                out0_shape,
-                                cb_id_out,
-                                out_tile_size,
-                                defer_write_m_tile,
-                                defer_write_m_tile_end,
-                                n_in_chunk,
-                                n_in_chunk + (defer_write_n_tile_end - defer_write_n_tile));
-                        } else if (chunk_idx == 1) {
-                            write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                                out1_reader,
-                                out1_shape,
-                                cb_id_out,
-                                out_tile_size,
-                                defer_write_m_tile,
-                                defer_write_m_tile_end,
-                                n_in_chunk,
-                                n_in_chunk + (defer_write_n_tile_end - defer_write_n_tile));
-                        } else {
-                            write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                                out2_reader,
-                                out2_shape,
-                                cb_id_out,
-                                out_tile_size,
-                                defer_write_m_tile,
-                                defer_write_m_tile_end,
-                                n_in_chunk,
-                                n_in_chunk + (defer_write_n_tile_end - defer_write_n_tile));
+                            cb_wait_front(cb_id_out, N_block_tiles);
+                            uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+
+                            for (uint32_t n_tile_idx = defer_write_n_tile; n_tile_idx < defer_write_n_tile_end;
+                                 ++n_tile_idx) {
+                                // Only write if both M and N are within logical bounds (not padding)
+                                if (m_tile_idx < M_tiles && n_tile_idx < N_tiles) {
+                                    uint32_t chunk_idx = n_tile_idx / N_tiles_per_chunk;
+                                    uint32_t n_in_chunk = n_tile_idx % N_tiles_per_chunk;
+                                    uint32_t tile_id = m_tile_idx * N_tiles_per_chunk + n_in_chunk;
+
+                                    DPRINT << "IN1_DEFER: m=" << m_tile_idx << " n_global=" << n_tile_idx
+                                           << " chunk=" << chunk_idx << " n_local=" << n_in_chunk
+                                           << " tile_id=" << tile_id << ENDL();
+
+                                    if (chunk_idx == 0) {
+                                        noc_async_write_tile(tile_id, out0_reader, out_read_ptr);
+                                    } else if (chunk_idx == 1) {
+                                        noc_async_write_tile(tile_id, out1_reader, out_read_ptr);
+                                    } else {
+                                        noc_async_write_tile(tile_id, out2_reader, out_read_ptr);
+                                    }
+                                }
+                                out_read_ptr += out_tile_size;
+                            }
+                            cb_pop_front(cb_id_out, N_block_tiles);
                         }
                     }
                 }
@@ -232,40 +231,38 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    // Determine which output chunk this block belongs to
-                    uint32_t chunk_idx = n_tile / N_tiles_per_chunk;
-                    uint32_t n_in_chunk = n_tile % N_tiles_per_chunk;
+                    // Write block tile-by-tile, one M-row at a time (matching compute kernel output pattern)
+                    for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
+                        uint32_t m_tile_idx = m_tile + m_id;
+                        if (m_tile_idx >= m_tile_end) {
+                            break;
+                        }
 
-                    if (chunk_idx == 0) {
-                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                            out0_reader,
-                            out0_shape,
-                            cb_id_out,
-                            out_tile_size,
-                            m_tile,
-                            m_tile_end,
-                            n_in_chunk,
-                            n_in_chunk + (n_tile_end - n_tile));
-                    } else if (chunk_idx == 1) {
-                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                            out1_reader,
-                            out1_shape,
-                            cb_id_out,
-                            out_tile_size,
-                            m_tile,
-                            m_tile_end,
-                            n_in_chunk,
-                            n_in_chunk + (n_tile_end - n_tile));
-                    } else {
-                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                            out2_reader,
-                            out2_shape,
-                            cb_id_out,
-                            out_tile_size,
-                            m_tile,
-                            m_tile_end,
-                            n_in_chunk,
-                            n_in_chunk + (n_tile_end - n_tile));
+                        cb_wait_front(cb_id_out, N_block_tiles);
+                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+
+                        for (uint32_t n_tile_idx = n_tile; n_tile_idx < n_tile_end; ++n_tile_idx) {
+                            // Only write if both M and N are within logical bounds (not padding)
+                            if (m_tile_idx < M_tiles && n_tile_idx < N_tiles) {
+                                uint32_t chunk_idx = n_tile_idx / N_tiles_per_chunk;
+                                uint32_t n_in_chunk = n_tile_idx % N_tiles_per_chunk;
+                                uint32_t tile_id = m_tile_idx * N_tiles_per_chunk + n_in_chunk;
+
+                                DPRINT << "IN1_IMMED: m=" << m_tile_idx << " n_global=" << n_tile_idx
+                                       << " chunk=" << chunk_idx << " n_local=" << n_in_chunk << " tile_id=" << tile_id
+                                       << ENDL();
+
+                                if (chunk_idx == 0) {
+                                    noc_async_write_tile(tile_id, out0_reader, out_read_ptr);
+                                } else if (chunk_idx == 1) {
+                                    noc_async_write_tile(tile_id, out1_reader, out_read_ptr);
+                                } else {
+                                    noc_async_write_tile(tile_id, out2_reader, out_read_ptr);
+                                }
+                            }
+                            out_read_ptr += out_tile_size;
+                        }
+                        cb_pop_front(cb_id_out, N_block_tiles);
                     }
                 }
             }
