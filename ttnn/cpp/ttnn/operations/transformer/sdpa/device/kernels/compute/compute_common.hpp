@@ -1531,14 +1531,14 @@ void sdpa_inner_loop(
         }
 
         cb_pop_front(cb_q_in, q_chunk_tiles);
+    }
 
-        if constexpr (sdpa_type == RING) {
-            if (KV_chunks_processed_in_iter % 2 == 0) {
-                cb_wait_front(cb_k_in, k_chunk_tiles);
-                cb_wait_front(cb_v_in, k_chunk_tiles);
-                cb_pop_front(cb_k_in, k_chunk_tiles);
-                cb_pop_front(cb_v_in, k_chunk_tiles);
-            }
+    if constexpr (sdpa_type == RING) {
+        if (KV_chunks_processed_in_iter % 2 == 0) {
+            cb_wait_front(cb_k_in, k_chunk_tiles);
+            cb_wait_front(cb_v_in, k_chunk_tiles);
+            cb_pop_front(cb_k_in, k_chunk_tiles);
+            cb_pop_front(cb_v_in, k_chunk_tiles);
         }
     }
 
