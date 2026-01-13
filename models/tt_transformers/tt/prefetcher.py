@@ -7,128 +7,159 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
-
-
-@dataclass(frozen=True)
-class PrefetcherCoreConstants:
-    """
-    Stores all the column number constants used in PrefetcherCoreConfig.
-    """
-
-    LEFT_START_COL: int = 1
-    LEFT_END_COL_WORMHOLE_B0: int = 4
-    LEFT_END_COL_BLACKHOLE: int = 6
-    RIGHT_START_COL_WORMHOLE_B0: int = 5
-    RIGHT_START_COL_BLACKHOLE: int = 8
-    RIGHT_END_COL_WORMHOLE_B0: int = 8
-    RIGHT_END_COL_BLACKHOLE: int = 12
-    SENDER_COL_WORMHOLE_B0: int = 0
-    SENDER_COL_BLACKHOLE: int = 7
+from models.common.utility_functions import is_blackhole
 
 
 @dataclass
 class PrefetcherCoreConfig:
     """
-    Defines the core locations of the sender cores and receiver cores of the prefetcher
+    Defines the core locations of the sender and receiver cores for the prefetcher.
+
+    Architecture layout:
+    - Blackhole: Left sender column=0, Right sender column=7
+                 Left receiver columns=1-6, Right receiver columns=8-10
+    - Wormhole:  Left sender column=0, Right sender column=4
+                 Left receiver columns=1-3, Right receiver columns=5-6
     """
 
     num_receiver_cores: int
     mesh_device: ttnn.MeshDevice
 
+    # Sender core rows that are adjacent to DRAM banks (different for left and right sides)
+    # Active rows are the ones adjacent to DRAM banks, inactive are the remaining rows
+    SENDER_ROWS = {
+        "blackhole": {
+            "left": {"active": [0, 3, 7, 9], "inactive": [1, 2, 4, 5, 6, 8]},
+            "right": {"active": [1, 4, 6, 9], "inactive": [0, 2, 3, 5, 7, 8]},
+        },
+        "wormhole": {
+            "left": {"active": [0, 4, 5, 9], "inactive": [1, 2, 3, 6, 7, 8]},
+            "right": {"active": [0, 1, 2, 4, 5, 6, 7, 9], "inactive": [3, 8]},
+        },
+    }
+
+    # Sender core columns (left side near banks 0-3, right side near banks 4-7)
+    SENDER_COLS = {
+        "blackhole": {"left": 0, "right": 7},
+        "wormhole": {"left": 0, "right": 4},
+    }
+
+    # Receiver core column ranges (start_col, end_col exclusive)
+    RECEIVER_COLS = {
+        "blackhole": {"left": (1, 7), "right": (8, 11)},
+        "wormhole": {"left": (1, 4), "right": (5, 7)},
+    }
+
     def __post_init__(self):
-        constants = PrefetcherCoreConstants
-        left_start_col = constants.LEFT_START_COL
-        left_end_col = constants.LEFT_END_COL_WORMHOLE_B0 if is_wormhole_b0() else constants.LEFT_END_COL_BLACKHOLE
-        right_start_col = (
-            constants.RIGHT_START_COL_WORMHOLE_B0 if is_wormhole_b0() else constants.RIGHT_START_COL_BLACKHOLE
-        )
-        right_end_col = constants.RIGHT_END_COL_WORMHOLE_B0 if is_wormhole_b0() else constants.RIGHT_END_COL_BLACKHOLE
+        arch = "blackhole" if is_blackhole() else "wormhole"
+        self._sender_rows = self.SENDER_ROWS[arch]
+        self._sender_cols = self.SENDER_COLS[arch]
+        self._receiver_cols = self.RECEIVER_COLS[arch]
 
-        def get_sender_range(active: Optional[bool] = None):
-            left_sender_range = ([] if active == False else [0, 3, 7, 9]) + (
-                [] if active == True else [1, 2, 4, 6, 5, 8]
-            )
-            right_sender_range = ([] if active == False else [1, 4, 6, 9] + [] if is_blackhole() else [5, 6, 7, 9]) + (
-                [] if active == True else [2, 3, 5, 7, 8] if is_blackhole() else [3, 8]
-            )
-            return left_sender_range, right_sender_range
+    def _get_sender_rows(self, active: Optional[bool], side: str) -> List[int]:
+        """Get sender rows based on active filter for a specific side."""
+        if active is True:
+            return self._sender_rows[side]["active"]
+        elif active is False:
+            return self._sender_rows[side]["inactive"]
+        else:  # None - return all rows
+            return self._sender_rows[side]["active"] + self._sender_rows[side]["inactive"]
 
-        def get_receiver_range(active: Optional[bool] = None):
-            left_recv_range = (
-                [] if active == False else list(range(left_start_col, self.num_receiver_cores + left_start_col))
-            ) + ([] if active == True else list(range(self.num_receiver_cores + left_start_col, left_end_col)))
-            right_recv_range = (
-                [] if active == False else list(range(right_start_col, self.num_receiver_cores + right_start_col))
-            ) + ([] if active == True else list(range(self.num_receiver_cores + right_start_col, right_end_col)))
-            return left_recv_range, right_recv_range
+    def _get_receiver_col_range(self, active: Optional[bool], side: str) -> tuple:
+        """Get receiver column range (start, end) based on active filter."""
+        start, end = self._receiver_cols[side]
+        if active is True:
+            return (start, start + self.num_receiver_cores)
+        elif active is False:
+            return (start + self.num_receiver_cores, end)
+        else:  # None - return all columns
+            return (start, end)
 
-        # Prefetcher sender cores (cores adjacent to dram cores/banks)
-        def wh_sender_cores(active: Optional[bool] = None):
-            self.left_sender_range, self.right_sender_range = [list(r) for r in get_sender_range(active)]
-            return [ttnn.CoreCoord(0, i) for i in self.left_sender_range] + [
-                ttnn.CoreCoord(4, i) for i in self.right_sender_range
+    def sender_cores(self, active: Optional[bool] = None) -> List[ttnn.CoreCoord]:
+        """
+        Get sender cores (cores adjacent to DRAM banks).
+
+        Args:
+            active: If True, return only active sender cores (one per DRAM bank).
+                   If False, return only inactive sender cores.
+                   If None, return all sender cores (active first, then inactive).
+
+        The order is: left_active, right_active, left_inactive, right_inactive.
+        This ensures the first num_dram_banks cores are the active ones, which
+        matches the sub-device configuration.
+        """
+        left_col = self._sender_cols["left"]
+        right_col = self._sender_cols["right"]
+
+        if active is True:
+            left_active = self._sender_rows["left"]["active"]
+            right_active = self._sender_rows["right"]["active"]
+            return [ttnn.CoreCoord(left_col, r) for r in left_active] + [
+                ttnn.CoreCoord(right_col, r) for r in right_active
             ]
-
-        def bh_sender_cores(active: Optional[bool] = None):
-            self.left_sender_range, self.right_sender_range = [list(r) for r in get_sender_range(active)]
-            return (
-                [ttnn.CoreCoord(0, i) for i in self.left_sender_range[:4]]
-                + [ttnn.CoreCoord(7, i) for i in self.right_sender_range[:4]]
-                + [ttnn.CoreCoord(0, i) for i in self.left_sender_range[4:]]
-                + [ttnn.CoreCoord(7, i) for i in self.right_sender_range[4:]]
-            )
-
-        # Prefetcher receiver cores (num_receiver_cores worker cores adjacent to sender cores)
-        def wh_receiver_cores(sender_active: Optional[bool] = None, receiver_active: Optional[bool] = None):
-            self.left_sender_range, self.right_sender_range = get_sender_range(sender_active)
-            self.left_recv_range, self.right_recv_range = get_receiver_range(receiver_active)
-            return [
-                ttnn.CoreRange(ttnn.CoreCoord(self.left_recv_range[0], i), ttnn.CoreCoord(self.left_recv_range[-1], i))
-                for i in self.left_sender_range
-            ] + [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(self.right_recv_range[0], i), ttnn.CoreCoord(self.right_recv_range[-1], i)
-                )
-                for i in self.right_sender_range
+        elif active is False:
+            left_inactive = self._sender_rows["left"]["inactive"]
+            right_inactive = self._sender_rows["right"]["inactive"]
+            return [ttnn.CoreCoord(left_col, r) for r in left_inactive] + [
+                ttnn.CoreCoord(right_col, r) for r in right_inactive
             ]
-
-        def bh_receiver_cores(sender_active: Optional[bool] = None, receiver_active: Optional[bool] = None):
-            self.left_sender_range, self.right_sender_range = get_sender_range(sender_active)
-            self.left_recv_range, self.right_recv_range = get_receiver_range(receiver_active)
+        else:  # None - return all: active first, then inactive
+            left_active = self._sender_rows["left"]["active"]
+            right_active = self._sender_rows["right"]["active"]
+            left_inactive = self._sender_rows["left"]["inactive"]
+            right_inactive = self._sender_rows["right"]["inactive"]
             return (
-                [
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(self.left_recv_range[0], i), ttnn.CoreCoord(self.left_recv_range[-1], i)
-                    )
-                    for i in self.left_sender_range[:4]
-                ]
-                + [
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(self.right_recv_range[0], i), ttnn.CoreCoord(self.right_recv_range[-1], i)
-                    )
-                    for i in self.right_sender_range[:4]
-                ]
-                + [
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(self.left_recv_range[0], i), ttnn.CoreCoord(self.left_recv_range[-1], i)
-                    )
-                    for i in self.left_sender_range[4:]
-                ]
-                + [
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(self.right_recv_range[0], i), ttnn.CoreCoord(self.right_recv_range[-1], i)
-                    )
-                    for i in self.right_sender_range[4:]
-                ]
+                [ttnn.CoreCoord(left_col, r) for r in left_active]
+                + [ttnn.CoreCoord(right_col, r) for r in right_active]
+                + [ttnn.CoreCoord(left_col, r) for r in left_inactive]
+                + [ttnn.CoreCoord(right_col, r) for r in right_inactive]
             )
 
-        self.sender_cores = wh_sender_cores if is_wormhole_b0() else bh_sender_cores
-        self.receiver_cores = wh_receiver_cores if is_wormhole_b0() else bh_receiver_cores
+    def receiver_cores(
+        self, sender_active: Optional[bool] = None, receiver_active: Optional[bool] = None
+    ) -> List[ttnn.CoreRange]:
+        """
+        Get receiver core ranges (worker cores adjacent to sender cores).
+
+        Each sender core has a horizontal strip of receiver cores on the same row.
+
+        Args:
+            sender_active: Filter which sender rows to create receiver ranges for.
+            receiver_active: Filter which receiver columns to include.
+
+        The order matches sender_cores: left_active, right_active, left_inactive, right_inactive.
+        """
+        left_recv = self._get_receiver_col_range(receiver_active, "left")
+        right_recv = self._get_receiver_col_range(receiver_active, "right")
+
+        def make_range(col_start, col_end, row):
+            return ttnn.CoreRange(ttnn.CoreCoord(col_start, row), ttnn.CoreCoord(col_end - 1, row))
+
+        if sender_active is True:
+            left_active = self._sender_rows["left"]["active"]
+            right_active = self._sender_rows["right"]["active"]
+            return [make_range(*left_recv, r) for r in left_active] + [make_range(*right_recv, r) for r in right_active]
+        elif sender_active is False:
+            left_inactive = self._sender_rows["left"]["inactive"]
+            right_inactive = self._sender_rows["right"]["inactive"]
+            return [make_range(*left_recv, r) for r in left_inactive] + [
+                make_range(*right_recv, r) for r in right_inactive
+            ]
+        else:  # None - return all: active first, then inactive
+            left_active = self._sender_rows["left"]["active"]
+            right_active = self._sender_rows["right"]["active"]
+            left_inactive = self._sender_rows["left"]["inactive"]
+            right_inactive = self._sender_rows["right"]["inactive"]
+            return (
+                [make_range(*left_recv, r) for r in left_active]
+                + [make_range(*right_recv, r) for r in right_active]
+                + [make_range(*left_recv, r) for r in left_inactive]
+                + [make_range(*right_recv, r) for r in right_inactive]
+            )
 
 
 ### Helper class to manage subdevices for the Prefetcher
-# The class PrefetcherSubDevice provides an interface for creating subdevices
+# The class PrefetcherSubDevice provides an interface for creating subdevices is only managed by the prefetcher module
 class PrefetcherSubDevice:
     def __init__(self, mesh_device):
         self.mesh_device = mesh_device
@@ -166,28 +197,29 @@ class Prefetcher(LightweightModule):
         self.worker_sub_device_id = None
         self.global_cb_size = 0
         self.num_receiver_cores = self.get_optimal_receiver_cores()
-        self.max_num_receiver_cores = 4 if is_blackhole() else 2
 
         # Max tensor block size is the largest block size of a tensor in bytes (1 block = tensor volume / (tile size * tile size) // (num_receiver_cores * num_reader_cores))
         self.max_tensor_block_size = 0
         self.ring_size = self.num_receiver_cores * self.mesh_device.dram_grid_size().x
-        assert (
-            self.num_receiver_cores <= self.max_num_receiver_cores
-        ), f"Number of receiver cores {self.num_receiver_cores} is greater than the maximum number of receiver cores {self.max_num_receiver_cores}"
         self.width_cores = self.mesh_device.compute_with_storage_grid_size().x
         self.height_cores = self.mesh_device.compute_with_storage_grid_size().y
-        # Only ring size of 24 has been tested on WH
 
-        ### Prefetcher HardCoded Core Ranges (i dont like this)
+        ### Core Config
+        self.core_config = PrefetcherCoreConfig(
+            num_receiver_cores=self.num_receiver_cores, mesh_device=self.mesh_device
+        )
+
+        ### Prefetcher Hardcoded Core Ranges
         self.all_core_range_set = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.width_cores - 1, self.height_cores - 1))]
         )
 
+        # Remaining worker core ranges for the worker sub device
+        left_range = self.core_config._receiver_cols["left"]
+        right_range = self.core_config._receiver_cols["right"]
         self.all_worker_cores_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(10, 9)),
-            ]
+            [ttnn.CoreRange(ttnn.CoreCoord(left_range[0], 0), ttnn.CoreCoord(left_range[1] - 1, 9))]
+            + [ttnn.CoreRange(ttnn.CoreCoord(right_range[0], 0), ttnn.CoreCoord(right_range[1] - 1, 9))]
         )
 
         ### Prefetched Tensors
@@ -199,28 +231,31 @@ class Prefetcher(LightweightModule):
         ### Core Ranges
         self.sender_cores = None
         self.receiver_cores = None
-        self.all_cores = None
         self.mode = "prefill"
 
-    # Todo: add a note to that weights are prefetched in the order of the construction of the module
+    # NOTE: DRAM prefetched weights are prefetched in the order of the construction of the module
     def register_callback(self, callback: Callable[[], None]):
         self.callbacks.append(callback)
 
+    # Mapping from mesh shape (as tuple) to optimal number of receiver cores
+    OPTIMAL_RECEIVER_CORES = {
+        (1, 1): 2,
+        (1, 2): 2,
+        (1, 4): 2,
+        (1, 8): 1,
+    }
+
     def get_optimal_receiver_cores(self):
-        if self.mesh_device.shape == ttnn.MeshShape([1, 2]):
-            return 4
-        elif self.mesh_device.shape == ttnn.MeshShape([1, 4]):
-            return 2
-        elif self.mesh_device.shape == ttnn.MeshShape([1, 8]):
-            return 1
-        else:
-            raise ValueError(
-                f"Provided mesh device shape {self.mesh_device.shape} is not supported, only [1,2], [1,4] and [1,8] are supported"
-            )
+        mesh_shape = tuple(self.mesh_device.shape)
+        if mesh_shape not in self.OPTIMAL_RECEIVER_CORES:
+            supported = list(self.OPTIMAL_RECEIVER_CORES.keys())
+            raise ValueError(f"Mesh shape {mesh_shape} is not supported. Supported shapes: {supported}")
+        return self.OPTIMAL_RECEIVER_CORES[mesh_shape]
 
     def to_core_range_set(
         self, cores: Union[List[ttnn.CoreCoord], List[ttnn.CoreRange]], return_list: bool = False
     ) -> ttnn.CoreRangeSet:
+        assert len(cores) > 0, "No cores provided to to_core_range_set"
         if isinstance(cores[0], ttnn.CoreCoord):
             return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores])
         elif isinstance(cores[0], ttnn.CoreRange):
@@ -244,13 +279,10 @@ class Prefetcher(LightweightModule):
         ], f"Provided mode {mode} is not supported, only `decode` and `prefill` are supported"
 
         # Get the sender and receiver cores
-        self.sender_cores = PrefetcherCoreConfig(
-            num_receiver_cores=self.num_receiver_cores, mesh_device=self.mesh_device
-        ).sender_cores
+        # Create a single config instance to ensure consistent state
+        self.sender_cores = self.core_config.sender_cores
+        self.receiver_cores = self.core_config.receiver_cores
 
-        self.receiver_cores = PrefetcherCoreConfig(
-            num_receiver_cores=self.num_receiver_cores, mesh_device=self.mesh_device
-        ).receiver_cores
         self.sender_receiver_mapping = list(
             zip(
                 self.sender_cores(),
@@ -272,7 +304,6 @@ class Prefetcher(LightweightModule):
         logger.info("=" * 50)
         logger.info("[Prefetcher Initialization]")
         logger.info(f"  Mode: {mode}")
-        logger.info(f"  All cores: {self.all_cores}")
         logger.info(f"  Sender cores: {self.sender_cores(active=True)}")
         logger.info(f"  Receiver cores: {self.receiver_cores(sender_active=None, receiver_active=True)}")
         logger.info(f"  Number of receiver cores: {self.num_receiver_cores}")
@@ -286,9 +317,9 @@ class Prefetcher(LightweightModule):
         The addresses are replicated on each sender core
         """
         assert (
-            len(self.prefetched_tensor_addr) == self.num_tensors * self.num_layers,
-            "No tensor addresses have been inserted",
-        )
+            len(self.prefetched_tensor_addr) == self.num_tensors * self.num_layers
+        ), "No tensor addresses have been inserted"
+
         tensor_addrs = torch.tensor(self.prefetched_tensor_addr)
         tensor_addrs = tensor_addrs.repeat(self.mesh_device.dram_grid_size().x, 1)
         tensor_addrs_mem_config = ttnn.MemoryConfig(
@@ -311,29 +342,38 @@ class Prefetcher(LightweightModule):
 
     def insert_tensor(self, tensor: ttnn.Tensor):
         """
-        Populates the tensor addressess that need to be prefetched
+        Populates the tensor addresses that need to be prefetched
         """
         bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
         if tensor.volume() % self.ring_size != 0:
             raise ValueError(
-                f"Tensor volume ({tensor.volume()}) must be divisible by num_receiver_cores * num_reader_cores ({self.num_receiver_cores * self.width_cores}) for prefetcher."
+                f"Tensor volume ({tensor.volume()}) must be divisible by ring_size ({self.ring_size}) for prefetcher."
             )
-        self.max_tensor_block_size = max(
-            (math.ceil(tensor.volume() / (ttnn.TILE_SIZE * ttnn.TILE_SIZE)) // (self.ring_size))
-            * bytes_in_tile[tensor.dtype],
-            self.max_tensor_block_size,
-        )
+        if not tensor.is_sharded() or tensor.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            raise ValueError(
+                f"Tensor must be DRAM sharded for prefetcher. Got sharded={tensor.is_sharded()}, "
+                f"buffer_type={tensor.memory_config().buffer_type}"
+            )
+        h, w = tensor.shape[-2], tensor.shape[-1]
+        h_tiles, w_tiles = math.ceil(h / ttnn.TILE_SIZE), math.ceil(w / ttnn.TILE_SIZE)
+        h_tiles_padded = math.ceil(h_tiles / self.ring_size) * self.ring_size
+        max_tensor_tiles = (h_tiles_padded * w_tiles) // self.ring_size
+        self.max_tensor_block_size = max(max_tensor_tiles * bytes_in_tile[tensor.dtype], self.max_tensor_block_size)
         self.prefetched_tensors.append(tensor)
         self.prefetched_tensor_addr.append(tensor.buffer_address())
         logger.info(
-            f"Inserted tensor {tensor.shape} into prefetcher, total number of tensors: {len(self.prefetched_tensor_addr)}"
+            f"Inserted tensor of shape {tensor.shape} into prefetcher, total number of tensors in prefetcher queue: {len(self.prefetched_tensor_addr)}"
         )
 
     def prefetch(self):
         """
         Inserts the tensors to be prefetched in a queue
         The tensors are prefetched in the order of the registration of the callbacks
+        NOTE: This only needs to be called if a callback is registered for inserting tensors
         """
+        assert (
+            len(self.callbacks) > 0
+        ), "No tensors insertion callbacks have been inserted into the prefetcher queue. Cannot prefetch an empty queue"
         for callback in self.callbacks:
             callback()
 
@@ -341,9 +381,9 @@ class Prefetcher(LightweightModule):
         """
         Start prefetching weights into global CB with dram_prefetcher op
         """
-        # Create global cb buffer if it was not
+        # Create global cb buffer if it was not yet created.
         if self.global_cb is None:
-            self.global_cb_size = self.max_tensor_block_size  # Double buffered weights
+            self.global_cb_size = self.max_tensor_block_size
             self.global_cb = ttnn.create_global_circular_buffer(
                 self.mesh_device,
                 self.sender_receiver_mapping,
@@ -354,7 +394,7 @@ class Prefetcher(LightweightModule):
         if self.prefetched_tt_addr_tensor is None:
             self.prefetched_tt_addr_tensor = self.create_address_tensor()
 
-        # Run prefetcher op
+        # Run prefetcher op (prefetcher op will start asynchronously prefetching weights until prefetcher.stop() is called)
         self.garbage = ttnn.dram_prefetcher(
             self.prefetched_tensors[: self.num_tensors] + [self.prefetched_tt_addr_tensor],
             num_layers=self.num_layers,

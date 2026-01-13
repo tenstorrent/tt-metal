@@ -190,7 +190,13 @@ def test_model_inference(
 
     if layers is not None:
         model_args.n_layers = layers
-    state_dict = model_args.load_state_dict()
+
+    # Load state_dict from test_decoder.py if available, otherwise load normally
+    if os.path.exists("/tmp/decoder_state_dict.pt"):
+        state_dict = torch.load("/tmp/decoder_state_dict.pt")
+        logger.info("Loaded state_dict from /tmp/decoder_state_dict.pt (same weights as test_decoder.py)")
+    else:
+        state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     reference_state_dict = {
         k[len(state_dict_prefix) :]: v
@@ -284,6 +290,7 @@ def test_model_inference(
     )
     breakpoint()
     if use_prefetcher:
+        model_args.build_prefetcher_configs("decode")
         tt_model.prefetcher.prefetch()
 
     logger.info("Model and caches loaded.")
@@ -322,6 +329,48 @@ def test_model_inference(
     for i in range(generation_length):
         logger.info(f"[Model] Generating token {i}")
 
+        # Load saved input from test_decoder.py if available
+        saved_rot_mats = None
+        if os.path.exists("/tmp/decoder_input.pt"):
+            saved_data = torch.load("/tmp/decoder_input.pt")
+            logger.info(f"Loaded decoder input from /tmp/decoder_input.pt (iteration {saved_data['iteration']})")
+            tt_decode_input = saved_data["pt_decode_input"]
+            current_pos = saved_data["current_pos"]
+            current_pos_tensor = ttnn.from_torch(
+                current_pos,
+                device=mesh_device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device,
+                    dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                    mesh_shape=model_args.cluster_shape,
+                ),
+            )
+            # Also update pt_decode_input for reference model comparison
+            pt_decode_input = saved_data["pt_decode_input"]
+            # Load saved rot_mats if available
+            if "rot_mats" in saved_data and saved_data["rot_mats"] is not None:
+                # Create sharded memory config to match original rot_mats (HEIGHT_SHARDED in L1)
+                # Original config: grid={[(x=1,y=0) - (x=1,y=0)]}, shape={32, 128}
+                rot_mats_mem_config = ttnn.create_sharded_memory_config(
+                    shape=(32, 128),
+                    core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                saved_rot_mats = [
+                    ttnn.from_torch(
+                        rm,
+                        device=mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=rot_mats_mem_config,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    )
+                    for rm in saved_data["rot_mats"]
+                ]
+                logger.info("Using saved rot_mats from test_decoder.py")
+
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             model_args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"]
@@ -329,9 +378,11 @@ def test_model_inference(
             else model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
 
-        breakpoint()
         # Get cos/sin matrices for the current position of each user
-        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if use_prefetcher else None)
+        if saved_rot_mats is not None:
+            rot_mats = saved_rot_mats
+        else:
+            rot_mats = tt_model.rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if use_prefetcher else None)
 
         breakpoint()
         # Run TT model

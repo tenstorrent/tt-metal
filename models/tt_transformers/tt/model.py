@@ -3,13 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
+from loguru import logger
 from tqdm import tqdm
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
+from models.common.utility_functions import comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -71,7 +75,7 @@ class Transformer(LightweightModule):
             max_seq_len=args.max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
-            rot_mats_layout=ttnn.TILE_LAYOUT,
+            rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT if prefetcher is not None else ttnn.TILE_LAYOUT,
             prefetcher=prefetcher,
         )
 
@@ -551,6 +555,30 @@ class Transformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
+            breakpoint()
+            # Load and compare with saved decoder output from test_decoder.py
+            if mode == "decode" and os.path.exists("/tmp/decoder_output.pt"):
+                saved_decoder_data = torch.load("/tmp/decoder_output.pt")
+                saved_decoder_output = saved_decoder_data["decoder_output"]
+
+                # Convert current output to torch for comparison
+                x_torch = ttnn.to_torch(
+                    x,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape
+                    ),
+                )
+                # Reshape to match saved decoder output format: [batch, 1, dim]
+                x_torch_reshaped = x_torch[:, 0:1, : self.args.max_batch_size, : self.args.dim].view(
+                    -1, 1, self.args.dim
+                )
+
+                passing, pcc_message = comp_pcc(saved_decoder_output, x_torch_reshaped)
+                logger.info(f"[Layer {i}] Decoder output PCC comparison: {pcc_message}")
+                if passing:
+                    logger.info(f"[Layer {i}] Decoder output matches saved decoder output!")
+                else:
+                    logger.warning(f"[Layer {i}] Decoder output MISMATCH with saved decoder output!")
 
         if mode == "decode":
             if self.prefetcher is not None:
@@ -566,12 +594,139 @@ class Transformer(LightweightModule):
         # Output norm
         # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=1,y=0) - (x=4,y=7)]},shape={32, 64},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=NdShardSpec(shard_shape=Shape([32, 64]),grid={[(x=1,y=0) - (x=4,y=7)]},orientation=ShardOrientation::ROW_MAJOR,shard_distribution_strategy=ShardDistributionStrategy::ROUND_ROBIN_1D),created_with_nd_shard_spec=0)
 
+        # Save input before norm and compare with PyTorch RMSNorm
+        mesh_composer_norm = ttnn.ConcatMesh2dToTensor(
+            self.mesh_device, dims=(1, 3) if self.args.is_galaxy else (1, 3), mesh_shape=self.args.cluster_shape
+        )
+        x_before_norm_torch = ttnn.to_torch(x, mesh_composer=mesh_composer_norm).float()
+
+        # Load norm weights from saved state_dict if available
+        norm_weight = None
+        if os.path.exists("/tmp/decoder_state_dict.pt"):
+            saved_state_dict = torch.load("/tmp/decoder_state_dict.pt")
+            state_dict_prefix = self.args.get_state_dict_prefix("", None)
+            norm_weight_key = f"{state_dict_prefix}norm.weight"
+            if norm_weight_key in saved_state_dict:
+                norm_weight = saved_state_dict[norm_weight_key].float()
+
+        # Run PyTorch RMSNorm
+        if norm_weight is not None:
+            # RMSNorm: x * weight / sqrt(mean(x^2) + eps)
+            x_pt = x_before_norm_torch
+            rms = torch.sqrt(torch.mean(x_pt**2, dim=-1, keepdim=True) + self.args.norm_eps)
+            x_pt_normed = (x_pt / rms) * norm_weight
+            logger.info(
+                f"[Norm Debug] Input shape: {x_before_norm_torch.shape}, norm_weight shape: {norm_weight.shape}"
+            )
+
+        breakpoint()
         x = self.norm(x, mode=mode, norm_config=self.model_config["LM_HEAD_NORM_CONFIG"])
+
+        # Convert ttnn norm output to torch and compare PCC
+        x_after_norm_torch = ttnn.to_torch(x, mesh_composer=mesh_composer_norm).float()
+
+        if norm_weight is not None:
+            logger.info(
+                f"[Norm Debug] PyTorch normed shape: {x_pt_normed.shape}, TTNN normed shape: {x_after_norm_torch.shape}"
+            )
+
+            # Handle shape differences - extract the dim portion from ttnn output
+            # TTNN norm output may have different layout, slice to match PyTorch shape
+            if x_pt_normed.shape != x_after_norm_torch.shape:
+                # Try to extract matching dimensions
+                # x_pt_normed: [1, 1, 32, 4096], x_after_norm_torch might be different
+                ttnn_normed_slice = x_after_norm_torch[:, :, : x_pt_normed.shape[2], : x_pt_normed.shape[3]]
+                logger.info(f"[Norm Debug] Sliced TTNN shape: {ttnn_normed_slice.shape}")
+                passing, pcc_message = comp_pcc(x_pt_normed, ttnn_normed_slice)
+            else:
+                passing, pcc_message = comp_pcc(x_pt_normed, x_after_norm_torch)
+
+            logger.info(f"[Norm Debug] PyTorch vs TTNN RMSNorm PCC: {pcc_message}")
+            if passing:
+                logger.info("[Norm Debug] RMSNorm output MATCHES PyTorch!")
+            else:
+                logger.warning("[Norm Debug] RMSNorm output MISMATCH with PyTorch!")
+
+        breakpoint()
 
         if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
+        # Save input before lm_head and compare with PyTorch linear
+        mesh_composer_lm = ttnn.ConcatMesh2dToTensor(
+            self.mesh_device, dims=(1, 3) if self.args.is_galaxy else (1, 3), mesh_shape=self.args.cluster_shape
+        )
+        x_before_lm_head_torch = ttnn.to_torch(x, mesh_composer=mesh_composer_lm).float()
+
+        # Load lm_head weights from saved state_dict
+        lm_head_weight = None
+        if os.path.exists("/tmp/decoder_state_dict.pt"):
+            saved_state_dict = torch.load("/tmp/decoder_state_dict.pt")
+            state_dict_prefix = self.args.get_state_dict_prefix("", None)
+            lm_head_weight_key = f"{state_dict_prefix}output.weight"
+            if lm_head_weight_key in saved_state_dict:
+                # LM head weight: [vocab_size, dim] -> transpose to [dim, vocab_size] for matmul
+                lm_head_weight = saved_state_dict[lm_head_weight_key].float()
+                logger.info(
+                    f"[LM Head Debug] Input shape: {x_before_lm_head_torch.shape}, weight shape: {lm_head_weight.shape}"
+                )
+
+        # Run PyTorch LM head (linear: x @ weight.T)
+        x_pt_lm_head = None
+        if lm_head_weight is not None:
+            # x_before_lm_head_torch is concatenated across devices, shape [1, 1, batch, dim*num_devices]
+            # We need to slice to get just the first 'dim' elements for PyTorch comparison
+            dim = self.args.dim  # 4096
+            x_lm_input_sliced = x_before_lm_head_torch[..., :dim]
+            logger.info(
+                f"[LM Head Debug] Sliced input shape: {x_lm_input_sliced.shape}, weight shape: {lm_head_weight.shape}"
+            )
+            # x: [1, 1, batch, dim], weight: [vocab_size, dim]
+            # Output should be [1, 1, batch, vocab_size]
+            x_pt_lm_head = torch.matmul(x_lm_input_sliced, lm_head_weight.T)
+            logger.info(f"[LM Head Debug] PyTorch LM head output shape: {x_pt_lm_head.shape}")
+
+        breakpoint()
         x = self.lm_head(x)
+
+        # Convert ttnn lm_head output to torch and compare PCC
+        if x_pt_lm_head is not None:
+            # Use mesh_composer matching test_lm_head.py: dims=(3, 1) for galaxy, (1, 3) for non-galaxy
+            mesh_composer_lm_out = ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, self.args.cluster_shape, dims=(3, 1) if self.args.is_galaxy else (1, 3)
+            )
+            x_after_lm_head_torch = ttnn.to_torch(x, mesh_composer=mesh_composer_lm_out).float()
+            # Slice to vocab_size like test_lm_head.py does
+            x_after_lm_head_torch = x_after_lm_head_torch[:, 0:1, :, : self.args.vocab_size]
+            logger.info(
+                f"[LM Head Debug] TTNN LM head output shape (sliced to vocab_size): {x_after_lm_head_torch.shape}"
+            )
+
+            # Also slice PyTorch output to vocab_size for fair comparison
+            x_pt_lm_head_sliced = x_pt_lm_head[:, :, :, : self.args.vocab_size]
+            logger.info(
+                f"[LM Head Debug] PyTorch LM head output shape (sliced to vocab_size): {x_pt_lm_head_sliced.shape}"
+            )
+
+            # Handle shape differences
+            if x_pt_lm_head_sliced.shape != x_after_lm_head_torch.shape:
+                # Slice to compare matching portions
+                min_vocab = min(x_pt_lm_head_sliced.shape[-1], x_after_lm_head_torch.shape[-1])
+                min_batch = min(x_pt_lm_head_sliced.shape[-2], x_after_lm_head_torch.shape[-2])
+                x_pt_slice = x_pt_lm_head_sliced[..., :min_batch, :min_vocab]
+                x_tt_slice = x_after_lm_head_torch[..., :min_batch, :min_vocab]
+                logger.info(f"[LM Head Debug] Sliced shapes - PyTorch: {x_pt_slice.shape}, TTNN: {x_tt_slice.shape}")
+                passing, pcc_message = comp_pcc(x_pt_slice, x_tt_slice)
+            else:
+                passing, pcc_message = comp_pcc(x_pt_lm_head_sliced, x_after_lm_head_torch)
+
+            logger.info(f"[LM Head Debug] PyTorch vs TTNN LM Head PCC: {pcc_message}")
+            if passing:
+                logger.info("[LM Head Debug] LM Head output MATCHES PyTorch!")
+            else:
+                logger.warning("[LM Head Debug] LM Head output MISMATCH with PyTorch!")
+
+        breakpoint()
 
         if mode == "prefill":
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)

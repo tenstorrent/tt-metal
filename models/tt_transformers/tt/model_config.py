@@ -1711,7 +1711,7 @@ class ModelArgs:
         self.model_config["LM_HEAD_NORM_CONFIG"] = {
             "sharded_program_config": self.create_sharded_norm_config(self.attn_input_grid),
             "sharded_output_config": self.model_config["PREFETCHER_SHARDED_FINAL_NORM_INPUT_MEMCFG"],
-            "output_mem_config": None,
+            "output_mem_config": self.model_config["PREFETCHER_SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
         }
         # ====== END of Prefetcher program and memory configs ======
 
