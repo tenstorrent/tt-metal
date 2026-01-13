@@ -482,24 +482,33 @@ void process_write_linear(uint32_t num_mcast_dests) {
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmdLarge);
     // DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index << ",
     // dst_addr:0x" << dst_addr << ", length:0x" << length << ", data_ptr:0x" << data_ptr << DEC() << ENDL();
-#if !defined(FABRIC_RELAY)
     if (multicast) {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
     } else {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
     }
-#endif
 
     while (length != 0) {
         // Transfer size is min(remaining_length, data_available_in_cb)
+#if defined(FABRIC_RELAY)
+        uint32_t available_data = dispatch_cb_reader.available_data();
+        bool hit_boundary = false;
+        if (available_data == 0) {
+            available_data = dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+                hit_boundary = true;
+            });
+        }
+        uint32_t xfer_size = length > available_data ? available_data : length;
+        if (hit_boundary) {
+            if (multicast) {
+                cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
+            } else {
+                cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
+            }
+        }
+#else
         uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
         uint32_t xfer_size = length > available_data ? available_data : length;
-#if defined(FABRIC_RELAY)
-    if (multicast) {
-        cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
-    } else {
-        cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
-    }
 #endif
         cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
         // Increment counters based on the number of packets that were written
