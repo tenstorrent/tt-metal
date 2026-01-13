@@ -335,7 +335,7 @@ class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
     def preprocess_weights_impl(self):
         """Preprocess linear weights for TTNN."""
         if self.torch_layer is None:
-            self._fallback_torch_layer = NHWCConvBNPytorch(
+            self._fallback_torch_layer = NHWCConvBNActivationPytorch(
                 nn.Conv2d(
                     in_channels=self.in_channels,
                     out_channels=self.out_channels,
