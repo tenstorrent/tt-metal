@@ -413,7 +413,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
             bool should_check_direction = is_2D_routing || targets.size() > 1;
             if (should_check_direction && target.target_direction.has_value() &&
                 target.target_direction.value() != downstream_router.get_location().direction) {
-                // connction mapping contains connection info to all downstream directions.
+                // connection mapping contains connection info to all downstream directions.
                 // Proceed with connection setup only for the current downstream direction.
                 log_debug(
                     LogMetal,
