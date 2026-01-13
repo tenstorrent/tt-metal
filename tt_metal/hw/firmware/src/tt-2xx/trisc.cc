@@ -32,8 +32,8 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
-uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 
 uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
@@ -110,7 +110,7 @@ extern "C" uint32_t _start1() {
     do_crt1(__ldm_data_start);
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
-
+    DPRINT << "initialized trisc" << ENDL();
     // Initialize GPRs to all 0s
     // #pragma GCC unroll 0
     //     for (int i = 0; i < 64; i++) {

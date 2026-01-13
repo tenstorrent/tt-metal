@@ -238,7 +238,7 @@ extern "C" uint32_t _start1() {
                 // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
                 //     RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
-                // run_triscs(enables);
+                run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
@@ -281,7 +281,6 @@ extern "C" uint32_t _start1() {
                     // barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                     uint32_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                    DPRINT << "DM0-FW: kernel_lma: " << kernel_lma << ENDL();
                     asm("FENCE.i");
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                     record_stack_usage(stack_free);

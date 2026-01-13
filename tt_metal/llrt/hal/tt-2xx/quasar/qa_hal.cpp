@@ -128,10 +128,14 @@ public:
                 }
 
                 flags += fmt::format(" -Wl,--defsym=__data_size={} ", MEM_TRISC_GLOBAL_SIZE);
-                flags += fmt::format(" -Wl,--defsym=__fw_tls={} ", MEM_TRISC_LOCAL_BASE);
+                flags += fmt::format(
+                    " -Wl,--defsym=__fw_tls={} ",
+                    MEM_TRISC_LOCAL_BASE + MEM_TRISC_LOCAL_OFFSET * params.processor_id / 4);
                 flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
                 flags += fmt::format(" -Wl,--defsym=__min_stack={} ", MEM_TRISC_STACK_MIN_SIZE);
-                flags += fmt::format(" -Wl,--defsym=__local_base={} ", MEM_TRISC_LOCAL_BASE);
+                flags += fmt::format(
+                    " -Wl,--defsym=__local_base={} ",
+                    MEM_TRISC_LOCAL_BASE + MEM_TRISC_LOCAL_OFFSET * params.processor_id / 4);
                 flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE);
             } else {
                 switch (params.processor_id) {
