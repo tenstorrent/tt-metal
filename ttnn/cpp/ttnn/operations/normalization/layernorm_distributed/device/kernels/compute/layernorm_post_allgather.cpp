@@ -57,8 +57,8 @@ struct x_minus_mean_node {
         .fixed_dest_reg = 0xFFFF,
     };
 };
-constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
-constexpr uint32_t do_beta = get_compile_time_arg_val(5);
+constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
+constexpr uint32_t do_beta = get_compile_time_arg_val(4);
 constexpr uint32_t normed_output_cb =
     do_gamma || do_beta ? cb_x_normed : cb_out;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
 struct normed_output_node {
@@ -73,6 +73,9 @@ struct normed_output_node {
     };
 };
 constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
+constexpr uint32_t cb_length = get_compile_time_arg_val(8);
+constexpr uint32_t Wt = get_compile_time_arg_val(0);
+constexpr uint32_t pop_gamma_beta = Wt == cb_length ? 0xDDDD : 0xFFFF;
 
 constexpr uint32_t cb_times_gamma_out = do_beta ? tt::CBIndex::c_13 : cb_out;
 struct gamma_optional_node {
@@ -82,7 +85,7 @@ struct gamma_optional_node {
         .CB_A = cb_x_normed,
         .CB_B = cb_gamma,
         .CB_OUT = cb_times_gamma_out,
-        .fixed_CB_B_index = 0xFFFF,
+        .fixed_CB_B_index = pop_gamma_beta,
         .fixed_dest_reg = 0xFFFF,
     };
 };
@@ -95,7 +98,7 @@ struct beta_optional_node {
         .CB_A = cb_in_beta,
         .CB_B = cb_beta,
         .CB_OUT = cb_out,
-        .fixed_CB_B_index = 0xFFFF,
+        .fixed_CB_B_index = pop_gamma_beta,
         .fixed_dest_reg = 0xFFFF,
     };
 };

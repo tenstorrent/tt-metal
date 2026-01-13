@@ -102,13 +102,15 @@ public:
             tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         std::optional<uint8_t> num_routing_planes = std::nullopt,
         tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
-        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED);
+        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED,
+        tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT);
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
     tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
 
-    distributed::multihost::DistributedContext& global_distributed_context();
+    const distributed::multihost::DistributedContext& global_distributed_context();
+    const distributed::multihost::DistributedContext& full_world_distributed_context() const;
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
 
     // Fabric tensix configuration
@@ -118,6 +120,9 @@ public:
     // Fabric UDM mode configuration
     tt_fabric::FabricUDMMode get_fabric_udm_mode() const;
 
+    // Fabric manager mode configuration
+    tt_fabric::FabricManagerMode get_fabric_manager() const;
+
     // This is used to track the current thread's command queue id stack
     using CommandQueueIdStack = std::vector<uint8_t>;
     CommandQueueIdStack& get_command_queue_id_stack_for_thread();
@@ -125,6 +130,9 @@ public:
 
     // Utilities
     bool is_coord_in_range(CoreCoord coord, CoreType core_type);
+
+    // Hang detection
+    void on_dispatch_timeout_detected();
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
@@ -155,15 +163,19 @@ private:
     void generate_device_bank_to_noc_tables(ChipId device_id);
     void generate_worker_logical_to_virtual_map(ChipId device_id);
     void initialize_device_bank_to_noc_tables(
-        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
+        ChipId device_id,
+        const HalProgrammableCoreType& core_type,
+        CoreCoord virtual_core,
+        std::optional<CoreCoord> end_core);
     void initialize_worker_logical_to_virtual_tables(
-        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
+        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord start_core, CoreCoord end_core);
     void initialize_firmware(
         ChipId device_id,
         const HalProgrammableCoreType& core_type,
         CoreCoord virtual_core,
         dev_msgs::launch_msg_t::View launch_msg,
-        dev_msgs::go_msg_t::ConstView go_msg);
+        dev_msgs::go_msg_t::ConstView go_msg,
+        std::optional<CoreCoord> end_core = std::nullopt);
     void initialize_and_launch_firmware(ChipId device_id);
     dev_msgs::core_info_msg_t populate_core_info_msg(
         ChipId device_id, HalProgrammableCoreType programmable_core_type) const;
@@ -185,6 +197,10 @@ private:
 
     // Mutex to protect control_plane_ for thread-safe access
     std::mutex control_plane_mutex_;
+
+    // Mutex to protect timeout detection for thread-safe access
+    std::mutex dispatch_timeout_detection_mutex_;
+    bool dispatch_timeout_detection_processed_ = false;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;
@@ -213,6 +229,7 @@ private:
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+    std::shared_ptr<distributed::multihost::DistributedContext> compute_only_distributed_context_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread
@@ -227,6 +244,7 @@ private:
     uint8_t num_fabric_active_routing_planes_ = 0;
     std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
+    tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 };
 
 }  // namespace tt::tt_metal

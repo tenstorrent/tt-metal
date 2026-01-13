@@ -121,8 +121,8 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
                     break;
-                } else if (
-                    block_size_[block_index] >= alloc_size &&
+                }
+                if (block_size_[block_index] >= alloc_size &&
                     (target_block_index == -1 || block_size_[block_index] < block_size_[target_block_index])) {
                     target_block_index = block_index;
                     segregated_list = &free_blocks;
@@ -334,8 +334,7 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
     std::vector<std::pair<DeviceAddr, DeviceAddr>> addresses;
 
     for (size_t i = size_segregated_index; i < size_segregated_count; i++) {
-        for (size_t j = 0; j < free_blocks_segregated_by_size_[i].size(); j++) {
-            size_t block_index = free_blocks_segregated_by_size_[i][j];
+        for (size_t block_index : free_blocks_segregated_by_size_[i]) {
             if (block_size_[block_index] >= alloc_size) {
                 addresses.push_back(
                     {block_address_[block_index] + offset_bytes_,
@@ -441,16 +440,16 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
             out << "  Size class " << i << ": (" << size_t(size_segregated_base * (size_t{1} << i))
                 << " - inf) blocks: ";
         }
-        for (size_t j = 0; j < free_blocks_segregated_by_size_[i].size(); j++) {
-            out << free_blocks_segregated_by_size_[i][j] << " ";
+        for (size_t block_id : free_blocks_segregated_by_size_[i]) {
+            out << block_id << " ";
         }
 
         out << std::endl;
     }
 
     out << "Free slots in block table: ";
-    for (size_t i = 0; i < free_meta_block_indices_.size(); i++) {
-        out << free_meta_block_indices_[i] << " ";
+    for (unsigned long free_meta_block_index : free_meta_block_indices_) {
+        out << free_meta_block_index << " ";
     }
     out << std::endl;
 
@@ -525,7 +524,8 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (!meta_block_is_allocated_[i]) {
             continue;
-        } else if (block_is_allocated_[i]) {
+        }
+        if (block_is_allocated_[i]) {
             TT_FATAL(
                 block_address_[i] >= shrunk_address,
                 "Shrink size {} cuts into allocated block at address {}",

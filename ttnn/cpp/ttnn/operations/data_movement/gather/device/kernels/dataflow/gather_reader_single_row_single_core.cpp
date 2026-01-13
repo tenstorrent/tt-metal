@@ -4,7 +4,7 @@
 
 #include "gather_common.hpp"
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <cstdint>
 
 /*

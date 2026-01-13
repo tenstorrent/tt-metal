@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "risc_attribs.h"
-#include "dataflow_api.h"
+#include "internal/risc_attribs.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Macros for determining if an early exit is signalled, ERISC only.
 #if defined(COMPILE_FOR_IDLE_ERISC)

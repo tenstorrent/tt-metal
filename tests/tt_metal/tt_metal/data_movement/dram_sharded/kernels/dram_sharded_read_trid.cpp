@@ -4,11 +4,11 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 
-// #include "debug/dprint.h"
-// #include "debug/dprint_pages.h"
+// #include "api/debug/dprint.h"
+// #include "api/debug/dprint_pages.h"
 
 // DRAM to L1 read
 void kernel_main() {

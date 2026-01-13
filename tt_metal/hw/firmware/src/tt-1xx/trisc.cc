@@ -4,20 +4,20 @@
 
 // clang-format off
 #include "ckernel.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 #include "risc_common.h"
 #include <tensix.h>
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 
-#include "debug/fw_debug.h"
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
+#include "internal/debug/fw_debug.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
 #if !defined(UCK_CHLKC_MATH)
-#include "circular_buffer.h"
-#include "circular_buffer_init.h"
+#include "internal/circular_buffer_interface.h"
+#include "internal/circular_buffer_init.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
 // clang-format on
@@ -62,10 +62,9 @@ uint32_t op_info_offset __attribute__((used)) = 0;
 
 const uint8_t thread_id = COMPILE_FOR_TRISC;
 
-#define GET_TRISC_RUN_EVAL(x, t) x##t
-#define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
 volatile tt_l1_ptr uint8_t* const trisc_run =
-    &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
+    &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))
+         ->subordinate_sync.map[COMPILE_FOR_TRISC + 1];  // first entry is for NCRISC
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 }  // namespace ckernel
 

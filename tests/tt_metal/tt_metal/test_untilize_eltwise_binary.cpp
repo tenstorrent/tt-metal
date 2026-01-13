@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -35,6 +35,7 @@
 #include "test_gold_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -70,7 +71,7 @@ inline std::vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_ve
                     // Left face row copy
                     for (int k = 0; k < 8; k++) {
                         int idx = physical_start_for_tile_row + (i * 8) + k + (j * tile_size);
-                        TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
+                        TT_FATAL(!ind.contains(idx), "{}", t);
                         ind.insert(idx);
                         dst_vec.push_back(src_vec.at(idx));
                     }
@@ -78,7 +79,7 @@ inline std::vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_ve
                     // Right face row copy
                     for (int k = 0; k < 8; k++) {
                         int idx = physical_start_for_tile_row + (i * 8) + k + face_size + (j * tile_size);
-                        TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
+                        TT_FATAL(!ind.contains(idx), "{}", t);
                         ind.insert(idx);
                         dst_vec.push_back(src_vec.at(idx));
                     }
@@ -95,7 +96,7 @@ inline std::vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_ve
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
+int main() {
     auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 

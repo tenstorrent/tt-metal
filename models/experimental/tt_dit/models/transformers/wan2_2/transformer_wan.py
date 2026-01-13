@@ -416,14 +416,14 @@ class WanTransformer3DModel:
         self.rope.load_state_dict(torch.load(cache_dict["rope"]))
         self.condition_embedder.load_state_dict(torch.load(cache_dict["condition_embedder"]))
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         self.rope.load_state_dict(substate(state_dict, "rope"))
-        self.patch_embed.load_state_dict(substate(state_dict, "patch_embedding"))
+        self.patch_embed.load_torch_state_dict(substate(state_dict, "patch_embedding"))
         self.condition_embedder.load_state_dict(substate(state_dict, "condition_embedder"))
         for i, block in enumerate(self.blocks):
             block.load_state_dict(substate(state_dict, f"blocks.{i}"))
-        self.norm_out.load_state_dict(substate(state_dict, "norm_out"))
-        self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+        self.norm_out.load_torch_state_dict(substate(state_dict, "norm_out"))
+        self.proj_out.load_torch_state_dict(substate(state_dict, "proj_out"))
 
         self.scale_shift_table = bf16_tensor(state_dict["scale_shift_table"], device=self.mesh_device)
 
@@ -439,10 +439,10 @@ class WanTransformer3DModel:
         rope_sin_1HND = rope_sin.permute(0, 2, 1, 3)
 
         rope_cos_1HND = pad_vision_seq_parallel(
-            rope_cos_1HND, chunk_size_lcm=256, num_devices=self.parallel_config.sequence_parallel.factor
+            rope_cos_1HND, num_devices=self.parallel_config.sequence_parallel.factor
         )
         rope_sin_1HND = pad_vision_seq_parallel(
-            rope_sin_1HND, chunk_size_lcm=256, num_devices=self.parallel_config.sequence_parallel.factor
+            rope_sin_1HND, num_devices=self.parallel_config.sequence_parallel.factor
         )
 
         trans_mat = get_rot_transformation_mat()
@@ -509,9 +509,7 @@ class WanTransformer3DModel:
         spatial = spatial.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pF * pH * pW * C)
         logger.info(f"spatial input after patchifying: {spatial.shape}")
 
-        spatial = pad_vision_seq_parallel(
-            spatial, chunk_size_lcm=256, num_devices=self.parallel_config.sequence_parallel.factor
-        )
+        spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
         logger.info(f"spatial input after padding: {spatial.shape}")
 
         spatial = bf16_tensor(

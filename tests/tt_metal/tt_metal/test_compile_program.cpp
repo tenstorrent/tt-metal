@@ -4,10 +4,10 @@
 
 #include <cstring>
 #include <exception>
-#include <errno.h>
+#include <cerrno>
 #include <filesystem>
 #include <map>
-#include <stdint.h>
+#include <cstdint>
 #include <string>
 #include <sys/types.h>
 #include <unordered_map>
@@ -81,7 +81,7 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(
 }
 
 // TODO: Replace this when we have debug/test hooks (GH: #964) to inspect inside CompileProgram
-KernelCacheStatus CompileProgramTestWrapper(IDevice* device, Program& program, bool profile_kernel = false) {
+KernelCacheStatus CompileProgramTestWrapper(IDevice* device, Program& program, bool /*profile_kernel*/ = false) {
     // Check
     std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(
         program,
@@ -95,7 +95,7 @@ KernelCacheStatus CompileProgramTestWrapper(IDevice* device, Program& program, b
 
     KernelCacheStatus kernel_cache_status;
     for (const auto& [kernel_name, hash_str] : post_compile_kernel_to_hash_str) {
-        if (pre_compile_kernel_to_hash_str.find(kernel_name) == pre_compile_kernel_to_hash_str.end()) {
+        if (!pre_compile_kernel_to_hash_str.contains(kernel_name)) {
             kernel_cache_status.kernel_name_to_cache_hit.insert({kernel_name, false});
         } else {
             const auto& prev_hash_str = pre_compile_kernel_to_hash_str.at(kernel_name);
@@ -121,7 +121,7 @@ struct ProgramAttributes {
     uint32_t output_cb_index = tt::CBIndex::c_16;
 };
 
-Program create_program(IDevice* device, const ProgramAttributes& program_attributes) {
+Program create_program(IDevice* /*device*/, const ProgramAttributes& program_attributes) {
     CoreCoord core = {0, 0};
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -398,7 +398,7 @@ bool test_compile_program_with_modified_program(IDevice* device) {
     return pass;
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

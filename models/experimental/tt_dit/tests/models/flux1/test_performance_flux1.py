@@ -25,12 +25,14 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
         [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
         [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
+        [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 2],
     ],
     ids=[
         "1x2sp0tp1",
         "2x2sp0tp1",
         "2x4sp0tp1",
-        "4x8sp0tp1",
+        "wh_4x8sp0tp1",
+        "bh_4x8sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -143,8 +145,8 @@ def test_flux1_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     seed=0,
                     traced=True,
-                    timer=benchmark_profiler,
-                    timer_iteration=i,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
                 )
             images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
 

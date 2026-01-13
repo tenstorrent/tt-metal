@@ -1,4 +1,4 @@
-name: Package and release
+name: "Package and release"
 on:
   workflow_dispatch:
     inputs:
@@ -141,7 +141,7 @@ jobs:
       - name: Download ALL wheels (separate folders)
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          pattern: eager-dist-*
+          pattern: ttnn-dist-*
           path: artifacts
           merge-multiple: false
 
@@ -263,6 +263,10 @@ jobs:
     outputs:
       should-skip-release: ${{ steps.check-release-conditions.outputs.should-skip-release }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Check release conditions and existing assets
         id: check-release-conditions
         env:

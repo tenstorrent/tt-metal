@@ -53,9 +53,7 @@ def run_test_do_post_proc(request, do_postproc):
 def run_test_do_cpp_and_python_post_procs(request):
     assert "command" in request.param, "Bad test setup, command not found in test setup dict"
     assert "name" in request.param, "Bad test setup, name not found in test setup dict"
-    run_device_profiler(
-        request.param["command"], request.param["name"], cpp_post_process=True, python_post_process=True
-    )
+    run_device_profiler(request.param["command"], request.param["name"], python_post_process=True)
     return request
 
 
@@ -70,7 +68,6 @@ def run_test_do_cpp_post_proc(request):
     run_device_profiler(
         request.param["command"],
         request.param["name"],
-        cpp_post_process=True,
         python_post_process=False,
         sum_profiling=sum_profiling,
         op_support_count=op_support_count,
@@ -140,7 +137,7 @@ class TestSingleOp:
 
 matmul_test_tensor_io = {
     "name": "Matmul_tensor_io",
-    "command": 'pytest "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_padding[program_config=MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=1,per_core_M=1,per_core_N=1,fused_activation=std::nullopt)-input_a_memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=2,y=0)]},shape={32, 32},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)-input_b_memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=2,y=0)]},shape={96, 32},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)-output_memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)-input_a_shape=(32, 96)-input_b_shape=(96, 32)-input_a_reshape=(1, 65)-input_b_reshape=(65, 16)-input_a_value=4.0-input_b_value=2.0]"',
+    "command": 'pytest "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_padding[dram_sharded-2_faces_padded-input_a_value=4.0-input_b_value=2.0]"',
 }
 
 

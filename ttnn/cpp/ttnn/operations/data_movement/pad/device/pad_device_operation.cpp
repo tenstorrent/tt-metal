@@ -4,6 +4,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include "pad_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/full/device/full_device_operation.hpp"
 #include "ttnn/operations/creation.hpp"
@@ -21,7 +22,7 @@ namespace ttnn::operations::data_movement::pad {
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> PadDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
     std::vector<Tensor>& output_tensors) {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
@@ -55,22 +56,19 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
                     "ttnn.pad: Unsupported sharded row-major padding configuration: pad_impl did not decompose padding "
                     "correctly.");
                 return {};
-            } else if (input_w != output_w) {
+            }
+            if (input_w != output_w) {
                 return program::PadRmShardedWidthOnlyProgramFactory{};
-            } else if (input_tot_h != output_tot_h) {
-                return program::PadRmShardedHeightOnlyProgramFactory{};
-            } else {
-                // for no padding, we just use the height-only padding program
-                return program::PadRmShardedHeightOnlyProgramFactory{};
             }
-        } else {
-            if (operation_attributes.use_multicore) {
-                return program::PadRmReaderWriterMultiCoreV2ProgramFactory{};
-            } else {
-                return program::PadRmReaderWriterProgramFactory{};
-            }
+            // height-only padding or no padding
+            return program::PadRmShardedHeightOnlyProgramFactory{};
         }
-    } else if (input_tensor.layout() == Layout::TILE) {
+        if (operation_attributes.use_multicore) {
+            return program::PadRmReaderWriterMultiCoreV2ProgramFactory{};
+        }
+        return program::PadRmReaderWriterProgramFactory{};
+    }
+    if (input_tensor.layout() == Layout::TILE) {
         if (operation_attributes.use_multicore && input_tensor.dtype() == DataType::BFLOAT16 &&
             !(input_tensor.memory_config().buffer_type() == BufferType::L1)) {
             return program::PadTileMulticoreProgramFactory{};
@@ -80,10 +78,9 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
             "Only bfloat16 and non-L1 tiled tensors are currently supported for multicore tiled pad. Falling back to 1 "
             "core. #29295");
         return program::PadTileCoreProgramFactory{};
-    } else {
-        TT_THROW("Unsupported layout for pad");
-        return {};
     }
+    TT_THROW("Unsupported layout for pad");
+    return {};
 }
 
 void PadDeviceOperation::validate_on_program_cache_hit(
@@ -183,20 +180,22 @@ Tensor PadDeviceOperation::create_output_tensors(
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input.device());
 }
+}  // namespace ttnn::operations::data_movement::pad
 
-std::tuple<PadDeviceOperation::operation_attributes_t, PadDeviceOperation::tensor_args_t> PadDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::pad::PadDeviceOperation::tensor_return_value_t pad(
     const Tensor& input,
     const ttnn::Shape& output_logical_shape,
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
-    const float pad_value,
+    float pad_value,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const bool use_multicore,
+    bool use_multicore,
     const std::optional<ttnn::Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::pad::PadDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             output_logical_shape, output_padded_shape, input_tensor_start, pad_value, output_mem_config, use_multicore},
-        tensor_args_t{input, preallocated_output}};
+        OperationType::tensor_args_t{input, preallocated_output});
 }
-
-}  // namespace ttnn::operations::data_movement::pad
+}  // namespace ttnn::prim

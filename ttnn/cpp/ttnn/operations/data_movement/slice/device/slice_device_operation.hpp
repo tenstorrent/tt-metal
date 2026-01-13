@@ -49,27 +49,23 @@ struct SliceDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const ttnn::Shape& slice_start,
-        const ttnn::Shape& slice_end,
-        const ttnn::Shape& step,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        bool use_tensor_args,
-        std::optional<Tensor> start_tensor = std::nullopt,
-        std::optional<Tensor> end_tensor = std::nullopt,
-        const std::optional<uint32_t>& slice_dim = std::nullopt,
-        const std::optional<uint32_t>& num_devices = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-        const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace slice
 }  // namespace ttnn::operations::data_movement
 
-// Register the operation with ttnn::register_operation API to make it available as ttnn::prim::slice
 namespace ttnn::prim {
-constexpr auto slice =
-    ttnn::register_operation<"ttnn::prim::slice", ttnn::operations::data_movement::slice::SliceDeviceOperation>();
+ttnn::operations::data_movement::slice::SliceDeviceOperation::tensor_return_value_t slice(
+    const Tensor& input,
+    const ttnn::Shape& slice_start,
+    const ttnn::Shape& slice_end,
+    const ttnn::Shape& step,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    bool use_tensor_args,
+    std::optional<Tensor> start_tensor = std::nullopt,
+    std::optional<Tensor> end_tensor = std::nullopt,
+    const std::optional<uint32_t>& slice_dim = std::nullopt,
+    const std::optional<uint32_t>& num_devices = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
 }  // namespace ttnn::prim
