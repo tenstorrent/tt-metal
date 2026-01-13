@@ -8,6 +8,64 @@
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
 
+template <typename ReaderType, typename TensorAccessorType>
+void read_prev_output_and_lse(
+    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const TensorAccessorType& lse_writer,
+    const TensorTileShape& lse_tile_logical,
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t Sq_chunk_t,
+    const Slice out_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t lse_seq_start_tile,
+    const uint32_t lse_seq_end_tile,
+    const uint32_t cb_prev_out,
+    const uint32_t cb_lse_in,
+    const uint32_t tile_bytes,
+    const uint32_t lse_tile_bytes) {
+    // Read previous output for this Q chunk
+    read_block(cat_out_generator, out_slice, end_seq_tile, cb_prev_out, tile_bytes, false);
+
+    // Read previous LSE for this Q chunk
+    cb_reserve_back(cb_lse_in, Sq_chunk_t);
+    uint32_t lse_addr = get_write_ptr(cb_lse_in);
+    for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
+        noc_async_read_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, lse_addr);
+        lse_addr += lse_tile_bytes;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_lse_in, Sq_chunk_t);
+}
+
+template <typename ReaderType, typename TensorAccessorType>
+void write_output_and_lse(
+    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const TensorAccessorType& lse_writer,
+    const TensorTileShape& lse_tile_logical,
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t Sq_chunk_t,
+    const Slice out_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t lse_seq_start_tile,
+    const uint32_t lse_seq_end_tile,
+    const uint32_t cb_out,
+    const uint32_t cb_lse_out,
+    const uint32_t tile_bytes,
+    const uint32_t lse_tile_bytes) {
+    write_block(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
+
+    cb_wait_front(cb_lse_out, Sq_chunk_t);
+    uint32_t lse_addr = get_read_ptr(cb_lse_out);
+    for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
+        noc_async_write_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, lse_addr);
+        lse_addr += lse_tile_bytes;
+    }
+    noc_async_writes_flushed();
+    cb_pop_front(cb_lse_out, Sq_chunk_t);
+}
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
