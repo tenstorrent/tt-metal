@@ -409,8 +409,14 @@ def test_conv3d_sharded_layouts(
 
     # Run test
     tt_output, gt_output = run_conv3d_with_memory_config(
-        device,input_shape,out_channels,kernel_size,stride,padding,
-        padding_mode,input_mem_config=input_mem_config,
+        device,
+        input_shape,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        padding_mode,
+        input_mem_config=input_mem_config,
     )
 
     # Validate results
