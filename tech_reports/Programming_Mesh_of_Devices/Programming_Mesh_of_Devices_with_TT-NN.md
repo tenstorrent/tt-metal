@@ -527,18 +527,28 @@ output_tensor = ttnn.gelu(ttnn_tensor)
 #### 4.2.2 Mesh Device Execution
 
 ```py
+import ttnn
+import torch
+
 # Open MeshDevice
 mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1,4))
 
 # Create test tensor of data; 4 chunks of 32x32
 torch_tensor = torch.rand((1,1,32,128), dtype=torch.bfloat16)
 
+# Shard the tensor across devices on dimension 3 (width)
+mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+
 # Convert to ttnn.Tensor, tilize and move onto devices across mesh DRAM
 ttnn_tensor = ttnn.from_torch(
-    torch_input_tensor,
+    torch_tensor,
     layout=ttnn.TILE_LAYOUT,
     device=mesh_device,
+    mesh_mapper=mesh_mapper,
 )
+
+# Verify it's sharded
+ttnn.visualize_tensor(ttnn_tensor
 
 # Invoke ttnn.gelu on each of the devices in the mesh
 output_tensor = ttnn.gelu(ttnn_tensor)
