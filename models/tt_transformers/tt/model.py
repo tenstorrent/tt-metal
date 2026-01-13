@@ -61,11 +61,15 @@ class Transformer(LightweightModule):
         self.embd = embd_cls(**embd_kwargs)
 
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
+        # For batched prefill, we need RoPE matrices that can handle batch_size * max_prefill_len
+        # We use max(max_seq_len, max_batch_size * 1024) to ensure we have enough RoPE positions
+        # This allows batched prefill to concatenate up to 1024 tokens per user for batch_size users
+        rope_max_seq_len = max(args.max_seq_len, args.max_batch_size * 1024)
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
             head_dim=args.head_dim,
-            max_seq_len=args.max_seq_len,
+            max_seq_len=rope_max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
         )
@@ -157,23 +161,28 @@ class Transformer(LightweightModule):
         logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
-    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
         """
         host_inputs = self.prepare_inputs_prefill(
-            tokens, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+            tokens,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            trace_enabled=True,
+            batch_size=batch_size,
+            user_id=user_id,
         )
         return host_inputs
 
-    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table, tt_user_id=None):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, tt_page_table, tt_chunk_page_table
+        return tt_tokens, tt_page_table, tt_chunk_page_table, tt_user_id
 
     def prepare_inputs_prefill(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, batch_size=1, user_id=0
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -186,8 +195,18 @@ class Transformer(LightweightModule):
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
-        tokens = tokens.reshape(1, 1, 1, -1)
-        S = tokens.shape[-1]
+        # For batched prefill (batch_size > 1), tokens come in as [1, B*S] (concatenated along sequence)
+        # Following 70B Galaxy approach: reshape to [1, 1, 1, B*S], not [B, 1, 1, S]
+        # The internal batch handling happens inside attention module after QKV
+        if batch_size > 1:
+            # Tokens are already concatenated as [1, B*S_per_user]
+            total_seq = tokens.shape[-1]
+            S = total_seq // batch_size  # Per-user sequence length
+            tokens = tokens.reshape(1, 1, 1, -1)
+            print(f"[DEBUG MODEL] Batched prefill: tokens.shape={tokens.shape}, S_per_user={S}, total_seq={total_seq}")
+        else:
+            tokens = tokens.reshape(1, 1, 1, -1)
+            S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
             device=device,
@@ -203,12 +222,14 @@ class Transformer(LightweightModule):
 
         # Slice the rot mats to the prefill seqlen
         mat_len = self.rope_setup.cos_matrix.shape[2]
-        # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
-        seq_len = last_token_idx + 1 if last_token_idx is not None else S
-        assert mat_len >= seq_len, f"Seqence length {seq_len} exceeds max seq len {mat_len}"
+        # For batched prefill, each user needs their own RoPE positions (not concatenated)
+        # So seq_len remains S (per-user sequence), not S * batch_size
+        seq_len = S
+        print(f"[DEBUG ROPE] batch_size={batch_size}, S={S}, seq_len={seq_len}, mat_len={mat_len}")
+        assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
         # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.
-        required_end = start_pos + S
+        required_end = start_pos + seq_len  # Use per-user seq_len
         if required_end > mat_len:
             pad_len = required_end - mat_len
         else:
@@ -225,6 +246,11 @@ class Transformer(LightweightModule):
             padding[2] = (0, pad_len)
             cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
             sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
+
+        # For batched prefill: RoPE stays at [1, 1, S_per_user, D]
+        # After attention internally reshapes to [B, n_heads, S_per_user, D], RoPE broadcasts correctly
+        # (Following 70B Galaxy approach - no repetition needed)
+
         tt_rot_mats_prefill_global = [
             cos_slice,
             sin_slice,
@@ -232,7 +258,7 @@ class Transformer(LightweightModule):
 
         if hasattr(self, "rope_local_setup"):
             local_mat_len = self.rope_local_setup.cos_matrix.shape[2]
-            local_required_end = start_pos + S
+            local_required_end = start_pos + seq_len  # Use per-user seq_len
             if local_required_end > local_mat_len:
                 local_pad_len = local_required_end - local_mat_len
             else:
@@ -248,6 +274,9 @@ class Transformer(LightweightModule):
                 local_cos_slice = ttnn.pad(local_cos_slice, padding=local_padding, value=0.0)
                 local_sin_slice = ttnn.pad(local_sin_slice, padding=local_padding, value=0.0)
 
+            # For batched prefill: local RoPE stays at [1, 1, S_per_user, D]
+            # (Following 70B Galaxy approach - no repetition needed)
+
             tt_rot_mats_prefill_local = [
                 local_cos_slice,
                 local_sin_slice,
@@ -256,13 +285,28 @@ class Transformer(LightweightModule):
             tt_rot_mats_prefill_local = None
 
         if page_table is not None:
-            tt_page_table = ttnn.from_torch(
-                page_table,
-                device=device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+            # For batched prefill (batch_size > 1), concatenate page tables along sequence dimension
+            # Following 70B Galaxy approach: reshape from [B, num_pages] to [1, B * num_pages]
+            if batch_size > 1:
+                print(
+                    f"[DEBUG MODEL] Reshaping page_table for batched prefill: {page_table.shape} -> [1, {batch_size * page_table.shape[1]}]"
+                )
+                page_table_concat = page_table.reshape(1, -1)  # [B, num_pages] -> [1, B * num_pages]
+                tt_page_table = ttnn.from_torch(
+                    page_table_concat,
+                    device=device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            else:
+                tt_page_table = ttnn.from_torch(
+                    page_table,
+                    device=device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
         else:
             tt_page_table = None
 
@@ -277,12 +321,35 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
+        # Create user_id tensor for batched prefill KV cache filling
+        # This must be created here (before trace capture) not in attention
+        if batch_size > 1 and isinstance(user_id, list):
+            # user_id is a list of user IDs for batched prefill
+            tt_user_id = ttnn.from_torch(
+                torch.tensor(user_id, dtype=torch.int32),
+                device=device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            # Single user - create tensor with single user ID
+            user_id_val = user_id if isinstance(user_id, int) else user_id[0]
+            tt_user_id = ttnn.from_torch(
+                torch.tensor([user_id_val], dtype=torch.int32),
+                device=device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
         return (
             tokens if trace_enabled else tokens_embd,
             tt_rot_mats_prefill_global,
             tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
+            tt_user_id,
         )
 
     def prepare_inputs_decode(self, *inputs):
@@ -421,6 +488,8 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        batch_size=1,
+        user_id_tensor=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -438,6 +507,8 @@ class Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
+            batch_size=batch_size,
+            user_id_tensor=user_id_tensor,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -523,6 +594,8 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        batch_size=1,
+        user_id_tensor=None,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -545,6 +618,8 @@ class Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
+                batch_size=batch_size,
+                user_id_tensor=user_id_tensor,
             )
 
         if mode == "prefill" and get_last_token == -1:

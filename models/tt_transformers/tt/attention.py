@@ -667,8 +667,17 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
+        user_id_tensor=None,
     ):
+        # For batched prefill, x_11SH has shape [B, 1, S, H] where B is batch_size
+        # Following 70B Galaxy: concat before QKV matmul, then reshape back to batch after
+        if batch_size > 1:
+            # Concatenate batch dimension into sequence for matmul compatibility
+            x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+
         seq_len = x_11SH.shape[-2]
+        print(f"[DEBUG ATT] forward_prefill: x_11SH.shape={x_11SH.shape}, batch_size={batch_size}, seq_len={seq_len}")
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
         # QKV matmuls
@@ -706,6 +715,9 @@ class Attention(LightweightModule):
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        if batch_size > 1:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
         ttnn.deallocate(x_11SH)
 
@@ -789,12 +801,36 @@ class Attention(LightweightModule):
             # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
             fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
+        if batch_size > 1:
+            # For batched prefill, following 70B Galaxy approach:
+            # 1. Reshape k_fill/v_fill from [B, K, S, D] back to [1, 1, B*S, -1] (concatenated sequence)
+            # 2. Use single paged_fill_cache call with batch_idx_tensor (pre-created tensor of user IDs)
+            print(f"[DEBUG KV] batch_size={batch_size}, k_fill.shape={k_fill.shape}, seq_len={seq_len}")
+            k_fill = ttnn.reshape(k_fill, [1, 1, seq_len, -1])
+            v_fill = ttnn.reshape(v_fill, [1, 1, seq_len, -1])
+
+            page_len = fill_page_table.shape[1] * block_size
+            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
+            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+
+            # user_id_tensor is pre-created in model.prepare_inputs_prefill to avoid tensor creation during trace
+            assert user_id_tensor is not None, "user_id_tensor must be provided for batched prefill"
+            print(f"[DEBUG KV] k_fill_sliced.shape={k_fill_sliced.shape}, page_table.shape={fill_page_table.shape}")
+            ttnn.experimental.paged_fill_cache(
+                keys_BKSD, k_fill_sliced, fill_page_table, batch_idx_tensor=user_id_tensor
+            )
+            ttnn.experimental.paged_fill_cache(
+                values_BKSD, v_fill_sliced, fill_page_table, batch_idx_tensor=user_id_tensor
+            )
+        elif page_table:
+            # Single user path with page_table
             page_len = fill_page_table.shape[1] * block_size
             k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
             v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
             ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
         else:
+            # Single user path without page_table
             ttnn.fill_cache(
                 keys_BKSD,
                 k_fill,
@@ -826,6 +862,9 @@ class Attention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx),
             )
         else:
+            # For batched prefill, the actual per-user seq_len is seq_len // batch_size
+            # since the tensors have shape [batch_size, n_heads, seq_len_per_user, head_dim]
+            sdpa_seq_len = seq_len // batch_size if batch_size > 1 else seq_len
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
@@ -834,7 +873,7 @@ class Attention(LightweightModule):
                 sliding_window_size=self.sliding_window,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.model_config["SDPA_PROGCFG"](sdpa_seq_len),
             )
 
         # deallocate keys and values
@@ -842,7 +881,14 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+        # For single-user prefill, reshape to expected format for nlp_concat_heads
+        # For batched prefill (batch_size > 1), skip this reshape - nlp_concat_heads handles [B, H, S, D]
+        # IMPORTANT: Reshaping [B, H, S, D] to [1, H, B*S, D] BEFORE concat_heads would scramble data
+        # because batch and sequence dimensions are separated by heads. Must reshape AFTER concat_heads.
+        if batch_size == 1:
+            attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+        else:
+            attn_output_1QSD = attn_output_84SD
 
         ###
         # Output matmul
@@ -852,6 +898,13 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
+
+        # For batched prefill, reshape to concatenate batch dimension into sequence
+        # This MUST happen AFTER nlp_concat_heads to preserve correct data layout
+        # nlp_concat_heads outputs [B, 1, S_per_user, H*D], reshape to [1, 1, B*S, H*D]
+        if batch_size > 1:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
+
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
@@ -913,6 +966,8 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
+        user_id_tensor=None,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -923,6 +978,8 @@ class Attention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                batch_size=batch_size,
+                user_id_tensor=user_id_tensor,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)

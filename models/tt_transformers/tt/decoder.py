@@ -200,6 +200,8 @@ class TransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
+        user_id_tensor=None,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         residual = x
@@ -227,7 +229,14 @@ class TransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
+            batch_size=batch_size,
+            user_id_tensor=user_id_tensor,
         )
+        # To match the batch-related reshape inside the attention module
+        # Use the batch_size parameter instead of inferring from shape[-3]
+        # because for [32, 1, S, H] tensors, shape[-3] is 1, not 32
+        if batch_size > 1:
+            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
