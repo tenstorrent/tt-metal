@@ -62,7 +62,10 @@ class MistralTransformer(Transformer):
         )
         tokens_embd = self.embd(tokens)
 
-        vision_output = self.compute_vision_token(**kwargs)
+        # Extract only the parameters that compute_vision_token needs
+        pixel_values = kwargs.get("pixel_values", None)
+        image_sizes = kwargs.get("image_sizes", None)
+        vision_output = self.compute_vision_token(pixel_values, image_sizes)
 
         if vision_output is not None:
             tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
