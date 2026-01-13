@@ -102,6 +102,13 @@ def _auto_register_dispatchers():
     except ImportError:
         pass
 
+    try:
+        from models.tt_symbiote.core.dispatchers import tensor_operations_dispatcher
+
+        register_dispatcher("TENSOR_OPS", tensor_operations_dispatcher)
+    except ImportError:
+        pass
+
     # Add more auto-registrations here as new dispatchers are created
     # try:
     #     from models.tt_symbiote.core.dispatchers import optimized_dispatcher
