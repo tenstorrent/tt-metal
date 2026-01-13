@@ -50,21 +50,24 @@ void kernel_main() {
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_tile_size);
 
     // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles = 224;
+    constexpr uint32_t num_w0_w1_tiles_h = 224;
     constexpr uint32_t num_w2_tiles_h = 64;
-    const uint32_t num_w2_tiles_w = core_id < 32 ? 4 : 3;
-    const uint32_t num_mm2_tiles = core_id < 32 ? 4 : 3;
+
+    const uint32_t num_w0_w1_tiles_w = (core_id < 8) ? 5 : 6;
+    const uint32_t num_w2_tiles_w = (core_id < 8) ? 19 : 18;
+    const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
     constexpr uint32_t num_elt_tiles = 1;
     constexpr uint32_t num_in2_tiles = 64;
 
-    constexpr uint32_t w0_w1_stride = 64;
+    constexpr uint32_t w0_w1_stride_w = 1;
+    constexpr uint32_t w0_w1_stride_h = 64;
     constexpr uint32_t w2_stride_w = 1;
     constexpr uint32_t w2_stride_h = 224;
 
-    const uint32_t w0_tile_id_start = core_id;
-    const uint32_t w1_tile_id_start = core_id;
-    const uint32_t w2_tile_id_start = core_id < 32 ? 4 * core_id : 4 * 32 + 3 * (core_id - 32);
+    const uint32_t w0_tile_id_start = (core_id < 8) ? (5 * core_id) : (5 * 8 + 6 * (core_id - 8));
+    const uint32_t w1_tile_id_start = (core_id < 8) ? (5 * core_id) : (5 * 8 + 6 * (core_id - 8));
+    const uint32_t w2_tile_id_start = (core_id < 8) ? (19 * core_id) : (19 * 8 + 18 * (core_id - 8));
 
     // Write from cb_c2w_elt
     for (uint32_t i = 0; i < num_elt_tiles; ++i) {
