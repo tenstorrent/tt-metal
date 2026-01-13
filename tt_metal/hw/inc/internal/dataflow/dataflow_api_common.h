@@ -12,7 +12,7 @@ constexpr uint8_t noc_mode = NOC_MODE;
 #else
 
 extern uint8_t noc_index;
-// noc_mode may switch dynamically while in the firwmare, so we can't define it here.
+// noc_mode may switch dynamically while in the firmware, so we can't define it here.
 #endif
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
