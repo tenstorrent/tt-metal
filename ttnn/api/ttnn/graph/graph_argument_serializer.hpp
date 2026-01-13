@@ -22,6 +22,23 @@ public:
 
     static GraphArgumentSerializer& instance();
 
+    // Public API for external type registration
+    // This allows operations to register their types without exposing internal implementation
+    template <typename T>
+    static void register_argument_type() {
+        instance().register_type<T>();
+    }
+
+    template <typename T>
+    static void register_argument_vector() {
+        instance().register_vector<T>();
+    }
+
+    template <typename OptionalT>
+    static void register_argument_optional() {
+        instance().register_optional_type<OptionalT>();
+    }
+
 private:
     GraphArgumentSerializer();
     std::unordered_map<std::type_index, ConvertionFunction>& registry();
