@@ -91,11 +91,7 @@ void kernel_main() {
                 uint32_t num_bytes_to_write = num_cols_to_write * output_element_size;
 
                 // Perform the write
-#ifdef SHARDED
-                uint64_t dst_noc_addr = get_noc_addr(output_page_id, s, output_offset_within_page_in_bytes);
-#else
                 uint64_t dst_noc_addr = s.get_noc_addr(output_page_id, output_offset_within_page_in_bytes);
-#endif
                 noc_async_write(current_l1_read_addr, dst_noc_addr, num_bytes_to_write);
 
                 // Increment the number of cols we've processed in the input block
