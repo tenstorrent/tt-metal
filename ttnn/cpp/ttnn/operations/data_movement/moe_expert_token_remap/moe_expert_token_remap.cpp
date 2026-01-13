@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 #include "moe_expert_token_remap.hpp"
 

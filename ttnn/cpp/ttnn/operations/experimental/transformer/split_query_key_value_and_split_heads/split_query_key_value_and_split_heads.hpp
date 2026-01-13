@@ -5,7 +5,7 @@
 #pragma once
 
 #include "device/split_query_key_value_and_split_heads_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
