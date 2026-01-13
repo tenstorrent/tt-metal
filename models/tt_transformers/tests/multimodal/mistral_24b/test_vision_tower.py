@@ -13,9 +13,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0
+from models.experimental.mistral_24b.tt.vision_tower import MistralVisionTower
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.multimodal.mistral_24b.mistral_vision_tower import MistralVisionTower
 
 
 @run_for_wormhole_b0()
