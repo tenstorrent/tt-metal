@@ -2165,69 +2165,179 @@ def get_dist_info():
 
 
 # https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/runner/checkpoint.py
+# Copyright (c) OpenMMLab. All rights reserved.
 import os
+import os.path as osp
+import re
+import time
+import warnings
+from collections import OrderedDict
+
+import torch
+
+import mmcv
+from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import print_log, get_logger
+
+ENV_MMCV_HOME = "MMCV_HOME"
+ENV_XDG_CACHE_HOME = "XDG_CACHE_HOME"
+DEFAULT_CACHE_DIR = "~/.cache"
 
 
-def load_checkpoint(model, filename, map_location=None, logger=None):
-    """load checkpoint through URL scheme path.
+def _get_mmcv_home():
+    mmcv_home = os.path.expanduser(
+        os.getenv(ENV_MMCV_HOME, os.path.join(os.getenv(ENV_XDG_CACHE_HOME, DEFAULT_CACHE_DIR), "mmcv"))
+    )
+
+    # Simple mkdir_or_exist replacement
+    os.makedirs(mmcv_home, exist_ok=True)
+    return mmcv_home
+
+
+def is_module_wrapper(module):
+    """Check if a module is a wrapper (like DataParallel, DistributedDataParallel)."""
+    from torch.nn.parallel import DataParallel, DistributedDataParallel
+
+    return isinstance(module, (DataParallel, DistributedDataParallel))
+
+
+def load_state_dict(module, state_dict, strict=False, logger=None):
+    """Load state_dict to a module.
+
+    This method is modified from :meth:`torch.nn.Module.load_state_dict`.
+    Default value for ``strict`` is set to ``False`` and the message for
+    param mismatch will be shown even if strict is False.
 
     Args:
-        model (nn.Module): Model to load checkpoint for (not used, kept for compatibility).
-        filename (str): checkpoint file name with given prefix
+        module (Module): Module that receives the state_dict.
+        state_dict (OrderedDict): Weights.
+        strict (bool): whether to strictly enforce that the keys
+            in :attr:`state_dict` match the keys returned by this module's
+            :meth:`~torch.nn.Module.state_dict` function. Default: ``False``.
+        logger (:obj:`logging.Logger`, optional): Logger to log the error
+            message. If not specified, print function will be used.
+    """
+    unexpected_keys = []
+    all_missing_keys = []
+    err_msg = []
+
+    metadata = getattr(state_dict, "_metadata", None)
+    state_dict = state_dict.copy()
+    if metadata is not None:
+        state_dict._metadata = metadata
+
+    # use _load_from_state_dict to enable checkpoint version control
+    def load(module, prefix=""):
+        # recursively check parallel module in case that the model has a
+        # complicated structure, e.g., nn.Module(nn.Module(DDP))
+        if is_module_wrapper(module):
+            module = module.module
+        local_metadata = {} if metadata is None else metadata.get(prefix[:-1], {})
+        module._load_from_state_dict(
+            state_dict, prefix, local_metadata, True, all_missing_keys, unexpected_keys, err_msg
+        )
+        for name, child in module._modules.items():
+            if child is not None:
+                load(child, prefix + name + ".")
+
+    load(module)
+    load = None  # break load->load reference cycle
+
+    # ignore "num_batches_tracked" of BN layers
+    missing_keys = [key for key in all_missing_keys if "num_batches_tracked" not in key]
+
+    if unexpected_keys:
+        err_msg.append("unexpected key in source " f'state_dict: {", ".join(unexpected_keys)}\n')
+    if missing_keys:
+        err_msg.append(f'missing keys in source state_dict: {", ".join(missing_keys)}\n')
+
+    rank, _ = get_dist_info()
+    if len(err_msg) > 0 and rank == 0:
+        err_msg.insert(0, "The model and loaded state dict do not match exactly\n")
+        err_msg = "\n".join(err_msg)
+        if strict:
+            raise RuntimeError(err_msg)
+        elif logger is not None:
+            logger.warning(err_msg)
+        else:
+            print(err_msg)
+
+
+def _load_checkpoint(filename, map_location=None, logger=None):
+    """Load checkpoint from local file path.
+
+    Args:
+        filename (str): local checkpoint file path
         map_location (str, optional): Same as :func:`torch.load`.
-            Default: None
-        logger (:mod:`logging.Logger`, optional): The logger for message.
-            Default: None
 
     Returns:
         dict or OrderedDict: The loaded checkpoint.
     """
-    if logger is not None:
-        from models.experimental.BEVFormerV2.projects.mmdet3d_plugin.dependency import print_log
+    if not osp.isfile(filename):
+        raise IOError(f"{filename} is not a checkpoint file")
+    checkpoint = torch.load(filename, map_location=map_location, weights_only=False)
+    return checkpoint
 
-        print_log(f"load checkpoint from path: {filename}", logger=logger)
 
-    # Validate file exists and is readable
-    if not os.path.exists(filename):
-        raise FileNotFoundError(f"Checkpoint file not found: {filename}")
+def load_checkpoint(model, filename, map_location=None, strict=False, logger=None, revise_keys=[(r"^module\.", "")]):
+    """Load checkpoint from a file or URI.
 
-    if not os.path.isfile(filename):
-        raise ValueError(f"Checkpoint path is not a file: {filename}")
+    Args:
+        model (Module): Module to load checkpoint.
+        filename (str): Accept local filepath, URL, ``torchvision://xxx``,
+            ``open-mmlab://xxx``. Please refer to ``docs/model_zoo.md`` for
+            details.
+        map_location (str): Same as :func:`torch.load`.
+        strict (bool): Whether to allow different params for the model and
+            checkpoint.
+        logger (:mod:`logging.Logger` or None): The logger for error message.
+        revise_keys (list): A list of customized keywords to modify the
+            state_dict in checkpoint. Each item is a (pattern, replacement)
+            pair of the regular expression operations. Default: strip
+            the prefix 'module.' by [(r'^module\\.', '')].
 
-    # Check file size
-    file_size = os.path.getsize(filename)
-    if file_size == 0:
-        raise ValueError(f"Checkpoint file is empty: {filename}")
+    Returns:
+        dict or OrderedDict: The loaded checkpoint.
+    """
+    checkpoint = _load_checkpoint(filename, map_location, logger)
+    # OrderedDict is a subclass of dict
+    if not isinstance(checkpoint, dict):
+        raise RuntimeError(f"No state_dict found in checkpoint file {filename}")
+    # get state_dict from checkpoint
+    if "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
 
-    # Check if file appears to be a text file (likely a download error or URL)
-    try:
-        with open(filename, "rb") as f:
-            first_bytes = f.read(100)
-            # PyTorch checkpoint files should start with specific pickle magic bytes
-            # If it starts with text characters, it's likely not a valid checkpoint
-            if first_bytes.startswith(b"--") or first_bytes.startswith(b"http") or first_bytes.startswith(b"<!"):
-                raise ValueError(
-                    f"Checkpoint file appears to be a text file or download error, not a valid PyTorch checkpoint.\n"
-                    f"File path: {filename}\n"
-                    f"File size: {file_size} bytes\n"
-                    f"Please ensure the checkpoint file is properly downloaded from the source."
-                )
-    except (UnicodeDecodeError, ValueError) as e:
-        # If it's already a ValueError from our check, re-raise it
-        if isinstance(e, ValueError) and "Checkpoint file appears" in str(e):
-            raise
-        # Otherwise, continue to try loading
+    # strip prefix of state_dict
+    metadata = getattr(state_dict, "_metadata", OrderedDict())
+    for p, r in revise_keys:
+        state_dict = OrderedDict({re.sub(p, r, k): v for k, v in state_dict.items()})
+    # Keep metadata in state_dict
+    state_dict._metadata = metadata
 
-    try:
-        # weights_only=False is required for PyTorch 2.6+ compatibility with checkpoint files
-        checkpoint = torch.load(filename, map_location=map_location, weights_only=False)
-        return checkpoint
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to load checkpoint from {filename}: {str(e)}\n"
-            f"File size: {file_size} bytes. "
-            f"Please verify the checkpoint file is valid and not corrupted."
-        ) from e
+    # Transform keys to match model structure
+    # Fix transformer FFN layer key format: layers.0.0.* -> layers.0.*, layers.1.* -> layers.3.*
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        new_key = k
+        # Transform transformer FFN layer keys for both encoder and decoder
+        if (
+            "transformer.encoder.layers." in new_key or "transformer.decoder.layers." in new_key
+        ) and ".ffns.0.layers." in new_key:
+            # Pattern 1: layers.0.0.* -> layers.0.* (e.g., .ffns.0.layers.0.0.weight -> .ffns.0.layers.0.weight)
+            if ".ffns.0.layers.0.0." in new_key:
+                new_key = new_key.replace(".ffns.0.layers.0.0.", ".ffns.0.layers.0.")
+            # Pattern 2: layers.1.* -> layers.3.* (e.g., .ffns.0.layers.1.weight -> .ffns.0.layers.3.weight)
+            elif ".ffns.0.layers.1." in new_key and ".ffns.0.layers.0.0." not in k:
+                new_key = new_key.replace(".ffns.0.layers.1.", ".ffns.0.layers.3.")
+        new_state_dict[new_key] = v
+
+    state_dict = new_state_dict
+    state_dict._metadata = metadata
+
+    # load state_dict
+    load_state_dict(model, state_dict, strict, logger)
+    return checkpoint
 
 
 # Adapted from : https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/parallel/data_parallel.py
@@ -2522,6 +2632,154 @@ def main():
     if fp16_cfg is not None:
         wrap_fp16_model(model)
     checkpoint = load_checkpoint(model, args.checkpoint, map_location="cpu")
+
+    # Validate checkpoint loading
+    print(f"\n{'='*80}")
+    print("CHECKPOINT LOADING VALIDATION")
+    print(f"{'='*80}\n")
+
+    # Get model state_dict after loading checkpoint
+    model_state_dict = model.state_dict()
+    model_keys = set(model_state_dict.keys())
+    # Count parameters from state_dict (includes buffers) vs model.parameters() (trainable only)
+    model_param_count_from_sd = sum(p.numel() for p in model_state_dict.values())
+    model_param_count_from_params = sum(p.numel() for p in model.parameters())
+    model_param_count = model_param_count_from_sd  # Use state_dict count for comparison
+
+    # Extract state_dict from checkpoint and apply same transformation as load_checkpoint
+    if "state_dict" in checkpoint:
+        checkpoint_state_dict = checkpoint["state_dict"]
+    else:
+        checkpoint_state_dict = checkpoint
+
+    # Apply the same key transformation that was used in load_checkpoint
+    transformed_checkpoint_state_dict = OrderedDict()
+    for k, v in checkpoint_state_dict.items():
+        new_key = k
+        # Transform transformer FFN layer keys for both encoder and decoder
+        if (
+            "transformer.encoder.layers." in new_key or "transformer.decoder.layers." in new_key
+        ) and ".ffns.0.layers." in new_key:
+            # Pattern 1: layers.0.0.* -> layers.0.*
+            if ".ffns.0.layers.0.0." in new_key:
+                new_key = new_key.replace(".ffns.0.layers.0.0.", ".ffns.0.layers.0.")
+            # Pattern 2: layers.1.* -> layers.3.*
+            elif ".ffns.0.layers.1." in new_key and ".ffns.0.layers.0.0." not in k:
+                new_key = new_key.replace(".ffns.0.layers.1.", ".ffns.0.layers.3.")
+        transformed_checkpoint_state_dict[new_key] = v
+
+    checkpoint_state_dict = transformed_checkpoint_state_dict
+    checkpoint_keys = set(checkpoint_state_dict.keys())
+    checkpoint_param_count = sum(p.numel() for p in checkpoint_state_dict.values())
+
+    print(f"Model state_dict keys: {len(model_keys)}")
+    print(f"Checkpoint state_dict keys: {len(checkpoint_keys)}")
+    print(f"Model parameters count: {model_param_count:,}")
+    print(f"Checkpoint parameters count: {checkpoint_param_count:,}\n")
+
+    # Check for missing keys (keys in model but not in checkpoint)
+    missing_keys = model_keys - checkpoint_keys
+    # Check for unexpected keys (keys in checkpoint but not in model)
+    unexpected_keys = checkpoint_keys - model_keys
+    # Check matched keys
+    matched_keys = model_keys & checkpoint_keys
+
+    print(f"Matched keys: {len(matched_keys)}")
+    print(f"Missing keys in checkpoint: {len(missing_keys)}")
+    print(f"Unexpected keys in checkpoint: {len(unexpected_keys)}")
+
+    # Check if number of keys match
+    keys_match = len(model_keys) == len(checkpoint_keys) and len(missing_keys) == 0 and len(unexpected_keys) == 0
+
+    # Check if parameter count matches
+    param_count_match = model_param_count == checkpoint_param_count
+
+    # Check if weights are properly loaded (compare values for matched keys)
+    print(f"\nChecking if weights are properly loaded...")
+    weights_match = True
+    mismatched_keys = []
+
+    for key in sorted(list(matched_keys))[:100]:  # Check first 100 keys to save time
+        model_param = model_state_dict[key]
+        checkpoint_param = checkpoint_state_dict[key]
+
+        # Check shape match
+        if model_param.shape != checkpoint_param.shape:
+            weights_match = False
+            mismatched_keys.append(
+                f"{key} (shape mismatch: model {model_param.shape} vs checkpoint {checkpoint_param.shape})"
+            )
+            continue
+
+        # Check if values match (within numerical precision)
+        if not torch.equal(model_param.cpu(), checkpoint_param.cpu()):
+            # Allow for small numerical differences
+            if not torch.allclose(model_param.cpu(), checkpoint_param.cpu(), rtol=1e-5, atol=1e-8):
+                weights_match = False
+                mismatched_keys.append(key)
+
+    print(f"\n{'='*80}")
+    print("VALIDATION RESULTS")
+    print(f"{'='*80}")
+    print(f"✓ All keys match: {'✓ YES' if keys_match else '✗ NO'}")
+    print(f"✓ Parameter count match: {'✓ YES' if param_count_match else '✗ NO'}")
+    print(f"✓ Weights properly loaded: {'✓ YES' if weights_match else '✗ NO (checked first 100 keys)'}")
+
+    if missing_keys:
+        print(f"\n✗ Missing keys in checkpoint ({len(missing_keys)}):")
+        for key in sorted(list(missing_keys))[:10]:  # Print first 10
+            print(f"  - {key}")
+        if len(missing_keys) > 10:
+            print(f"  ... and {len(missing_keys) - 10} more")
+
+    if unexpected_keys:
+        print(f"\n✗ Unexpected keys in checkpoint ({len(unexpected_keys)}):")
+        for key in sorted(list(unexpected_keys))[:10]:  # Print first 10
+            print(f"  - {key}")
+        if len(unexpected_keys) > 10:
+            print(f"  ... and {len(unexpected_keys) - 10} more")
+
+    if mismatched_keys:
+        print(f"\n✗ Mismatched weights ({len(mismatched_keys)}):")
+        for key in mismatched_keys[:10]:  # Print first 10
+            print(f"  - {key}")
+        if len(mismatched_keys) > 10:
+            print(f"  ... and {len(mismatched_keys) - 10} more")
+
+    print(f"{'='*80}\n")
+
+    # Verify img_neck is properly initialized and has weights
+    print(f"\n{'='*80}")
+    print("IMG_NECK VERIFICATION")
+    print(f"{'='*80}\n")
+    if hasattr(model, "img_neck") and model.img_neck is not None:
+        print(f"✓ img_neck exists and is not None")
+        print(f"  Type: {type(model.img_neck)}")
+        print(f"  with_img_neck property: {model.with_img_neck}")
+        img_neck_params = sum(p.numel() for p in model.img_neck.parameters())
+        img_neck_trainable = sum(p.numel() for p in model.img_neck.parameters() if p.requires_grad)
+        print(f"  Total parameters: {img_neck_params:,}")
+        print(f"  Trainable parameters: {img_neck_trainable:,}")
+
+        # Check if img_neck has loaded weights by checking a specific key
+        model_sd = model.state_dict()
+        img_neck_keys = [k for k in model_sd.keys() if k.startswith("img_neck.")]
+        print(f"  img_neck keys in model state_dict: {len(img_neck_keys)}")
+        if img_neck_keys:
+            print(f"  Sample keys: {img_neck_keys[:3]}")
+            # Check if weights are non-zero (indicating they might be loaded)
+            sample_key = img_neck_keys[0]
+            sample_weight = model_sd[sample_key]
+            print(
+                f"  Sample weight ({sample_key}): shape={sample_weight.shape}, mean={sample_weight.mean().item():.6f}, std={sample_weight.std().item():.6f}"
+            )
+    else:
+        print(f"✗ img_neck is None or does not exist!")
+        print(f"  hasattr(model, 'img_neck'): {hasattr(model, 'img_neck')}")
+        if hasattr(model, "img_neck"):
+            print(f"  model.img_neck is None: {model.img_neck is None}")
+    print(f"{'='*80}\n")
+
     if args.fuse_conv_bn:
         model = fuse_conv_bn(model)
     # old versions did not save class info in checkpoints, this walkaround is
@@ -2536,6 +2794,121 @@ def main():
     elif hasattr(dataset, "PALETTE"):
         # segmentation dataset has `PALETTE` attribute
         model.PALETTE = dataset.PALETTE
+
+    # Ensure model is in eval mode before testing
+    model.eval()
+    print(f"\nModel training mode: {model.training}")
+    print(f"Model device: {next(model.parameters()).device if len(list(model.parameters())) > 0 else 'N/A'}")
+
+    # Check parameter count mismatch details
+    print(f"\n{'='*80}")
+    print("PARAMETER COUNT MISMATCH ANALYSIS")
+    print(f"{'='*80}\n")
+    param_diff = checkpoint_param_count - model_param_count
+    print(f"Parameter difference: {param_diff:,} ({param_diff/model_param_count*100:.2f}%)")
+    print(f"This suggests some layers may not be loaded or initialized differently.\n")
+
+    # Analyze which components contribute to the mismatch
+    model_sd = model.state_dict()
+    checkpoint_sd = checkpoint_state_dict
+
+    # Group parameters by component
+    components = ["img_backbone", "img_neck", "pts_bbox_head", "fcos3d_bbox_head"]
+    print("Parameter count by component:")
+    total_model_comp = 0
+    total_ckpt_comp = 0
+    for comp in components:
+        model_comp_params = sum(p.numel() for k, p in model_sd.items() if k.startswith(comp + "."))
+        ckpt_comp_params = sum(p.numel() for k, p in checkpoint_sd.items() if k.startswith(comp + "."))
+        total_model_comp += model_comp_params
+        total_ckpt_comp += ckpt_comp_params
+        diff = ckpt_comp_params - model_comp_params
+        if diff != 0:
+            print(f"  {comp}: Model={model_comp_params:,}, Checkpoint={ckpt_comp_params:,}, Diff={diff:,}")
+        else:
+            print(f"  {comp}: {model_comp_params:,} (match)")
+
+    # Check for parameters not in any of these components
+    other_model_params = sum(
+        p.numel() for k, p in model_sd.items() if not any(k.startswith(comp + ".") for comp in components)
+    )
+    other_ckpt_params = sum(
+        p.numel() for k, p in checkpoint_sd.items() if not any(k.startswith(comp + ".") for comp in components)
+    )
+    if other_model_params > 0 or other_ckpt_params > 0:
+        print(
+            f"  Other parameters: Model={other_model_params:,}, Checkpoint={other_ckpt_params:,}, Diff={other_ckpt_params - other_model_params:,}"
+        )
+
+    print(f"\nTotal from components: Model={total_model_comp:,}, Checkpoint={total_ckpt_comp:,}")
+    print(f"Total state_dict: Model={model_param_count:,}, Checkpoint={checkpoint_param_count:,}")
+    print(f"Difference in components: {total_ckpt_comp - total_model_comp:,}")
+    print(f"Difference in totals: {checkpoint_param_count - model_param_count:,}")
+
+    # Find which keys are in checkpoint but not in model (or vice versa)
+    model_keys_set = set(model_sd.keys())
+    checkpoint_keys_set = set(checkpoint_sd.keys())
+    missing_in_model = checkpoint_keys_set - model_keys_set
+    extra_in_model = model_keys_set - checkpoint_keys_set
+
+    if missing_in_model:
+        print(f"\nKeys in checkpoint but NOT in model ({len(missing_in_model)}):")
+        missing_params = sum(checkpoint_sd[k].numel() for k in missing_in_model)
+        print(f"  Total missing parameters: {missing_params:,}")
+        for key in sorted(list(missing_in_model))[:10]:
+            param_count = checkpoint_sd[key].numel()
+            print(f"  - {key}: {param_count:,} params")
+        if len(missing_in_model) > 10:
+            print(f"  ... and {len(missing_in_model) - 10} more keys")
+
+    if extra_in_model:
+        print(f"\nKeys in model but NOT in checkpoint ({len(extra_in_model)}):")
+        extra_params = sum(model_sd[k].numel() for k in extra_in_model)
+        print(f"  Total extra parameters: {extra_params:,}")
+        for key in sorted(list(extra_in_model))[:10]:
+            param_count = model_sd[key].numel()
+            print(f"  - {key}: {param_count:,} params")
+        if len(extra_in_model) > 10:
+            print(f"  ... and {len(extra_in_model) - 10} more keys")
+
+    print()
+
+    # Check if img_neck weights actually match checkpoint, especially extra levels
+    if hasattr(model, "img_neck") and model.img_neck is not None:
+        model_sd = model.state_dict()
+        img_neck_keys = [k for k in model_sd.keys() if k.startswith("img_neck.")]
+        if img_neck_keys:
+            # Check regular levels
+            sample_key = img_neck_keys[0]
+            if sample_key in checkpoint_state_dict:
+                model_weight = model_sd[sample_key]
+                checkpoint_weight = checkpoint_state_dict[sample_key]
+                if torch.allclose(model_weight.cpu(), checkpoint_weight.cpu(), rtol=1e-5, atol=1e-8):
+                    print(f"✓ img_neck weights match checkpoint (checked {sample_key})")
+                else:
+                    print(f"✗ img_neck weights DO NOT match checkpoint!")
+                    print(f"  Model: mean={model_weight.mean().item():.6f}, std={model_weight.std().item():.6f}")
+                    print(
+                        f"  Checkpoint: mean={checkpoint_weight.mean().item():.6f}, std={checkpoint_weight.std().item():.6f}"
+                    )
+
+            # Check extra levels (3 and 4)
+            extra_keys = [k for k in img_neck_keys if "fpn_convs.3" in k or "fpn_convs.4" in k]
+            if extra_keys:
+                print(f"\nChecking extra level weights (levels 3-4):")
+                for key in sorted(extra_keys)[:4]:  # Check first 4 keys
+                    if key in checkpoint_state_dict:
+                        model_w = model_sd[key]
+                        ckpt_w = checkpoint_state_dict[key]
+                        if torch.allclose(model_w.cpu(), ckpt_w.cpu(), rtol=1e-5, atol=1e-8):
+                            print(f"  ✓ {key}: weights match")
+                        else:
+                            print(f"  ✗ {key}: weights DO NOT match!")
+                            print(f"    Model: mean={model_w.mean().item():.6f}, std={model_w.std().item():.6f}")
+                            print(f"    Checkpoint: mean={ckpt_w.mean().item():.6f}, std={ckpt_w.std().item():.6f}")
+                    else:
+                        print(f"  ✗ {key}: NOT FOUND in checkpoint!")
+    print(f"{'='*80}\n")
 
     # if not distributed:
     #     assert False

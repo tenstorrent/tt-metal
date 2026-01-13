@@ -4132,6 +4132,340 @@ def build_backbone(cfg):
     return BACKBONES.build(cfg)
 
 
+def build_neck(cfg):
+    """Build neck."""
+    return NECKS.build(cfg)
+
+
+# https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/cnn/bricks/conv_module.py
+class ConvModule(BaseModule):
+    """A conv block that bundles conv/norm/activation layers.
+
+    This block simplifies the usage of convolution layers, which are commonly
+    used with a norm layer (e.g., BatchNorm) and activation layer (e.g., ReLU).
+
+    Args:
+        in_channels (int): Number of channels in the input feature map.
+        out_channels (int): Number of channels produced by the convolution.
+        kernel_size (int | tuple[int]): Size of the convolving kernel.
+        stride (int | tuple[int]): Stride of the convolution.
+        padding (int | tuple[int]): Zero-padding added to both sides of the input.
+        dilation (int | tuple[int]): Spacing between kernel elements.
+        groups (int): Number of blocked connections from input channels to output channels.
+        bias (bool | str): If specified as `auto`, it will be decided by the norm_cfg.
+            Bias will be set as True if `norm_cfg` is None, otherwise False. Default: "auto".
+        conv_cfg (dict): Config dict for convolution layer. Default: None.
+        norm_cfg (dict): Config dict for normalization layer. Default: None.
+        act_cfg (dict): Config dict for activation layer. Default: dict(type='ReLU').
+        inplace (bool): Whether to use inplace mode for activation. Default: True.
+        with_spectral_norm (bool): Whether use spectral norm in conv module. Default: False.
+        padding_mode (str): Padding mode. Default: 'zeros'.
+        order (tuple[str]): The order of conv/norm/activation layers. Default: ('conv', 'norm', 'act').
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride=1,
+        padding=0,
+        dilation=1,
+        groups=1,
+        bias="auto",
+        conv_cfg=None,
+        norm_cfg=None,
+        act_cfg=dict(type="ReLU"),
+        inplace=True,
+        with_spectral_norm=False,
+        padding_mode="zeros",
+        order=("conv", "norm", "act"),
+        init_cfg=None,
+    ):
+        super(ConvModule, self).__init__(init_cfg)
+        assert conv_cfg is None or isinstance(conv_cfg, dict)
+        assert norm_cfg is None or isinstance(norm_cfg, dict)
+        assert act_cfg is None or isinstance(act_cfg, dict)
+        official_padding_mode = ["zeros", "circular"]
+        self.conv_cfg = conv_cfg
+        self.norm_cfg = norm_cfg
+        self.act_cfg = act_cfg
+        self.inplace = inplace
+        self.with_spectral_norm = with_spectral_norm
+        self.with_explicit_padding = padding_mode not in official_padding_mode
+        self.order = order
+        assert isinstance(self.order, tuple) and len(self.order) == 3
+        assert set(order) == set(["conv", "norm", "act"])
+
+        self.with_norm = norm_cfg is not None
+        self.with_activation = act_cfg is not None
+        # if the conv layer is before a norm layer, bias is unnecessary.
+        if bias == "auto":
+            bias = not self.with_norm
+        self.with_bias = bias
+
+        # reset padding to 0 for conv module
+        conv_padding = 0 if self.with_explicit_padding else padding
+        # build convolution layer
+        self.conv = build_conv_layer(
+            conv_cfg,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=conv_padding,
+            dilation=dilation,
+            groups=groups,
+            bias=bias,
+        )
+        # export the attributes of self.conv to a higher level for convenience
+        self.in_channels = self.conv.in_channels
+        self.out_channels = self.conv.out_channels
+        self.kernel_size = self.conv.kernel_size
+        self.stride = self.conv.stride
+        self.padding = padding
+        self.dilation = self.conv.dilation
+        self.transposed = self.conv.transposed
+        self.output_padding = self.conv.output_padding
+        self.groups = self.conv.groups
+
+        if self.with_spectral_norm:
+            self.conv = nn.utils.spectral_norm(self.conv)
+
+        # build normalization layers
+        if self.with_norm:
+            # norm layer is after conv layer
+            if order.index("norm") > order.index("conv"):
+                norm_channels = out_channels
+            else:
+                norm_channels = in_channels
+            self.norm_name, norm = build_norm_layer(norm_cfg, norm_channels)
+            self.add_module(self.norm_name, norm)
+        else:
+            self.norm_name = None
+
+        # build activation layer
+        if self.with_activation:
+            if act_cfg["type"] == "ReLU":
+                self.activate = nn.ReLU(inplace=inplace)
+            else:
+                # For other activation types, default to ReLU for now
+                self.activate = nn.ReLU(inplace=inplace)
+        else:
+            self.activate = None
+
+    @property
+    def norm(self):
+        if self.norm_name:
+            return getattr(self, self.norm_name)
+        else:
+            return None
+
+    def forward(self, x, activate=True, norm=True):
+        for layer in self.order:
+            if layer == "conv":
+                x = self.conv(x)
+            elif layer == "norm" and norm and self.with_norm:
+                x = self.norm(x)
+            elif layer == "act" and activate and self.with_activation:
+                x = self.activate(x)
+        return x
+
+
+# https://github.com/open-mmlab/mmdetection/blob/v2.14.0/mmdet/models/necks/fpn.py
+@NECKS.register_module()
+class FPN(BaseModule):
+    r"""Feature Pyramid Network.
+
+    This is an implementation of paper `Feature Pyramid Networks for Object
+    Detection <https://arxiv.org/abs/1612.03144>`_.
+
+    Args:
+        in_channels (List[int]): Number of input channels per scale.
+        out_channels (int): Number of output channels (used at each scale)
+        num_outs (int): Number of output scales.
+        start_level (int): Index of the start input backbone level used to
+            build the feature pyramid. Default: 0.
+        end_level (int): Index of the end input backbone level (exclusive) to
+            build the feature pyramid. Default: -1, which means the last level.
+        add_extra_convs (bool | str): If bool, it decides whether to add conv
+            layers on top of the original feature maps. Default to False.
+            If True, it is equivalent to `add_extra_convs='on_input'`.
+            If str, it specifies the source feature map of the extra convs.
+            Only the following options are allowed
+            - 'on_input': Last feat map of neck inputs (i.e. backbone feature).
+            - 'on_lateral':  Last feature map after lateral convs.
+            - 'on_output': The last output feature map after fpn convs.
+        relu_before_extra_convs (bool): Whether to apply relu before the extra
+            conv. Default: False.
+        no_norm_on_lateral (bool): Whether to apply norm on lateral.
+            Default: False.
+        conv_cfg (dict): Config dict for convolution layer. Default: None.
+        norm_cfg (dict): Config dict for normalization layer. Default: None.
+        act_cfg (str): Config dict for activation layer in ConvModule.
+            Default: None.
+        upsample_cfg (dict): Config dict for interpolate layer.
+            Default: `dict(mode='nearest')`
+        init_cfg (dict or list[dict], optional): Initialization config dict.
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        num_outs,
+        start_level=0,
+        end_level=-1,
+        add_extra_convs=False,
+        relu_before_extra_convs=False,
+        no_norm_on_lateral=False,
+        conv_cfg=None,
+        norm_cfg=None,
+        act_cfg=None,
+        upsample_cfg=dict(mode="nearest"),
+        init_cfg=dict(type="Xavier", layer="Conv2d", distribution="uniform"),
+    ):
+        super(FPN, self).__init__(init_cfg)
+        assert isinstance(in_channels, list)
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.num_ins = len(in_channels)
+        self.num_outs = num_outs
+        self.relu_before_extra_convs = relu_before_extra_convs
+        self.no_norm_on_lateral = no_norm_on_lateral
+        self.fp16_enabled = False
+        self.upsample_cfg = upsample_cfg.copy()
+
+        if end_level == -1:
+            self.backbone_end_level = self.num_ins
+            assert num_outs >= self.num_ins - start_level
+        else:
+            # if end_level < inputs, no extra level is allowed
+            self.backbone_end_level = end_level
+            assert end_level <= len(in_channels)
+            assert num_outs == end_level - start_level
+        self.start_level = start_level
+        self.end_level = end_level
+        self.add_extra_convs = add_extra_convs
+        assert isinstance(add_extra_convs, (str, bool))
+        if isinstance(add_extra_convs, str):
+            # Extra_convs_source choices: 'on_input', 'on_lateral', 'on_output'
+            assert add_extra_convs in ("on_input", "on_lateral", "on_output")
+        elif add_extra_convs:  # True
+            self.add_extra_convs = "on_input"
+
+        self.lateral_convs = nn.ModuleList()
+        self.fpn_convs = nn.ModuleList()
+
+        for i in range(self.start_level, self.backbone_end_level):
+            l_conv = ConvModule(
+                in_channels[i],
+                out_channels,
+                1,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg if not self.no_norm_on_lateral else None,
+                act_cfg=act_cfg,
+                inplace=False,
+            )
+            fpn_conv = ConvModule(
+                out_channels,
+                out_channels,
+                3,
+                padding=1,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg,
+                act_cfg=act_cfg,
+                inplace=False,
+            )
+
+            self.lateral_convs.append(l_conv)
+            self.fpn_convs.append(fpn_conv)
+
+        # add extra conv layers (e.g., RetinaNet)
+        extra_levels = num_outs - self.backbone_end_level + self.start_level
+        if self.add_extra_convs and extra_levels >= 1:
+            for i in range(extra_levels):
+                if i == 0 and self.add_extra_convs == "on_input":
+                    in_channels = self.in_channels[self.backbone_end_level - 1]
+                else:
+                    in_channels = out_channels
+                extra_fpn_conv = ConvModule(
+                    in_channels,
+                    out_channels,
+                    3,
+                    stride=2,
+                    padding=1,
+                    conv_cfg=conv_cfg,
+                    norm_cfg=norm_cfg,
+                    act_cfg=act_cfg,
+                    inplace=False,
+                )
+                self.fpn_convs.append(extra_fpn_conv)
+
+    def forward(self, inputs):
+        """Forward function."""
+        assert len(inputs) == len(self.in_channels)
+
+        # build laterals
+        laterals = [lateral_conv(inputs[i + self.start_level]) for i, lateral_conv in enumerate(self.lateral_convs)]
+
+        # build top-down path
+        used_backbone_levels = len(laterals)
+        for i in range(used_backbone_levels - 1, 0, -1):
+            # In some cases, fixing `scale factor` (e.g. 2) is preferred, but
+            #  it cannot co-exist with `size` in `F.interpolate`.
+            if "scale_factor" in self.upsample_cfg:
+                laterals[i - 1] += F.interpolate(laterals[i], **self.upsample_cfg)
+            else:
+                prev_shape = laterals[i - 1].shape[2:]
+                laterals[i - 1] += F.interpolate(laterals[i], size=prev_shape, **self.upsample_cfg)
+
+        # build outputs
+        # part 1: from original levels
+        outs = [self.fpn_convs[i](laterals[i]) for i in range(used_backbone_levels)]
+        # part 2: add extra levels
+        if self.num_outs > len(outs):
+            # use max pool to get more levels on top of outputs
+            # (e.g., Faster R-CNN, Mask R-CNN)
+            if not self.add_extra_convs:
+                for i in range(self.num_outs - used_backbone_levels):
+                    outs.append(F.max_pool2d(outs[-1], 1, stride=2))
+            # add conv layers on top of original feature maps (RetinaNet)
+            else:
+                if self.add_extra_convs == "on_input":
+                    extra_source = inputs[self.backbone_end_level - 1]
+                elif self.add_extra_convs == "on_lateral":
+                    extra_source = laterals[-1]
+                elif self.add_extra_convs == "on_output":
+                    extra_source = outs[-1]
+                else:
+                    raise NotImplementedError
+                # Apply first extra conv
+                extra_out = self.fpn_convs[used_backbone_levels](extra_source)
+                # Clip features more aggressively to prevent numerical instability
+                if extra_out.numel() > 0:
+                    std_val = extra_out.std().item()
+                    if std_val > 50:  # Only clip if std is unreasonably high
+                        # Use a fixed reasonable range instead of std-based clipping
+                        # Clip to [-100, 100] which is reasonable for normalized features
+                        extra_out = torch.clamp(extra_out, min=-100.0, max=100.0)
+                outs.append(extra_out)
+
+                for i in range(used_backbone_levels + 1, self.num_outs):
+                    if self.relu_before_extra_convs:
+                        next_out = self.fpn_convs[i](F.relu(outs[-1]))
+                    else:
+                        next_out = self.fpn_convs[i](outs[-1])
+                    # Clip features more aggressively to prevent numerical instability
+                    if next_out.numel() > 0:
+                        std_val = next_out.std().item()
+                        if std_val > 50:
+                            # Use a fixed reasonable range instead of std-based clipping
+                            next_out = torch.clamp(next_out, min=-100.0, max=100.0)
+                    outs.append(next_out)
+        return tuple(outs)
+
+
 # https://github.com/open-mmlab/mmdetection/blob/v2.14.0/mmdet/core/bbox/prior_generators.py
 def build_prior_generator(cfg, default_args=None):
     """Builder for prior generator."""
@@ -4294,7 +4628,7 @@ class MVXTwoStageDetector(Base3DDetector):
         if img_backbone:
             self.img_backbone = build_backbone(img_backbone) if isinstance(img_backbone, dict) else img_backbone
         if img_neck is not None:
-            self.img_neck = None
+            self.img_neck = build_neck(img_neck) if isinstance(img_neck, dict) else img_neck
         if img_rpn_head is not None:
             self.img_rpn_head = None
         if img_roi_head is not None:
@@ -7151,3 +7485,173 @@ def track_iter_progress(tasks, bar_width=50, file=sys.stdout):
         yield task
         prog_bar.update()
     prog_bar.file.write("\n")
+
+
+# ============================================================================
+# MMDET3D CORE BBOX - points_cam2img
+# Source: https://github.com/open-mmlab/mmdetection3d/blob/v0.17.1/mmdet3d/core/bbox/box_np_ops.py
+# This function projects points from camera coordinates to image coordinates.
+# ============================================================================
+
+
+def points_cam2img(points_3d, proj_mat, with_depth=False):
+    """Project points in camera coordinates to image coordinates.
+
+    Args:
+        points_3d (np.ndarray): Points in shape (N, 3)
+        proj_mat (np.ndarray): Transformation matrix between coordinates.
+        with_depth (bool, optional): Whether to keep depth in the output.
+            Defaults to False.
+
+    Returns:
+        np.ndarray: Points in image coordinates with shape [N, 2].
+    """
+    points_shape = list(points_3d.shape)
+    points_shape[-1] = 1
+
+    assert len(proj_mat.shape) == 2, (
+        "The dimension of the projection" f" matrix should be 2 instead of {len(proj_mat.shape)}."
+    )
+    d1, d2 = proj_mat.shape[:2]
+    assert (d1 == 3 and d2 == 3) or (d1 == 3 and d2 == 4) or (d1 == 4 and d2 == 4), (
+        "The shape of the projection matrix" f" ({d1}*{d2}) is not supported."
+    )
+    if d1 == 3:
+        proj_mat_expanded = np.eye(4, dtype=proj_mat.dtype)
+        proj_mat_expanded[:d1, :d2] = proj_mat
+        proj_mat = proj_mat_expanded
+
+    points_4 = np.concatenate([points_3d, np.ones(points_shape)], axis=-1)
+    point_2d = points_4 @ proj_mat.T
+    point_2d_res = point_2d[..., :2] / point_2d[..., 2:3]
+
+    if with_depth:
+        points_2d_depth = np.concatenate([point_2d_res, point_2d[..., 2:3]], axis=-1)
+        return points_2d_depth
+    return point_2d_res
+
+
+# ============================================================================
+# MMCV FILEIO - load, dump, is_filepath, check_file_exist
+# Source: https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/fileio/io.py
+# These functions are extracted from mmcv v1.4.0 to avoid dependency on mmcv.
+# ============================================================================
+
+
+def is_filepath(filepath):
+    """Check if a path is a valid file path.
+
+    Source: Based on mmcv.utils.path.is_filepath
+    https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/utils/path.py
+
+    Args:
+        filepath (str): Path to check
+
+    Returns:
+        bool: True if the path exists and is a file, False otherwise
+    """
+    return os.path.isfile(filepath)
+
+
+def dump(obj, file=None, file_format=None):
+    """Dump data to json/yaml/pickle strings or files.
+
+    Source: https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/fileio/io.py
+    Original implementation: mmcv.fileio.io.dump
+
+    This method provides a unified api for dumping data as strings or to files.
+
+    Args:
+        obj (any): The python object to be dumped.
+        file (str or None): If not None, dump to file. Otherwise return string.
+        file_format (str, optional): Same as :func:`load`.
+
+    Returns:
+        bool: True for success, False otherwise.
+    """
+    if file_format is None:
+        if isinstance(file, str):
+            file_format = file.split(".")[-1]
+        else:
+            raise ValueError("file_format must be specified if file is a file object")
+
+    if file_format not in ["json", "yaml", "yml", "pickle", "pkl"]:
+        raise TypeError("Unsupported format: {}".format(file_format))
+
+    if file_format in ["yaml", "yml"]:
+        if file is None:
+            return yaml.dump(obj)
+        else:
+            with open(file, "w") as f:
+                yaml.dump(obj, f)
+    elif file_format in ["pickle", "pkl"]:
+        if file is None:
+            return pickle.dumps(obj)
+        else:
+            with open(file, "wb") as f:
+                pickle.dump(obj, f)
+    else:  # json
+        if file is None:
+            return json.dumps(obj, indent=2)
+        else:
+            with open(file, "w") as f:
+                json.dump(obj, f, indent=2)
+    return True
+
+
+import os
+
+
+def check_file_exist(filename, msg_tmpl='file "{}" does not exist', raise_error=True):
+    """Check if a file exists.
+
+    Source: https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/utils/path.py
+    Original implementation: mmcv.utils.path.check_file_exist
+
+    Args:
+        filename (str): File path to check.
+        msg_tmpl (str): Message template to show when file doesn't exist.
+        raise_error (bool): If True, raise FileNotFoundError when file doesn't exist.
+                           If False, return False instead of raising.
+
+    Returns:
+        bool: True if file exists, False if file doesn't exist and raise_error=False.
+    """
+    if not os.path.isfile(filename):
+        if raise_error:
+            raise FileNotFoundError(msg_tmpl.format(filename))
+        return False
+    return True
+
+
+def load(file_path, file_format=None):
+    """Load data from json/yaml/pickle files.
+
+    Source: https://github.com/open-mmlab/mmcv/blob/v1.4.0/mmcv/fileio/io.py
+    Original implementation: mmcv.fileio.io.load
+
+    This method provides a unified api for loading data from serialized files.
+
+    Args:
+        file_path (str): Path to the file to be loaded.
+        file_format (str, optional): If not specified, the file format will be
+            inferred from the file extension, otherwise use the specified one.
+            Currently supported formats include "json", "yaml/yml" and "pickle/pkl".
+
+    Returns:
+        The content from the file.
+    """
+    if file_format is None:
+        file_format = file_path.split(".")[-1]
+    if file_format not in ["json", "yaml", "yml", "pickle", "pkl"]:
+        raise TypeError("Unsupported format: {}".format(file_format))
+
+    if file_format in ["yaml", "yml"]:
+        with open(file_path, "r") as f:
+            return yaml.load(f, Loader=yaml.FullLoader)
+    elif file_format in ["pickle", "pkl"]:
+        with open(file_path, "rb") as f:
+            return pickle.load(f)
+    else:
+        with open(file_path, "r") as f:
+            return json.load(f)
