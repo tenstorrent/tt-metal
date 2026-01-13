@@ -181,8 +181,8 @@ void eltwise_add_tensix(
 
     // Create device tensors from input data.
     // This creates the tensors and queues transfer of data to device in one step.
-    Tensor src0_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(a), t_spec, prog_state.mesh_device.get());
-    Tensor src1_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(b), t_spec, prog_state.mesh_device.get());
+    Tensor src0_tensor = Tensor::from_vector<bfloat16>(a, t_spec, prog_state.mesh_device.get());
+    Tensor src1_tensor = Tensor::from_vector<bfloat16>(b, t_spec, prog_state.mesh_device.get());
     // Create output tensor on device (no initialization needed - kernel will write into it).
     Tensor dst_tensor = create_device_tensor(t_spec, prog_state.mesh_device.get());
 
