@@ -278,6 +278,10 @@ class TtSDXLCombinedPipeline:
 
         # 4. Compile refiner if enabled
         if self.config.use_refiner:
+            if self.config.encoders_on_device:
+                logger.info("Compiling text encoders...")
+                self.refiner_pipeline.compile_text_encoding()
+
             logger.info("Allocating device tensors for refiner pipeline...")
             dummy_latents = torch.randn(self.batch_size, 4, 128, 128)
             refiner_dummy_embeds = torch.randn(
@@ -432,15 +436,19 @@ class TtSDXLCombinedPipeline:
             # 4. Run refiner pipeline with timesteps[split_idx:] and base latents
             logger.info(f"Running refiner pipeline for {num_inference_steps - split_idx} steps...")
 
+            all_prompt_embeds_torch_refiner, torch_add_text_embeds_refiner = self.refiner_pipeline.encode_prompts(
+                prompts=prompts,
+                negative_prompts=negative_prompts,
+                prompt_2=prompt_2,
+                negative_prompt_2=negative_prompt_2,
+            )
             (
                 refiner_latents,
                 refiner_prompt_embeds,
                 refiner_add_text_embeds,
             ) = self.refiner_pipeline.generate_input_tensors(
-                all_prompt_embeds_torch=torch.randn(
-                    1, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER
-                ).repeat(self.batch_size, 1, 1, 1),
-                torch_add_text_embeds=torch_add_text_embeds,
+                all_prompt_embeds_torch=all_prompt_embeds_torch_refiner,
+                torch_add_text_embeds=torch_add_text_embeds_refiner,
                 torch_image=base_latents,
                 fixed_seed_for_batch=True,
                 start_latent_seed=0,

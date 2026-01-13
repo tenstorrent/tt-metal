@@ -871,7 +871,7 @@ struct LowLatencyMeshRoutingFields {
 
 // TODO: https://github.com/tenstorrent/tt-metal/issues/32237
 // Primary template for 2D routing headers with variable route buffer size
-template <int RouteBufferSize = 32>
+template <int RouteBufferSize = 35>
 struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteBufferSize>> {
     // Block route buffers >67 bytes until memory map is updated
     static_assert(
@@ -913,8 +913,8 @@ static_assert(sizeof(HybridMeshPacketHeaderT<67>) == 128, "67B buffer must resul
 #ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
 using HybridMeshPacketHeader = HybridMeshPacketHeaderT<FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE>;
 #else
-// Default: backward compatibility (96B header with 32B route buffer)
-using HybridMeshPacketHeader = HybridMeshPacketHeaderT<32>;
+// Default: backward compatibility (96B header with 35B route buffer)
+using HybridMeshPacketHeader = HybridMeshPacketHeaderT<35>;
 #endif
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {

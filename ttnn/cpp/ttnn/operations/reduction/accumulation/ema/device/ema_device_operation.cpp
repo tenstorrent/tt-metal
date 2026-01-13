@@ -13,7 +13,7 @@ namespace ttnn::operations::reduction::ema {
 using namespace tt::tt_metal;
 
 EmaDeviceOperation::program_factory_t EmaDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return program::EmaProgramFactory{};
 }
 

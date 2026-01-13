@@ -18,7 +18,7 @@ uint32_t EriscDatamoverConfig::get_edm_handshake_address() const { return usable
 std::size_t EriscDatamoverConfig::get_semaphores_region_size(std::size_t num_edm_channels) {
     return (num_edm_channels * semaphore_size);
 }
-std::size_t EriscDatamoverConfig::get_semaphores_region_start_offset(std::size_t num_edm_channels) {
+std::size_t EriscDatamoverConfig::get_semaphores_region_start_offset(std::size_t /*num_edm_channels*/) {
     return handshake_location_size + edm_receiver_first_level_ack_source_word_size;
 }
 uint32_t EriscDatamoverConfig::get_semaphores_base_address(std::size_t num_edm_channels) const {
