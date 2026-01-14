@@ -284,6 +284,7 @@ def prefill_forward(
     next_states = ttnn.reshape(
         next_states,
         (1, batch_size, seq_len_global, config.hidden_size),
+        (1, batch_size, max(32, seq_len_global), config.hidden_size),
     )
 
     return next_states
