@@ -131,24 +131,21 @@ TEST_F(FabricRouterPauseControlTest, PauseStopsTraffic) {
     // Step 2: Launch worker kernels on devices 0 to N-1
     // Each sends to next device (device i sends to device i+1)
     // FR-2: Launch worker kernels
-    // Note: launch_traffic_generators would be called here, but CS-006 (worker helpers)
-    // needs to be completed first. For testing purposes, this is a placeholder.
-    // launch_traffic_generators();
+    launch_traffic_generators();
 
-    log_info(LogTest, "Worker kernels launched (when CS-006 is complete)");
+    log_info(LogTest, "Worker kernels launched");
 
     // Step 3: Wait briefly for traffic to stabilize
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     // FR-3: Validate traffic is flowing
-    // Note: This would be validated after workers are launched
     log_info(LogTest, "Validating traffic is flowing...");
-    // bool traffic_flowing = test_utils::validate_traffic_flowing(
-    //     control_plane, mesh_id, num_devices);
-    // ASSERT_TRUE(traffic_flowing) << "Traffic not detected before pause command";
+    bool traffic_flowing = test_utils::validate_traffic_flowing(
+        control_plane, mesh_id, num_devices);
+    ASSERT_TRUE(traffic_flowing) << "Traffic not detected before pause command";
 
-    log_info(LogTest, "Traffic validation (when workers are running)");
-    // test_utils::log_all_router_states(control_plane, {mesh_id});
+    log_info(LogTest, "Traffic confirmed flowing");
+    test_utils::log_all_router_states(control_plane, {mesh_id});
 
     // Step 4: Issue pause command to all routers
     // FR-4: Router pause command
@@ -167,7 +164,7 @@ TEST_F(FabricRouterPauseControlTest, PauseStopsTraffic) {
         std::chrono::duration_cast<std::chrono::milliseconds>(pause_duration).count());
 
     // NFR-5: Observability - log router states
-    // test_utils::log_all_router_states(control_plane, {mesh_id});
+    test_utils::log_all_router_states(control_plane, {mesh_id});
 
     ASSERT_TRUE(paused) << "Routers did not enter PAUSED state within timeout";
 
@@ -181,16 +178,16 @@ TEST_F(FabricRouterPauseControlTest, PauseStopsTraffic) {
     // Step 7: Validate traffic has stopped
     // FR-7: Paused traffic verification
     log_info(LogTest, "Validating traffic has stopped...");
-    // bool traffic_stopped = test_utils::validate_traffic_stopped(
-    //     control_plane, mesh_id, num_devices);
-    // ASSERT_TRUE(traffic_stopped) << "Traffic detected during PAUSED state";
+    bool traffic_stopped = test_utils::validate_traffic_stopped(
+        control_plane, mesh_id, num_devices);
+    ASSERT_TRUE(traffic_stopped) << "Traffic detected during PAUSED state";
 
-    log_info(LogTest, "Traffic validation (when workers complete)");
+    log_info(LogTest, "Traffic confirmed stopped");
 
     // Step 8: Issue teardown to worker kernels
     // FR-8: Worker teardown
     log_info(LogTest, "Signaling worker teardown...");
-    // cleanup_workers();
+    cleanup_workers();
 
     log_info(LogTest, "Test completed successfully");
 }
@@ -207,15 +204,15 @@ TEST_F(FabricRouterPauseControlTest, ResumeRestoresTraffic) {
 
     log_info(LogTest, "Starting Fabric Router Resume Test");
 
-    // Launch workers (when CS-006 is complete)
-    // launch_traffic_generators();
+    // Launch workers
+    launch_traffic_generators();
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     // Validate traffic is flowing
-    // bool traffic_flowing = test_utils::validate_traffic_flowing(
-    //     control_plane, mesh_id, num_devices);
-    // ASSERT_TRUE(traffic_flowing) << "Traffic not detected before pause";
+    bool traffic_flowing = test_utils::validate_traffic_flowing(
+        control_plane, mesh_id, num_devices);
+    ASSERT_TRUE(traffic_flowing) << "Traffic not detected before pause";
 
     test_utils::FabricCommandInterface cmd_interface(control_plane);
 
@@ -225,9 +222,9 @@ TEST_F(FabricRouterPauseControlTest, ResumeRestoresTraffic) {
     ASSERT_TRUE(paused) << "Failed to pause routers";
 
     // Verify traffic stopped
-    // bool traffic_stopped = test_utils::validate_traffic_stopped(
-    //     control_plane, mesh_id, num_devices);
-    // ASSERT_TRUE(traffic_stopped) << "Traffic not stopped after pause";
+    bool traffic_stopped = test_utils::validate_traffic_stopped(
+        control_plane, mesh_id, num_devices);
+    ASSERT_TRUE(traffic_stopped) << "Traffic not stopped after pause";
 
     // Resume routers
     log_info(LogTest, "Issuing resume command to all routers...");
@@ -243,11 +240,12 @@ TEST_F(FabricRouterPauseControlTest, ResumeRestoresTraffic) {
         << "Not all routers in RUNNING state after resume";
 
     // Validate traffic resumes
-    // bool traffic_resumed = test_utils::validate_traffic_flowing(
-    //     control_plane, mesh_id, num_devices);
-    // ASSERT_TRUE(traffic_resumed) << "Traffic not detected after resume";
+    bool traffic_resumed = test_utils::validate_traffic_flowing(
+        control_plane, mesh_id, num_devices);
+    ASSERT_TRUE(traffic_resumed) << "Traffic not detected after resume";
 
     log_info(LogTest, "Resume test completed successfully");
+    cleanup_workers();
 }
 
 // Test pause timeout - routers that don't pause within timeout are detected
