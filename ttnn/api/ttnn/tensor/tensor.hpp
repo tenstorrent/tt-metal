@@ -297,8 +297,6 @@ void copy_tensor_to_device_from_host(
     const void* src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy6(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
-
 // Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
 // shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
