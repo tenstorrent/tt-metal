@@ -292,21 +292,21 @@ void copy_tensor_to_host_from_device(
     bool blocking = true);
 
 void memcpy(
+    void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
+
+void memcpy3(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const void* src,
     const std::optional<BufferRegion>& region = std::nullopt);
+
+void memcpy4(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy5(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt);
-
-void memcpy(
-    void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
-
-void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy6(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
