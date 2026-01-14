@@ -1,5 +1,5 @@
 name: "Download artifact with verification and retry"
-description: "Downloads a .deb package artifact, verifies integrity, and retries if verification fails"
+description: "Downloads a .deb package artifact, verifies integrity via SHA256 checksums, and retries if verification fails"
 
 inputs:
   name:
@@ -30,21 +30,33 @@ runs:
           echo "::error::No .deb files found in ${{ inputs.path }}"
           exit 1
         fi
-        for deb in "${deb_files[@]}"; do
-          if dpkg-deb --info "$deb" > /dev/null 2>&1; then
-            echo "OK: $deb"
-          else
-            echo "::error::CORRUPT: $deb"
+
+        # Verify SHA256 checksums if available
+        if [ -f SHA256SUMS ]; then
+          echo "Verifying SHA256 checksums..."
+          if ! sha256sum --check SHA256SUMS; then
+            echo "::error::SHA256 checksum verification failed"
             exit 1
           fi
-        done
+          echo "SHA256 checksums verified"
+        else
+          echo "::warning::No SHA256SUMS file found, falling back to dpkg-deb verification"
+          for deb in "${deb_files[@]}"; do
+            if dpkg-deb --info "$deb" > /dev/null 2>&1; then
+              echo "OK: $deb"
+            else
+              echo "::error::CORRUPT: $deb"
+              exit 1
+            fi
+          done
+        fi
 
     - name: Clear corrupted packages
       if: steps.verify.outcome == 'failure'
       shell: bash
       run: |
         echo "::warning::Package verification failed, retrying download..."
-        rm -f "${{ inputs.path }}"/*.deb
+        rm -f "${{ inputs.path }}"/*.deb "${{ inputs.path }}"/*.ddeb "${{ inputs.path }}"/SHA256SUMS
 
     - name: Retry download
       if: steps.verify.outcome == 'failure'
@@ -64,11 +76,23 @@ runs:
           echo "::error::No .deb files found after retry"
           exit 1
         fi
-        for deb in "${deb_files[@]}"; do
-          if dpkg-deb --info "$deb" > /dev/null 2>&1; then
-            echo "OK: $deb"
-          else
-            echo "::error::CORRUPT after retry: $deb"
+
+        # Verify SHA256 checksums if available
+        if [ -f SHA256SUMS ]; then
+          echo "Verifying SHA256 checksums..."
+          if ! sha256sum --check SHA256SUMS; then
+            echo "::error::SHA256 checksum verification failed after retry"
             exit 1
           fi
-        done
+          echo "SHA256 checksums verified after retry"
+        else
+          echo "::warning::No SHA256SUMS file found, falling back to dpkg-deb verification"
+          for deb in "${deb_files[@]}"; do
+            if dpkg-deb --info "$deb" > /dev/null 2>&1; then
+              echo "OK: $deb"
+            else
+              echo "::error::CORRUPT after retry: $deb"
+              exit 1
+            fi
+          done
+        fi
