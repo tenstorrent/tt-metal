@@ -69,7 +69,7 @@ class DistributedContext;
 
 using DeviceIds = std::vector<int>;
 
-class MeshDevice final : public IDevice, public std::enable_shared_from_this<MeshDevice> {
+class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
 private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {

@@ -90,7 +90,7 @@ Device::Device(
     size_t worker_l1_size) :
     id_(device_id), completion_queue_reader_core_(completion_queue_reader_core) {
     ZoneScoped;
-    this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
+    Device::initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
@@ -147,8 +147,8 @@ void Device::initialize_default_sub_device_state(
     size_t worker_l1_unreserved_start,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     // Create the default sub-device manager representing the entire chip
-    const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    const auto& active_eth_cores = this->get_active_ethernet_cores(true);
+    const auto& compute_grid_size = Device::compute_with_storage_grid_size();
+    const auto& active_eth_cores = Device::get_active_ethernet_cores(true);
     std::vector<CoreRange> active_eth_core_ranges;
     active_eth_core_ranges.reserve(active_eth_cores.size());
     for (const auto& core : active_eth_cores) {
@@ -171,10 +171,10 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t worker_l1_unreserved_start,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_);
     auto config = L1BankingAllocator::generate_config(
-        this->id(),
-        this->num_hw_cqs(),
+        id_,
+        num_hw_cqs_,
         l1_small_size,
         trace_region_size,
         worker_l1_unreserved_start,
@@ -455,12 +455,12 @@ bool Device::initialize(
 }
 
 bool Device::close() {
-    log_trace(tt::LogMetal, "Closing device {}", this->id_);
-    if (not this->initialized_) {
-        TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
+    log_trace(tt::LogMetal, "Closing device {}", id_);
+    if (not initialized_) {
+        TT_THROW("Cannot close device {} that has not been initialized!", id_);
     }
 
-    this->disable_and_clear_program_cache();
+    Device::disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 
     sub_device_manager_tracker_.reset(nullptr);
@@ -475,9 +475,9 @@ bool Device::close() {
 }
 
 Device::~Device() {
-    log_debug(tt::LogMetal, "Device {} destructor", this->id_);
-    if (this->initialized_) {
-        this->close();
+    log_debug(tt::LogMetal, "Device {} destructor", id_);
+    if (initialized_) {
+        Device::close();
     }
 }
 

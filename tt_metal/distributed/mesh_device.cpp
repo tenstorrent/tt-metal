@@ -227,7 +227,7 @@ MeshDevice::MeshDevice(
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
     const auto& mpi_context = MetalContext::instance().global_distributed_context();
     distributed_context_ =
-        mpi_context.split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context.rank()));
+        mpi_context.split(distributed::multihost::Color(mesh_id_), distributed::multihost::Key(*mpi_context.rank()));
 }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
@@ -647,9 +647,9 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 bool MeshDevice::close() {
     ZoneScoped;
 
-    log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
+    log_trace(tt::LogMetal, "Closing mesh device {}", mesh_id_);
 
-    if (this->is_initialized()) {
+    if (is_internal_state_initialized && scoped_devices_) {
         ReadMeshDeviceProfilerResults(*this, ProfilerReadState::LAST_FD_READ);
     }
 
@@ -675,7 +675,7 @@ bool MeshDevice::close() {
                         "MeshDevice cq ID {} is in use by parent mesh ID {} during close of mesh ID {}",
                         cq_id,
                         *parent_mesh_id,
-                        id());
+                        mesh_id_);
                 }
             }
 
@@ -687,7 +687,7 @@ bool MeshDevice::close() {
                             "MeshDevice cq ID {} is in use by child submesh ID {} during close of mesh ID {}",
                             cq_id,
                             *child_mesh_id,
-                            id());
+                            mesh_id_);
                     }
                 }
             }
