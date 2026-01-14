@@ -113,11 +113,6 @@ void deepseek_reduce_scatter_common_validates(
 
     const auto& input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape[3] % ring_size == 0, "Dimension 3 must be divisible by ring_size");
-
-    // TODO: (GR) Update later, using L1 interleaved for now
-    TT_FATAL(
-        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Unsupported input tensor memory layout");
 }
 
 }  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail

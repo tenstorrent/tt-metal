@@ -67,8 +67,16 @@ tt::tt_metal::CircularBufferConfig create_sub_tensor_cb_config(
     CoreRangeSet shard_core_range_set) {
     uint32_t page_size = input_tensor.buffer()->page_size();
 
-    uint32_t shard_spec_num_pages =
-        4; /* TODO: (GR) should be able to get this from input_tensor - shard_spec_->num_pages() */
+    const NdShardSpec& input_nd_shard_spec = input_tensor.nd_shard_spec().value();
+    const Shape& input_nd_shard_shape = input_nd_shard_spec.shard_shape;
+
+    const uint32_t input_tensor_nd_shard_shape_B = input_nd_shard_shape[0];
+    const uint32_t input_tensor_nd_shard_shape_C = input_nd_shard_shape[1];
+    const uint32_t input_tensor_nd_shard_shape_Ht = input_nd_shard_shape[2] / tt::constants::TILE_HEIGHT;
+    const uint32_t input_tensor_nd_shard_shape_Wt = input_nd_shard_shape[3] / tt::constants::TILE_WIDTH;
+    const uint32_t shard_spec_num_pages = input_tensor_nd_shard_shape_B * input_tensor_nd_shard_shape_C *
+                                          input_tensor_nd_shard_shape_Ht * input_tensor_nd_shard_shape_Wt;
+
     uint32_t alignment = mesh_device->allocator()->get_alignment(input_tensor.memory_config().buffer_type());
     uint32_t num_dev_pages = shard_spec_num_pages * shard_core_range_set.size();
     DeviceAddr aligned_page_size = tt::align(page_size, alignment);
@@ -123,19 +131,10 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const uint32_t ring_size = 8;
 
     // choose cores
-    const uint32_t num_directions_per_link = 2;
-    const auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
-        num_links, num_directions_per_link, mesh_device, sub_device_id, core_grid_offset);
-
-    std::vector<CoreRange> worker_core_ranges;
-    uint32_t core_id = 0;
-    for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            const auto& worker_core = all_cores[core_id++];
-            worker_core_ranges.emplace_back(worker_core);
-        }
-    }
-    CoreRangeSet worker_core_range_set = CoreRangeSet(worker_core_ranges);
+    // TODO: (GR) need to add an extra dummy core when moving to 4 links and the proper shape
+    const NdShardSpec& input_nd_shard_spec = input_tensor.nd_shard_spec().value();
+    CoreRangeSet worker_core_range_set = input_nd_shard_spec.grid;
+    std::vector<CoreCoord> worker_cores = corerange_to_cores(worker_core_range_set);
 
     // tensor info
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -192,7 +191,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         cb_num_pages,
         df,
         /* shard_core_range_set */ worker_core_range_set);
-    CreateCircularBuffer(program, worker_core_range_set, input_slice_0_cb_config);
+    CreateCircularBuffer(program, worker_core_range_set, input_slice_0_cb_config);  // SEG FAULTING HERE
 
     tt::tt_metal::CircularBufferConfig input_slice_1_cb_config = create_sub_tensor_cb_config(
         input_slice_1_cb_id,
@@ -359,6 +358,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         tt::tt_metal::CreateKernel(program, reduce_kernel_path, worker_core_range_set, reduce_kernel_config);
 
     // runtime args
+    const uint32_t num_directions_per_link = 2;
     auto worker_core_iter = worker_core_range_set.ranges().cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t direction = 0; direction < num_directions_per_link; direction++) {
@@ -446,7 +446,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         }
     }
 
-    return {reader_kernel_id, writer_kernel_id, all_cores, num_directions_per_link};
+    return {reader_kernel_id, writer_kernel_id, worker_cores, num_directions_per_link};
 }
 
 void deepseek_reduce_scatter_helper_override_runtime_arguments(

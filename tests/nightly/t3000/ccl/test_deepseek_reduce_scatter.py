@@ -281,6 +281,13 @@ def test_reduce_scatter_async(
     mem_config_rs,
     rs_topology,
 ):
+    shard_shape = [1, 1, 32, 128]
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))])
+    nd_shard_spec = ttnn.NdShardSpec(
+        ttnn.Shape(shard_shape), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
+    )
+    mem_config_input = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
