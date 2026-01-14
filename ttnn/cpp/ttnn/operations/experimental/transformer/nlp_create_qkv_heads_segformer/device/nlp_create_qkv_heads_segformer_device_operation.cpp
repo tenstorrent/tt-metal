@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>

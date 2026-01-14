@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <gmock/gmock.h>
 #include <memory>
 #include <vector>

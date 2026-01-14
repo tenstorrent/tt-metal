@@ -10,6 +10,7 @@
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {

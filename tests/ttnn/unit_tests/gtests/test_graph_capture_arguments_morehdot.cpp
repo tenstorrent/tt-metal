@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nlohmann/json.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <map>
 #include <optional>
 #include <vector>

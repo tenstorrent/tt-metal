@@ -5,6 +5,7 @@
 #include "attn_matmul_device_operation.hpp"
 #include "attn_matmul_program_factory.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;

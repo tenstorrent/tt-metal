@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "split_query_key_value_and_split_heads_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads {

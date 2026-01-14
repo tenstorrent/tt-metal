@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "copy_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement::copy {
 

@@ -5,6 +5,7 @@
 #include "padded_slice_device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 

@@ -8,6 +8,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <algorithm>
 
 using namespace tt::tt_metal;

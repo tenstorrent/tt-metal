@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"

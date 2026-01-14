@@ -9,6 +9,7 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::ccl::strided_all_gather_async {
 

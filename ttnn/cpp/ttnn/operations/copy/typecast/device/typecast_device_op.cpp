@@ -4,6 +4,7 @@
 
 #include "typecast_device_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
@@ -106,7 +107,7 @@ tensor_return_value_t TypecastDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
     }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+    return tt::tt_metal::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 tt::stl::hash::hash_t TypecastDeviceOperation::compute_program_hash(

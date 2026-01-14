@@ -9,6 +9,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

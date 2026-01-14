@@ -6,6 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "convert_to_hwc_program_factory.hpp"
 
 using namespace tt::tt_metal;

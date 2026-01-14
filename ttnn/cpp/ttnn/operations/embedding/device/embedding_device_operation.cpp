@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::constants;
 using namespace std;

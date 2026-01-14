@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_program_factory.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
