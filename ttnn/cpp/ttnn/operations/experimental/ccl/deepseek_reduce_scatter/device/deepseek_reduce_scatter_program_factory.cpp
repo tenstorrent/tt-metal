@@ -122,9 +122,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     uint32_t ring_index,
     const tt::tt_metal::GlobalSemaphore& op_semaphore,
     const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores,
-    uint32_t num_links,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    CoreCoord core_grid_offset) {
+    uint32_t num_links) {
     auto* mesh_device = input_tensor.device();
 
     // hardcoded constants
@@ -495,20 +493,19 @@ DeepseekReduceScatterMeshWorkloadFactory::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto sub_device_id = operation_attributes.sub_device_id;
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto sub_device_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    auto sd_id = mesh_device->get_sub_device_ids().at(0);
+    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     // 1 semaphore used for within op synchronizations
     tt::tt_metal::GlobalSemaphore op_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, sub_device_core_range_set, 0);
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
 
     // 2 barrier semaphores used for pre/post op synchronization
     // pre: remote tensors are allocated, post: all incoming data received
     std::vector<tt::tt_metal::GlobalSemaphore> barrier_semaphores = {
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, sub_device_core_range_set, 0),
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, sub_device_core_range_set, 0),
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0),
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0),
     };
 
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> sub_device_ids = {sd_id};
@@ -550,13 +547,6 @@ DeepseekReduceScatterMeshWorkloadFactory::create_at(
         ttnn::ccl::get_linearized_index_from_physical_coord(input_tensor, mesh_coordinate, cluster_axis);
     log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
 
-    auto sub_device_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto sub_device_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    auto bbox = sub_device_core_range_set.bounding_box();
-    auto first_coord = bbox.start_coord;
-
     tt::tt_metal::Program program{};
     auto deepseek_reduce_scatter_program_artifacts = build_deepseek_reduce_scatter_program_artifacts(
         program,
@@ -569,9 +559,7 @@ DeepseekReduceScatterMeshWorkloadFactory::create_at(
         device_index,
         op_semaphore,
         barrier_semaphores,
-        operation_attributes.num_links,
-        operation_attributes.sub_device_id,
-        first_coord);
+        operation_attributes.num_links);
 
     shared_variables_t shared_vars{
         .op_semaphore = op_semaphore,

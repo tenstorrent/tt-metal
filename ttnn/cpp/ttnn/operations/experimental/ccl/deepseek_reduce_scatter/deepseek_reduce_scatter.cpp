@@ -12,8 +12,7 @@ ttnn::Tensor ExecuteDeepseekReduceScatter::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::MemoryConfig& output_memory_config,
     uint32_t num_links,
-    std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    std::optional<uint32_t> cluster_axis) {
     // Calculate ring size based on cluster_axis
     uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(num_devices == 8, "deepseek_reduce_scatter op is hardcoded for 8 devices, but has {}", num_devices);
@@ -26,8 +25,7 @@ ttnn::Tensor ExecuteDeepseekReduceScatter::invoke(
         usable_topology);
 
     // Call the prim operation
-    auto result =
-        ttnn::prim::deepseek_reduce_scatter(input_tensor, output_memory_config, num_links, cluster_axis, sub_device_id);
+    auto result = ttnn::prim::deepseek_reduce_scatter(input_tensor, output_memory_config, num_links, cluster_axis);
     // Return the output tensor (index 1, intermediate is at index 0)
     return result.at(1);
 }

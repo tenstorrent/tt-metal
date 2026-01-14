@@ -76,18 +76,12 @@ tt::stl::hash::hash_t DeepseekReduceScatterDeviceOperation::compute_program_hash
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "DeepseekReduceScatterDeviceOperation::compute_program_hash is called");
 
-    auto sub_device_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto sub_device_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<DeepseekReduceScatterDeviceOperation>(
         operation_attributes.output_memory_config,
         operation_attributes.num_links,
         operation_attributes.cluster_axis,
-        sub_device_core_range_set,
         tensor_args,
         program_factory.index());
 }
@@ -125,13 +119,12 @@ ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekRe
         const ttnn::Tensor& input_tensor,
         const ttnn::MemoryConfig& output_memory_config,
         uint32_t num_links,
-        std::optional<uint32_t> cluster_axis,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+        std::optional<uint32_t> cluster_axis) {
     using OperationType =
         ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation;
 
     auto operation_attributes =
-        OperationType::operation_attributes_t{std::move(output_memory_config), num_links, cluster_axis, sub_device_id};
+        OperationType::operation_attributes_t{std::move(output_memory_config), num_links, cluster_axis};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor};
 

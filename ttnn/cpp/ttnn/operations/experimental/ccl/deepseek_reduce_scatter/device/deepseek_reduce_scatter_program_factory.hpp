@@ -53,9 +53,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     uint32_t ring_index,
     const tt::tt_metal::GlobalSemaphore& op_semaphore,
     const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores,
-    uint32_t num_links,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    CoreCoord core_grid_offset);
+    uint32_t num_links);
 
 // Override runtime arguments helper for ring topology
 void deepseek_reduce_scatter_helper_override_runtime_arguments(

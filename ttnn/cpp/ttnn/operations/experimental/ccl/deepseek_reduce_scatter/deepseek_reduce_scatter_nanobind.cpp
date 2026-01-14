@@ -33,16 +33,14 @@ void bind_deepseek_reduce_scatter(nb::module_& mod, const ccl_operation_t& opera
                const ttnn::Tensor& input_tensor,
                const ttnn::MemoryConfig& output_memory_config,
                uint32_t num_links,  // TODO: (GR) leave for iterative testing on T3K, remove after switching to GLX
-               std::optional<uint32_t> cluster_axis,
-               std::optional<tt::tt_metal::SubDeviceId> sub_device_id) -> ttnn::Tensor {
-                return self(input_tensor, output_memory_config, num_links, cluster_axis, sub_device_id);
+               std::optional<uint32_t> cluster_axis) -> ttnn::Tensor {
+                return self(input_tensor, output_memory_config, num_links, cluster_axis);
             },
             nb::arg("input_tensor"),
             nb::arg("output_memory_config"),
             nb::kw_only(),
             nb::arg("num_links") = 1,
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()});
+            nb::arg("cluster_axis") = nb::none()});
 }
 
 }  // namespace

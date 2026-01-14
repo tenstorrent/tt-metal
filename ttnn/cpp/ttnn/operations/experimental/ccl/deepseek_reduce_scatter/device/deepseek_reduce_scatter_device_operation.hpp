@@ -42,7 +42,6 @@ ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekRe
         const ttnn::Tensor& input_tensor,
         const ttnn::MemoryConfig& output_memory_config,
         uint32_t num_links,
-        std::optional<uint32_t> cluster_axis,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
+        std::optional<uint32_t> cluster_axis);
 
 }  // namespace ttnn::prim

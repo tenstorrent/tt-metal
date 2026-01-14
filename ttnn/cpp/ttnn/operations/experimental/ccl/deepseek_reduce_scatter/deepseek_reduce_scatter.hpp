@@ -16,8 +16,7 @@ struct ExecuteDeepseekReduceScatter {
         const ttnn::Tensor& input_tensor,
         const ttnn::MemoryConfig& output_memory_config,
         uint32_t num_links = 1,
-        std::optional<uint32_t> cluster_axis = std::nullopt,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+        std::optional<uint32_t> cluster_axis = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

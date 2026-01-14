@@ -30,7 +30,6 @@ struct operation_attributes_t {
     ttnn::MemoryConfig output_memory_config;
     uint32_t num_links;
     std::optional<uint32_t> cluster_axis;
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -39,7 +38,6 @@ struct operation_attributes_t {
         attrs.emplace_back("output_memory_config", output_memory_config);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("sub_device_id", sub_device_id);
         return attrs;
     }
 };
