@@ -14,9 +14,7 @@
 namespace ttnn::operations::data_movement::concat::program {
 
 ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
@@ -227,7 +225,7 @@ void ConcatProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
     auto& program = cached_program.program;

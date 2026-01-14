@@ -28,8 +28,8 @@ using namespace tt::stl;
 struct IntImgDeviceOperation {
     using operation_attributes_t = reduction::operation_attributes_t;
     using tensor_args_t = reduction::tensor_args_t;
-    using spec_return_value_t = reduction::spec_return_value_t;
-    using tensor_return_value_t = reduction::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<reduction::IntImgProgramFactory>;
 
     using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;

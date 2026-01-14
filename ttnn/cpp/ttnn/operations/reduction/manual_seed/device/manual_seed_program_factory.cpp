@@ -74,7 +74,7 @@ void override_multi_core_runtime_args(
 ManualSeedSingleSeedToAllCoresProgramFactory::cached_program_t ManualSeedSingleSeedToAllCoresProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*output_tensor*/) {
+    Tensor& /*output_tensor*/) {
     tt::tt_metal::Program program{};
 
     // Calculate core grid
@@ -95,14 +95,14 @@ void ManualSeedSingleSeedToAllCoresProgramFactory::override_runtime_arguments(
     cached_program_t& /*cached_program*/,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*output_tensor*/) {
+    Tensor& /*output_tensor*/) {
     // NOTE: No runtime arguments to override for this OP
 }
 
 ManualSeedSingleSeedSingleCoreProgramFactory::cached_program_t ManualSeedSingleSeedSingleCoreProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*output_tensor*/) {
+    Tensor& /*output_tensor*/) {
     tt::tt_metal::Program program{};
 
     uint32_t num_cores{};
@@ -123,14 +123,12 @@ void ManualSeedSingleSeedSingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& /*cached_program*/,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*output_tensor*/) {
+    Tensor& /*output_tensor*/) {
     // NOTE: No runtime arguments to override for this OP
 }
 
 ManualSeedSingleSeedSetCoresProgramFactory::cached_program_t ManualSeedSingleSeedSetCoresProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*output_tensor*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& /*output_tensor*/) {
     tt::tt_metal::Program program{};
 
     // Safety check
@@ -195,7 +193,7 @@ void ManualSeedSingleSeedSetCoresProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*output_tensor*/) {
+    Tensor& /*output_tensor*/) {
     TT_FATAL(
         tensor_args.user_ids.has_value(),
         "user_ids tensor must be provided for ManualSeedSingleSeedSetCoresProgramFactory");
@@ -204,9 +202,7 @@ void ManualSeedSingleSeedSetCoresProgramFactory::override_runtime_arguments(
 }
 
 ManualSeedSetSeedsSetCoresProgramFactory::cached_program_t ManualSeedSetSeedsSetCoresProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*output_tensor*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& /*output_tensor*/) {
     tt::tt_metal::Program program{};
 
     // Safety checks
@@ -283,7 +279,7 @@ void ManualSeedSetSeedsSetCoresProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*output_tensor*/) {
+    Tensor& /*output_tensor*/) {
     TT_FATAL(
         tensor_args.user_ids.has_value(),
         "user_ids tensor must be provided for ManualSeedSetSeedsSetCoresProgramFactory");

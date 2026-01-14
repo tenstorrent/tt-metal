@@ -189,7 +189,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 namespace slice::program {
 
 SliceRmShardedProgramFactory::cached_program_t SliceRmShardedProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -300,7 +300,7 @@ void SliceRmShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*args*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     auto* src_buffer_a = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
 

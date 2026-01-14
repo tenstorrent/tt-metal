@@ -20,7 +20,6 @@ struct operation_attributes_t {
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     const bool share_cache;
     const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
-    const bool noop = false;  // When true, kernels early exit
 };
 
 struct tensor_args_t {
@@ -29,8 +28,5 @@ struct tensor_args_t {
     std::optional<Tensor> update_idxs_tensor;
     std::optional<Tensor> page_table;
 };
-
-using spec_return_value_t = ttnn::TensorSpec;
-using tensor_return_value_t = Tensor;
 
 }  // namespace ttnn::operations::experimental::paged_cache::update
