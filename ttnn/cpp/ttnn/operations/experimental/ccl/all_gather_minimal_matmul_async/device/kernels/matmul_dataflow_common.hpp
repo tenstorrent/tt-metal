@@ -12,7 +12,11 @@ uint32_t compute_actual_k_block(
     uint32_t my_rank,
     uint32_t k_blocks_per_device,
     uint32_t num_devices,
-    bool is_forward) {
+    bool is_forward,
+    bool is_first_n_block,
+    volatile tt_l1_ptr uint32_t* out_ready_semaphore,
+    uint32_t& sem_target,
+    uint32_t* slices_received) {
     // Start with self, then go backward, then forward.
     // Each time, read all k_blocks on device before moving on
     // If is_forward is false, iterate in the backwards order
@@ -35,7 +39,16 @@ uint32_t compute_actual_k_block(
         }
     }
     uint32_t k_block_start = k_blocks_per_device * actual_device_rank;
-    return k_block_start + device_k_block_iter;
+    uint32_t k_block_index = k_block_start + device_k_block_iter;
+    if (device_iter > 0 && is_first_n_block) {
+        // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
+        noc_semaphore_wait_min(out_ready_semaphore, sem_target + 1);
+        sem_target++;
+        if (device_k_block_iter == 0) {
+            slices_received++;
+        }
+    }
+    return k_block_index;
 }
 
 bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_device) {
@@ -46,6 +59,72 @@ bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_devic
 
 bool is_injector(uint32_t use_backward, bool is_injector_core_backward, bool is_injector_core_forward) {
     return (is_injector_core_backward && use_backward) || (is_injector_core_forward && !use_backward);
+}
+
+template <
+    typename TensorAccessorType,
+    typename ConnectionHandleType,
+    typename ScatterPacketHdrType,
+    typename UnicastPacketHdrType,
+    typename SemIncPacketHdrType>
+bool forward_tile_to_fabric_neighbor(
+    uint32_t m_tile_start,
+    uint32_t k_tile_start,
+    uint32_t m_block_tiles,
+    uint32_t k_block_tiles,
+    uint32_t num_tiles_to_write_per_packet,
+    uint32_t in0_start_address,
+    uint32_t output_tensor_Wt,
+    const TensorAccessorType& output_addrgen,
+    ConnectionHandleType mux_connection_handle,
+    ScatterPacketHdrType pkt_scatter_hdr,
+    UnicastPacketHdrType pkt_unicast_hdr,
+    SemIncPacketHdrType pkt_hdr_sem_inc,
+    uint32_t page_size,
+    uint64_t out_ready_sem_noc_addr_in_pkt) {
+    uint32_t tiles_to_read = m_block_tiles * k_block_tiles;
+    uint32_t tiles_read = 0;
+    uint32_t tile_id_start = m_tile_start * output_tensor_Wt + k_tile_start;
+    uint32_t row_offset = 0;
+    uint32_t pages_read_in_row = 0;
+    uint32_t l1_read_addr = in0_start_address;
+    while (tiles_read < tiles_to_read) {
+        uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+        uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
+
+        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
+        uint64_t noc_addrs[4] = {0, 0, 0, 0};
+        for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
+            uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
+            pages_read_in_row++;
+            if (pages_read_in_row >= k_block_tiles) {
+                row_offset += output_tensor_Wt;
+                pages_read_in_row = 0;
+            }
+            noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
+        }
+        if (tiles_to_put_in_current_packet > 1) {
+            fabric_unicast_noc_scatter_write_with_state<
+                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                UnicastScatterWriteUpdateMask::PayloadSize>(
+                mux_connection_handle,
+                pkt_scatter_hdr,
+                l1_read_addr,
+                NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                page_size * tiles_to_put_in_current_packet);
+        } else {
+            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
+        }
+        tiles_read += tiles_to_put_in_current_packet;
+        l1_read_addr += tiles_to_put_in_current_packet;
+    }
+
+    // unicast output ready semaphore
+    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        mux_connection_handle,
+        pkt_hdr_sem_inc,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
 }
 
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {

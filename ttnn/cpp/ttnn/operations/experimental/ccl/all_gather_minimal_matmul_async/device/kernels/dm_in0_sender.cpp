@@ -9,6 +9,33 @@
 
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 
+namespace detail {
+
+bool valid_targets_forward(const bool direction) {
+    if constexpr (num_targets_forward_direction) {
+        return (direction == 0);
+    } else {
+        return false;
+    }
+}
+
+bool valid_targets_backward(const bool direction) {
+    if constexpr (num_targets_backward_direction) {
+        return (direction == 1);
+    } else {
+        return false;
+    }
+}
+
+bool valid_targets(const bool direction) {
+    if constexpr (num_targets_backward_direction + num_targets_forward_direction == 0) {
+        return false;
+    } else {
+        return (valid_targets_forward(direction) || valid_targets_backward(direction));
+    }
+}
+}  // namespace detail
+
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
@@ -35,16 +62,32 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(22);
     constexpr uint32_t my_rank = get_compile_time_arg_val(23);
     constexpr uint32_t in3_tile_size = get_compile_time_arg_val(24);
+    constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(25);
+    constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(26);
+    constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(27);
 
 #ifdef USE_MUX
-    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(25);
-    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(26);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(27);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(28);
-    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(29);
-    constexpr uint32_t ct_arg_count = 30;
+    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(28);
+    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(29);
+    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(30);
+    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(31);
+    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(32);
+
+    constexpr uint32_t mux_arg_count = 33;
+
+    constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
+        ccl_routing_utils::get_line_unicast_route_info_from_args<rt_arg_count>();
+
+    constexpr ccl_routing_utils::line_unicast_route_info_t backward_unicast_route_info =
+        ccl_routing_utils::get_line_unicast_route_info_from_args<
+            rt_arg_count + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args>();
+
+    constexpr uint32_t ct_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
+
+    const auto& unicast_route_info =
+        is_injector_core_backward ? forward_unicast_route_info : backward_unicast_route_info;
 #else
-    constexpr uint32_t ct_arg_count = 25;
+    constexpr uint32_t ct_arg_count = 28;
 #endif
 
     // Load input/output addresses and range parameters
@@ -67,6 +110,9 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(argidx++);
+    const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(argidx++);
+    size_t out_ready_sem = get_arg_val<uint32_t>(argidx++);
 
 #ifdef USE_MUX
     bool mux_connection_valid = get_arg_val<uint32_t>(argidx++) == 1;
@@ -175,6 +221,64 @@ void kernel_main() {
     const uint64_t in0_receiver_forward_semaphore_noc_addr =
         get_noc_addr(in0_dest_forward_noc_x, in0_dest_forward_noc_y, in0_receiver_forward_semaphore_addr);
 
+#ifdef USE_MUX
+    // all gather
+    volatile tt_l1_ptr uint32_t* out_ready_sem_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem);
+    uint32_t sem_target = 0;
+    uint64_t out_ready_sem_noc_addr_in_pkt =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+
+    uint32_t slices_expected = 0;
+    uint32_t writes_expected = 0;
+    if (topology == Topology::Linear) {
+        if (is_injector_core_forward) {
+            slices_expected = num_targets_forward_direction;
+            writes_expected = num_targets_backward_direction ? num_targets_forward_direction : 0;
+        } else {
+            slices_expected = num_targets_backward_direction;
+            writes_expected = num_targets_forward_direction ? num_targets_backward_direction : 0;
+        }
+    } else if (topology == Topology::Ring) {
+        if (is_injector_core_forward) {
+            slices_expected = num_targets_backward_direction;
+        } else {
+            slices_expected = num_targets_forward_direction;
+        }
+        writes_expected = slices_expected - 1;
+    }
+
+    // pre-populate packet headers
+    auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
+    auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
+    auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
+    // only initialize if we're actually going to send something over fabric
+    if (detail::valid_targets(is_injector_core_forward)) {
+        static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
+        uint64_t dummy_addrs[4] = {0, 0, 0, 0};
+        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
+        fabric_unicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+            pkt_scatter_hdr,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
+            in3_tile_size * num_tiles_to_write_per_packet);
+
+        fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, in3_tile_size);
+
+        fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            pkt_hdr_sem_inc,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                0,  // ignore
+                static_cast<uint32_t>(1)});
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
+    }
+#endif
+
     /**
      * This is a Serpentine (Boustrophedon) output block ordering.
      * It enables reuse of one of the input blocks for the last output block.
@@ -201,6 +305,7 @@ void kernel_main() {
 
         // When striding M block, in0 gets no reuse
         reuse_block = false;
+        uint32_t slices_received = 0;
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
                                         : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
@@ -234,9 +339,22 @@ void kernel_main() {
                 bool is_injector_core =
                     is_injector(use_backward_injector_core, is_injector_core_backward, is_injector_core_forward);
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+
+                uint32_t k_block = 0;
+#ifdef USE_MUX
+                k_block = compute_actual_k_block(
+                    k_block_iter,
+                    K_num_blocks,
+                    my_rank,
+                    K_num_blocks / num_devices,
+                    num_devices,
+                    k_forward,
+                    n_block_iter == 0,
+                    out_ready_sem_addr_ptr,
+                    sem_target,
+                    slices_received);
+#endif
                 if (is_injector_core) {
-                    uint32_t k_block = compute_actual_k_block(
-                        k_block_iter, K_num_blocks, my_rank, K_num_blocks / num_devices, num_devices, k_forward);
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
@@ -302,6 +420,31 @@ void kernel_main() {
                         use_backward_injector_core ? in0_receiver_backward_semaphore_noc_addr
                                                    : in0_receiver_forward_semaphore_noc_addr);
                 }
+
+#ifdef USE_MUX
+                if (n_block_iter == 0) {
+                    // If not the last block
+                    if (slices_received <= writes_expected) {
+                        // If backward, send forward
+                        // If forward, send backward
+                        forward_tile_to_fabric_neighbor(
+                            m_tile,
+                            k_block * K_block_tiles,
+                            current_M_block_tiles,
+                            K_block_tiles,
+                            num_tiles_to_write_per_packet,
+                            in0_start_address,
+                            padded_K_tiles,
+                            in0_reader,
+                            mux_connection_handle,
+                            pkt_scatter_hdr,
+                            pkt_unicast_hdr,
+                            pkt_hdr_sem_inc,
+                            in0_tile_size,
+                            out_ready_sem_noc_addr_in_pkt);
+                    }
+                }
+#endif
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
@@ -362,5 +505,7 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+
+    noc_semaphore_set(out_ready_sem_addr_ptr, 0);
 #endif
 }
