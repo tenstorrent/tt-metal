@@ -1,9 +1,10 @@
 
 
 ## Schema Setup
-- Compile a `.proto` file using `protoc` for python
-- `import` into some `.py` file and use to parse a `.textproto` and enforce the schema
+- Compile the `.proto` schema into Python bindings using `protoc`, for example:
 
+  ```bash
+  protoc --python_out=. mesh_graph_descriptor.proto
 ## Use
 - Pass `.textproto` file as the MGD to be parsed
 - Other optional arguments to configure worker cores, noc_type etc.
