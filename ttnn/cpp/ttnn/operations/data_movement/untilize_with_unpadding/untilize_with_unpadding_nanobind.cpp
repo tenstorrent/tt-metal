@@ -36,22 +36,11 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
             List of ttnn.Tensor: the output tensor.
     )doc";
 
-    using OperationType = decltype(ttnn::untilize_with_unpadding);
     ttnn::bind_registered_operation(
         mod,
         ttnn::untilize_with_unpadding,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Shape& output_tensor_end,
-               const std::optional<MemoryConfig>& memory_config,
-               bool use_multicore,
-               bool use_pack_untilize,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(
-                    input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("output_tensor_end"),
             nb::kw_only(),
