@@ -471,10 +471,10 @@ class RotarySetup(LightweightModule):
         if self.use_qk_fused:
             # NOTE: For fused QK ops (rotary embedding + paged cache update), we intentionally double the batch dimension so that
             # the rotary indices can be used for Q and K tensors each.
+            position_idxs = position_idxs.repeat(2)
             assert (
                 position_idxs.shape[0] == self.batch_size_per_device_group
             ), "Position idxs must be the same as the batch size per device group"
-            position_idxs = position_idxs.repeat(2)
 
         batch = position_idxs.shape[0]
         position_idxs = position_idxs.reshape(1, batch)  # [1, 1, 1, batch]
