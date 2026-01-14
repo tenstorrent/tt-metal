@@ -49,6 +49,7 @@ class WanTransformerBlock:
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
+            bias=False,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
@@ -102,6 +103,7 @@ class WanTransformerBlock:
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
+            bias=False,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
@@ -207,7 +209,6 @@ class WanTransformerBlock:
         spatial_normed_1BND = self.norm1(
             spatial_1BND, dynamic_weight=(1.0 + scale_msa_1B1D), dynamic_bias=shift_msa_1B1D
         )
-        # spatial_normed_1BND = spatial_normed_1BND * (1.0 + scale_msa_1B1D) + shift_msa_1B1D
 
         # Self attention on spatial
         spatial_attn_1BND = self.attn1(
@@ -237,8 +238,6 @@ class WanTransformerBlock:
         spatial_normed_1BND = self.norm3(
             spatial_1BND, dynamic_weight=(1.0 + c_scale_msa_1B1D), dynamic_bias=c_shift_msa_1B1D
         )
-
-        # spatial_normed_1BND = spatial_normed_1BND * (1 + c_scale_msa_1B1D) + c_shift_msa_1B1D
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
@@ -337,6 +336,7 @@ class WanTransformer3DModel:
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
+            bias=False,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
