@@ -613,7 +613,7 @@ on:
 
   schedule:
     - cron: "30 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:30 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
-    - cron: "0 4 * * 3, 6" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
+    - cron: "0 4 * * 3,6" # This cron schedule runs the workflow at 4:00 AM UTC on Wed/Sat (comprehensive run)
     - cron: "0 4 * * *" # This cron schedule runs the workflow at 4:00 AM UTC daily (model traced runs)
     - cron: "0 3 * * *" # This cron schedule runs the workflow at 3:00 AM UTC daily (lead model runs)
 concurrency:
@@ -1157,7 +1157,7 @@ jobs:
         run: |
           # Determine run type based on schedule or input
           RUN_TYPE="nightly"
-          if [[ "${{ github.event.schedule }}" == "0 4 * * 3, 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+          if [[ "${{ github.event.schedule }}" == "0 4 * * 3,6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
             RUN_TYPE="comprehensive"
           elif [[ "${{ github.event.schedule }}" == "0 4 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Model Traced)" ]]; then
             RUN_TYPE="model_traced"

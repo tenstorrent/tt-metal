@@ -256,7 +256,7 @@ def main():
         sys.exit(1)
 
     # Detect run type
-    is_comprehensive = schedule_expr == "0 4 * * 3, 6" or sweep_name == "ALL SWEEPS (Comprehensive)"
+    is_comprehensive = schedule_expr == "0 4 * * 3,6" or sweep_name == "ALL SWEEPS (Comprehensive)"
     is_model_traced = schedule_expr == "0 4 * * *" or sweep_name == "ALL SWEEPS (Model Traced)"
     is_lead_models = schedule_expr == "0 3 * * *" or sweep_name == "ALL SWEEPS (Lead Models)"
 

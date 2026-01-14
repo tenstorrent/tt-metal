@@ -20,7 +20,7 @@ The script analyzes generated sweep vector files and produces a matrix configura
 - **Batch Size**: 10 modules per batch
 - **Suite**: `nightly`
 
-### 3. Comprehensive (Wed/Sat: `0 4 * * 3, 6`)
+### 3. Comprehensive (Wed/Sat: `0 4 * * 3,6`)
 - **Purpose**: Exhaustive testing with all suite combinations
 - **Strategy**: Smaller batches to avoid timeouts
 - **Batch Size**: 3 modules per batch
@@ -289,7 +289,7 @@ Always test locally before committing:
 
 ```bash
 # Test all run types
-for schedule in "0 3 * * *" "0 0 * * 1" "0 4 * * 3, 6" "0 4 * * *"; do
+for schedule in "0 3 * * *" "0 0 * * 1" "0 4 * * 3,6" "0 4 * * *"; do
     echo "Testing schedule: $schedule"
     GITHUB_EVENT_SCHEDULE="$schedule" \
     GITHUB_EVENT_NAME="schedule" \
