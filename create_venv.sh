@@ -80,11 +80,17 @@ fi
 # Install uv if not already available
 if ! command -v uv &>/dev/null; then
     echo "Installing uv..."
-    ${PYTHON_CMD} -m pip install uv
-    # Add pip's bin directory to PATH for the current session
-    USER_BIN="${HOME}/.local/bin"
-    if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
-        export PATH="$USER_BIN:$PATH"
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$SCRIPT_DIR/scripts/install-uv.sh" ]; then
+        bash "$SCRIPT_DIR/scripts/install-uv.sh"
+    else
+        echo "Warning: install-uv.sh not found, falling back to pip installation"
+        ${PYTHON_CMD} -m pip install uv
+        # Add pip's bin directory to PATH for the current session
+        USER_BIN="${HOME}/.local/bin"
+        if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+            export PATH="$USER_BIN:$PATH"
+        fi
     fi
 fi
 
