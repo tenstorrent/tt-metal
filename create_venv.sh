@@ -29,8 +29,8 @@ ENVIRONMENT VARIABLES:
                            Default: ./python_env
 
 NOTE:
-    If you encounter venv issues, running "uv pip install -e ." may fix them without
-    having to rebuild the entire virtual environment.
+    If you encounter venv issues, running "uv pip install -e ." with the venv active
+    may fix them without having to rebuild the entire virtual environment.
 
 EOF
 }
