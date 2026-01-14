@@ -66,13 +66,24 @@ class SuffixEmbeddingTTNN:
         pad_len = ((suffix_len + 31) // 32) * 32
         att_mask_padded = att_mask_pattern + [0] * (pad_len - suffix_len)
 
-        self._att_mask_pattern = ttnn.from_torch(
-            torch.tensor([att_mask_padded], dtype=torch.float32),  # [1, pad_len]
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Create attention mask using ttnn (avoid torch.tensor)
+        # Use ttnn.zeros and fill with ones at specific positions
+        att_mask_ttnn = ttnn.zeros((1, pad_len), device=device, dtype=ttnn.bfloat16)
+        att_mask_ttnn = ttnn.to_layout(att_mask_ttnn, ttnn.TILE_LAYOUT)
+
+        # The pattern is: [1, 1, 0, ...] for PI0 or [1, 0, ...] for PI05
+        # Create a mask with ones in the right positions
+        num_ones = len([x for x in att_mask_pattern if x == 1])
+        if num_ones > 0:
+            ones_tensor = ttnn.ones((1, num_ones), device=device, dtype=ttnn.bfloat16)
+            ones_tensor = ttnn.to_layout(ones_tensor, ttnn.TILE_LAYOUT)
+            # Pad the ones tensor to full length
+            ones_padded = ttnn.pad(ones_tensor, [(0, 0), (0, pad_len - num_ones)], value=0.0)
+            ttnn.deallocate(ones_tensor)
+            ttnn.deallocate(att_mask_ttnn)
+            att_mask_ttnn = ones_padded
+
+        self._att_mask_pattern = att_mask_ttnn
         self._att_mask_suffix_len = suffix_len
 
     def embed_actions(self, noisy_actions: ttnn.Tensor) -> ttnn.Tensor:

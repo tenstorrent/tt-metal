@@ -15,7 +15,7 @@ SigLIP Architecture:
 Optimizations over baseline:
     1. Unfold + TTNN linear for patch embedding (from Gemma3)
     2. Fused QKV projection (single linear instead of 3)
-    3. Native ttnn.experimental.nlp_create_qkv_heads (no PyTorch transfers)
+    3. Native ttnn.experimental.nlp_create_qkv_heads
     4. Native ttnn.experimental.nlp_concat_heads for output
 """
 
@@ -23,8 +23,8 @@ import math
 from typing import Dict
 
 import torch
-import torch.nn.functional as F
 import ttnn
+import tt_lib.fallback_ops as fallback_ops
 
 from models.experimental.pi0.common.configs import SigLIPConfig
 
@@ -46,10 +46,10 @@ def nearest_32(x: int) -> int:
 
 class PatchEmbeddingTTNN:
     """
-    Convert image patches to embeddings using Unfold + TTNN linear.
+    Convert image patches to embeddings using TTNN 6D permute + linear.
 
-    OPTIMIZED: Uses torch.nn.Unfold for patch extraction, then TTNN linear.
-    This approach (from Gemma3) uses optimized TTNN linear instead of PyTorch conv2d.
+    OPTIMIZED: Uses TTNN's MultiCoreTileInvariant 6D permute for patch extraction,
+    staying in TILE layout throughout to minimize layout conversions.
     """
 
     def __init__(
@@ -71,9 +71,6 @@ class PatchEmbeddingTTNN:
         self.patch_size = config.patch_size
         self.hidden_size = config.hidden_size
 
-        # Create unfold operation (runs on host, very fast)
-        self._unfold = torch.nn.Unfold(kernel_size=self.patch_size, stride=self.patch_size)
-
         # Handle both formats: vision_model.embeddings.patch_embedding (checkpoint) and patch_embedding (legacy)
         conv_weight = weights.get("patch_embedding.weight") or weights.get(
             "vision_model.embeddings.patch_embedding.weight"
@@ -84,30 +81,44 @@ class PatchEmbeddingTTNN:
         # Conv weight: (out_channels, in_channels, kernel_h, kernel_w) = (hidden_size, 3, patch_size, patch_size)
         # Linear weight: (in_features, out_features) where in_features = 3 * patch_size * patch_size
         out_channels = conv_weight.shape[0]  # hidden_size
-        in_features = conv_weight.shape[1] * conv_weight.shape[2] * conv_weight.shape[3]  # 3 * 14 * 14 = 588
+        in_channels = conv_weight.shape[1]  # 3
+        in_features = in_channels * conv_weight.shape[2] * conv_weight.shape[3]  # 3 * 14 * 14 = 588
 
-        # Reshape: (out, in, h, w) -> (out, in*h*w) -> transpose -> (in*h*w, out)
-        linear_weight = conv_weight.view(out_channels, -1)  # (hidden_size, 588)
+        # Store raw in_features for unfold output
+        self.in_features = in_features
+        self.in_channels = in_channels
+
+        # Reorder weight to match our unfold's channel-last output order (h, w, c)
+        # Conv weight: (out, c, h, w) -> permute to (out, h, w, c) -> flatten to (out, h*w*c)
+        # This matches our _unfold_conv2d which produces (B, num_patches, h*w*c) order
+        linear_weight = conv_weight.permute(0, 2, 3, 1).contiguous()  # (hidden_size, 14, 14, 3)
+        linear_weight = linear_weight.view(out_channels, -1)  # (hidden_size, 588)
 
         # Pad input dimension to tile-aligned (588 -> 608)
         self.in_features_padded = nearest_32(in_features)
         pad_len = self.in_features_padded - in_features
 
-        if pad_len > 0:
-            padding = torch.zeros(out_channels, pad_len, dtype=linear_weight.dtype)
-            linear_weight = torch.cat([linear_weight, padding], dim=-1)
-
-        # Transpose for TTNN linear: (hidden_size, padded_in) -> (padded_in, hidden_size)
+        # Transpose for TTNN linear: (hidden_size, in_features) -> (in_features, hidden_size)
         linear_weight = linear_weight.T.contiguous()
 
-        # Store as TTNN tensor on device
-        self._linear_weight = ttnn.from_torch(
+        # Transfer to device first, then pad on device
+        linear_weight_ttnn = ttnn.from_torch(
             linear_weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        # Pad on device using ttnn.pad
+        if pad_len > 0:
+            linear_weight_ttnn = ttnn.pad(
+                linear_weight_ttnn,
+                padding=((0, pad_len), (0, 0)),  # Pad first dim (in_features)
+                value=0.0,
+            )
+
+        self._linear_weight = linear_weight_ttnn
 
         # Bias (if present)
         if conv_bias is not None:
@@ -129,9 +140,45 @@ class PatchEmbeddingTTNN:
             packer_l1_acc=True,
         )
 
+    def _unfold_conv2d(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Unfold using TTNN 6D permute with MultiCoreTileInvariant optimization.
+        Stays in TILE layout throughout - no layout conversions.
+
+        The permute pattern (0, 1, 3, 2, 4, 5) keeps the last 2 dimensions (4, 5)
+        in place, enabling the optimized MultiCoreTileInvariant kernel.
+
+        Args:
+            x: TTNN tensor (batch_size, height, width, channels) - channel-last, TILE layout
+
+        Returns:
+            TTNN tensor (batch_size, num_patches, patch_size * patch_size * channels) - TILE layout
+        """
+        batch_size = x.shape[0]
+        img_h = x.shape[1]
+        img_w = x.shape[2]
+        img_c = x.shape[3]
+
+        patches_h = img_h // self.patch_size
+        patches_w = img_w // self.patch_size
+
+        # Reshape to 6D: (B, H, W, C) -> (B, patches_h, patch_size, patches_w, patch_size, C)
+        x = ttnn.reshape(x, (batch_size, patches_h, self.patch_size, patches_w, self.patch_size, img_c))
+
+        # Optimized 6D permute - last 2 dims (4, 5) stay in place
+        # Uses MultiCoreTileInvariant kernel for TILE layout
+        # (B, patches_h, patch_size, patches_w, patch_size, C) -> (B, patches_h, patches_w, patch_size, patch_size, C)
+        x = ttnn.permute(x, (0, 1, 3, 2, 4, 5))
+
+        # Flatten to 3D: (B, patches_h, patches_w, patch_size, patch_size, C) -> (B, num_patches, patch_features)
+        x = ttnn.reshape(x, (batch_size, patches_h * patches_w, self.patch_size * self.patch_size * img_c))
+
+        return x
+
     def forward(self, pixel_values) -> ttnn.Tensor:
         """
-        OPTIMIZED: Extract patch embeddings using Unfold + TTNN linear.
+        OPTIMIZED: Extract patch embeddings entirely on device using TILE layout.
+        Minimizes layout conversions by staying in TILE throughout.
 
         Args:
             pixel_values: PyTorch tensor (batch_size, channels, height, width)
@@ -145,41 +192,41 @@ class PatchEmbeddingTTNN:
 
         batch_size = pixel_values.shape[0]
 
-        # Step 1: Unfold on host (very fast - just memory reorganization)
-        # Input: (B, C, H, W) -> Output: (B, C*patch_size*patch_size, num_patches)
-        x = self._unfold(pixel_values)
-
-        # Step 2: Permute to (B, num_patches, C*patch_size*patch_size)
-        x = x.permute(0, 2, 1)
-
-        # Step 3: Pad to tile-aligned dimension
-        in_features = x.shape[-1]
-        pad_len = self.in_features_padded - in_features
-
-        if pad_len > 0:
-            padding = torch.zeros((batch_size, x.shape[1], pad_len), dtype=x.dtype, device=x.device)
-            x = torch.cat([x, padding], dim=-1)
-
-        # Step 4: Transfer to device
-        x_ttnn = ttnn.from_torch(
-            x,
+        # Step 1: Transfer to device in TILE layout directly (B, C, H, W)
+        x = ttnn.from_torch(
+            pixel_values,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Step 5: TTNN linear (optimized on device)
+        # Step 2: Permute to channel-last: (B, C, H, W) -> (B, H, W, C)
+        # Note: This uses generic kernel since last 2 dims move, but unavoidable
+        x = ttnn.permute(x, (0, 2, 3, 1))
+
+        # Step 3: Unfold using optimized 6D permute (MultiCoreTileInvariant)
+        x = self._unfold_conv2d(x)
+
+        # Step 4: Pad to tile-aligned if needed (588 -> 608)
+        current_features = x.shape[-1]
+        if current_features < self.in_features_padded:
+            pad_amount = self.in_features_padded - current_features
+            # Use ttnn.pad: pad last dimension
+            x = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_amount)], value=0.0)
+
+        # Step 5: TTNN linear (already in TILE - no conversion needed!)
+        # Use L1 for intermediate computation
         out = ttnn.linear(
-            x_ttnn,
+            x,
             self._linear_weight,
             bias=self._linear_bias,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        ttnn.deallocate(x_ttnn)
+        ttnn.deallocate(x)
 
         return out
 
@@ -219,75 +266,81 @@ class SigLIPAttentionTTNN:
 
         # Pad head_dim to multiple of 32 for TTNN tile alignment
         self.padded_head_dim = ((self.head_dim + 31) // 32) * 32  # 72 -> 96
+        padding_size = self.padded_head_dim - self.head_dim
 
-        # Helper function to pad weights to tile-aligned head_dim
-        def pad_head_dim_weight(weight, heads_out=True):
-            """Pad weight tensor's head dimension to multiple of 32."""
+        # Helper function to pad weights on device using ttnn.pad
+        def pad_head_dim_weight_ttnn(weight, heads_out=True):
+            """Pad weight tensor's head dimension using TTNN operations."""
             dim = weight.shape[0]  # hidden_size
-            padded_head_dim = self.padded_head_dim
-            padding_size = padded_head_dim - self.head_dim
 
             if padding_size > 0:
                 if heads_out:
                     weight = weight.T  # (hidden, hidden) -> transpose for reshape
+                # Reshape to expose head dimension
                 weight = weight.reshape(dim, self.num_heads, self.head_dim)
-                padding = torch.zeros(dim, self.num_heads, padding_size, dtype=weight.dtype)
-                weight = torch.cat([weight, padding], dim=-1)
-                weight = weight.reshape(dim, self.num_heads * padded_head_dim)
+                # Transfer to device
+                weight_ttnn = ttnn.from_torch(
+                    weight.contiguous(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                # Pad head dimension using ttnn.pad
+                weight_ttnn = ttnn.pad(weight_ttnn, padding=((0, 0), (0, 0), (0, padding_size)), value=0.0)
+                weight_ttnn = ttnn.reshape(weight_ttnn, (dim, self.num_heads * self.padded_head_dim))
+                weight = ttnn.to_torch(weight_ttnn)
                 if heads_out:
-                    weight = weight.T  # Transpose back
+                    weight = weight.T
             return weight
 
-        def pad_head_dim_bias(bias):
-            """Pad 1D bias to match padded head dim."""
-            padded_head_dim = self.padded_head_dim
-            padding_size = padded_head_dim - self.head_dim
-
+        def pad_head_dim_bias_ttnn(bias):
+            """Pad 1D bias using TTNN operations."""
             if padding_size > 0:
+                # Reshape to expose head dimension
                 bias = bias.view(self.num_heads, self.head_dim)
-                padding = torch.zeros(self.num_heads, padding_size, dtype=bias.dtype)
-                bias = torch.cat([bias, padding], dim=-1)
-                bias = bias.view(self.num_heads * padded_head_dim)
+                # Transfer to device
+                bias_ttnn = ttnn.from_torch(
+                    bias.contiguous(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                # Pad using ttnn.pad
+                bias_ttnn = ttnn.pad(bias_ttnn, padding=((0, 0), (0, padding_size)), value=0.0)
+                bias_ttnn = ttnn.reshape(bias_ttnn, (self.num_heads * self.padded_head_dim,))
+                bias = ttnn.to_torch(bias_ttnn)
             return bias
 
         # OPTIMIZATION: Fused QKV weights - single linear instead of 3
-        # Pad each weight, transpose for TTNN linear, then concatenate
-        wq_padded = pad_head_dim_weight(weights["self_attn.q_proj.weight"])
-        wk_padded = pad_head_dim_weight(weights["self_attn.k_proj.weight"])
-        wv_padded = pad_head_dim_weight(weights["self_attn.v_proj.weight"])
+        # Pad each weight using TTNN, then concatenate
+        wq_padded = pad_head_dim_weight_ttnn(weights["self_attn.q_proj.weight"])
+        wk_padded = pad_head_dim_weight_ttnn(weights["self_attn.k_proj.weight"])
+        wv_padded = pad_head_dim_weight_ttnn(weights["self_attn.v_proj.weight"])
 
-        # Concatenate Q, K, V weights: [hidden, 3 * num_heads * padded_head_dim]
-        wqkv_combined = torch.cat([wq_padded.T, wk_padded.T, wv_padded.T], dim=-1)
-
-        self.wqkv = ttnn.from_torch(
-            wqkv_combined.contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Concatenate Q, K, V weights on device: [hidden, 3 * num_heads * padded_head_dim]
+        wq_ttnn = ttnn.from_torch(wq_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        wk_ttnn = ttnn.from_torch(wk_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        wv_ttnn = ttnn.from_torch(wv_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.wqkv = ttnn.concat([wq_ttnn, wk_ttnn, wv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Fused QKV biases
         if "self_attn.q_proj.bias" in weights:
-            bq_padded = pad_head_dim_bias(weights["self_attn.q_proj.bias"])
-            bk_padded = pad_head_dim_bias(weights["self_attn.k_proj.bias"])
-            bv_padded = pad_head_dim_bias(weights["self_attn.v_proj.bias"])
+            bq_padded = pad_head_dim_bias_ttnn(weights["self_attn.q_proj.bias"])
+            bk_padded = pad_head_dim_bias_ttnn(weights["self_attn.k_proj.bias"])
+            bv_padded = pad_head_dim_bias_ttnn(weights["self_attn.v_proj.bias"])
 
-            # Concatenate biases
-            bqkv_combined = torch.cat([bq_padded, bk_padded, bv_padded], dim=-1)
-
-            self.bqkv = ttnn.from_torch(
-                bqkv_combined.unsqueeze(0).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            # Concatenate biases on device
+            bq_ttnn = ttnn.from_torch(bq_padded.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            bk_ttnn = ttnn.from_torch(bk_padded.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            bv_ttnn = ttnn.from_torch(bv_padded.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            self.bqkv = ttnn.concat([bq_ttnn, bk_ttnn, bv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             self.bqkv = None
 
         # Output projection - pad input head dim, output is hidden_size
-        wo_padded = pad_head_dim_weight(weights["self_attn.out_proj.weight"], heads_out=False)
+        wo_padded = pad_head_dim_weight_ttnn(weights["self_attn.out_proj.weight"], heads_out=False)
         self.wo = ttnn.from_torch(
             wo_padded.T.contiguous(),
             dtype=ttnn.bfloat16,
@@ -327,8 +380,8 @@ class SigLIPAttentionTTNN:
 
         Key optimizations:
         1. Single fused QKV linear (3x fewer linear ops)
-        2. Native ttnn.experimental.nlp_create_qkv_heads (no PyTorch transfers)
-        3. Native ttnn.experimental.nlp_concat_heads (no PyTorch transfers)
+        2. Native ttnn.experimental.nlp_create_qkv_heads
+        3. Native ttnn.experimental.nlp_concat_heads
 
         Args:
             hidden_states: TTNN tensor (batch_size, seq_len, hidden_size)
@@ -345,23 +398,24 @@ class SigLIPAttentionTTNN:
 
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, 3 * num_heads * padded_head_dim]
+        # Use L1 for intermediate computation
         xqkv_fused = ttnn.linear(
             hidden_states,
             self.wqkv,
             bias=self.bqkv,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
-
-        # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
+        
+        # OPTIMIZATION 2: Native TTNN head splitting
         # This splits the fused QKV into separate Q, K, V with proper head layout
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
             xqkv_fused,
             num_heads=self.num_heads,
             num_kv_heads=self.num_heads,  # SigLIP uses MHA, not MQA
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(xqkv_fused)
 
@@ -392,20 +446,20 @@ class SigLIPAttentionTTNN:
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
 
-        # OPTIMIZATION 3: Native TTNN head concatenation (no PyTorch transfers!)
+        # OPTIMIZATION 3: Native TTNN head concatenation
         # This concatenates heads back to [batch, 1, seq, num_heads * padded_head_dim]
         attn_concat = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output)
-
-        # Output projection
+        
+        # Output projection - use L1 for intermediate computation
         output = ttnn.linear(
             attn_concat,
             self.wo,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
         ttnn.deallocate(attn_concat)
@@ -502,23 +556,23 @@ class SigLIPMLPTTNN:
         Returns:
             TTNN tensor (batch_size, seq_len, hidden_size)
         """
-        # FC1 with GELU activation
+        # FC1 with GELU activation - use L1 for intermediate computation
         x = ttnn.linear(
             hidden_states,
             self.fc1_weight,
             bias=self.fc1_bias,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             activation="gelu",
         )
-
-        # FC2
+        
+        # FC2 - use L1 for intermediate computation
         output = ttnn.linear(
             x,
             self.fc2_weight,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(x)
@@ -617,11 +671,11 @@ class SigLIPBlockTTNN:
         # Native TTNN attention with padded head dim workaround
         attn_output = self.attention.forward(normed)
         ttnn.deallocate(normed)
-
-        # Residual connection
-        hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        
+        # Residual connection - use L1 for intermediate computation
+        hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
-
+        
         # Pre-MLP LayerNorm
         normed = ttnn.layer_norm(
             hidden_states,
@@ -630,11 +684,11 @@ class SigLIPBlockTTNN:
             epsilon=self.config.layer_norm_eps,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
-        # MLP with residual
+        
+        # MLP with residual - use L1 for intermediate computation
         mlp_output = self.mlp.forward(normed)
         ttnn.deallocate(normed)
-        hidden_states = ttnn.add(hidden_states, mlp_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden_states = ttnn.add(hidden_states, mlp_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(mlp_output)
 
         return hidden_states
@@ -691,12 +745,13 @@ class SigLIPVisionTowerTTNN:
                 original_size = int(math.sqrt(original_num_patches))
                 target_size = int(math.sqrt(num_patches))
 
-                # Reshape to 2D grid: (num_patches, hidden_size) -> (1, H, W, hidden_size)
+                # Reshape to 2D grid: (num_patches, hidden_size) -> (1, hidden_size, H, W)
                 pos_emb_2d = pos_emb.view(1, original_size, original_size, -1)
                 pos_emb_2d = pos_emb_2d.permute(0, 3, 1, 2)  # (1, hidden_size, H, W)
 
-                # Interpolate using bicubic
-                pos_emb_interpolated = F.interpolate(
+                # Interpolate using bicubic (via TTNN fallback_ops)
+                # Note: This is still rare - only when checkpoint resolution differs
+                pos_emb_interpolated = fallback_ops.interpolate(
                     pos_emb_2d,
                     size=(target_size, target_size),
                     mode="bicubic",
@@ -791,25 +846,26 @@ class SigLIPVisionTowerTTNN:
 
             # Check if we need to interpolate position embeddings dynamically
             if num_patches_actual != num_patches_expected:
-                # Convert position embeddings back to torch for interpolation
-                pos_emb_torch = ttnn.to_torch(self.pos_emb_weights)
-
+                # Dynamic position embedding interpolation (rare - only when image size differs)
                 original_size = int(math.sqrt(num_patches_expected))
                 target_size = int(math.sqrt(num_patches_actual))
-                hidden_size = pos_emb_torch.shape[1]
 
-                # Reshape and interpolate
-                pos_emb_2d = pos_emb_torch.view(1, original_size, original_size, hidden_size)
-                pos_emb_2d = pos_emb_2d.permute(0, 3, 1, 2)
+                # Reshape position embeddings for interpolation
+                # pos_emb_weights: [num_patches, hidden_size] -> [1, hidden_size, H, W]
+                pos_emb_2d = ttnn.reshape(self.pos_emb_weights, (1, original_size, original_size, -1))
+                pos_emb_2d = ttnn.permute(pos_emb_2d, (0, 3, 1, 2))
 
-                pos_emb_interpolated = F.interpolate(
+                # Interpolate using bicubic (via TTNN fallback_ops - handles TTNN tensors)
+                pos_emb_interpolated = fallback_ops.interpolate(
                     pos_emb_2d,
                     size=(target_size, target_size),
                     mode="bicubic",
                     align_corners=False,
                 )
 
-                pos_emb_resized = pos_emb_interpolated.permute(0, 2, 3, 1).flatten(0, 2)
+                # Reshape back: [1, hidden_size, H, W] -> [num_patches, hidden_size]
+                pos_emb_resized = ttnn.permute(pos_emb_interpolated, (0, 2, 3, 1))
+                pos_emb_resized = ttnn.reshape(pos_emb_resized, (target_size * target_size, -1))
 
                 # Create new position IDs for actual number of patches
                 position_ids_new = ttnn.arange(0, num_patches_actual, 1, dtype=ttnn.uint32, device=self.device)

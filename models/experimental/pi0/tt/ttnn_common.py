@@ -44,10 +44,9 @@ def create_sinusoidal_pos_embedding_ttnn(
     device: Optional[ttnn.Device] = None,
 ) -> ttnn.Tensor:
     """
-    Create sinusoidal positional embeddings for timesteps (TTNN version).
+    Create sinusoidal positional embeddings for timesteps (pure TTNN version).
 
-    Note: The frequency computation is done on host (torch) since it's
-    a one-time computation. The sin/cos operations are done on device.
+    All computations are done on device using TTNN operations.
 
     Args:
         time: TTNN tensor of shape (batch_size,) with timestep values
@@ -65,31 +64,53 @@ def create_sinusoidal_pos_embedding_ttnn(
     if device is None:
         device = time.device()
 
-    # Compute frequencies on host (one-time computation)
-    fraction = torch.linspace(0.0, 1.0, dimension // 2, dtype=torch.float32)
-    period = min_period * (max_period / min_period) ** fraction
-    scaling_factor = (1.0 / period) * 2 * math.pi
+    half_dim = dimension // 2
 
-    # Convert scaling factor to TTNN
-    scaling_factor_ttnn = ttnn.from_torch(
-        scaling_factor.unsqueeze(0),  # [1, dim//2]
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
+    # Create fraction [0, 1/(n-1), 2/(n-1), ..., 1] using TTNN
+    # ttnn.arange creates [0, 1, 2, ..., n-1], divide by (n-1) to get [0, 1]
+    indices = ttnn.arange(0, half_dim, 1, device=device, dtype=ttnn.float32)
+    indices = ttnn.to_layout(indices, ttnn.TILE_LAYOUT)
+    if half_dim > 1:
+        fraction = ttnn.multiply(indices, 1.0 / (half_dim - 1))
+    else:
+        fraction = indices  # Edge case: half_dim == 1
 
-    # Reshape time for broadcasting: [batch, 1]
+    # Compute period: min_period * (max_period / min_period) ** fraction
+    # = min_period * exp(fraction * log(max_period / min_period))
+    log_ratio = math.log(max_period / min_period)
+    exponent = ttnn.multiply(fraction, log_ratio)
+    period_ratio = ttnn.exp(exponent)
+    period = ttnn.multiply(period_ratio, min_period)
+
+    # Compute scaling_factor: (1.0 / period) * 2 * pi
+    inv_period = ttnn.reciprocal(period)
+    scaling_factor = ttnn.multiply(inv_period, 2 * math.pi)
+
+    # Reshape for broadcasting: scaling_factor [half_dim] -> [1, half_dim]
+    scaling_factor = ttnn.reshape(scaling_factor, (1, half_dim))
+
+    # Reshape time for broadcasting: [batch] -> [batch, 1]
     time_reshaped = ttnn.reshape(time, (-1, 1))
 
-    # Compute sin input: time * scaling_factor
-    sin_input = ttnn.matmul(time_reshaped, scaling_factor_ttnn)
+    # Compute sin input: time * scaling_factor (broadcasts to [batch, half_dim])
+    sin_input = ttnn.matmul(time_reshaped, scaling_factor)
 
     # Compute sin and cos
     sin_emb = ttnn.sin(sin_input)
     cos_emb = ttnn.cos(sin_input)
 
-    # Concatenate
+    # Concatenate to get [batch, dimension]
     embeddings = ttnn.concat([sin_emb, cos_emb], dim=-1)
+
+    # Clean up
+    ttnn.deallocate(indices)
+    ttnn.deallocate(fraction)
+    ttnn.deallocate(exponent)
+    ttnn.deallocate(period_ratio)
+    ttnn.deallocate(period)
+    ttnn.deallocate(inv_period)
+    ttnn.deallocate(scaling_factor)
+    ttnn.deallocate(sin_input)
 
     return embeddings
 

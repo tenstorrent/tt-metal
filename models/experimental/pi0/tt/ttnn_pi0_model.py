@@ -295,26 +295,30 @@ class PI0ModelTTNN:
         # Step 2: Forward prefix through VLM and cache KV
         _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
 
-        # Get timesteps (on host for control flow)
+        # Get timesteps using pure Python list (for control flow on host)
         num_steps = self.denoise_config.num_steps
-        timesteps = torch.linspace(1.0, 0.0, num_steps + 1)
+        # Create timesteps as Python list: [1.0, 0.9, 0.8, ..., 0.0]
+        timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
 
-        # OPTIMIZATION: Pre-compute all timestep tensors on device (saves 9 transfers!)
-        timestep_values = timesteps[:-1]  # [t0, t1, ..., t9] - exclude final 0.0
-        timesteps_expanded = timestep_values.unsqueeze(0).expand(batch_size, -1)  # [batch, num_steps]
-        # Pad to tile-aligned size (num_steps=10 -> 32)
+        # OPTIMIZATION: Pre-compute all timestep tensors on device using TTNN
         pad_steps = ((num_steps + 31) // 32) * 32
-        timesteps_padded = torch.zeros(batch_size, pad_steps, dtype=torch.float32)
-        timesteps_padded[:, :num_steps] = timesteps_expanded
-        timesteps_ttnn = ttnn.from_torch(
-            timesteps_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
 
-        # Step 3: Sample initial noise and convert to TTNN ONCE (not per step!)
+        # Create timestep indices on device using ttnn.arange
+        timestep_indices = ttnn.arange(0, pad_steps, 1, device=self.device, dtype=ttnn.bfloat16)
+        timestep_indices = ttnn.to_layout(timestep_indices, ttnn.TILE_LAYOUT)
+
+        # Convert to timestep values: 1.0 - index / num_steps
+        timestep_values = ttnn.multiply(timestep_indices, -1.0 / num_steps)
+        timesteps_ttnn = ttnn.add(timestep_values, 1.0)
+        timesteps_ttnn = ttnn.reshape(timesteps_ttnn, (1, pad_steps))
+
+        # Cleanup
+        ttnn.deallocate(timestep_indices)
+        ttnn.deallocate(timestep_values)
+
+        # Step 3: Sample initial noise (small tensor - host generation is fine)
+        # Note: Using torch.randn ensures PCC compatibility with PyTorch reference
+        # The tensor is tiny (batch * 50 * 7 = 350 floats), so transfer is negligible
         x_t_torch = torch.randn(batch_size, self.config.action_horizon, self.config.action_dim)
         x_t_ttnn = ttnn.from_torch(
             x_t_torch,
@@ -326,8 +330,8 @@ class PI0ModelTTNN:
 
         # Step 4: Denoising loop (stays on device!)
         for i in range(num_steps):
-            t = timesteps[i].item()
-            t_next = timesteps[i + 1].item()
+            t = timesteps[i]  # Already Python float
+            t_next = timesteps[i + 1]
             dt = t_next - t  # Negative since we go from 1.0 to 0.0
 
             # OPTIMIZATION: Slice timestep from pre-computed tensor (no transfer per step!)
