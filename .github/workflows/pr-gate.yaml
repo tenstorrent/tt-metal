@@ -158,7 +158,7 @@ jobs:
       # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
       # name clashes.
       build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
-      build-wheel: false
+      build-wheel: true
       publish-artifact: false
       skip-tt-train: true
       distributed: false
@@ -224,12 +224,12 @@ jobs:
     if: ${{ needs.find-changed-files.outputs.any-code-changed == 'true' ||
             needs.find-changed-files.outputs.docs-changed == 'true'
         }}
-    needs: [find-changed-files, asan-build]
+    needs: [find-changed-files, build]
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.asan-build.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   metalium-examples:
     needs: [ build, find-changed-files ]

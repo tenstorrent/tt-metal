@@ -219,7 +219,7 @@ jobs:
           # processes like bash, apt, git, etc. which aren't ASan-compatible.
           export LD_PRELOAD="/usr/lib/llvm-20/lib/clang/20/lib/linux/libclang_rt.asan-x86_64.so"
           export ASAN_OPTIONS="color=always"
-          export LSAN_OPTIONS="suppressions=/usr/share/tt-metalium/lsan.supp"
+          export LSAN_OPTIONS="suppressions=/work/tt_metal/test/lsan.supp"
 
           pytest \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/ \
