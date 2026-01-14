@@ -33,6 +33,7 @@ uint32_t compute_actual_k_block(
     bool is_first_n_block,
     volatile tt_l1_ptr uint32_t* out_ready_semaphore,
     uint32_t& sem_target,
+    bool is_injector_core,
     uint32_t& slices_received) {
 #else
 uint32_t compute_actual_k_block(
@@ -67,7 +68,7 @@ uint32_t compute_actual_k_block(
     uint32_t k_block_start = k_blocks_per_device * actual_device_rank;
     uint32_t k_block_index = k_block_start + device_k_block_iter;
 #ifdef USE_MUX
-    if (device_iter > 0 && is_first_n_block) {
+    if (device_iter > 1 && is_first_n_block) {
         // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         noc_semaphore_wait_min(out_ready_semaphore, sem_target + 1);
         sem_target++;
