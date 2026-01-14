@@ -20,11 +20,7 @@ void bind_example_operation(nb::module_& mod) {
 
         // Add nanobind overloads for the C++ APIs that should be exposed to python
         // There should be no logic here, just a call to `self` with the correct arguments
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::composite_example)& self, const ttnn::Tensor& input_tensor) -> ttnn::Tensor {
-                return self(input_tensor);
-            },
-            nb::arg("input_tensor")});
+        ttnn::nanobind_arguments_t{nb::arg("input_tensor")});
 }
 
 }  // namespace ttnn::operations::examples
