@@ -16,14 +16,13 @@
 #include "optimizers/adamw.hpp"
 
 class ModelFC : public ttml::modules::ModuleBase {
-    ttml::modules::ModuleBasePtr m_fc1;
-    ttml::modules::ModuleBasePtr m_fc2;
+    std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
+    std::shared_ptr<ttml::modules::LinearLayer> m_fc2;
 
 public:
     ModelFC() {
-        auto fc2 = std::make_shared<ttml::modules::LinearLayer>(64, 64);
-        m_fc2 = fc2;
-        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(fc2->get_weight(), /* has_bias*/ true);
+        m_fc2 = std::make_shared<ttml::modules::LinearLayer>(64, 64);
+        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(m_fc2->get_weight(), /* has_bias*/ true);
         create_name("ModelFC");
 
         register_module(m_fc1, "fc1");
@@ -38,27 +37,22 @@ public:
     }
 
     ttml::autograd::TensorPtr get_fc1_weight() {
-        auto* linear = dynamic_cast<ttml::modules::LinearLayer*>(m_fc1.get());
-        TT_ASSERT(linear != nullptr, "m_fc1 is not a LinearLayer");
-        return linear->get_weight();
+        return m_fc1->get_weight();
     }
 
     ttml::autograd::TensorPtr get_fc2_weight() {
-        auto* linear = dynamic_cast<ttml::modules::LinearLayer*>(m_fc2.get());
-        TT_ASSERT(linear != nullptr, "m_fc2 is not a LinearLayer");
-        return linear->get_weight();
+        return m_fc2->get_weight();
     }
 };
 
 class LanguageModel : public ttml::modules::ModuleBase {
-    ttml::modules::ModuleBasePtr m_fc1;
-    ttml::modules::ModuleBasePtr m_emb;
+    std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
+    std::shared_ptr<ttml::modules::Embedding> m_emb;
 
 public:
     LanguageModel() {
-        auto emb = std::make_shared<ttml::modules::Embedding>(64, 128);
-        m_emb = emb;
-        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(emb->get_weight(), /* has_bias*/ true);
+        m_emb = std::make_shared<ttml::modules::Embedding>(64, 128);
+        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(m_emb->get_weight(), /* has_bias*/ true);
 
         create_name("LanguageModel");
 

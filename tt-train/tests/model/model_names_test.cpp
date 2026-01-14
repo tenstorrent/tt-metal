@@ -14,12 +14,12 @@
 #include "ops/unary_ops.hpp"
 
 class MNISTModel : public ttml::modules::ModuleBase {
-    ttml::modules::ModuleBasePtr m_fc1;
-    ttml::modules::ModuleBasePtr m_fc2;
-    ttml::modules::ModuleBasePtr m_fc3;
-    ttml::modules::ModuleBasePtr m_dropout;
-    ttml::modules::ModuleBasePtr m_layernorm1;
-    ttml::modules::ModuleBasePtr m_layernorm2;
+    std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
+    std::shared_ptr<ttml::modules::LinearLayer> m_fc2;
+    std::shared_ptr<ttml::modules::LinearLayer> m_fc3;
+    std::shared_ptr<ttml::modules::DropoutLayer> m_dropout;
+    std::shared_ptr<ttml::modules::LayerNormLayer> m_layernorm1;
+    std::shared_ptr<ttml::modules::LayerNormLayer> m_layernorm2;
 
 public:
     MNISTModel() {

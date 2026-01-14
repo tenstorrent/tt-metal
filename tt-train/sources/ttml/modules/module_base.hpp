@@ -46,9 +46,7 @@ public:
     [[nodiscard]] const std::string& get_name() const;
     [[nodiscard]] serialization::NamedParameters parameters() const;
     [[nodiscard]] const std::map<std::string, ModuleBasePtr>& named_modules() const;
-    [[nodiscard]] std::map<std::string, ModuleBasePtr>& named_modules();
     [[nodiscard]] const std::map<std::string, autograd::TensorPtr>& named_tensors() const;
-    [[nodiscard]] std::map<std::string, autograd::TensorPtr>& named_tensors();
 
     [[nodiscard]] ModuleBasePtr override_module(const std::string& name, const ModuleBasePtr& module_ptr);
 

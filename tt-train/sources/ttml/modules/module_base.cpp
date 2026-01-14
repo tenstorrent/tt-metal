@@ -58,15 +58,7 @@ const std::map<std::string, ModuleBasePtr>& ModuleBase::named_modules() const {
     return m_named_modules;
 }
 
-std::map<std::string, ModuleBasePtr>& ModuleBase::named_modules() {
-    return m_named_modules;
-}
-
 const std::map<std::string, autograd::TensorPtr>& ModuleBase::named_tensors() const {
-    return m_named_tensors;
-}
-
-std::map<std::string, autograd::TensorPtr>& ModuleBase::named_tensors() {
     return m_named_tensors;
 }
 
@@ -112,8 +104,8 @@ serialization::NamedParameters ModuleBase::parameters() const {
 
 void ModuleBase::set_run_mode(RunMode mode) {
     m_run_mode = mode;
-    for (auto& [_, module_ptr] : this->m_named_modules) {
-        module_ptr->set_run_mode(mode);
+    for (auto& [_, module] : this->m_named_modules) {
+        module->set_run_mode(mode);
     }
 }
 

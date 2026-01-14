@@ -4,6 +4,7 @@
 
 #include "lora_model.hpp"
 
+#include <algorithm>
 #include <memory>
 
 #include "attention_lora_replacer.hpp"
@@ -35,13 +36,8 @@ bool LoraModel::should_replace_module(const std::string& module_name) const {
     }
 
     // Check if module name matches any of the target modules
-    for (const auto& target : *m_config.target_modules) {
-        if (module_name == target) {
-            return true;
-        }
-    }
-
-    return false;
+    return std::find(m_config.target_modules->begin(), m_config.target_modules->end(), module_name) !=
+           m_config.target_modules->end();
 }
 
 void LoraModel::freeze_base_model_weights() {
