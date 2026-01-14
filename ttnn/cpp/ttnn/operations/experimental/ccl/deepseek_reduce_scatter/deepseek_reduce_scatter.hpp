@@ -13,7 +13,7 @@ namespace operations::experimental::ccl {
 
 struct ExecuteDeepseekReduceScatter {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
+        const std::vector<ttnn::Tensor>& input_tensors,
         const ttnn::MemoryConfig& output_memory_config,
         uint32_t num_links = 1,
         std::optional<uint32_t> cluster_axis = std::nullopt);

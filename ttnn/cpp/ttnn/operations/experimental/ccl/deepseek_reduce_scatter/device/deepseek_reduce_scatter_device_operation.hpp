@@ -39,7 +39,7 @@ namespace ttnn::prim {
 ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation::
     tensor_return_value_t
     deepseek_reduce_scatter(
-        const ttnn::Tensor& input_tensor,
+        const std::vector<ttnn::Tensor>& input_tensors,
         const ttnn::MemoryConfig& output_memory_config,
         uint32_t num_links,
         std::optional<uint32_t> cluster_axis);

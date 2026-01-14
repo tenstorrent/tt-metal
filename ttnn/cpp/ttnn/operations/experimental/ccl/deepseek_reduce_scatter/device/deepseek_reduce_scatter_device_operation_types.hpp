@@ -24,6 +24,8 @@ struct DeepseekReduceScatterProgramArtifacts {
     tt::tt_metal::KernelHandle writer_kernel_id;
     std::vector<tt::tt_metal::CoreCoord> all_cores;
     uint32_t num_directions_per_link;
+    std::vector<tt::tt_metal::CBHandle> input_cb_handles;
+    std::vector<tt::tt_metal::CBHandle> intermediate_cb_handles;
 };
 
 struct operation_attributes_t {
@@ -43,15 +45,15 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    ttnn::Tensor input_tensor;
+    std::vector<ttnn::Tensor> input_tensors;
 };
 
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-using tensor_return_value_t = std::vector<Tensor>;
+using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
 // Common validation function
 void deepseek_reduce_scatter_common_validates(
-    const ttnn::Tensor& input_tensor,
+    const std::vector<ttnn::Tensor>& input_tensors,
     const ttnn::MemoryConfig& output_memory_config,
     uint32_t num_links,
     uint32_t ring_size);

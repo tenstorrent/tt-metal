@@ -44,8 +44,8 @@ struct DeepseekReduceScatterMeshWorkloadFactory {
 // Builder function for ring topology - creates program artifacts
 DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_artifacts(
     tt::tt_metal::Program& program,
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& intermediate_tensor,
+    const std::vector<ttnn::Tensor>& input_tensors,
+    const std::vector<ttnn::Tensor>& intermediate_slice_tensors,
     const ttnn::Tensor& output_tensor,
     const ttnn::MeshCoordinate& sender_coord,
     const std::optional<MeshCoordinate>& forward_coord,
@@ -62,11 +62,13 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     const tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t num_directions_per_link,
+    const std::vector<tt::tt_metal::CBHandle>& input_cb_handles,
+    const std::vector<tt::tt_metal::CBHandle>& intermediate_cb_handles,
     const tt::tt_metal::GlobalSemaphore& op_semaphore,
     const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores,
     uint32_t num_links,
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& intermediate_tensor,
+    const std::vector<ttnn::Tensor>& input_tensors,
+    const std::vector<ttnn::Tensor>& intermediate_slice_tensors,
     const ttnn::Tensor& output_tensor);
 
 }  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail
