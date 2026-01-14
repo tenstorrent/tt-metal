@@ -681,6 +681,11 @@ class GptOssForCausalLM(Generator):
         model_args = []
         model = []
         state_dict = None
+        # GPT-OSS throughput profile uses user-row sharding on
+        # multi-row meshes with large max batch sizes (e.g., 128 on 4x8).
+        # This must be selected at model init time to ensure correct sharding
+        # and input preparation.
+        users_row_sharded = bool(mesh_device.shape[0] > 1 and max_batch_size > 32)
 
         for submesh in submesh_devices:
             # Use the existing create_tt_model function
@@ -694,10 +699,20 @@ class GptOssForCausalLM(Generator):
                 num_layers=n_layers,
                 mesh_config=None,
                 create_kv_cache=False,
+                users_row_sharded=users_row_sharded,
+                use_throughput_experts=submesh.shape[0] > 1 and (max_batch_size > 1),
             )
 
             model_args.append(model_args_i)
             model.append(model_i)
+
+        # Select the generator implementation based on max_batch_size.
+        # For large batch sizes with users_row_sharded, we need a prefill path
+        # that uses global user slots when filling the KV cache.
+        if users_row_sharded:
+            from models.demos.gpt_oss.tt.generator import GPTOSSRowShardedGenerator
+
+            return GPTOSSRowShardedGenerator(model, model_args, mesh_device)
 
         return cls(model, model_args, mesh_device)
 
