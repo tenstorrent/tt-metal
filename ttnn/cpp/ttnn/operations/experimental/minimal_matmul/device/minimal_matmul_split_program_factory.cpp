@@ -88,14 +88,13 @@ CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
 void append_accessors_split(
     std::vector<uint32_t>& args,
     const Tensor& main_tensor,
-    const Tensor& output_tensor_0,
-    const Tensor& output_tensor_1,
-    const Tensor& output_tensor_2,
+    std::vector<Tensor>& output_tensors,
     const std::optional<const Tensor>& bias_tensor) {
     tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
-    tt::tt_metal::TensorAccessorArgs(*output_tensor_0.buffer()).append_to(args);
-    tt::tt_metal::TensorAccessorArgs(*output_tensor_1.buffer()).append_to(args);
-    tt::tt_metal::TensorAccessorArgs(*output_tensor_2.buffer()).append_to(args);
+
+    for (const auto& output_tensor : output_tensors) {
+        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
+    }
     if (bias_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(args);
     }
@@ -314,6 +313,8 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
     uint32_t out1_addr = output_tensors[1].buffer()->address();
     uint32_t out2_addr = output_tensors[2].buffer()->address();
 
+    std::vector<Tensor> output_tensors_vector = {output_tensors[0], output_tensors[1], output_tensors[2]};
+
     /**
      * Create kernels
      */
@@ -346,13 +347,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         N_tiles_per_chunk,  // NEW: for split logic
         in0_tile_size,      // placeholder for in3_tile_size
     };
-    append_accessors_split(
-        in0_sender_compile_time_args,
-        input_tensor,
-        output_tensors[0],
-        output_tensors[1],
-        output_tensors[2],
-        bias_tensor);
+    append_accessors_split(in0_sender_compile_time_args, input_tensor, output_tensors_vector, bias_tensor);
 
     auto in0_sender_kernels_id = CreateKernel(
         program,
@@ -385,13 +380,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         N_tiles_per_chunk,  // NEW: for split logic
         in0_tile_size,      // placeholder for in3_tile_size
     };
-    append_accessors_split(
-        in0_receiver_compile_time_args,
-        input_tensor,
-        output_tensors[0],
-        output_tensors[1],
-        output_tensors[2],
-        bias_tensor);
+    append_accessors_split(in0_receiver_compile_time_args, input_tensor, output_tensors_vector, bias_tensor);
 
     auto in0_receiver_kernels_id = CreateKernel(
         program,
@@ -424,13 +413,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         N_chunks,
         N_tiles_per_chunk,  // NEW: for split logic
     };
-    append_accessors_split(
-        in1_sender_compile_time_args,
-        weight_tensor,
-        output_tensors[0],
-        output_tensors[1],
-        output_tensors[2],
-        bias_tensor);
+    append_accessors_split(in1_sender_compile_time_args, weight_tensor, output_tensors_vector, bias_tensor);
 
     auto in1_sender_kernels_id = CreateKernel(
         program,
@@ -462,13 +445,8 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         N_chunks,
         N_tiles_per_chunk,  // NEW: for split logic
     };
-    append_accessors_split(
-        in1_receiver_compile_time_args,
-        weight_tensor,
-        output_tensors[0],
-        output_tensors[1],
-        output_tensors[2],
-        bias_tensor);
+
+    append_accessors_split(in1_receiver_compile_time_args, weight_tensor, output_tensors_vector, bias_tensor);
 
     auto in1_receiver_kernels_id = CreateKernel(
         program,
