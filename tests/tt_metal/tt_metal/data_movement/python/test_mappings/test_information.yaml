@@ -75,23 +75,23 @@ tests:
 
   12:
     name: "One to All Multicast Linked 2x2 Packet Sizes"
-    memory: "l1"
-    mechanism: "multicast"
-    pattern: "one_to_all"
-    num_peers: 4
+    # memory: "l1"
+    # mechanism: "multicast"
+    # pattern: "one_to_all"
+    # num_peers: 4
 
   13:
     name: "One to All Multicast Linked 5x5 Packet Sizes"
-    memory: "l1"
-    mechanism: "multicast"
-    pattern: "one_to_all"
-    num_peers: 25
+    # memory: "l1"
+    # mechanism: "multicast"
+    # pattern: "one_to_all"
+    # num_peers: 25
 
   14:
     name: "One to All Multicast Linked Packet Sizes"
-    memory: "l1"
-    mechanism: "multicast"
-    pattern: "one_to_all"
+    # memory: "l1"
+    # mechanism: "multicast"
+    # pattern: "one_to_all"
 
   15:
     name: "One from All Packet Sizes"
@@ -169,9 +169,10 @@ tests:
 
   40:
     name: "DRAM Packet Sizes 2.0"
-    memory: "dram"
-    mechanism: "unicast"
-    pattern: "one_to_one"
+    # memory: "dram"
+    # mechanism: "unicast"
+    # pattern: "one_to_one"
+    # TO DO (IMPORTANT), what if we have two measurements like here?
 
   50:
     name: "One to One Directed Ideal"
@@ -277,9 +278,9 @@ tests:
 
   111:
     name: "Multi Interleaved Sizes"
-    memory: "dram"
-    mechanism: "unicast"
-    pattern: "one_to_one"
+    # memory: "dram"
+    # mechanism: "unicast"
+    # pattern: "one_to_one" this should be all_*_all?
 
   112:
     name: "Multi Interleaved Read Directed Ideal"
@@ -295,63 +296,63 @@ tests:
 
   115:
     name: "Multi Interleaved Write Sizes"
-    memory: "dram"
-    mechanism: "unicast"
-    pattern: "one_to_one"
+    # memory: "dram"
+    # mechanism: "unicast"
+    # pattern: "one_to_one" this should be all_to_all?
 
   116:
     name: "Multi Interleaved 2x2 Directed Ideal"
 
   117:
     name: "Multi Interleaved 2x2 Sizes"
-    memory: "dram"
-    mechanism: "unicast"
-    pattern: "one_to_one"
+    # memory: "dram"
+    # mechanism: "unicast"
+    # pattern: "one_to_one" this should be all_*_all?
 
   118:
     name: "Multi Interleaved 2x2 Read Directed Ideal"
 
   119:
     name: "Multi Interleaved 2x2 Read Sizes"
-    memory: "dram"
-    mechanism: "unicast"
-    pattern: "one_from_one"
+    # memory: "dram"
+    # mechanism: "unicast"
+    # pattern: "one_from_one" this should be "all_from_all"
 
   120:
     name: "Multi Interleaved 2x2 Write Directed Ideal"
 
   121:
     name: "Multi Interleaved 2x2 Write Sizes"
-    memory: "dram"
-    mechanism: "unicast"
-    pattern: "one_to_one"
+    # memory: "dram"
+    # mechanism: "unicast"
+    # pattern: "one_to_one" this should be "all_to_all"
 
   122:
     name: "Multi Interleaved 6x6 Directed Ideal"
 
   123:
     name: "Multi Interleaved 6x6 Sizes"
-    memory: "dram"
-    mechanism: "unicast"
-    pattern: "one_to_one"
+    # memory: "dram"
+    # mechanism: "unicast"
+    # pattern: "one_to_one" this should be "all_*_all"
 
   124:
     name: "Multi Interleaved 6x6 Read Directed Ideal"
 
   125:
     name: "Multi Interleaved 6x6 Read Sizes"
-    memory: "dram"
-    mechanism: "unicast"
-    pattern: "one_from_one"
+    # memory: "dram"
+    # mechanism: "unicast"
+    # pattern: "one_from_one" this should be "all_from_all"
 
   126:
     name: "Multi Interleaved 6x6 Write Directed Ideal"
 
   127:
     name: "Multi Interleaved 6x6 Write Sizes"
-    memory: "dram"
-    mechanism: "unicast"
-    pattern: "one_to_one"
+    # memory: "dram"
+    # mechanism: "unicast"
+    # pattern: "one_from_one" this should be "all_to_all"
 
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
@@ -412,63 +413,63 @@ tests:
 
   170:
     name: "One to All Unicast 2x2 Packet Sizes 2.0"
-    memory: "l1"
-    mechanism: "unicast"
-    pattern: "one_to_all"
-    num_peers: 4
+    # memory: "l1"
+    # mechanism: "unicast"
+    # pattern: "one_to_all"
+    # num_peers: 4
 
   171:
     name: "One to All Unicast 5x5 Packet Sizes 2.0"
-    memory: "l1"
-    mechanism: "unicast"
-    pattern: "one_to_all"
-    num_peers: 25
+    # memory: "l1"
+    # mechanism: "unicast"
+    # pattern: "one_to_all"
+    # num_peers: 25
 
   172:
     name: "One to All Unicast Packet Sizes 2.0"
-    memory: "l1"
-    mechanism: "unicast"
-    pattern: "one_to_all"
+    # memory: "l1"
+    # mechanism: "unicast"
+    # pattern: "one_to_all"
 
   173:
     name: "One to All Multicast 2x2 Packet Sizes 2.0"
-    memory: "l1"
-    mechanism: "multicast"
-    pattern: "one_to_all"
-    num_peers: 4
+    # memory: "l1"
+    # mechanism: "multicast"
+    # pattern: "one_to_all"
+    # num_peers: 4
 
   174:
     name: "One to All Multicast 5x5 Packet Sizes 2.0"
-    memory: "l1"
-    mechanism: "multicast"
-    pattern: "one_to_all"
-    num_peers: 25
+    # memory: "l1"
+    # mechanism: "multicast"
+    # pattern: "one_to_all"
+    # num_peers: 25
 
   175:
     name: "One to All Multicast Packet Sizes 2.0"
-    memory: "l1"
-    mechanism: "multicast"
-    pattern: "one_to_all"
+    # memory: "l1"
+    # mechanism: "multicast"
+    # pattern: "one_to_all"
 
   176:
     name: "One to All Multicast Linked 2x2 Packet Sizes 2.0"
-    memory: "l1"
-    mechanism: "multicast"
-    pattern: "one_to_all"
-    num_peers: 4
+    # memory: "l1"
+    # mechanism: "multicast"
+    # pattern: "one_to_all"
+    # num_peers: 4
 
   177:
     name: "One to All Multicast Linked 5x5 Packet Sizes 2.0"
-    memory: "l1"
-    mechanism: "multicast"
-    pattern: "one_to_all"
-    num_peers: 25
+    # memory: "l1"
+    # mechanism: "multicast"
+    # pattern: "one_to_all"
+    # num_peers: 25
 
   178:
     name: "One to All Multicast Linked Packet Sizes 2.0"
-    memory: "l1"
-    mechanism: "multicast"
-    pattern: "one_to_all"
+    # memory: "l1"
+    # mechanism: "multicast"
+    # pattern: "one_to_all"
 
   179:
     name: "One to All Multicast Linked Loopback Directed Ideal 2.0"
@@ -496,9 +497,9 @@ tests:
 
   301:
     name: "All to All Packet Sizes"
-    memory: "l1"
-    mechanism: "unicast"
-    pattern: "all_to_all"
+    # memory: "l1"
+    # mechanism: "unicast"
+    # pattern: "all_to_all"
 
   302:
     name: "All to All 2x2 To 1x1 Directed Ideal"
