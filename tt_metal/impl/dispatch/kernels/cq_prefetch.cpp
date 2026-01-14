@@ -1895,7 +1895,7 @@ inline void relay_raw_data_to_downstream(
         }
 
         // Advance pointers and wlength
-        data_ptr += can_read_now;
+        h_cmddat_q_reader.consumed_data(data_ptr, can_read_now);
         wlength -= can_read_now;
 
         // Release upstream pages so prefetch_h can make more available. Ensure to flush the writes just made to prevent
