@@ -101,15 +101,38 @@ install_uv_fedora() {
     fi
 }
 
-# Helper: Install uv on Ubuntu/Debian
+# Helper: Check if distro requires --break-system-packages (PEP 668)
+# PEP 668 is enforced on Ubuntu 23.04+, Debian 12+
+requires_break_system_packages() {
+    local distro_id="$1"
+    local distro_version="$2"
+
+    case "${distro_id}" in
+        ubuntu)
+            # Ubuntu versions are YY.MM format (e.g., 22.04, 24.04)
+            # PEP 668 enforced starting with 23.04
+            local major_version="${distro_version%%.*}"
+            [[ "${major_version}" -ge 23 ]]
+            ;;
+        debian)
+            # Debian uses major version numbers (e.g., 11, 12)
+            # PEP 668 enforced starting with Debian 12
+            local major_version="${distro_version%%.*}"
+            [[ "${major_version}" -ge 12 ]]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Helper: Install uv on Ubuntu/Debian via pip
 install_uv_debian() {
     local distro_id="$1"
     local distro_version="$2"
     local pip_args="--no-cache-dir"
 
-    # Add --break-system-packages for Ubuntu 24.04+ / Debian 12+
-    if [[ "${distro_id}" == "ubuntu" && "${distro_version}" == "24.04" ]] || \
-       [[ "${distro_id}" == "debian" && "${distro_version%%.*}" -ge 12 ]]; then
+    if requires_break_system_packages "${distro_id}" "${distro_version}"; then
         pip_args="${pip_args} --break-system-packages"
     fi
 
