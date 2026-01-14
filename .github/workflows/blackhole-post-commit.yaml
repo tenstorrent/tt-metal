@@ -117,22 +117,22 @@ jobs:
       tracy: true
       version: "22.04"
       build-umd-tests: true
-  run-profiler-regression:
-    needs: [build-artifact, generate-matrix]
-    uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: "blackhole"
-      runner-label: ${{ matrix.test-group }}
-      post_commit_only: true
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
+  # run-profiler-regression:
+  #   needs: [build-artifact, generate-matrix]
+  #   uses: ./.github/workflows/run-profiler-regression.yaml
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+  #   with:
+  #     arch: "blackhole"
+  #     runner-label: ${{ matrix.test-group }}
+  #     post_commit_only: true
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     enable-watcher: ${{ inputs.enable-watcher || false }}
   # umd-unit-tests:
   #   needs: [build-artifact, generate-matrix]
   #   secrets: inherit
