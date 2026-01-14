@@ -18,7 +18,6 @@
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
-#include "api/dataflow/dataflow_api.h"
 #include "internal/ethernet/dataflow_api.h"
 #include "internal/ethernet/tunneling.h"
 #include "dev_mem_map.h"

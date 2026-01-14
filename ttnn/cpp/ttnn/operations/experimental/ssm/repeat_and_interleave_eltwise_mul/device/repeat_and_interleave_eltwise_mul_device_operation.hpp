@@ -20,8 +20,8 @@ namespace ttnn::operations::experimental::ssm::repeat_mul {
 struct RepeatAndInterleaveEltwiseMulDeviceOperation {
     using operation_attributes_t = repeat_mul::operation_attributes_t;
     using tensor_args_t = repeat_mul::tensor_args_t;
-    using spec_return_value_t = repeat_mul::spec_return_value_t;
-    using tensor_return_value_t = repeat_mul::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::RepeatAndInterleaveEltwiseMulProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

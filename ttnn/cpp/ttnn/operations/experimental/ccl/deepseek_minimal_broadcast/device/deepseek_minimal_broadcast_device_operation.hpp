@@ -24,8 +24,8 @@ namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast {
 struct DeepseekMinimalBroadcastDeviceOperation {
     using operation_attributes_t = deepseek_minimal_broadcast::operation_attributes_t;
     using tensor_args_t = deepseek_minimal_broadcast::tensor_args_t;
-    using spec_return_value_t = deepseek_minimal_broadcast::spec_return_value_t;
-    using tensor_return_value_t = deepseek_minimal_broadcast::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::DeepseekMinimalBroadcastProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

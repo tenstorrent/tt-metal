@@ -23,7 +23,4 @@ struct tensor_args_t {
    Tensor input_tensor;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
 }  // namespace ttnn::operations::pool::upsample

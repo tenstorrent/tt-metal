@@ -86,7 +86,7 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(temp.logical_shape() == Shape({32}), "temp must have shape [32]!");
 }
 
-spec_return_value_t SamplingDeviceOperation::compute_output_specs(
+TensorSpec SamplingDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -101,7 +101,7 @@ spec_return_value_t SamplingDeviceOperation::compute_output_specs(
         TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), input_values_tensor.memory_config()));
 }
 
-tensor_return_value_t SamplingDeviceOperation::create_output_tensors(
+Tensor SamplingDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();

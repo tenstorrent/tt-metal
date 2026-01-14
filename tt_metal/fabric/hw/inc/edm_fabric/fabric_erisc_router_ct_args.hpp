@@ -65,9 +65,10 @@ constexpr uint32_t sender_channel_6_free_slots_stream_id = get_compile_time_arg_
 constexpr uint32_t sender_channel_7_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 28);
 constexpr uint32_t tensix_relay_local_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 29);
 constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 30);
+constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 31);
 
 // Special marker after stream IDs
-constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 31;
+constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 32;
 constexpr size_t STREAM_IDS_END_MARKER = 0xFFEE0001;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(STREAM_IDS_END_MARKER_IDX) == STREAM_IDS_END_MARKER,
@@ -112,16 +113,16 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 40,
-    "wait_for_host_signal_IDX must be 40 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
+    wait_for_host_signal_IDX == 41,
+    "wait_for_host_signal_IDX must be 41 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
     "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
     "num_downstream_senders_vc1, wait_for_host_signal)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 41,
-    "MAIN_CT_ARGS_START_IDX must be 41 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
+    MAIN_CT_ARGS_START_IDX == 42,
+    "MAIN_CT_ARGS_START_IDX must be 42 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
     "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
     "num_downstream_senders_vc1, wait_for_host_signal)");
 

@@ -72,8 +72,7 @@ RepeatDeviceOperation::tensor_return_value_t RepeatDeviceOperation::create_outpu
         compute_output_specs(operation_attributes, input_tensors), input_tensors.input.device());
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
-RepeatDeviceOperation::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> RepeatDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
