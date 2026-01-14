@@ -158,7 +158,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         // Enable updates at a fixed interval for link stability and link status updates
         constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 32;
         edm_builder->set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
-        edm_builder->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
+        edm_builder->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE);
     }
 
     // Create tensix builder if needed
