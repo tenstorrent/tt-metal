@@ -28,9 +28,19 @@ class FusedResblock:
 
     @staticmethod
     def create_mcast_kernel(
-        core_coord: ttnn.CoreCoord, data_format, page_size: int, tile: ttnn.TileDescriptor
+        all_mcast_cores: ttnn.CoreRangeSet,
+        all_sender_cores: ttnn.CoreRangeSet,
+        data_format,
+        page_size: int,
+        tile: ttnn.TileDescriptor,
+        receiver_semaphore_descriptor: ttnn.SemaphoreDescriptor,
     ) -> tuple[ttnn.KernelDescriptor, ttnn.KernelDescriptor, ttnn.CBDescriptor]:
-        all_mcast_cores = ttnn.CoreRangeSet({ttnn.CoreRange(core_coord, core_coord)})
+        logger.debug(f"All mcast cores: {all_mcast_cores}")
+        logger.debug(f"Number of mcast cores: {all_mcast_cores.size()}")
+        logger.debug(f"All sender cores: {all_sender_cores}")
+        logger.debug(f"Number of sender cores: {all_sender_cores.size()}")
+
+        number_of_senders = all_sender_cores.size()
 
         # Create CBs for gather destination
         mcast_cb_format = ttnn.CBFormatDescriptor(
@@ -49,14 +59,22 @@ class FusedResblock:
             kernel_source="models/demos/resblock/kernels/mcast_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_mcast_cores,
-            compile_time_args=[FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB],
+            compile_time_args=[
+                FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
+                number_of_senders,
+                receiver_semaphore_descriptor.id,
+            ],
             config=ttnn.ReaderConfigDescriptor(),
         )
         mcast_writer_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/mcast_writer.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_mcast_cores,
-            compile_time_args=[FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB],
+            compile_time_args=[
+                FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
+                number_of_senders,
+                receiver_semaphore_descriptor.id,
+            ],
             config=ttnn.WriterConfigDescriptor(),
         )
         return mcast_reader_kernel_descriptor, mcast_writer_kernel_descriptor, mcast_cb_descriptor
@@ -71,6 +89,8 @@ class FusedResblock:
         logger.debug(f"Weight0 tensor sharding: {weight0.memory_config().shard_spec}")
         logger.debug(f"Weight1 tensor sharding: {weight1.memory_config().shard_spec}")
         logger.debug(f"Output tensor sharding: {output_tensor.memory_config().shard_spec}")
+
+        device = input_tensor.device()
 
         input_shape = input_tensor.shape
         input_tile = input_tensor.get_tile()
@@ -151,6 +171,35 @@ class FusedResblock:
             format_descriptors=[interm_cb2_format],
         )
 
+        logger.debug(f"Placing mcast core at: {FusedResblock.MCAST_CORE}")
+        gather_destination_core = device.worker_core_from_logical_core(FusedResblock.MCAST_CORE)
+        all_mcast_cores = ttnn.CoreRangeSet({ttnn.CoreRange(FusedResblock.MCAST_CORE, FusedResblock.MCAST_CORE)})
+
+        all_cores = all_matmul_cores.merge(all_mcast_cores)
+        assert (
+            all_cores.size() == all_matmul_cores.size() + all_mcast_cores.size()
+        ), f"All cores must be the same size as all matmul cores plus one for the mcast core"
+        logger.debug(f"All cores: {all_cores}")
+
+        receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=0,
+            core_ranges=all_cores,
+            initial_value=0,
+        )
+
+        (
+            mcast_reader_kernel_descriptor,
+            mcast_writer_kernel_descriptor,
+            mcast_cb_descriptor,
+        ) = FusedResblock.create_mcast_kernel(
+            all_mcast_cores,
+            all_matmul_cores,
+            out_dtype,
+            out_tile_size,
+            out_tile_descriptor,
+            receiver_semaphore_descriptor,
+        )
+
         reader_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -162,6 +211,9 @@ class FusedResblock:
                 FusedResblock.MatmulCoreCBIndex.INTERM_CB,
                 FusedResblock.MatmulCoreCBIndex.INTERM_CB2,
                 num_tiles_k,
+                gather_destination_core.x,
+                gather_destination_core.y,
+                receiver_semaphore_descriptor.id,
             ],
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -194,13 +246,6 @@ class FusedResblock:
             ),
         )
 
-        logger.debug(f"Placing mcast core at: {FusedResblock.MCAST_CORE}")
-        (
-            mcast_reader_kernel_descriptor,
-            mcast_writer_kernel_descriptor,
-            mcast_cb_descriptor,
-        ) = FusedResblock.create_mcast_kernel(FusedResblock.MCAST_CORE, out_dtype, out_tile_size, out_tile_descriptor)
-
         return ttnn.generic_op(
             [input_tensor, weight0, weight1, output_tensor],
             ttnn.ProgramDescriptor(
@@ -220,5 +265,6 @@ class FusedResblock:
                     interm_cb2_descriptor,
                     mcast_cb_descriptor,
                 ],
+                semaphores=[receiver_semaphore_descriptor],
             ),
         )
