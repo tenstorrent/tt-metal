@@ -170,7 +170,7 @@ jobs:
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
     defaults:
       run:
         shell: bash
@@ -195,9 +195,11 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           fetch-depth: 500
           fetch-tags: true # Need tags for `git describe`
-          path: docker-job
           sparse-checkout: |
             tt-train
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
 
       - name: Submodules
         run: |
