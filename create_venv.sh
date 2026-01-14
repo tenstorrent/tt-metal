@@ -87,7 +87,18 @@ if ! command -v uv &>/dev/null; then
         echo "Warning: install-uv.sh not found, falling back to pip installation"
         # Use the same pinned version as install-uv.sh to maintain consistency
         UV_VERSION="0.7.12"
-        ${PYTHON_CMD} -m pip install --no-cache-dir "uv==${UV_VERSION}"
+        if ! ${PYTHON_CMD} -m pip install --no-cache-dir "uv==${UV_VERSION}"; then
+            echo "Initial 'pip install uv' failed. This can happen in PEP 668 externally-managed environments."
+            echo "Retrying uv installation with --break-system-packages..."
+            if ! ${PYTHON_CMD} -m pip install --no-cache-dir --break-system-packages "uv==${UV_VERSION}"; then
+                echo "Retry with --break-system-packages failed. Retrying uv installation with --user..."
+                if ! ${PYTHON_CMD} -m pip install --no-cache-dir --user "uv==${UV_VERSION}"; then
+                    echo "Error: failed to install uv via pip even after applying PEP 668 workarounds."
+                    echo "Please run '$SCRIPT_DIR/scripts/install-uv.sh' if available, or install 'uv' manually."
+                    exit 1
+                fi
+            fi
+        fi
         # Add pip's bin directory to PATH for the current session
         USER_BIN="${HOME}/.local/bin"
         if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
