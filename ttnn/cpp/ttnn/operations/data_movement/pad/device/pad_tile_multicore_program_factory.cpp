@@ -82,7 +82,7 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
         case DataType::UINT16:
             packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
             break;
-        case DataType::FLOAT32: packed_pad_value = (uint32_t)std::bit_cast<uint32_t>(pad_value); break;
+        case DataType::FLOAT32: packed_pad_value = std::bit_cast<uint32_t>(pad_value); break;
         default:
             packed_pad_value = 0;
             TT_ASSERT(
