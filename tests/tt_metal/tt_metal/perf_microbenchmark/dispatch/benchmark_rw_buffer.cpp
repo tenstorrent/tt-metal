@@ -19,6 +19,10 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/vector_aligned.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <benchmark/benchmark.h>
 #include "context/metal_context.hpp"
@@ -51,8 +55,6 @@ using namespace tt::tt_metal::distributed;
  * Link to data sheet as follows:
  * https://docs.google.com/spreadsheets/d/1zy1teJtgf7hsMMdgy5uIOtcuI73AGVqy4lnyYwL7YFQ/edit
  */
-
-static constexpr auto num_test_repetitions = 11;
 
 static constexpr uint64_t KB = 1024;
 static constexpr uint64_t MB = 1024 * KB;
@@ -124,9 +126,56 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
+static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
+    auto page_size = state.range(0);
+    auto transfer_size = state.range(1);
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
+    [[maybe_unused]] auto device_id = state.range(3);
+
+    log_debug(
+        LogTest,
+        "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        page_size,
+        transfer_size,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        device_id);
+
+    auto device_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{transfer_size},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        mesh_device.get());
+
+    // Allocate destination host buffer with 16-byte alignment
+    auto dst_storage = std::make_shared<vector_aligned<std::uint8_t>>(static_cast<std::size_t>(transfer_size), 0);
+    void* aligned_ptr = reinterpret_cast<void*>(dst_storage->data());
+
+    // Create HostBuffer on top of aligned memory
+    HostBuffer host_buffer(
+        tt::stl::Span<std::uint8_t>(dst_storage->data(), static_cast<std::size_t>(transfer_size)),
+        MemoryPin(dst_storage));
+
+    // Pin the aligned host memory region for the shard
+    auto coord = MeshCoordinate(0, 0);
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto pinned_unique =
+        experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
+    std::shared_ptr<experimental::PinnedMemory> pinned_mem = std::move(pinned_unique);
+
+    // Prepare the read transfer using pinned memory
+    auto read_transfer = distributed::ShardDataTransfer{coord}
+                             .host_data(aligned_ptr)
+                             .region(BufferRegion(0, static_cast<std::size_t>(transfer_size)));
+    experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_mem);
+
+    for (auto _ : state) {
+        mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, device_buffer, /*blocking=*/true);
+    }
+
+    state.SetBytesProcessed(transfer_size * state.iterations());
+}
+
 int main(int argc, char** argv) {
     benchmark::Initialize(&argc, argv);
-
     // no need to initialize for bandwidth measurement, saves test initialization time
     std::vector<ElementType> host_buffer_max(max_transfer_size / ElementSize);
     auto available_device_ids = MetalContext::instance().get_cluster().all_chip_ids();
@@ -142,6 +191,7 @@ int main(int argc, char** argv) {
     }
 
     auto devices = MeshDevice::create_unit_meshes(device_ids);
+
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
         auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
@@ -152,7 +202,6 @@ int main(int argc, char** argv) {
         benchmark::RegisterBenchmark("Write", BM_write, device, host_buffer_max)
             ->ArgsProduct(benchmark_args)
             ->UseRealTime()
-            ->Repetitions(num_test_repetitions)
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
             ->ComputeStatistics("max", compute_max);
@@ -160,10 +209,19 @@ int main(int argc, char** argv) {
         benchmark::RegisterBenchmark("Read", BM_read, device)
             ->ArgsProduct(benchmark_args)
             ->UseRealTime()
-            ->Repetitions(num_test_repetitions)
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
             ->ComputeStatistics("max", compute_max);
+        bool can_map_to_noc = experimental::GetMemoryPinningParameters(*devices[0]).can_map_to_noc;
+
+        if (can_map_to_noc) {
+            benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
+                ->ArgsProduct(benchmark_args)
+                ->UseRealTime()
+                ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+                ->ComputeStatistics("min", compute_min)
+                ->ComputeStatistics("max", compute_max);
+        }
     }
 
     benchmark::RunSpecifiedBenchmarks();
