@@ -35,10 +35,13 @@ def test_speech_t5(device):
     inputs["speaker_embeddings"] = torch.randn((1, 512), dtype=torch.bfloat16)
     model.eval()  # Disables dropout, batch norm updates
     vocoder.eval()
-    register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
-    register_module_replacement_dict(vocoder, nn_to_ttnn, model_config=None)
+    modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
+    modules2 = register_module_replacement_dict(vocoder, nn_to_ttnn, model_config=None)
     set_device(model, device)
     set_device(vocoder, device)
+    for k, v in {**modules1, **modules2}.items():
+        v.preprocess_weights()
+        v.move_weights_to_device()
     torch.set_grad_enabled(False)  # Disables autograd overhead
     DispatchManager.clear_timings()
     speech = model.generate_speech(**inputs, vocoder=vocoder)
