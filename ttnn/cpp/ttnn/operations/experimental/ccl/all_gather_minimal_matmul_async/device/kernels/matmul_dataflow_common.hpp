@@ -7,7 +7,17 @@
 #include "api/dataflow/dataflow_api.h"
 
 #ifdef USE_MUX
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 
 using namespace tt::tt_fabric::linear::experimental;
 #endif
