@@ -55,8 +55,8 @@
       "target":     6.25
     },
     "accuracy": {
-      "clip_valid_range_full_dataset": [0.10191032491223886, 0.11591032491223888],
-      "clip_valid_range_100": [0.10162800920195877, 0.12162800920195876]
+      "clip_valid_range_full_dataset": [0.10591032491223887, 0.11191032491223887],
+      "clip_valid_range_100": [0.10662800920195876, 0.11662800920195877]
     }
   },
   "sdxl-base-refiner": {
