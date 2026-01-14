@@ -113,7 +113,7 @@ void test_raw_host_memory_pointer() {
     Tensor c_dev = ttnn::sqrt(a_dev);
 
     auto dst_host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor_for_printing);
-    copy_tensor_to_host_from_device(c_dev.device()->mesh_command_queue(), dst_host_buffer.view_bytes().data(), c_dev);
+    copy_tensor_to_host_buffer(c_dev.device()->mesh_command_queue(), dst_host_buffer.view_bytes().data(), c_dev);
 
     // Check that cpu tensor has correct data
     bfloat16 output_value = 2.0f;
@@ -128,7 +128,7 @@ void test_raw_host_memory_pointer() {
     // Alternatively, we could allocate memory manually and create Tensors with borrowed storage on the fly to print the
     // data
     void* storage_of_alternative_tensor_for_printing = malloc(shape.volume() * sizeof(bfloat16));
-    tt::tt_metal::copy_tensor_to_host_from_device(
+    tt::tt_metal::copy_tensor_to_host_buffer(
         c_dev.device()->mesh_command_queue(), storage_of_alternative_tensor_for_printing, c_dev);
 
     HostBuffer alternative_tensor_for_printing_buffer(
@@ -160,12 +160,12 @@ void test_raw_host_memory_pointer() {
 
     Tensor d_dev = a_dev;
     auto d_cpu_buffer = tt::tt_metal::host_buffer::get_host_buffer(d_cpu);
-    copy_tensor_to_device_from_host(d_cpu.device()->mesh_command_queue(), d_dev, d_cpu_buffer.view_bytes().data());
+    fill_tensor_from_host_buffer(d_cpu.device()->mesh_command_queue(), d_dev, d_cpu_buffer.view_bytes().data());
 
     Tensor e_dev = ttnn::add(c_dev, d_dev);
 
     auto dst_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor_for_printing);
-    copy_tensor_to_host_from_device(e_dev.device()->mesh_command_queue(), dst_buffer.view_bytes().data(), e_dev);
+    copy_tensor_to_host_buffer(e_dev.device()->mesh_command_queue(), dst_buffer.view_bytes().data(), e_dev);
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_FATAL(element == bfloat16(10.0f), "Element does not match expected bfloat16(10.0f)");

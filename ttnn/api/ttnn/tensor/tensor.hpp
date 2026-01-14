@@ -283,15 +283,18 @@ private:
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
-// The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
-void copy_tensor_to_host_from_device(
+// dst need to have enough space data will be copied into dst
+// use of host based tensor for dst memory as most appropriate approach
+void copy_tensor_to_host_buffer(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-void copy_tensor_to_device_from_host(
+// src could be picked from host based tensor
+// Device tensor will be filled with the data from source tensor
+void fill_tensor_from_host_buffer(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const void* src,
