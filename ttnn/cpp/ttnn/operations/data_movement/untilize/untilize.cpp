@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize.hpp"
 
 #include "device/untilize_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 

@@ -120,6 +120,23 @@ run_t3000_ttnn_tests() {
   fi
 }
 
+run_t3000_ttnn_udm_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_ttnn_udm_tests"
+  ./build/test/ttnn/unit_tests_ttnn_udm
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_ttnn_udm_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tt_metal_multiprocess_tests() {
   local mpi_args="--allow-run-as-root --tag-output"
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
@@ -521,6 +538,14 @@ run_t3000_qwen25_vl_unit_tests() {
   echo "LOG_METAL: Unit tests for $qwen25_vl_72b on T3K completed in $duration seconds"
 }
 
+run_t3000_deepseek_tests() {
+  pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+
+  export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+  export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+  MESH_DEVICE=T3K pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
+}
+
 run_t3000_ccl_tests() {
   # Record the start time
   fail=0
@@ -530,11 +555,7 @@ run_t3000_ccl_tests() {
 
   # all gather: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # width sharded to interleaved case using linear - using i2s_shape0 which is perf with fabric_linear
-  if [[ -n "${NANOBIND}" ]]; then
-    pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
-  else
-    pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-layout0-ag_input_dtype0-mesh_device0]
-  fi
+  pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
   # 10 iteration trace test with fabric ring (dit_shape now in test_ttnn_all_gather, no barrier parameters)
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]
   # 2D fabric case – hanging on main? tracking with issue #30250
@@ -554,11 +575,7 @@ run_t3000_ccl_tests() {
 
   # all reduce: 1 test should be enough
   # 4 chip test with bfloat8_b
-  if [[ -n "${NANOBIND}" ]]; then
-    pytest -n auto tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit[wormhole_b0-True-device_params0-ReduceType.Sum-2x4x2048x32-bfloat8_b-DRAM-4-1]
-  else
-    pytest -n auto tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit[wormhole_b0-True-device_params0-math_op0-2x4x2048x32-bfloat8_b-DRAM-4-1]
-  fi
+  pytest -n auto tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit -k "2x4x2048x32-bfloat8_b-DRAM-4-1"
 
   # p2p: 1 test should be enough
   # trace test with device delay
@@ -570,30 +587,14 @@ run_t3000_ccl_tests() {
 
   # all to all dispatch: 1 test for 2d and 1 for 1d linear should be enough
   # fabric 1d linear test on cluster axis 0 as other CCL tests aren't testing on this axis
-  if [[ -n "${NANOBIND}" ]]; then
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
-  else
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-dtype0-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
-  fi
+  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
   # fabric 2d test on cluster axis 1
-  if [[ -n "${NANOBIND}" ]]; then
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
-  else
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-dtype0-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
-  fi
+  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
 
   # all to all combine: 1 test for 1d ring and 1 for 2d should be enough
-  if [[ -n "${NANOBIND}" ]]; then
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
-  else
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-dtype0-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
-  fi
+  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
   # fabric 2d test on cluster axis 0 - Re-enable this test when we have more T3K availability
-  # if [[ -n "${NANOBIND}" ]]; then
-  #   pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
-  # else
-  #   pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-dtype0-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
-  # fi
+  # pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
 
   # Record the end time
   end_time=$(date +%s)
@@ -643,6 +644,43 @@ run_t3000_tt_dit_tests() {
     exit 1
   fi
 
+}
+
+run_t3000_tttv2_modules_tests() {
+  # Run MLP1D tests
+  export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct # Only used for test_mlp_1d_vs_reference_from_model_args, which will retire with TTTv1
+  export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d
+  pytest models/common/tests/modules/mlp/test_mlp_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --cov=models.common.modules.mlp.mlp_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg
+}
+
+run_t3000_gpt_oss_unit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_gpt_oss_unit_tests"
+
+  # Install gpt-oss requirements
+  pip install -r models/demos/gpt_oss/requirements.txt
+
+  # Test GPT-OSS 20B model
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
+
+  # Test GPT-OSS 120B model
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_gpt_oss_unit_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
 }
 
 run_t3000_tests() {
@@ -696,6 +734,12 @@ run_t3000_tests() {
 
   # Run tt_dit tests
   run_t3000_tt_dit_tests
+
+  # Run tttv2 modules tests
+  run_t3000_tttv2_modules_tests
+
+  # Run gpt-oss unit tests
+  run_t3000_gpt_oss_unit_tests
 }
 
 fail=0

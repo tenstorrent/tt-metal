@@ -371,8 +371,7 @@ TopologyMapper::TopologyMapper(
         }
 
         // Decode and populate mesh_host_rank_to_mpi_rank_ from gathered data
-        for (std::size_t idx = 0; idx < gathered.size(); ++idx) {
-            const auto encoded = gathered[idx];
+        for (const auto encoded : gathered) {
             if (encoded == sentinel) {
                 continue;
             }
@@ -580,8 +579,7 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
     // Build an ordered map from MPI rank to (mesh_id, host_rank) pairs for deterministic iteration
     std::map<int, std::map<MeshId, MeshHostRankId>> mpi_rank_to_mesh_bindings;
     mesh_host_rank_to_mpi_rank_.clear();
-    for (std::size_t idx = 0; idx < gathered.size(); ++idx) {
-        const auto encoded = gathered[idx];
+    for (const auto encoded : gathered) {
         if (encoded == sentinel) {
             continue;
         }
@@ -666,7 +664,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
         info.fabric_node_id = fabric_node;
         info.mesh_coord = mesh_graph_.chip_to_coordinate(mesh_id, fabric_node.chip_id);
-        if (asic_id_to_mesh_rank.find(asic) != asic_id_to_mesh_rank.end()) {
+        if (asic_id_to_mesh_rank.contains(asic)) {
             info.mesh_host_rank = asic_id_to_mesh_rank.at(asic);
         }
         info.is_mapped = true;
@@ -1197,7 +1195,7 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
         if (host_ranks.size() == 1) {
             MeshHostRankId mesh_host_rank{*host_ranks.values().front()};
             auto key = std::make_pair(mesh_id, mesh_host_rank);
-            if (mesh_host_rank_coord_ranges_.find(key) == mesh_host_rank_coord_ranges_.end()) {
+            if (!mesh_host_rank_coord_ranges_.contains(key)) {
                 // Get the full coordinate range for this mesh from the mesh graph
                 MeshCoordinateRange coord_range = mesh_graph_.get_coord_range(mesh_id);
                 mesh_host_rank_coord_ranges_.insert({key, coord_range});
@@ -1496,8 +1494,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         auto logical_adjacency_matrix = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_logical(mesh_graph);
 
         // Extract adjacency maps for this mesh_id
-        if (logical_adjacency_matrix.find(mesh_id) == logical_adjacency_matrix.end() ||
-            physical_adjacency_matrix.find(mesh_id) == physical_adjacency_matrix.end()) {
+        if (!logical_adjacency_matrix.contains(mesh_id) || !physical_adjacency_matrix.contains(mesh_id)) {
             continue;
         }
 
@@ -1525,6 +1522,29 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
 
         // Return mesh_graph if mapping is successful
         if (mapping_result.success) {
+            // Check if the final mesh size doesn't match the number of physical chips
+            size_t final_mesh_size = mesh_shape.mesh_size();
+            if (final_mesh_size < total_number_of_chips) {
+                // Format mesh shape as "2x4" style string
+                std::string mesh_shape_str;
+                for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+                    if (i > 0) {
+                        mesh_shape_str += "x";
+                    }
+                    mesh_shape_str += std::to_string(mesh_shape[i]);
+                }
+
+                log_warning(
+                    tt::LogFabric,
+                    "TopologyMapper auto-discovery: Downgrading to mesh shape {} ({} total nodes) for {} physical "
+                    "chips. "
+                    "Some physical chips may not be used. This may indicate connectivity issues, topology mismatches, "
+                    "or insufficient fabric links between chips. Verify your physical chip connectivity and ensure "
+                    "that the fabric links are correctly configured.",
+                    mesh_shape_str,
+                    final_mesh_size,
+                    total_number_of_chips);
+            }
             return mesh_graph;
         }
     }

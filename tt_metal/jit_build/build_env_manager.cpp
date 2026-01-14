@@ -4,9 +4,9 @@
 
 #include "build_env_manager.hpp"
 
-#include <limits.h>
+#include <climits>
 #include <enchantum/enchantum.hpp>
-#include <math.h>
+#include <cmath>
 #include <tracy/Tracy.hpp>
 #include <bitset>
 #include <cstddef>
@@ -22,7 +22,7 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -176,7 +176,7 @@ void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
     const std::lock_guard<std::mutex> lock(this->lock);
-    TT_ASSERT(device_id_to_build_env_.count(device_id) != 0, "Couldn't find build env for device {}.", device_id);
+    TT_ASSERT(device_id_to_build_env_.contains(device_id), "Couldn't find build env for device {}.", device_id);
     return device_id_to_build_env_[device_id];
 }
 

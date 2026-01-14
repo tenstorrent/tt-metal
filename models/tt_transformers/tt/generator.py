@@ -96,6 +96,11 @@ class Generator:
         self.enable_split_sampling = True
         self.mode = None
 
+    # Class-level capabilities (VLLM specific, to be overridden by subclasses)
+    model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
     def _chunk_sampling_param(self, values):
         if isinstance(values, List):
             return split_list(values, self.data_parallel)
@@ -259,13 +264,14 @@ class Generator:
     # Note: This function is called by vLLM
     def prefill_forward_text(
         self,
-        tokens: torch.Tensor,
+        tokens: torch.Tensor,  # All tokens, including the cached ones
         page_table=None,
         kv_cache=None,
-        prompt_lens=None,
+        prompt_lens=None,  # Full prompt lengths, including the cached ones
         empty_slots=None,
         enable_trace=True,
         model_id_warmup=None,
+        start_pos: list[int] = None,  # Cached prefixes lengths
         **kwargs,
     ):
         self.mode = "prefill"
@@ -293,9 +299,12 @@ class Generator:
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
-            seq_len = int(prompt_lens[idx])
-            last_token_idx = seq_len - 1
-            prefill_seq_len = get_padded_prefill_len(seq_len)
+            seq_len = int(prompt_lens[idx])  # Full length of the current prompt
+            num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
+            last_token_idx = seq_len - 1  # Last token index of the current full prompt, including the cached tokens
+            prefill_seq_len = get_padded_prefill_len(
+                seq_len - num_cached_tokens
+            )  # Without the cached tokens, then padded
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
 
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
@@ -303,10 +312,16 @@ class Generator:
             # Extracting data for the current user
             # If page_table is not provided, we keep track of the relative/model user_id through group_user_id
             prefill_ids = torch.cat(
-                [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+                [
+                    tokens[idx : idx + 1, num_cached_tokens:seq_len],  # Select this user, skip the cached tokens
+                    torch.zeros(1, prefill_seq_len - (seq_len - num_cached_tokens)).long(),  # Pad
+                ],
+                dim=-1,
             )
 
-            enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(prefill_seq_len)
+            enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(
+                prefill_seq_len, num_cached_tokens
+            )
 
             logger.info(
                 f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
@@ -314,9 +329,9 @@ class Generator:
 
             page_table_user = (
                 self._get_prefill_user_page_table(
-                    page_table[idx : idx + 1],
-                    kv_cache[model_id],
-                    seq_len,
+                    page_table=page_table[idx : idx + 1],  # Slice page table for the current user
+                    kv_cache=kv_cache[model_id],
+                    prefill_len=seq_len,  # Full length of the current prompt
                     trace_enabled=enable_trace_current_prompt,
                     prefill_seq_len=prefill_seq_len,
                 )
@@ -350,6 +365,7 @@ class Generator:
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
+                    num_cached_tokens=num_cached_tokens,
                     **local_kwargs,
                 )
             if enable_trace_current_prompt:
@@ -365,6 +381,8 @@ class Generator:
         for idx, out in enumerate(out_list):
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
+            num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
+            last_token_idx_relative = last_token_idx - num_cached_tokens
             user_id = empty_slots[idx]
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
 
@@ -372,17 +390,28 @@ class Generator:
             ttnn.synchronize_device(self.model[model_id].mesh_device)
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+            output_logits[idx] = self.model[model_id].process_output_prefill(
+                out, last_token_idx=((last_token_idx_relative) % 32)
+            )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
 
     def prefill_forward_single_user_text(
-        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
+        self,
+        tokens,  # New tokens to prefill (without the cached tokens), padded by get_padded_prefill_len()
+        page_table,  # Cached and new pages
+        user_id,
+        last_token_idx,  # Last token index of the full prompt, including the cached tokens
+        kv_cache=None,
+        model_id=-1,
+        num_cached_tokens: int = 0,
+        **kwargs,
     ):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
-        if use_chunked_prefill:
+        use_prefix_caching = num_cached_tokens > 0
+        if use_chunked_prefill or use_prefix_caching:
             """
             Chunked prefill requires paged attention. There are some strange constraints which we must meet:
              - page_table, which is used in SDPA, must match batch size of inputs, which is 1. This is because SDPA
@@ -394,29 +423,53 @@ class Generator:
             """
             assert page_table is not None, "page_table must be provided for chunked prefill"
             assert kv_cache is not None, "kv_cache must be provided for chunked prefill"
-            assert (
-                last_token_idx is not None and last_token_idx < seq_len
-            ), "last_token_idx must be provided and less than seq_len"
-            chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args[model_id].max_prefill_chunk_size)
+            assert last_token_idx is not None and last_token_idx < seq_len + num_cached_tokens, (
+                f"last_token_idx must be provided and less than seq_len + num_cached_tokens: "
+                f"last_token_idx={last_token_idx}, seq_len={seq_len}, num_cached_tokens={num_cached_tokens}"
+            )
+
+            if use_chunked_prefill:
+                # If chunked prefill (more than one chunk is needed), we want to use the maximum chunk size.
+                chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args[model_id].max_prefill_chunk_size)
+            else:
+                # Otherwise we only have one chunk.
+                chunk_size = seq_len
+
+            last_token_idx_in_seq = last_token_idx - num_cached_tokens  # Excluding the cached tokens
             block_size = get_block_size(kv_cache)
-            last_token_idx_in_chunk = last_token_idx % chunk_size
+            last_token_idx_in_chunk = last_token_idx_in_seq % chunk_size
             # Calculate which chunk contains the last_token_idx
-            last_chunk_start = (last_token_idx // chunk_size) * chunk_size
+            last_chunk_start = (last_token_idx_in_seq // chunk_size) * chunk_size
             page_table_user = page_table[user_id : user_id + 1, :]
             # Pad page table to match number of blocks in seq_len
-            num_padding_blocks = num_blocks_in_seq(seq_len, block_size) - page_table_user.shape[1]
+            num_padding_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size) - page_table_user.shape[1]
             page_table_user_padded = torch.cat(
                 [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
             )
             CHUNK_USER_ID = 0
 
-            for chunk_start in range(0, seq_len, chunk_size):
+            for chunk_start in range(num_cached_tokens, num_cached_tokens + seq_len, chunk_size):
+                # These are absolute, i.e. including the cached tokens
                 chunk_end = chunk_start + chunk_size
-                assert (
-                    chunk_end <= seq_len
-                ), f"Chunk end should be less than seq_len, got chunk_end={chunk_end} and seq_len={seq_len}"
-                chunk_tokens = tokens[:, chunk_start:chunk_end]
-                chunk_page_table = page_table_user[:, chunk_start // block_size : chunk_end // block_size]
+                # These are relative, i.e. excluding the cached tokens
+                chunk_start_relative = chunk_start - num_cached_tokens
+                chunk_end_relative = chunk_end - num_cached_tokens
+                assert chunk_end <= num_cached_tokens + seq_len, (
+                    f"chunk_end should be less or equal to "
+                    f"num_cached_tokens + seq_len. "
+                    f"Got: chunk_end={chunk_end}, "
+                    f"num_cached_tokens={num_cached_tokens}, seq_len={seq_len}"
+                )
+
+                # Select tokens for the current chunk.
+                # Cached tokens were allready excluded (not part of the input),
+                # so using relative indexes.
+                chunk_tokens = tokens[:, chunk_start_relative:chunk_end_relative]
+
+                # Select pages for the current chunk.
+                # Cached pages must be skipped as well,
+                # so using absolute indexes.
+                chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
 
                 (
                     chunk_prefill_input,
@@ -429,6 +482,7 @@ class Generator:
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
+                    last_token_idx=last_token_idx,
                     **kwargs,
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
@@ -441,10 +495,9 @@ class Generator:
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
-                    **kwargs,
                 )
 
-                if chunk_start == last_chunk_start:
+                if chunk_start_relative == last_chunk_start:
                     return tt_logits
                 else:
                     del tt_logits
@@ -458,6 +511,7 @@ class Generator:
             ) = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
+                last_token_idx=last_token_idx,
                 **kwargs,
             )
 

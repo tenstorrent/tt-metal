@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ssm::hc_sum_reduce {
 
 HCSumReduceDeviceOperation::program_factory_t HCSumReduceDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::HCSumReduceProgramFactory{};
 }
 
@@ -85,19 +85,25 @@ tt::stl::hash::hash_t HCSumReduceDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<HCSumReduceDeviceOperation::operation_attributes_t, HCSumReduceDeviceOperation::tensor_args_t>
-HCSumReduceDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ssm::hc_sum_reduce::HCSumReduceDeviceOperation::tensor_return_value_t hc_sum_reduce(
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DataType> dtype,
-    const std::optional<MathFidelity> math_fidelity) {
-    return {
-        operation_attributes_t{
-            .memory_config = memory_config.value_or(input.memory_config()),
-            .dtype = dtype.value_or(input.dtype()),
-            .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
-        },
-        tensor_args_t{.input = input}};
+    std::optional<DataType> dtype,
+    std::optional<MathFidelity> math_fidelity) {
+    using OperationType = ttnn::operations::experimental::ssm::hc_sum_reduce::HCSumReduceDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .memory_config = memory_config.value_or(input.memory_config()),
+        .dtype = dtype.value_or(input.dtype()),
+        .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce
+}  // namespace ttnn::prim

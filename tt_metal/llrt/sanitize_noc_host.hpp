@@ -31,9 +31,7 @@ static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoo
     return false;
 }
 
-static bool coord_found_p(std::unordered_set<CoreCoord> coords, CoreCoord core) {
-    return coords.find(core) != coords.end();
-}
+static bool coord_found_p(const std::unordered_set<CoreCoord>& coords, CoreCoord core) { return coords.contains(core); }
 
 static std::string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
     std::stringstream ss;
@@ -139,6 +137,41 @@ inline void watcher_sanitize_host_noc_write(
         core,
         addr,
         lbytes);
+}
+
+inline void watcher_sanitize_host_noc_multicast_write(
+    const metal_SocDescriptor& soc_d,
+    const std::unordered_set<CoreCoord>& virtual_worker_cores,
+    const CoreCoord& core_start,
+    const CoreCoord& core_end,
+    uint64_t addr,
+    uint32_t lbytes) {
+    if (core_start.x > core_end.x || core_start.y > core_end.y) {
+        TT_THROW(
+            "Host watcher: bad multicast write coordinates - start {} must be <= end {} in both x and y",
+            core_start.str(),
+            core_end.str());
+    }
+
+    if (not coord_found_p(soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0), core_start) and
+        not coord_found_p(virtual_worker_cores, core_start)) {
+        TT_THROW("Host watcher: bad multicast write NOC coord {} - start core is not tensix", core_start.str());
+    } else if (coord_found_p(virtual_worker_cores, core_start)) {
+        if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad multicast write worker address {}", noc_address(core_start, addr, lbytes));
+        }
+    }
+
+    if (not coord_found_p(soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0), core_end) and
+        not coord_found_p(virtual_worker_cores, core_end)) {
+        TT_THROW("Host watcher: bad multicast write NOC coord {} - end core is not tensix", core_end.str());
+    } else if (coord_found_p(virtual_worker_cores, core_end)) {
+        if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad multicast write worker address {}", noc_address(core_end, addr, lbytes));
+        }
+    }
 }
 
 }  // namespace tt

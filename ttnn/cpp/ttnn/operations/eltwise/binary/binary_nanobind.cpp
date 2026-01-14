@@ -1223,8 +1223,8 @@ void bind_div(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            accurate_mode (bool, optional): `false` if input_tensor_b is non-zero, else `true` (Only if the input tensor is not ComplexTensor). Defaults to `false`.
-            round_mode (string, optional): can be `None`, `floor` and `trunc` (only if the input tensor is not ComplexTensor). Defaults to `None`.
+            fast_and_approximate_mode (bool, optional): `true` if input_tensor_b is non-zero for fast approximation, else `false` for accurate division (Only if the input tensor is not ComplexTensor). Defaults to `false`.
+            rounding_mode (string, optional): can be `None`, `floor` and `trunc` (only if the input tensor is not ComplexTensor). Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
@@ -1264,8 +1264,8 @@ void bind_div(
             [](const binary_operation_t& self,
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
-               bool accurate_mode,
-               const std::optional<std::string>& round_mode,
+               bool fast_and_approximate_mode,
+               const std::optional<std::string>& rounding_mode,
                const std::optional<const DataType>& dtype,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
@@ -1277,8 +1277,8 @@ void bind_div(
                 return self(
                     input_tensor_a,
                     input_tensor_b,
-                    accurate_mode,
-                    round_mode,
+                    fast_and_approximate_mode,
+                    rounding_mode,
                     dtype,
                     memory_config,
                     output_tensor,
@@ -1291,8 +1291,8 @@ void bind_div(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("accurate_mode") = false,
-            nb::arg("round_mode") = nb::none(),
+            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("rounding_mode") = nb::none(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
@@ -1307,8 +1307,8 @@ void bind_div(
             [](const binary_operation_t& self,
                const Tensor& input_tensor_a,
                float value,
-               bool accurate_mode,
-               const std::optional<std::string>& round_mode,
+               bool fast_and_approximate_mode,
+               const std::optional<std::string>& rounding_mode,
                const std::optional<const DataType>& dtype,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
@@ -1320,8 +1320,8 @@ void bind_div(
                 return self(
                     input_tensor_a,
                     value,
-                    accurate_mode,
-                    round_mode,
+                    fast_and_approximate_mode,
+                    rounding_mode,
                     dtype,
                     memory_config,
                     output_tensor,
@@ -1334,8 +1334,8 @@ void bind_div(
             nb::arg("input_tensor_a"),
             nb::arg("value"),
             nb::kw_only(),
-            nb::arg("accurate_mode") = false,
-            nb::arg("round_mode") = nb::none(),
+            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("rounding_mode") = nb::none(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
@@ -2039,7 +2039,7 @@ void bind_binary_inplace_operation(
 }
 
 template <typename binary_operation_t>
-void bind_power(nb::module_& mod, const binary_operation_t& operation, const std::string& note = "") {
+void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         Perform element-wise {0} operation on :attr:`input_tensor` with :attr:`exponent`.
@@ -2341,18 +2341,6 @@ void py_module(nb::module_& mod) {
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_binary_operation_with_fast_approx(
-        mod,
-        ttnn::divide,
-        R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i / \mathrm{{input\_tensor\_b}}_i))doc",
-        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
-        R"doc(
-        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
-        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handle division by zero.
-        When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.
-        )doc");
-
     detail::bind_binary_operation(
         mod,
         ttnn::xlogy,
@@ -2366,7 +2354,7 @@ void py_module(nb::module_& mod) {
         R"doc(Subtracts :attr:`input_tensor_a` from :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_b}}_i - \mathrm{{input\_tensor\_a}}_i)doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32,BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_bitwise_binary_ops_operation(
         mod,
@@ -2411,7 +2399,7 @@ void py_module(nb::module_& mod) {
     detail::bind_bitwise_binary_ops_operation(
         mod,
         ttnn::logical_left_shift,
-        R"doc(Perform logical_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
+        R"doc(Perform logical_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Equivalent to multiplying by 2^shift_amt.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_left_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
         R"doc(INT32, UINT32)doc");
@@ -2419,17 +2407,10 @@ void py_module(nb::module_& mod) {
     detail::bind_logical_binary_ops_operation(
         mod,
         ttnn::logical_right_shift,
-        R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Logical right shift fills vacated bits with zeros.)doc",
+        R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Logical right shift fills vacated bits with zeros. Equivalent to integer division by 2^shift_amt.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_right_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
         R"doc(INT32, UINT32)doc");
-
-    auto prim_module = mod.def_submodule("prim", "Primitive binary operations");
-
-    detail::bind_primitive_binary_operation(
-        prim_module,
-        ttnn::prim::binary,
-        R"doc(Applied binary operation on :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         mod,
@@ -2543,9 +2524,11 @@ void py_module(nb::module_& mod) {
         R"doc(Divides :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns a tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output}_i = \begin{cases} \mathrm{\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{None} \\ \mathrm{\text{floor}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{floor} \\ \mathrm{\text{trunc}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{trunc} \end{cases}
         )doc",
-        R"doc(BFLOAT16, FLOAT32, INT32)doc",
+        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
         R"doc(
-        With INT32 inputs, round_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
+        With INT32 inputs, rounding_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
+        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
+        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero (accurate mode).
         )doc");
 
     detail::bind_binary_composite_overload(
@@ -2693,7 +2676,7 @@ void py_module(nb::module_& mod) {
         ttnn::rsub_,
         R"doc(Subtracts :attr:`input_a` from :attr:`input_b` in-place and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_b}} - \mathrm{{input\_tensor\_a}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_inplace_operation(
         mod,

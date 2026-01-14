@@ -23,7 +23,7 @@ on:
     inputs:
       build-type:
         required: false
-        default: ASanCoverage
+        default: ASan
         type: choice
         options:
           - Release
@@ -77,7 +77,7 @@ jobs:
     with:
       version: "22.04"
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
-      build-type: ${{ inputs.build-type || 'ASanCoverage' }}
+      build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
       skip-tt-train: true
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}

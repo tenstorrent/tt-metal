@@ -20,6 +20,9 @@ Description:
 
     This enables other scripts to easily run comprehensive checks across all devices and their
     block locations and RISC cores without needing to depend on multiple separate scripts.
+
+Owner:
+    adjordjevic-TT
 """
 
 from collections.abc import Callable
@@ -101,7 +104,9 @@ class PerCoreCheckResult(PerBlockCheckResult):
 
 
 def is_galaxy(device: Device) -> bool:
-    return device.cluster_desc["chip_to_boardtype"][device._id] == "GALAXY"
+    import tt_umd
+
+    return device._context.cluster_descriptor.get_board_type(device._id) == tt_umd.BoardType.GALAXY
 
 
 def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:
@@ -145,7 +150,7 @@ def _convert_metal_device_ids_to_device_ids(
                 break
         log_check(
             found,
-            f"Device with unique_id {unique_id} (metal_device_id {metal_device_id}) not found in context.devices",
+            f"Device {metal_device_id} [{unique_id}] not found. There is a mismatch between metal and exalens device IDs, most likely due to use of TT_VISIBLE_DEVICES. Please contact script owner.",
         )
     return device_ids
 

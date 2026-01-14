@@ -63,16 +63,16 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
-      nanobind:
-        required: false
-        type: boolean
-        default: false
-        description: "Build with nanobind bindings"
       build-umd-tests:
         required: false
         type: boolean
         default: false
         description: "Build UMD tests"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
       fetch-depth:
         required: false
         type: number
@@ -157,16 +157,16 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
-      nanobind:
-        required: false
-        type: boolean
-        default: false
-        description: "Build with nanobind bindings"
       build-umd-tests:
         required: false
         type: boolean
         default: false
         description: "Build UMD tests"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-docker-image:
@@ -239,8 +239,6 @@ jobs:
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
-        CARGO_HOME: /tmp/.cargo
-        TT_FROM_PRECOMPILED_DIR: /work
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
@@ -323,11 +321,11 @@ jobs:
           if [ "${{ inputs.profile }}" = "true" ]; then
             build_command="$build_command --enable-time-trace --disable-unity-builds"
           fi
-          if [ "${{ inputs.nanobind }}" = "true" ]; then
-            build_command="$build_command --bindings nanobind"
-          fi
           if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
             build_command="$build_command --build-umd-tests"
+          fi
+          if [ "${{ inputs.enable-lto }}" = "true" ]; then
+            build_command="$build_command --enable-lto"
           fi
           echo "build-artifact.yaml running: $build_command"
           $build_command
@@ -406,6 +404,7 @@ jobs:
     needs: build-docker-image
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type }}
       python-version: ${{ inputs.version == '22.04' && '3.10' || '3.12' }}
       docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}

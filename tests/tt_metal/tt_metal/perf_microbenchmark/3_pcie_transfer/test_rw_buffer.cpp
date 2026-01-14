@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <algorithm>
@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
         }
 
-        TT_ASSERT(
+        TT_FATAL(
             page_size == 0 ? transfer_size == 0 : transfer_size % page_size == 0,
             "Transfer size {}B should be divisible by page size {}B",
             transfer_size,

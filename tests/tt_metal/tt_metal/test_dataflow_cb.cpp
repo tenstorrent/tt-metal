@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.h>
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -41,7 +40,7 @@ class IDevice;
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -78,7 +77,7 @@ int main(int argc, char** argv) {
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         int num_cbs = 1;  // works at the moment
-        assert(num_tiles % num_cbs == 0);
+        TT_FATAL(num_tiles % num_cbs == 0, "num_tiles must be divisible by num_cbs");
         int num_tiles_per_cb = num_tiles / num_cbs;
 
         uint32_t cb0_index = 0;

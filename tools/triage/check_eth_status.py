@@ -9,15 +9,18 @@ Usage:
 
 Description:
     Check status on the ethernet cores
+
+Owner:
+    nhuang-tt
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, triage_field, log_check_location, run_script
+from ttexalens import read_word_from_device
 from ttexalens.context import Context
 from ttexalens.device import Device, OnChipCoordinate
-from ttexalens.register_store import read_word_from_device
 import utils
 
 script_config = ScriptConfig(

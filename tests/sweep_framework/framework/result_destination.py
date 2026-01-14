@@ -107,6 +107,7 @@ def _collect_all_metrics(raw: dict[str, Any]) -> set[PerfMetric] | None:
     # Collect e2e and device metrics via helpers
     _add_e2e_metrics(metrics, raw)
     _add_device_metrics(metrics, raw)
+    _add_memory_metrics(metrics, raw)
 
     return metrics if metrics else None
 
@@ -180,6 +181,20 @@ def _add_device_metrics(metrics: set, raw: dict[str, Any]) -> None:
     device_perf_cached = raw.get("device_perf_cached")
     if isinstance(device_perf_cached, dict):
         _add_device_perf_from_dict(metrics, device_perf_cached, suffix="_cached")
+
+
+def _add_memory_metrics(metrics: set, raw: dict[str, Any]) -> None:
+    """Extract memory metrics from result dict and add to metrics set"""
+
+    # Per-core memory metrics from extract_resource_usage_per_core
+    _add_metric(metrics, "peak_l1_memory_per_core_bytes", raw.get("peak_l1_memory_per_core"))
+    _add_metric(metrics, "peak_cb_per_core_bytes", raw.get("peak_cb_per_core"))
+    _add_metric(metrics, "peak_l1_buffers_per_core_bytes", raw.get("peak_l1_buffers_per_core"))
+    _add_metric(metrics, "num_cores", raw.get("num_cores"))
+
+    # Aggregate and device-level metrics
+    _add_metric(metrics, "peak_l1_memory_aggregate_bytes", raw.get("peak_l1_memory_aggregate"))
+    _add_metric(metrics, "peak_l1_memory_device_bytes", raw.get("peak_l1_memory_device"))
 
 
 class ResultDestination(ABC):
@@ -354,7 +369,9 @@ class FileResultDestination(ResultDestination):
                 error_hash=error_hash,
                 config=None,
                 frontend="ttnn.op",
-                model_name=header.get("traced_source", "n/a"),
+                model_name=header.get("traced_source", "n/a")
+                if isinstance(header.get("traced_source"), str)
+                else ", ".join(header.get("traced_source", ["n/a"])),
                 op_kind=_op_kind,
                 op_name=_op_name,
                 framework_op_name="sweep",
@@ -516,7 +533,7 @@ def _normalize_original_vector_data(original):
         elif isinstance(obj, (list, str, int, float, bool)) or obj is None:
             normalized[k] = obj
         else:
-            # For complex pybind/ttnn objects, fall back to structured serialization
+            # For complex nanobind/ttnn objects, fall back to structured serialization
             try:
                 normalized[k] = serialize_structured(obj)
             except Exception:
