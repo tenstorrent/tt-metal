@@ -161,6 +161,17 @@ class TTSampling(LightweightModule):
     def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
         """Flexible all-gather that works with both CCL implementations."""
         if self.cluster_shape[0] * self.cluster_shape[1] == 32:
+            if hasattr(self.tt_ccl, "populate_all_gather_runtime_args"):
+                gather_cfg = self.tt_ccl.populate_all_gather_runtime_args(
+                    {
+                        "cluster_axis": cluster_axis,
+                        "dim": dim,
+                        "memory_config": memory_config,
+                        "topology": ttnn.Topology.Linear,
+                        "num_links": num_links,
+                    }
+                )
+                return ttnn.experimental.all_gather_async(tensor, **gather_cfg)
             # Use line_all_gather with persistent buffer support
             return self.tt_ccl.line_all_gather(
                 tensor,
