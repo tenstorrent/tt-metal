@@ -61,20 +61,11 @@ void bind_experimental_gelu_backward_operation(nb::module_& mod) {
             >>> output = ttnn.experimental.gelu_bw(grad_tensor, input_tensor)
         )doc");
 
-    using OperationType = decltype(ttnn::experimental::gelu_bw);
     bind_registered_operation(
         mod,
         ttnn::experimental::gelu_bw,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& grad_output_tensor,
-               const Tensor& input_tensor,
-               const std::string& approximate,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor>& input_grad_tensor) -> ttnn::Tensor {
-                return self(grad_output_tensor, input_tensor, approximate, memory_config, input_grad_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_output_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
