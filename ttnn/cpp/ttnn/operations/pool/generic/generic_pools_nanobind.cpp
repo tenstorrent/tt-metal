@@ -54,52 +54,7 @@ void bind_max_pool2d_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::max_pool2d)& self,
-               const ttnn::Tensor& input_tensor,
-               uint32_t batch_size,
-               uint32_t input_h,
-               uint32_t input_w,
-               uint32_t channels,
-               std::array<uint32_t, 2> kernel_size,
-               std::array<uint32_t, 2> stride,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-               std::array<uint32_t, 2> dilation,
-               bool ceil_mode,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<Op2DSliceConfig>& dram_slice_config,
-               const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
-               bool deallocate_input,
-               bool reallocate_halo_output,
-               bool return_indices,
-               const DataType dtype,
-               const Layout output_layout) -> nb::object {
-                auto result = self(
-                    input_tensor,
-                    batch_size,
-                    input_h,
-                    input_w,
-                    channels,
-                    kernel_size,
-                    stride,
-                    padding,
-                    dilation,
-                    ceil_mode,
-                    memory_config,
-                    dram_slice_config,
-                    applied_shard_scheme,
-                    deallocate_input,
-                    reallocate_halo_output,
-                    return_indices,
-                    dtype,
-                    output_layout);
-
-                // Return single tensor or tuple based on vector size
-                if (result.size() == 1) {
-                    return nb::cast(std::move(result[0]));
-                }
-                return nb::cast(std::move(result));
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("batch_size"),
             nb::arg("input_h"),
@@ -155,48 +110,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the average pool convolved output tensor.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::avg_pool2d)& self,
-               const ttnn::Tensor& input_tensor,
-               uint32_t batch_size,
-               uint32_t input_h,
-               uint32_t input_w,
-               uint32_t channels,
-               std::array<uint32_t, 2> kernel_size,
-               std::array<uint32_t, 2> stride,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-               bool ceil_mode,
-               bool count_include_pad,
-               std::optional<int32_t> divisor_override,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<Op2DSliceConfig>& dram_slice_config,
-               const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
-               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-               bool deallocate_input,
-               bool reallocate_halo_output,
-               const DataType dtype,
-               const Layout output_layout) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    batch_size,
-                    input_h,
-                    input_w,
-                    channels,
-                    kernel_size,
-                    stride,
-                    padding,
-                    ceil_mode,
-                    count_include_pad,
-                    divisor_override,
-                    memory_config,
-                    dram_slice_config,
-                    applied_shard_scheme,
-                    compute_kernel_config,
-                    deallocate_input,
-                    reallocate_halo_output,
-                    dtype,
-                    output_layout);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("batch_size"),
             nb::arg("input_h"),
