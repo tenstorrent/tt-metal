@@ -75,15 +75,7 @@ void bind_unary_backward_two_float(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float min,
-               float max,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, min, max, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg("min"),
@@ -143,17 +135,8 @@ void bind_unary_backward_op(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        ttnn::nanobind_arguments_t{
+            nb::arg("grad_tensor"), nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 
 template <typename unary_backward_operation_t>
@@ -206,14 +189,7 @@ void bind_unary_backward_rsqrt(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor, memory_config, input_grad);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
@@ -419,14 +395,7 @@ void bind_unary_backward_float(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
@@ -496,15 +465,7 @@ void bind_unary_backward_two_float_with_default(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               float parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
@@ -566,14 +527,7 @@ void bind_unary_backward_float_with_default(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
@@ -733,15 +687,7 @@ void bind_unary_backward_rdiv(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<std::string>& parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
@@ -802,15 +748,7 @@ void bind_unary_backward_unary_optional_float(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float parameter,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor, parameter, memory_config, input_grad);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg(parameter_name.c_str()),
@@ -870,14 +808,7 @@ void bind_unary_backward_shape(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Shape& parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
@@ -934,14 +865,7 @@ void bind_unary_backward_optional(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor, memory_config, input_grad);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
@@ -996,14 +920,7 @@ void bind_unary_backward_neg(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor, memory_config, input_grad);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
@@ -1051,14 +968,7 @@ void bind_unary_backward_prod_bw(nb::module_& mod, const unary_backward_operatio
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<int64_t> dim,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, dim, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
@@ -1120,15 +1030,7 @@ void bind_unary_backward_gelu(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               std::string parameter_a,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor, parameter_a, memory_config, input_grad);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
