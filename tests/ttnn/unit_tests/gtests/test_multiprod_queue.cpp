@@ -126,7 +126,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             std::iota(host_data.begin(), host_data.end(), j);
             const Tensor host_tensor = Tensor::from_vector(host_data, tensor_spec);
             auto src_buffer = host_buffer::get_host_buffer(host_tensor);
-            copy_tensor_to_device_from_host(
+            fill_tensor_from_host_buffer(
                 device->mesh_command_queue(*write_cq), device_tensor, src_buffer.view_bytes().data());
             EXPECT_TRUE(is_device_tensor(device_tensor));
 

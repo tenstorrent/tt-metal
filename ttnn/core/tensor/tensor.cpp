@@ -497,7 +497,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     return output;
 }
 
-void copy_tensor_to_host_from_device(
+void copy_tensor_to_host_buffer(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
@@ -514,7 +514,7 @@ void copy_tensor_to_host_from_device(
     queue.enqueue_read_shards(shard_data_transfers, src.mesh_buffer(), blocking);
 }
 
-void copy_tensor_to_device_from_host(
+void fill_tensor_from_host_buffer(
     distributed::MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
     TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
