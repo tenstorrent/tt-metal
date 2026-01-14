@@ -60,10 +60,21 @@ jobs:
           sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
           # Convert to JSON
           json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
+          # Filter by model if specified
+          echo "[INFO] Selected model: ${{ inputs.model }}"
+          if [ "${{ inputs.model }}" = "all" ]; then
+            filtered_output="$json_output"
+            echo "[INFO] Loading all tests from YAML"
+          else
+            # Filter tests by model-name field
+            # Include tests where model-name matches OR model-name doesn't exist (always-run tests)
+            filtered_output=$(echo "$json_output" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+            echo "[INFO] Filtered tests by model: ${{ inputs.model }}"
+          fi
           # Print the JSON output
           echo "Read contents of $TESTS_YAML_PATH and converted to JSON:"
-          echo "${json_output}"
-          echo "matrix=${json_output}" >> $GITHUB_OUTPUT
+          echo "${filtered_output}"
+          echo "matrix=${filtered_output}" >> $GITHUB_OUTPUT
 
   t3000-perf-tests:
     needs: load-test-matrix
@@ -118,7 +129,6 @@ jobs:
           governor: performance
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        if: ${{ inputs.model == 'all' || inputs.model == matrix.test-group.model-name }}
         run: |
           source tests/scripts/t3000/run_t3000_perf_tests.sh
           echo ${{ matrix.test-group.cmd }}
@@ -147,7 +157,6 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ inputs.model == 'all' || inputs.model == matrix.test-group.model-name }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
@@ -159,7 +168,7 @@ jobs:
             exit 1
           fi
       - name: Upload Models perf report
-        if: ${{ (inputs.model == 'all' || inputs.model == matrix.test-group.model-name) && steps.check-perf-report.outputs.perf_report_filename != '' }}
+        if: ${{ steps.check-perf-report.outputs.perf_report_filename != '' }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
