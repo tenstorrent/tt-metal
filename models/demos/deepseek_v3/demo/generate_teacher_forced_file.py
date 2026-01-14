@@ -10,10 +10,12 @@ be refreshed or reproduced when needed.
 
 import argparse
 import os
+import types
 from pathlib import Path
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
+from transformers.cache_utils import DynamicCache
 from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
 
 try:
@@ -36,6 +38,14 @@ MODEL_PATH = Path(
     )
 )
 
+# Remote-code models may expect DynamicCache.get_max_length; add a shim if missing.
+if not hasattr(DynamicCache, "get_max_length"):
+
+    def _get_max_length(self):
+        return self.get_seq_length()
+
+    DynamicCache.get_max_length = _get_max_length
+
 REFERENCE_FILE = Path(__file__).with_name("deepseek_v3_teacher_forcing.refpt")
 
 TEST_PROMPT = "What is the correct answer to this question:Racemic 3-methylpent-1-ene is treated with Grubbs catalyst. How many possible products are there (excluding ethene)?\nChoices:\n(A) 8\n(B) 2\n(C) 6\n(D) 4\nPlease reason step by step, and your final answer must be only (A,B,C or D) within \\boxed\nAnswer:"
@@ -45,6 +55,7 @@ def generate_reference(
     max_new_tokens: int = 128,
     reference_file: Path = REFERENCE_FILE,
     prompt: str = TEST_PROMPT,
+    debug_one_layer: bool = False,
 ) -> Path:
     """
     Generate reference tokens using HuggingFace model and save to refpt file.
@@ -78,6 +89,13 @@ def generate_reference(
     model = load_model_uninitialized(str(MODEL_PATH))
     model.eval()
     print("Model structure created successfully")
+
+    if debug_one_layer:
+        print("Debug mode: truncating to 1 decoder layer")
+        if hasattr(model, "model") and hasattr(model.model, "layers"):
+            model.model.layers = model.model.layers[:1]
+        if hasattr(model, "config"):
+            model.config.num_hidden_layers = 1
 
     print("Loading weights dictionary from disk...")
     weights_dict = load_model_weights(str(MODEL_PATH))
@@ -147,6 +165,51 @@ def generate_reference(
     add_dynamic_weight_loading_hooks_with_dtype(model, weights_dict)
     print("Lazy weight loading configured - weights will be loaded as needed during generation")
 
+    def _get_past_length(past_key_values) -> int:
+        if past_key_values is None:
+            return 0
+        if hasattr(past_key_values, "get_seq_length"):
+            return past_key_values.get_seq_length()
+        if hasattr(past_key_values, "get_max_length"):
+            return past_key_values.get_max_length()
+        try:
+            return past_key_values[0][0].shape[-2]
+        except Exception:
+            return 0
+
+    original_prepare = model.prepare_inputs_for_generation.__func__
+
+    def _patched_prepare_inputs_for_generation(self, *args, **kwargs):
+        model_inputs = original_prepare(self, *args, **kwargs)
+        attention_mask = model_inputs.get("attention_mask")
+        past_key_values = model_inputs.get("past_key_values", kwargs.get("past_key_values"))
+        input_ids = model_inputs.get("input_ids")
+        if attention_mask is not None and past_key_values is not None and input_ids is not None:
+            expected_len = _get_past_length(past_key_values) + input_ids.shape[-1]
+            if attention_mask.shape[-1] != expected_len:
+                if attention_mask.shape[-1] < expected_len:
+                    pad = torch.ones(
+                        attention_mask.shape[0],
+                        expected_len - attention_mask.shape[-1],
+                        dtype=attention_mask.dtype,
+                        device=attention_mask.device,
+                    )
+                    attention_mask = torch.cat([attention_mask, pad], dim=-1)
+                else:
+                    attention_mask = attention_mask[:, :expected_len]
+                model_inputs["attention_mask"] = attention_mask
+        return model_inputs
+
+    model.prepare_inputs_for_generation = types.MethodType(_patched_prepare_inputs_for_generation, model)
+
+    original_generate = model.generate.__func__
+
+    def _patched_generate(self, *args, **kwargs):
+        kwargs.pop("cache_implementation", None)
+        return original_generate(self, *args, **kwargs)
+
+    model.generate = types.MethodType(_patched_generate, model)
+
     model = model.to(device)
     print(f"Model moved to {device}")
 
@@ -209,12 +272,21 @@ def generate_reference(
         }
 
     class ReferenceSnapshotter(StoppingCriteria):
-        def __init__(self, prompt_len: int, max_new_tokens: int, reference_file: Path) -> None:
+        def __init__(
+            self,
+            prompt_len: int,
+            max_new_tokens: int,
+            reference_file: Path,
+            tokenizer,
+            pbar,
+        ) -> None:
             self.prompt_len = prompt_len
             self.reference_file = reference_file
             self.max_total_len = prompt_len + max_new_tokens
             self.top5_tokens_full = torch.zeros(self.max_total_len, 5, dtype=torch.long)
             self.last_len = prompt_len
+            self.tokenizer = tokenizer
+            self.pbar = pbar
 
         def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
             current_len = input_ids.shape[-1]
@@ -224,6 +296,12 @@ def generate_reference(
                     self.top5_tokens_full[current_len - 1] = top5
                 self.last_len = current_len
                 reference_tokens_tensor = input_ids.detach().cpu()
+                generated_tokens = reference_tokens_tensor[0, self.prompt_len :].tolist()
+                decoded = self.tokenizer.decode(generated_tokens, skip_special_tokens=False)
+                if self.pbar is not None:
+                    self.pbar.write(f"Decoded so far: {decoded!r}")
+                else:
+                    print(f"Decoded so far: {decoded!r}")
                 payload = build_payload(
                     reference_tokens_tensor,
                     self.top5_tokens_full[:current_len].cpu(),
@@ -244,12 +322,14 @@ def generate_reference(
 
     pbar = None
     stopping_criteria = None
-    snapshotter = ReferenceSnapshotter(prompt_len, max_new_tokens, reference_file)
+    snapshotter = None
     if tqdm is not None and max_new_tokens > 0:
         pbar = tqdm(total=max_new_tokens, desc="Generating tokens", unit="tok", mininterval=1)
+        snapshotter = ReferenceSnapshotter(prompt_len, max_new_tokens, reference_file, tokenizer, pbar)
         stopping_criteria = StoppingCriteriaList([TokenProgress(prompt_len, pbar), snapshotter])
     elif tqdm is None and max_new_tokens > 0:
         print("tqdm not available; generation progress bar disabled.")
+        snapshotter = ReferenceSnapshotter(prompt_len, max_new_tokens, reference_file, tokenizer, None)
         stopping_criteria = StoppingCriteriaList([snapshotter])
 
     try:
@@ -307,11 +387,17 @@ if __name__ == "__main__":
         default=REFERENCE_FILE,
         help="Path to output .refpt file.",
     )
+    parser.add_argument(
+        "--debug-one-layer",
+        action="store_true",
+        help="Use only the first decoder layer (debugging; not for real references).",
+    )
     args = parser.parse_args()
 
     path = generate_reference(
         max_new_tokens=args.max_new_tokens,
         reference_file=args.output,
         prompt=args.prompt,
+        debug_one_layer=args.debug_one_layer,
     )
     print(f"\nDone. Reference saved to: {path}")
