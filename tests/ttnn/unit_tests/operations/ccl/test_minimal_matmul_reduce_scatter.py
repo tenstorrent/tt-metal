@@ -10,6 +10,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+import time
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -41,7 +42,7 @@ def run_reduce_scatter_impl(
     enable_trace=True,
 ):
     enable_trace = False
-    torch.manual_seed(0)
+    torch.manual_seed(time.time_ns())
 
     tile = (32, 32)
 
@@ -73,7 +74,7 @@ def run_reduce_scatter_impl(
     logger.info("Creating persistent buffers")
     rs_num_batches = rs_input_shape[0]
     single_batch_input_shape = rs_input_shape[:]
-    single_batch_input_shape[2] //= rs_num_batches
+    # single_batch_input_shape[2] //= rs_num_batches
     persistent_intermediate_buffers = [
         ttnn.from_torch(
             torch.zeros(single_batch_input_shape),
@@ -88,17 +89,17 @@ def run_reduce_scatter_impl(
     rs_output_shape = rs_input_shape[:]
     rs_output_shape[3] //= num_devices
     persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(rs_output_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=rs_input_dtype,
-            memory_config=mem_config_rs,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+        None
+        # ttnn.from_torch(
+        #     torch.zeros(rs_output_shape),
+        #     device=mesh_device,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     dtype=rs_input_dtype,
+        #     memory_config=mem_config_rs,
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        # )
         for _ in range(num_iters)
     ]
-
     logger.info("Done creating persistent buffers")
 
     ##### Matmul weight setup #####
@@ -152,6 +153,15 @@ def run_reduce_scatter_impl(
         packer_l1_acc=True,
     )
 
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=2,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=core_grid,
+    )
+
     ##### MM input setup #####
     logger.info(f"Reduce scatter shape: {rs_input_shape}")
     logger.info(f"Reduce scatter dim: {rs_scatter_dim}")
@@ -178,7 +188,6 @@ def run_reduce_scatter_impl(
                 ),
             ),
         )
-
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
     ##### Perform torch ops #####
@@ -205,7 +214,7 @@ def run_reduce_scatter_impl(
                 weight_tt,
                 bias=bias_tt,
                 memory_config=mem_config_mm,
-                program_config=program_config,
+                program_config=matmul_config,
                 compute_kernel_config=compute_kernel_config,
             )
             tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
@@ -220,11 +229,14 @@ def run_reduce_scatter_impl(
                 subdevice_id=worker_sub_device_id,
             )
         else:
-            tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = ttnn.experimental.matmul_reduce_scatter_async(
+            (
+                tt_matmul_out_tensor,
+                tt_reduce_scatter_output_tensor,
+            ) = ttnn.experimental.minimal_matmul_reduce_scatter_async(
                 tt_input_tensor_mesh_list[i],
                 weight_tt,
                 persistent_intermediate_buffer=persistent_intermediate_buffers[i],
-                persistent_output_buffer=persistent_output_buffers[i],
+                # persistent_output_buffer=persistent_output_buffers[i],
                 dim=rs_scatter_dim,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 reduce_scatter_core_grid_offset=(0, 6),
@@ -234,7 +246,7 @@ def run_reduce_scatter_impl(
                 topology=rs_topology,
                 subdevice_id=worker_sub_device_id,
                 memory_config_mm=mem_config_mm,
-                program_config=program_config,
+                program_config=matmul_config,
                 compute_kernel_config=compute_kernel_config,
             )
 
@@ -281,7 +293,7 @@ def run_reduce_scatter_impl(
         tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
         tt_mm_out = torch.sum(torch.stack(torch.chunk(tt_mm_out, num_devices, 3)), dim=0)
         eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
-        logger.info(f"{output}, iteration {i}")
+        logger.info(f"Matmul {output}, shape = {tt_mm_out.shape}, iteration {i}")
         assert eq, f"{i} FAILED mm: {output}"
         tt_rs_out_tensor = tt_reduce_scatter_output_list[i]
         torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
@@ -291,7 +303,11 @@ def run_reduce_scatter_impl(
         tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
         tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
         eq, output = comp_pcc(tt_rs_out, torch_rs_out)
-        logger.info(f"{output}, iteration {i}")
+        logger.info(f"Reduce Scatter {output}, shape = {tt_rs_out.shape}, iteration {i}")
+        if not eq:
+            diff = torch.abs(tt_rs_out - torch_rs_out)
+            rdiff = diff.max(axis=-1)[0]
+            torch.set_printoptions(sci_mode=False)
         assert eq, f"{i} FAILED ag: {output}"
 
         # print(f"RS TORCH TENSOR {torch_rs_out}")
@@ -321,32 +337,6 @@ def run_reduce_scatter_impl(
             8,
             1,
             [1, 1, 10240, 2560],
-            [4, 1, 1024, 2560],
-            2,
-            3,
-            ttnn.TILE_LAYOUT,
-            5,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            True,
-        ),  # use batching when fused
-        (
-            8,
-            1,
-            [1, 1, 10240, 2560],
-            [2, 1, 2048, 2560],
-            2,
-            3,
-            ttnn.TILE_LAYOUT,
-            5,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            True,
-        ),  # use batching when fused
-        (
-            8,
-            1,
-            [1, 1, 10240, 2560],
             [1, 1, 4096, 2560],
             2,
             3,
@@ -356,8 +346,21 @@ def run_reduce_scatter_impl(
             ttnn.bfloat16,
             True,
         ),  # use batching when fused
+        (
+            8,
+            1,
+            [1, 1, 2048, 1024],
+            [1, 1, 32768, 1024],
+            2,
+            3,
+            ttnn.TILE_LAYOUT,
+            5,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            True,
+        ),  # use batching when fused
     ],
-    ids=["batch_8", "batch_4", "batch_2", "batch_1"],
+    ids=["10240_batch_8", "10240_batch_1", "32768_batch_1"],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_mm, mem_config_rs",

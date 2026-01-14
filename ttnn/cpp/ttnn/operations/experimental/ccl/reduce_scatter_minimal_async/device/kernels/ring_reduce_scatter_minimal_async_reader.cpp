@@ -110,7 +110,7 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         if constexpr (fuse_op) {
-            matmul_receiver.wait_for_matmul_batch(b);
+            matmul_receiver.wait_for_matmul_batch(std::min(b + 1, input_tensor_B - 1));
         }
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
         uint32_t batch_offset = input_batch_num_pages * b;

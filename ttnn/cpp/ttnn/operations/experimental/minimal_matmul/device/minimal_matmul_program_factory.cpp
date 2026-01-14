@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "minimal_matmul_program_factory.hpp"
+#include <cstdint>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -120,6 +122,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto* device = input_tensor.device();
 
     bool fuse_op = fused_op_signaler.has_value();
+    bool write_continuous_output = fuse_op && fused_op_signaler->is_reduce_scatter();
 
     if (!config.has_value()) {
         log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");
@@ -128,6 +131,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto grid_size =
         config.has_value() ? config.value().compute_with_storage_grid_size : device->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    const auto& cores_list = grid_to_cores(core_grid.start_coord, core_grid.end_coord, true);
+
     auto num_cores = core_grid.size();
 
     bool use_bias = bias_tensor.has_value();
@@ -247,6 +252,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
 
+    uint32_t M_block_multiplier = 1;
+    if (write_continuous_output) {
+        M_block_multiplier = in0_parallel_axis_cores;
+    }
     log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
     log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
@@ -315,6 +324,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     log_debug(tt::LogOp, "M_block_tiles: {}", M_block_tiles);
     log_debug(tt::LogOp, "K_block_tiles: {}", K_block_tiles);
     log_debug(tt::LogOp, "N_block_tiles: {}", N_block_tiles);
+    log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
+    log_debug(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
     log_debug(tt::LogOp, "subblock_h: {}", subblock_h);
     log_debug(tt::LogOp, "subblock_w: {}", subblock_w);
     log_debug(tt::LogOp, "in0_tile_size: {}", in0_tile_size);
@@ -335,12 +346,19 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     }
 
     if (fuse_op) {
-        // Create semaphores
-        fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
-        defines["FUSE_AG"] = "1";
-        if (fused_op_signaler->read_local_slice_from_input) {
-            in0_injector_defines = defines;
-            in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
+        if (fused_op_signaler->is_all_gather()) {
+            // Create semaphores
+            fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
+            defines["FUSE_AG"] = "1";
+            if (fused_op_signaler->read_local_slice_from_input) {
+                in0_injector_defines = defines;
+                in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
+            }
+        } else if (fused_op_signaler->is_reduce_scatter()) {
+            // Create semaphores
+            // fused_op_signaler->init_fused_op(program, device, core_grid);
+            fused_op_signaler->init_fused_op(program, device, core_grid, cores_list);
+            defines["FUSE_RS"] = "1";
         }
     }
 
@@ -351,11 +369,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // They are appended as a variable-length array at the end of the runtime-args:
     //   - for in0 output-writer cores the first output address is at index 13
     //   - for in1 output-writer cores the first output address is at index 12
-    uint32_t in3_addr = (fuse_op && fused_op_signaler->read_local_slice_from_input)
+    uint32_t in3_addr = (fuse_op && fused_op_signaler->is_all_gather() && fused_op_signaler->read_local_slice_from_input)
                             ? fused_op_signaler->ag_input.value().buffer()->address()
                             : 0;
     auto in3_data_format =
-        (fuse_op && fused_op_signaler->read_local_slice_from_input)
+        (fuse_op && fused_op_signaler->is_all_gather() && fused_op_signaler->read_local_slice_from_input)
             ? tt::tt_metal::datatype_to_dataformat_converter(fused_op_signaler->ag_input.value().dtype())
             : in1_data_format;
     auto in3_tile_size = tt::tile_size(in3_data_format);
@@ -379,6 +397,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
+        M_block_multiplier,
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -419,6 +438,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
+        M_block_multiplier,
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -452,6 +472,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
+        M_block_multiplier,
         in1_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -483,6 +504,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
+        M_block_multiplier,
         in1_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -509,6 +531,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
+        M_block_multiplier,
         subblock_h,
         subblock_w};
 
@@ -594,9 +617,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
-
-        // log_info(tt::LogOp, "core_id: {}, M_start_tile: {}, M_end_tile: {}, N_start_tile: {}, N_end_tile: {}",
-        // core_id, M_start_tile, M_end_tile, N_start_tile, N_end_tile);
+        if (write_continuous_output) {
+            M_start_tile = M_block_tiles * in0_idx;
+            M_end_tile =
+                M_block_tiles * in0_parallel_axis_cores * (M_blocks_per_core - 1) + M_block_tiles + M_start_tile;
+        }
 
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
@@ -625,7 +650,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         for (const auto& output_tensor : output_tensors) {
             in0_args.push_back(output_tensor.buffer()->address());
         }
-        if (fuse_op) {
+        if (fuse_op && fused_op_signaler->is_all_gather()) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
         if (in1_idx == 0) {
@@ -655,7 +680,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in1_args.push_back(output_tensor.buffer()->address());
         }
         if (fuse_op) {
-            fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+            if (fused_op_signaler->is_all_gather()) {
+                fused_op_signaler->push_matmul_fused_op_rt_args(
+                    in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+            } else if (fused_op_signaler->is_reduce_scatter()) {
+                fused_op_signaler->push_matmul_fused_reduce_scatter_rt_args(
+                    transpose_core_grid, in1_args, in0_idx, in1_idx);
+            }
         }
         if (in0_idx == 0) {
             // in1 sender
@@ -682,7 +713,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_sender_kernels_id,
         in1_receiver_kernels_id,
         transpose_core_grid,
-        fuse_op && fused_op_signaler->read_local_slice_from_input};
+        fuse_op && fused_op_signaler->is_all_gather() && fused_op_signaler->read_local_slice_from_input};
 }
 
 // Legacy wrapper for single output tensor (backward compatibility)
@@ -735,14 +766,13 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
 
 // Common helper for override_runtime_arguments - works with both single and multiple output tensors
 void override_runtime_arguments_common(
-    MinimalMatmulProgramFactory::cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
+    const MinimalMatmulProgramFactory::shared_variables_t& override_variables,
     uint32_t in0_addr,
     uint32_t in1_addr,
     uint32_t in2_addr,
     uint32_t in3_addr,
     const std::vector<uint32_t>& output_addrs) {
-    auto& program = cached_program.program;
-    auto& override_variables = cached_program.shared_variables;
 
     auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
@@ -805,16 +835,28 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     const MinimalMatmulParams& /*operation_attributes*/,
     const MinimalMatmulInputs& tensor_args,
     Tensor& tensor_return_value) {
+
+    auto& program = cached_program.program;
+    auto& override_variables = cached_program.shared_variables;
+    override_runtime_arguments(program,override_variables, tensor_args, tensor_return_value);
+}
+
+void MinimalMatmulProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const MinimalMatmulProgramFactory::shared_variables_t& override_variables,
+    const MinimalMatmulInputs& tensor_args,
+    Tensor& tensor_return_value) {
+
     auto in0_addr = tensor_args.input_tensor.buffer()->address();
     auto in1_addr = tensor_args.weight_tensor.buffer()->address();
     auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
     auto in3_addr =
-        tensor_args.optional_input_tensor.has_value() && cached_program.shared_variables.read_local_slice_from_input
+        tensor_args.optional_input_tensor.has_value() && override_variables.read_local_slice_from_input
             ? tensor_args.optional_input_tensor.value().buffer()->address()
             : 0;
 
     std::vector<uint32_t> output_addrs = {tensor_return_value.buffer()->address()};
-    override_runtime_arguments_common(cached_program, in0_addr, in1_addr, in2_addr, in3_addr, output_addrs);
+    override_runtime_arguments_common(program, override_variables, in0_addr, in1_addr, in2_addr, in3_addr, output_addrs);
 }
 
 }  // namespace ttnn::experimental::prim
