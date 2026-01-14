@@ -332,6 +332,22 @@ jobs:
           echo "=== Current ccache stats before Run 3 (back to original commit) ===="
           ccache -s
 
+      - name: Build after returning to original commit
+        run: |
+          echo "=========================================="
+          echo "=== Building project after returning to original commit ===="
+          echo "=========================================="
+          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          echo "Building to test if returning to original commit restores build cache..."
+          echo ""
+          echo "=== Build ccache stats before build ===="
+          ccache -s
+          echo ""
+          ./build_metal.sh --build-all
+          echo ""
+          echo "=== Build ccache stats after build ===="
+          ccache -s
+
       - name: Run TTNN tests (Third run - back to original commit)
         timeout-minutes: 30
         env:
@@ -787,6 +803,22 @@ jobs:
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
           echo ""
           echo "=== Current ccache stats before Run 3 (back to original commit) ===="
+          ccache -s
+
+      - name: Build after returning to original commit
+        run: |
+          echo "=========================================="
+          echo "=== Building project after returning to original commit ===="
+          echo "=========================================="
+          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          echo "Building to test if returning to original commit restores build cache..."
+          echo ""
+          echo "=== Build ccache stats before build ===="
+          ccache -s
+          echo ""
+          ./build_metal.sh --build-all
+          echo ""
+          echo "=== Build ccache stats after build ===="
           ccache -s
 
       - name: Run tt-train tests (Third run - back to original commit)
