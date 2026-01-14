@@ -1,0 +1,42 @@
+name: "[internal] Produce GitHub Merge Queue data"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 minutes (safe for now)
+
+permissions:
+  contents: read
+
+jobs:
+  produce-merge-queue:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Fetch merge queue snapshot from GitHub API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p generated/merge_queue
+          gh api \
+            repos/tenstorrent/tt-metal/merge-queue \
+            > generated/merge_queue/merge_queue.json
+
+      - name: Add timestamp to filename
+        run: |
+          ts=$(date -u +"%Y%m%dT%H%M%SZ")
+          mv generated/merge_queue/merge_queue.json \
+             generated/merge_queue/${ts}_merge_queue.json
+          echo "Created file:"
+          ls -lh generated/merge_queue
+
+      - name: Upload merge queue data via SFTP
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          username: ${{ secrets.SFTP_CICD_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/merge_queue_data_batchfile.txt
