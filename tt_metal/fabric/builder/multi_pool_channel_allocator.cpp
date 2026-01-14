@@ -99,9 +99,10 @@ void MultiPoolChannelAllocator::emit_ct_args(
 
     // Temporary workaround for z routers.
     // Static channel allocator is allocating 9 channels for z routers, since we can have 5 VC0 and 4 VC1 sender
-    // channels. However, mesh routers only need 8 channels. When creating sender channel to pool index mapping, we need
-    // to skip the 5th VC0 sender channel. Mesh routers VC0 sender channels are 0-3, and VC1 sender channels are 4-7
-    // which map to pools 0-3 and 5-8 respectively.
+    // channels. However, mesh routers only need 8 channels. When creating sender channel to pool index mapping for mesh
+    // routers, we need to skip the 5th VC0 sender channel. Mesh routers VC0 sender channels are 0-3, and VC1 sender
+    // channels are 4-7 which map to pools 0-3 and 5-8 respectively. But since the channel pool is allocated for 9
+    // channels, we add a dummy/padding entry after the 8 Mesh router channel mappings.
     if (z_router_enabled) {
         if (num_used_sender_channels == builder_config::num_sender_channels_2d) {
             // mesh router on device with z router
@@ -112,7 +113,8 @@ void MultiPoolChannelAllocator::emit_ct_args(
                     ct_args.push_back(static_cast<uint32_t>(i + 1));
                 }
             }
-            ct_args.push_back(static_cast<uint32_t>(4));
+            // Add a dummy/padding entry after the 8 Mesh router channel mappings.
+            ct_args.push_back(static_cast<uint32_t>(0));
         } else {
             // z router on device with z router
             for (size_t i = 0; i < num_used_sender_channels; ++i) {
