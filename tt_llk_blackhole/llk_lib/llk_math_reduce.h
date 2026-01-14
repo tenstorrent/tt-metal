@@ -470,3 +470,8 @@ inline void _llk_math_reduce_init_()
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
+
+inline void _llk_math_reduce_uninit_()
+{
+    // No state to restore - all states are transient or default
+}

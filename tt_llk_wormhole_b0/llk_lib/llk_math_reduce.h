@@ -468,7 +468,7 @@ inline void _llk_math_reduce_init_()
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-inline void _llk_math_reduce_uninit_(const std::uint32_t srca_data_format = (uint)DataFormat::Float16)
+inline void _llk_math_reduce_uninit_(const std::uint32_t srca_data_format)
 {
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
 }

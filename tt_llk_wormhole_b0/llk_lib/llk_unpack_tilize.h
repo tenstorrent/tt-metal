@@ -414,7 +414,7 @@ inline void _llk_unpack_tilizeA_B_(
     }
 }
 
-inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
@@ -436,7 +436,7 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
         p_gpr_unpack::FACE_DIM_16x16); // GPR preloaded with  16 | (16 << 16)}
 }
 
-inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);

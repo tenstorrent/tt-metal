@@ -525,6 +525,11 @@ inline void _llk_pack_init_(
     TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
+inline void _llk_pack_uninit_()
+{
+    // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default
+}
+
 template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {

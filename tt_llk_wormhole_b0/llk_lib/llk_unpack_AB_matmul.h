@@ -205,7 +205,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
 }
 
-inline void _llk_unpack_AB_matmul_uninit_(const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_unpack_AB_matmul_uninit_(const std::uint32_t face_r_dim)
 {
     TT_SETADCXX(p_setadc::UNP_AB, face_r_dim * FACE_C_DIM - 1, 0x0);
 }

@@ -156,11 +156,12 @@ inline void _llk_unpack_tilize_(
     switch_config_context(unp_cfg_context);
 }
 
-inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces, const std::uint32_t face_r_dim)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Revert X dim value to default.
+    // TODO NC: Issue tt-llk#1036 will make this transient
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
 
@@ -351,10 +352,11 @@ inline void _llk_unpack_tilizeA_B_(
     }
 }
 
-inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
 {
     // Revert X dim value to default.
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
+    // TODO NC: Issue tt-llk#1036 will make this transient
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
 

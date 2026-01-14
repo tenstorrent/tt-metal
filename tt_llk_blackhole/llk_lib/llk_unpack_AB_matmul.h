@@ -237,6 +237,13 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
 }
 
+inline void _llk_unpack_AB_matmul_uninit_(const std::uint32_t unpA_face_r_dim, const std::uint32_t unpB_face_r_dim)
+{
+    // TODO NC: Issue tt-llk#1036 will make this transient
+    TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim * FACE_C_DIM - 1, 0x0);
+    TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim * FACE_C_DIM - 1, 0x0);
+}
+
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
