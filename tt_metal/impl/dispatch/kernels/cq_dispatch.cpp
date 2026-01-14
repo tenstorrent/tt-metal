@@ -491,7 +491,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
     while (length != 0) {
         // Transfer size is min(remaining_length, data_available_in_cb)
 #if defined(FABRIC_RELAY)
-        uint32_t available_data = dispatch_cb_reader.available_data();
+        uint32_t available_data = dispatch_cb_reader.available_bytes();
         bool hit_boundary = false;
         if (available_data == 0) {
             available_data = dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
