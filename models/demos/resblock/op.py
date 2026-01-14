@@ -51,7 +51,9 @@ class FusedResblock:
         )
         mcast_cb_descriptor = ttnn.CBDescriptor(
             total_size=page_size,
-            core_ranges=all_mcast_cores,
+            core_ranges=all_sender_cores.merge(
+                all_mcast_cores
+            ),  # Create on all cores since otherwise the senders won't get the correct CB address
             format_descriptors=[mcast_cb_format],
         )
 
@@ -214,6 +216,7 @@ class FusedResblock:
                 gather_destination_core.x,
                 gather_destination_core.y,
                 mcast_receiver_semaphore_descriptor.id,
+                FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
             ],
             config=ttnn.ReaderConfigDescriptor(),
         )
