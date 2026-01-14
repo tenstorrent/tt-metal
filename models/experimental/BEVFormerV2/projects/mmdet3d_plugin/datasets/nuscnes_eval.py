@@ -547,9 +547,27 @@ class NuScenesEval_custom(NuScenesEval):
         )
         self.gt_boxes = load_gt(self.nusc, self.eval_set, DetectionBox_modified, verbose=verbose)
 
-        assert set(self.pred_boxes.sample_tokens) == set(
-            self.gt_boxes.sample_tokens
-        ), "Samples in split doesn't match samples in predictions."
+        # Allow evaluation on subset of samples (for debugging/partial runs)
+        pred_samples = set(self.pred_boxes.sample_tokens)
+        gt_samples = set(self.gt_boxes.sample_tokens)
+        if pred_samples != gt_samples:
+            if not pred_samples.issubset(gt_samples):
+                missing_in_gt = pred_samples - gt_samples
+                raise ValueError(
+                    f"Prediction samples {missing_in_gt} not found in ground truth split. "
+                    f"Predictions: {len(pred_samples)} samples, GT: {len(gt_samples)} samples"
+                )
+            # Predictions are a subset - filter GT boxes to only include samples with predictions
+            if verbose:
+                print(f"Warning: Evaluating on {len(pred_samples)} samples (subset of {len(gt_samples)} GT samples)")
+            # Create new EvalBoxes with only the samples that have predictions
+            from nuscenes.eval.common.data_classes import EvalBoxes
+
+            filtered_gt_boxes = EvalBoxes()
+            for sample_token in pred_samples:
+                if sample_token in self.gt_boxes.sample_tokens:
+                    filtered_gt_boxes.add_boxes(sample_token, self.gt_boxes[sample_token])
+            self.gt_boxes = filtered_gt_boxes
 
         # Add center distances.
         self.pred_boxes = add_center_dist(nusc, self.pred_boxes)

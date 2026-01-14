@@ -4442,13 +4442,6 @@ class FPN(BaseModule):
                     raise NotImplementedError
                 # Apply first extra conv
                 extra_out = self.fpn_convs[used_backbone_levels](extra_source)
-                # Clip features more aggressively to prevent numerical instability
-                if extra_out.numel() > 0:
-                    std_val = extra_out.std().item()
-                    if std_val > 50:  # Only clip if std is unreasonably high
-                        # Use a fixed reasonable range instead of std-based clipping
-                        # Clip to [-100, 100] which is reasonable for normalized features
-                        extra_out = torch.clamp(extra_out, min=-100.0, max=100.0)
                 outs.append(extra_out)
 
                 for i in range(used_backbone_levels + 1, self.num_outs):
@@ -4456,12 +4449,6 @@ class FPN(BaseModule):
                         next_out = self.fpn_convs[i](F.relu(outs[-1]))
                     else:
                         next_out = self.fpn_convs[i](outs[-1])
-                    # Clip features more aggressively to prevent numerical instability
-                    if next_out.numel() > 0:
-                        std_val = next_out.std().item()
-                        if std_val > 50:
-                            # Use a fixed reasonable range instead of std-based clipping
-                            next_out = torch.clamp(next_out, min=-100.0, max=100.0)
                     outs.append(next_out)
         return tuple(outs)
 
