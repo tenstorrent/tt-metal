@@ -415,13 +415,16 @@ class LlamaForCausalLM(Generator):
 
     def decode_forward(self, *args, **kwargs):
         result = super().decode_forward_text(*args, **kwargs)
-        # Handle backward compatibility: decode_forward_text now returns list of tuples
-        # [(tt_logits, tt_log_probs), ...] when read_from_device=False.
+        # Handle backward compatibility: decode_forward_text may return tuples.
+        # When read_from_device=False: returns list of tuples [(tt_logits, tt_log_probs), ...]
+        # When read_from_device=True: returns tuple (logits, log_probs) from process_decode_output_host
         # Older vLLM versions expect just the logits tensor, not tuples.
         read_from_device = kwargs.get("read_from_device", True)
         if not read_from_device and isinstance(result, list) and len(result) > 0:
             if isinstance(result[0], tuple):
                 result = [item[0] for item in result]
+        elif read_from_device and isinstance(result, tuple):
+            result = result[0]  # Return just the logits tensor
         return result
 
     def allocate_kv_cache(self, *args, **kwargs):
@@ -471,11 +474,16 @@ class QwenForCausalLM(Generator):
 
     def decode_forward(self, *args, **kwargs):
         result = super().decode_forward_text(*args, **kwargs)
-        # Handle backward compatibility for tuple returns
+        # Handle backward compatibility: decode_forward_text may return tuples.
+        # When read_from_device=False: returns list of tuples [(tt_logits, tt_log_probs), ...]
+        # When read_from_device=True: returns tuple (logits, log_probs) from process_decode_output_host
+        # Older vLLM versions expect just the logits tensor, not tuples.
         read_from_device = kwargs.get("read_from_device", True)
         if not read_from_device and isinstance(result, list) and len(result) > 0:
             if isinstance(result[0], tuple):
                 result = [item[0] for item in result]
+        elif read_from_device and isinstance(result, tuple):
+            result = result[0]  # Return just the logits tensor
         return result
 
     def allocate_kv_cache(self, *args, **kwargs):
@@ -525,11 +533,16 @@ class MistralForCausalLM(Generator):
 
     def decode_forward(self, *args, **kwargs):
         result = super().decode_forward_text(*args, **kwargs)
-        # Handle backward compatibility for tuple returns
+        # Handle backward compatibility: decode_forward_text may return tuples.
+        # When read_from_device=False: returns list of tuples [(tt_logits, tt_log_probs), ...]
+        # When read_from_device=True: returns tuple (logits, log_probs) from process_decode_output_host
+        # Older vLLM versions expect just the logits tensor, not tuples.
         read_from_device = kwargs.get("read_from_device", True)
         if not read_from_device and isinstance(result, list) and len(result) > 0:
             if isinstance(result[0], tuple):
                 result = [item[0] for item in result]
+        elif read_from_device and isinstance(result, tuple):
+            result = result[0]  # Return just the logits tensor
         return result
 
     def allocate_kv_cache(self, *args, **kwargs):
@@ -669,11 +682,16 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
 
     def decode_forward(self, *args, **kwargs):
         result = super().decode_forward_text(*args, **kwargs)
-        # Handle backward compatibility for tuple returns
+        # Handle backward compatibility: decode_forward_text may return tuples.
+        # When read_from_device=False: returns list of tuples [(tt_logits, tt_log_probs), ...]
+        # When read_from_device=True: returns tuple (logits, log_probs) from process_decode_output_host
+        # Older vLLM versions expect just the logits tensor, not tuples.
         read_from_device = kwargs.get("read_from_device", True)
         if not read_from_device and isinstance(result, list) and len(result) > 0:
             if isinstance(result[0], tuple):
                 result = [item[0] for item in result]
+        elif read_from_device and isinstance(result, tuple):
+            result = result[0]  # Return just the logits tensor
         return result
 
 
@@ -736,11 +754,16 @@ class GptOssForCausalLM(Generator):
 
     def decode_forward(self, *args, **kwargs):
         result = super().decode_forward_text(*args, **kwargs)
-        # Handle backward compatibility for tuple returns
+        # Handle backward compatibility: decode_forward_text may return tuples.
+        # When read_from_device=False: returns list of tuples [(tt_logits, tt_log_probs), ...]
+        # When read_from_device=True: returns tuple (logits, log_probs) from process_decode_output_host
+        # Older vLLM versions expect just the logits tensor, not tuples.
         read_from_device = kwargs.get("read_from_device", True)
         if not read_from_device and isinstance(result, list) and len(result) > 0:
             if isinstance(result[0], tuple):
                 result = [item[0] for item in result]
+        elif read_from_device and isinstance(result, tuple):
+            result = result[0]  # Return just the logits tensor
         return result
 
     def allocate_kv_cache(self, *args, **kwargs):
