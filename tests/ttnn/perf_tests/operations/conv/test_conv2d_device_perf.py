@@ -4,6 +4,7 @@
 
 import pandas as pd
 import pytest
+import re
 import torch
 import ttnn
 from loguru import logger
@@ -104,7 +105,7 @@ def extract_ops_between_signposts(csv_path, op_name):
               Format: {test_name: [duration_ns, ...]}
 
     Example:
-        results = extract_ops_between_signposts("ops_perf_results_2025_01_15.csv")
+        results = extract_ops_between_signposts("ops_perf_results_2025_01_15.csv", "Conv2dDeviceOperation")
         # Returns: {"test_conv1": [12345.0, 12456.0], "test_conv2": [23456.0]}
     """
     df = pd.read_csv(csv_path)
@@ -118,10 +119,15 @@ def extract_ops_between_signposts(csv_path, op_name):
                 current_region = op_code[:-6]  # Remove "-start" suffix to get test_name
             elif op_code.endswith("-end"):
                 current_region = None
-        elif current_region and op_name in str(row["OP CODE"]):
-            if current_region not in results:
-                results[current_region] = []
-            results[current_region].append(float(row["DEVICE KERNEL DURATION [ns]"]))
+        elif current_region:
+            op_code = row["OP CODE"]
+            # Match op_name as a complete word, even if part of a larger string (e.g.,
+            # "MeshDeviceOperationAdapter<ttnn::operations::conv::conv2d::Conv2dDeviceOperation>"
+            # which is the current format possibly prone to changes)
+            if pd.notna(op_code) and re.search(rf"\b{re.escape(op_name)}(?:<|$|\W)", op_code):
+                if current_region not in results:
+                    results[current_region] = []
+                results[current_region].append(float(row["DEVICE KERNEL DURATION [ns]"]))
 
     return results
 
