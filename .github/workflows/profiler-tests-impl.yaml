@@ -29,9 +29,7 @@ jobs:
       fail-fast: false
     name: "profiler tests"
     runs-on:
-      - arch-wormhole_b0
-      - ${{ inputs.topology }}
-      - ${{ inputs.extra-tag }}
+      - tt-metal-ci-vm-t3k-15
     container:
       image: ${{ inputs.docker-image }}
       env:

@@ -69,10 +69,7 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - arch-wormhole_b0
-      - config-t3000
-      - pipeline-functional
-      - ${{ inputs.extra-tag }}
+      - tt-metal-ci-vm-t3k-15
     container:
       image: ${{ inputs.docker-image }}
       env:
