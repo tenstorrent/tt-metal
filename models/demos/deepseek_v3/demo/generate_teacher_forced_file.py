@@ -254,6 +254,7 @@ def generate_reference(
     def build_payload(reference_tokens_tensor: torch.Tensor, top5_tokens_full: torch.Tensor) -> dict:
         generated_tokens_tensor = reference_tokens_tensor[0, prompt_len:]
         generated_tokens = generated_tokens_tensor.tolist()
+        generated_tokens_tensor = generated_tokens_tensor.unsqueeze(0)
         return {
             "reference_tokens": reference_tokens_tensor,  # [1, L]
             "prompt_tokens": torch.tensor(raw_prompt_tokens, dtype=torch.long).unsqueeze(0),  # [1, prompt_len]
@@ -341,6 +342,7 @@ def generate_reference(
                 do_sample=False,
                 return_dict_in_generate=True,
                 output_logits=True,  # reuse logits from the generation pass
+                output_scores=True,  # needed for incremental top5 in stopping criteria
                 pad_token_id=safe_pad_id,
                 eos_token_id=eos_id,
                 use_cache=True,
