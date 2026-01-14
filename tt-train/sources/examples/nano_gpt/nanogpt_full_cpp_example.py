@@ -828,10 +828,10 @@ def main():
     # Set TT_METAL_RUNTIME_ROOT if not set and TT_METAL_HOME is available
     # This is needed for the runtime to find kernel files like moreh_mean
     if "TT_METAL_RUNTIME_ROOT" not in os.environ:
-        tt_metal_home = os.environ.get("TT_METAL_HOME", "")
+        tt_metal_home = get_tt_metal_home()
         if tt_metal_home and os.path.exists(tt_metal_home):
             os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_home
-            print(f"Set TT_METAL_RUNTIME_ROOT={tt_metal_home} (from TT_METAL_HOME)")
+            print(f"Set TT_METAL_RUNTIME_ROOT={tt_metal_home} (from get_tt_metal_home)")
         else:
             # Try to auto-detect from current directory
             current_dir = os.getcwd()
