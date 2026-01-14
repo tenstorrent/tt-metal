@@ -19,8 +19,13 @@ extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
 extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
+#ifdef ARCH_QUASAR
+extern thread_local uint32_t tt_l1_ptr* rta_l1_base;
+extern thread_local uint32_t tt_l1_ptr* crta_l1_base;
+#else
 extern uint32_t tt_l1_ptr* rta_l1_base;
 extern uint32_t tt_l1_ptr* crta_l1_base;
+#endif
 extern uint32_t tt_l1_ptr* sem_l1_base[];
 
 /** @file */

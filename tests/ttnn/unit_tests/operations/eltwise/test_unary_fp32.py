@@ -6,7 +6,12 @@ import torch
 import ttnn
 
 import pytest
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_with_ulp,
+    generate_all_bfloat16_bitpatterns,
+    flush_subnormal_values_to_zero,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -106,6 +111,30 @@ def test_relu_fp32(device, ttnn_function):
     assert status
 
 
+def test_atan_fp32(device):
+    all_bf16_values = generate_all_bfloat16_bitpatterns(torch.float32)
+
+    # Flush subnormal inputs
+    # Hardware does not handle subnormal values and will flush these values to 0.0 (known behavior)
+    # For testing, we set these values to 0.0 beforehand so that golden function also gets 0.0
+    x_torch = flush_subnormal_values_to_zero(all_bf16_values)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Execute atan operation
+    y_tt = ttnn.atan(x_tt)
+    y_torch = torch.atan(x_torch)
+
+    # Compare results
+    tt_out = ttnn.to_torch(y_tt)
+
+    # If function is expected to return subnormal value, then hardware is expected to flush it to 0.0
+    # Thus, we flush golden output to 0.0 as well to verify this behavior
+    y_torch = flush_subnormal_values_to_zero(y_torch)
+
+    assert_with_ulp(y_torch, tt_out, 3, allow_nonfinite=True)
+
+
 def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     torch.manual_seed(0)
 
@@ -167,12 +196,6 @@ def test_asin(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_acos(device, h, w):
     run_unary_test(device, h, w, ttnn.acos, pcc=0.998)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_atan(device, h, w):
-    run_unary_test(device, h, w, ttnn.atan)
 
 
 @pytest.mark.parametrize("h", [64])

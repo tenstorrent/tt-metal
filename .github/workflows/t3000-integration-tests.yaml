@@ -1,0 +1,53 @@
+name: "(T3K) T3000 integration tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Select model to test"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - tteager
+          # - ethernet (GH #34582)
+          - trace stress
+          - falcon40b
+          - llama3.2-vision
+          - n300 mesh llama3.2-vision
+          - llama3.2-90b-vision
+          - llama3
+          - llama3 accuracy
+          - llama3_70n90b accuracy
+          - llama3_90b
+          # - llama3_70b
+          # - mixtral
+          - resnet
+          - sd35_large
+          - flux1
+          - motif
+          - mistral
+          - wan2.2
+          - mochi
+  schedule:
+    - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+  t3000-integration-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-integration-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.model || 'all' }}

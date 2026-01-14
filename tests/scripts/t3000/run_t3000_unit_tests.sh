@@ -103,7 +103,6 @@ run_t3000_ttnn_tests() {
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
   ./build/test/ttnn/unit_tests_ttnn_accessor
   ./build/test/ttnn/test_ccl_multi_cq_multi_device
-  ./build/test/ttnn/unit_tests_ttnn_udm
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; fail+=$?
   pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
@@ -116,6 +115,23 @@ run_t3000_ttnn_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_ttnn_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_ttnn_udm_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_ttnn_udm_tests"
+  ./build/test/ttnn/unit_tests_ttnn_udm
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_ttnn_udm_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -522,6 +538,14 @@ run_t3000_qwen25_vl_unit_tests() {
   echo "LOG_METAL: Unit tests for $qwen25_vl_72b on T3K completed in $duration seconds"
 }
 
+run_t3000_deepseek_tests() {
+  pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+
+  export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+  export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+  MESH_DEVICE=T3K pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
+}
+
 run_t3000_ccl_tests() {
   # Record the start time
   fail=0
@@ -622,6 +646,18 @@ run_t3000_tt_dit_tests() {
 
 }
 
+run_t3000_tttv2_modules_tests() {
+  # Run MLP1D tests
+  export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct # Only used for test_mlp_1d_vs_reference_from_model_args, which will retire with TTTv1
+  export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d
+  pytest models/common/tests/modules/mlp/test_mlp_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --cov=models.common.modules.mlp.mlp_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg
+}
+
 run_t3000_gpt_oss_unit_tests() {
   # Record the start time
   fail=0
@@ -698,6 +734,9 @@ run_t3000_tests() {
 
   # Run tt_dit tests
   run_t3000_tt_dit_tests
+
+  # Run tttv2 modules tests
+  run_t3000_tttv2_modules_tests
 
   # Run gpt-oss unit tests
   run_t3000_gpt_oss_unit_tests

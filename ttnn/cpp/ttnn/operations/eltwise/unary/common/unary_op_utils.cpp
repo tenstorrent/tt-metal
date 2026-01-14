@@ -238,14 +238,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("erfc_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("erfc_tile<{1}u>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::RDIV: {
-            uint32_t round_mode_value = params[1];
-            static constexpr const char* round_mode_strs[] = {
+            uint32_t rounding_mode_value = params[1];
+            static constexpr const char* rounding_mode_strs[] = {
                 "ckernel::RoundingMode::None", "ckernel::RoundingMode::Trunc", "ckernel::RoundingMode::Floor"};
             return {
                 "rdiv_tile_init();",
                 fmt::format(
                     "rdiv_tile<{}>({}, {:#x}u);",
-                    round_mode_strs[round_mode_value],
+                    rounding_mode_strs[rounding_mode_value],
                     idst,
                     std::bit_cast<uint32_t>(param0))};
         }
@@ -952,9 +952,9 @@ std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {
     return std::bit_cast<std::uint32_t>(param);
 }
 
-std::uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype) { return param; }
+std::uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType /*dtype*/) { return param; }
 
-std::uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype) {
+std::uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType /*dtype*/) {
     return std::bit_cast<std::uint32_t>(param);
 }
 

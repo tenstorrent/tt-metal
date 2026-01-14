@@ -1,0 +1,132 @@
+# Minimal PSD for testing build_adjacency_map_physical
+# This represents a simple 4-ASIC system: ASICs 100-103
+# ASICs 100-101 are connected (will be in mesh 0)
+# ASICs 102-103 are connected (will be in mesh 1)
+# Note: target_device_type: 0 = Silicon (matches PhysicalSystemDescriptor mock constructor)
+target_device_type: 0
+system_graph {
+  asic_connectivity_graph {
+    host_name: "host0"
+    asic_topologies {
+      asic_id: 100
+      topology {
+        asic_connections {
+          dst_asic_id: 101
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 101
+      topology {
+        asic_connections {
+          dst_asic_id: 100
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 102
+      topology {
+        asic_connections {
+          dst_asic_id: 103
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 103
+      topology {
+        asic_connections {
+          dst_asic_id: 102
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+      }
+    }
+  }
+}
+asic_descriptors {
+  asic_id: 100
+  asic_descriptor {
+    tray_id: 0
+    asic_location: 0
+    board_type: 1
+    unique_id: 100
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 101
+  asic_descriptor {
+    tray_id: 0
+    asic_location: 1
+    board_type: 1
+    unique_id: 101
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 102
+  asic_descriptor {
+    tray_id: 0
+    asic_location: 2
+    board_type: 1
+    unique_id: 102
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 103
+  asic_descriptor {
+    tray_id: 0
+    asic_location: 3
+    board_type: 1
+    unique_id: 103
+    host_name: "host0"
+  }
+}
+host_to_rank {
+  host_name: "host0"
+  rank: 0
+}
+ethernet_firmware_version {
+  major: 1
+  minor: 0
+  patch: 0
+}

@@ -87,7 +87,7 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
 }
 
 spec_return_value_t SamplingDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }
