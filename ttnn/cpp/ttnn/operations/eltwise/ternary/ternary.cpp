@@ -259,11 +259,14 @@ Tensor AddcmulOperation::invoke(
     bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
                             (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
                             (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+    bool is_input_int32 = (input_a.dtype() == DataType::INT32) && (input_b.dtype() == DataType::INT32) &&
+                          (input_c.dtype() == DataType::INT32);
 
-    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
         log_debug(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
         // For block-format ROW bcast of ttnn.mul, legacy binary bcast implementation is used.
+        // For int32 inputs, composite implementation is used.
         return _addcmul(input_a, input_b, input_c, value, memory_config);
     }
 
