@@ -300,8 +300,6 @@ void memcpy3(
     const void* src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy4(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
-
 void memcpy5(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
