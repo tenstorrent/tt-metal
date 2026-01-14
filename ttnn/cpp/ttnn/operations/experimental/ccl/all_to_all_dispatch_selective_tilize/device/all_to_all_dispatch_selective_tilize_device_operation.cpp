@@ -45,20 +45,13 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::compute_output_specs(
     const auto& mesh_view = mesh_device->get_view();
 
     uint32_t num_devices = mesh_view.num_devices();
-    uint32_t dispatch_devices = num_devices;
     uint32_t hidden_size = input_shape[-1];
-    if (operation_attributes.axis.has_value()) {
-        uint32_t axis = operation_attributes.axis.value();
-        log_debug(tt::LogOp, "axis: {}", axis);
-        dispatch_devices = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
-    }
 
     uint32_t experts = mapping_shape[-1];
     uint32_t experts_per_device = tt::div_up(experts, num_devices);
 
     // tokens_per_device from input, total tokens across all dispatch devices
-    uint32_t tokens_per_device = input_shape[0] * input_shape[1] * input_shape[2];
-    uint32_t total_tokens = tokens_per_device * dispatch_devices;
+    uint32_t total_tokens = input_shape[0] * input_shape[1];  // 512
 
     // Output shape: [experts_per_device, total_tokens, hidden_size] - tiled for matmul
     auto output_shape = ttnn::Shape({experts_per_device, total_tokens, hidden_size});

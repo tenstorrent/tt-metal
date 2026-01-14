@@ -121,6 +121,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
     auto scores_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_scores_tensor.dtype());
 
+    // CB for passing total_chunks from writer to compute
+    uint32_t total_chunks_cb_id = tt::CBIndex::c_0;
     // full indices buffer
     uint32_t indices_tensor_cb_id = tt::CBIndex::c_1;
     // full mapping buffer
@@ -301,6 +303,16 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         experts_per_device,
         tt::DataFormat::UInt32);
 
+    // CB for passing total_chunks from writer to compute kernel
+    // Single page holding one uint32_t value
+    tt::tt_metal::create_cb(
+        total_chunks_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        sizeof(uint32_t),
+        1,  // single page
+        tt::DataFormat::UInt32);
+
     // Tilizer output buffer: holds tilized output from compute kernel
     // page_size is the tile size, num_pages is tiles_per_chunk (based on max subtoken size)
     // Tile dimensions: height = tokens_per_chunk, width = 32
@@ -322,6 +334,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"tilizer_input_cb_id", tilizer_input_cb_id},
         {"tilizer_output_cb_id", tilizer_output_cb_id},
+        {"total_chunks_cb_id", total_chunks_cb_id},
         {"indices_tensor_cb_id", indices_tensor_cb_id},
         {"scores_tensor_cb_id", scores_tensor_cb_id},
         {"mapping_tensor_cb_id", mapping_tensor_cb_id},
@@ -410,6 +423,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"tilizer_output_cb_id", tilizer_output_cb_id},
         {"tiles_per_chunk", tiles_per_chunk},
         {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
+        {"total_chunks_cb_id", total_chunks_cb_id},
     };
 
     tt::tt_metal::KernelHandle compute_tilizer_kernel_id = tt::tt_metal::CreateKernel(
