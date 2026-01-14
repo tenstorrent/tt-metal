@@ -36,21 +36,11 @@ void bind_tilize(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
     )doc";
 
-    using OperationType = decltype(ttnn::tilize);
     ttnn::bind_registered_operation(
         mod,
         ttnn::tilize,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<DataType> output_dtype,
-               bool use_multicore,
-               bool use_low_perf,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(input_tensor, memory_config, output_dtype, use_multicore, use_low_perf, sub_core_grids);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
