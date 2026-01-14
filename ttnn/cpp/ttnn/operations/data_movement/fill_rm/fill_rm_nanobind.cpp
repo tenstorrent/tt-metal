@@ -81,25 +81,11 @@ void bind_fill_rm_op(nb::module_& mod) {
         )doc",
         ttnn::fill_rm.base_name());
 
-    using OperationType = decltype(ttnn::fill_rm);
     ttnn::bind_registered_operation(
         mod,
         ttnn::fill_rm,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               uint32_t N,
-               uint32_t C,
-               uint32_t H,
-               uint32_t W,
-               uint32_t hOnes,
-               uint32_t wOnes,
-               const Tensor& any,
-               const float val_hi,
-               const float val_lo,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(N, C, H, W, hOnes, wOnes, any, val_hi, val_lo, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("N"),
             nb::arg("C"),
             nb::arg("H"),
@@ -154,23 +140,11 @@ void bind_fill_ones_rm_op(nb::module_& mod) {
         )doc",
         ttnn::fill_ones_rm.base_name());
 
-    using OperationType = decltype(ttnn::fill_ones_rm);
     ttnn::bind_registered_operation(
         mod,
         ttnn::fill_ones_rm,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               uint32_t N,
-               uint32_t C,
-               uint32_t H,
-               uint32_t W,
-               uint32_t hOnes,
-               uint32_t wOnes,
-               const Tensor& any,
-               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(N, C, H, W, hOnes, wOnes, any, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("N"),
             nb::arg("C"),
             nb::arg("H"),
