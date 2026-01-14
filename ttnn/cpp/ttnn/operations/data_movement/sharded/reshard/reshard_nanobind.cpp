@@ -24,13 +24,7 @@ void bind_reshard(nb::module_& mod, const data_movement_sharded_operation_t& ope
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_sharded_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const MemoryConfig& output_memory_config,
-               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, output_memory_config, output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("output_memory_config"),
             nb::arg("output_tensor").noconvert() = nb::none(),
