@@ -32,6 +32,7 @@ struct LoRAConfig {
     bool use_rslora = false;
     std::optional<std::vector<uint32_t>> ranks;
     std::optional<std::vector<float>> alphas;
+    std::optional<std::vector<std::string>> trainable_modules;
 
     static LoRAConfig from_yaml(const YAML::Node& yaml_config);
 };
@@ -44,7 +45,10 @@ private:
     // Determine if a module at the given path should be replaced
     [[nodiscard]] bool should_replace_module(const std::string& module_name) const;
 
-    // Freeze all parameters in the base model
+    // Check if a parameter should remain trainable based on trainable_modules config
+    [[nodiscard]] bool should_keep_trainable(const std::string& param_name) const;
+
+    // Freeze all parameters in the base model (except those in trainable_modules)
     void freeze_base_model_weights();
 
     // Create a LoRA layer from an existing linear layer

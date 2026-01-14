@@ -1,6 +1,6 @@
 lora_config:
   # LoRA rank (r) - dimensionality of the low-rank adaptation
-  r: 128
+  r: 8
 
   # Alpha parameter for LoRA scaling
   lora_alpha: 1.0
@@ -16,15 +16,27 @@ lora_config:
 
   # Optional: Per-layer ranks. Length must match target_modules length.
   # If specified, overrides default r for each layer.
-  # ranks: [64, 128, 64, 128, ...]
+  # ranks: [4, 8, 4, 8, ...]
 
   # Optional: Per-layer alphas. Length must match target_modules length.
   # If specified, overrides default lora_alpha for each layer.
   # alphas: [1.0, 2.0, 1.0, 2.0, ...]
 
   # Target modules to apply LoRA (optional - if not specified, applies to all applicable modules)
-  # Examples: [
-  #   "llama/llama_block_9/attention/q_linear/",
-  #   "llama/llama_block_9/attention/kv_linear/",
-  #   "llama/llama_block_9/attention/out_linear/",
-  # ]
+  # Example:
+  target_modules:
+    - "llama/llama_block_0/attention/q_linear"
+    - "llama/llama_block_0/attention/kv_linear"
+    - "llama/llama_block_0/attention/out_linear"
+
+    - "llama/llama_block_1/attention/q_linear"
+    - "llama/llama_block_1/attention/kv_linear"
+    - "llama/llama_block_1/attention/out_linear"
+
+
+  # Optional: List of modules in the base model that should remain trainable
+  # These modules will not be frozen during LoRA fine-tuning
+  # You can put a full path of the parameter, or use a prefix to match all parameters under that path
+  trainable_modules:
+  - llama/llama_block_0/ # The whole block will be trainable
+  - llama/llama_block_1/attention/q_linear/weight # Only specific parameter will be trainable

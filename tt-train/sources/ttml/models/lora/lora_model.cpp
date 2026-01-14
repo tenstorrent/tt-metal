@@ -39,6 +39,11 @@ LoRAConfig LoRAConfig::from_yaml(const YAML::Node& yaml_config) {
         config.alphas = alphas_node.as<std::vector<float>>();
     }
 
+    auto trainable_modules_node = lora_config["trainable_modules"];
+    if (trainable_modules_node && trainable_modules_node.IsSequence()) {
+        config.trainable_modules = trainable_modules_node.as<std::vector<std::string>>();
+    }
+
     // Validate that ranks and alphas length match target_modules length if provided
     if (config.target_modules.has_value()) {
         size_t target_modules_size = config.target_modules->size();
@@ -86,14 +91,58 @@ bool LoraModel::should_replace_module(const std::string& module_name) const {
            m_config.target_modules->end();
 }
 
-void LoraModel::freeze_base_model_weights() {
-    auto params = m_base_model->parameters();
-
-    for (auto& [name, tensor_ptr] : params) {
-        tensor_ptr->set_requires_grad(false);
+bool LoraModel::should_keep_trainable(const std::string& param_name) const {
+    // If no trainable_modules specified, freeze all parameters
+    if (!m_config.trainable_modules.has_value()) {
+        return false;
     }
 
-    fmt::print("Froze {} parameters in base model\n", params.size());
+    // Simple prefix matching: check if parameter name starts with any trainable path
+    // Example: "llama/llama_block_0/attention/q_linear" matches:
+    //   - "llama/llama_block_0/attention/q_linear/weight"
+    //   - "llama/llama_block_0/attention/q_linear/bias"
+    // Example: "llama/llama_block_5/" matches all parameters under that path
+    for (const auto& trainable_path : *m_config.trainable_modules) {
+        if (trainable_path.empty()) {
+            continue;
+        }
+
+        // Prefix match: check if param_name starts with trainable_path
+        if (param_name.find(trainable_path) == 0) {
+            // Ensure it's a proper path match (not a partial match)
+            // Check if it's followed by "/" or at the end
+            size_t path_len = trainable_path.length();
+            if (path_len == param_name.length() || param_name[path_len] == '/') {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+void LoraModel::freeze_base_model_weights() {
+    auto params = m_base_model->parameters();
+    uint64_t frozen_params = 0;
+    uint64_t trainable_params = 0;
+
+    fmt::print("###\n");
+    for (auto& [name, tensor_ptr] : params) {
+        auto tensor = tensor_ptr->get_value();
+        uint64_t num_params = tensor.logical_volume();
+
+        if (should_keep_trainable(name)) {
+            tensor_ptr->set_requires_grad(true);
+            trainable_params += num_params;
+            fmt::print("Keeping {} trainable\n", name);
+        } else {
+            tensor_ptr->set_requires_grad(false);
+            frozen_params += num_params;
+            fmt::print("Freezing {}\n", name);
+        }
+    }
+
+    fmt::print("Froze {} parameters, kept {} parameters trainable in base model\n", frozen_params, trainable_params);
 }
 
 ttml::modules::ModuleBasePtr LoraModel::create_lora_from_linear(

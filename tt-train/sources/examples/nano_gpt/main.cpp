@@ -354,7 +354,7 @@ void print_model_summary(Model &model, bool tp = false) {
     fmt::print("{}\n", std::string(120, '-'));
 
     // Print trainable parameters
-    fmt::print("\nTrainable Layers:\n");
+    fmt::print("\nTrainable Parameters:\n");
     fmt::print("{}\n", std::string(120, '-'));
     for (const auto &[name, shape_str, params, is_trainable] : param_info) {
         if (is_trainable) {
@@ -365,7 +365,7 @@ void print_model_summary(Model &model, bool tp = false) {
     // Print non-trainable parameters
     bool has_non_trainable = total_non_trainable_params > 0;
     if (has_non_trainable) {
-        fmt::print("\nNon-Trainable Layers:\n");
+        fmt::print("\nNon-Trainable Parameters:\n");
         fmt::print("{}\n", std::string(120, '-'));
         for (const auto &[name, shape_str, params, is_trainable] : param_info) {
             if (!is_trainable) {
