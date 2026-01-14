@@ -158,7 +158,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait_with_prefetch_stall(
 }
 
 template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr) {
+void DeviceCommand<hugepage_write>::add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint64_t addr) {
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmdLarge), this->pcie_alignment);
     auto initialize_relay_linear_cmd = [&](CQPrefetchCmdLarge* relay_linear_cmd) {
         relay_linear_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
