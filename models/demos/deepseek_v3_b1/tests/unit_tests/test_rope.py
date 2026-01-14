@@ -16,6 +16,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc, nearest_y
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding, rotate_half
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
+from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
 
 
 def reference_apply_rope(
@@ -169,13 +170,23 @@ def test_rope_decode(device, batch, num_heads, head_dim, pcc):
         memory_config=trans_mem_config,
     )
 
+    # Create output tensor with same sharded memory config as input
+    torch_output_zeros = torch.zeros_like(x_ttnn, dtype=torch.bfloat16)
+    tt_out = ttnn.from_torch(
+        torch_output_zeros,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
     # Run TTNN rotary embedding in decode mode
-    tt_out = ttnn.experimental.rotary_embedding_llama(
+    tt_out = RopeSingleCore.op(
         tt_x,
         tt_cos,
         tt_sin,
         tt_trans,
-        is_decode_mode=True,
+        tt_out,
     )
 
     # Original result: [seq_len, batch, num_heads, head_dim]
@@ -320,13 +331,23 @@ def test_rope_decode_yarn(device, batch, num_heads, pcc):
         memory_config=trans_mem_config,
     )
 
+    # Create output tensor with same sharded memory config as input
+    torch_output_zeros = torch.zeros_like(x_ttnn, dtype=torch.bfloat16)
+    tt_out = ttnn.from_torch(
+        torch_output_zeros,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
     # Run TTNN rotary embedding
-    tt_out = ttnn.experimental.rotary_embedding_llama(
+    tt_out = RopeSingleCore.op(
         tt_x,
         tt_cos,
         tt_sin,
         tt_trans,
-        is_decode_mode=True,
+        tt_out,
     )
 
     # Compare results
