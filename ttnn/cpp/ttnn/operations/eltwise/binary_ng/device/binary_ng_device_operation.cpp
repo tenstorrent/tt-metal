@@ -370,51 +370,25 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         const auto& buffer_type = attributes.memory_config.buffer_type();
         auto shard_spec_opt = attributes.memory_config.shard_spec();
 
-        // Helper to check if shard spec needs adjustment for output shape
-        auto needs_shard_adjustment = [&](const tt::tt_metal::ShardSpec& shard_spec,
-                                          const ttnn::Shape& padded_out_shape) {
-            // For WIDTH_SHARDED, shard height must equal physical height
-            if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-                uint32_t physical_height = 1;
-                for (size_t i = 0; i < padded_out_shape.rank() - 1; ++i) {
-                    physical_height *= padded_out_shape[i];
-                }
-                return shard_spec.shape[0] != physical_height;
-            }
-            // For HEIGHT_SHARDED and BLOCK_SHARDED, check if shard dimensions changed
-            // This is a heuristic - if the shard spec came from an input tensor with
-            // different shape, we should adjust it
-            return false;
-        };
-
-        // Get padded output shape for validation/adjustment
-        ttnn::Shape padded_out_shape;
-        if (input_tensor_a.is_sharded()) {
-            padded_out_shape = input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-        } else if (tensor_b.has_value() && tensor_b->is_sharded()) {
-            padded_out_shape = tensor_b->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-        } else {
-            // Use a default tile layout for padding calculation
-            padded_out_shape =
-                TensorLayout(output_dtype, PageConfig(Layout::TILE), MemoryConfig{}).compute_padded_shape(output_shape);
-        }
-
-        // If no shard spec is provided, or provided shard spec is incompatible, inherit from input tensor
-        if (!shard_spec_opt.has_value() || needs_shard_adjustment(*shard_spec_opt, padded_out_shape)) {
+        // If no shard spec is provided, inherit from input tensor
+        if (!shard_spec_opt.has_value()) {
             if (input_tensor_a.is_sharded()) {
                 // Adjust shard spec from input A to match output shape
                 const auto& padded_a_shape = input_tensor_a.padded_shape();
+                const auto& padded_out_shape =
+                    input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
                     *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
             } else if (tensor_b.has_value() && tensor_b->is_sharded()) {
                 // Adjust shard spec from input B to match output shape
                 const auto& padded_b_shape = tensor_b->padded_shape();
+                const auto& padded_out_shape =
+                    tensor_b->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
                     *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
-            } else if (!shard_spec_opt.has_value()) {
+            } else {
                 TT_THROW("Output memory config is sharded but has no shard spec, and no input tensors are sharded");
             }
-            // If shard_spec_opt has value but neither input is sharded, keep the provided shard spec
         }
 
         return TensorSpec(
