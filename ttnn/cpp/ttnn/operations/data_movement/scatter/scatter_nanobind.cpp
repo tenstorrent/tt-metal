@@ -43,29 +43,11 @@ void bind_scatter(nb::module_& mod) {
             * Input tensors must be interleaved and on device.
         )doc";
 
-    using OperationType = decltype(ttnn::scatter);
     bind_registered_operation(
         mod,
         ttnn::scatter,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t& dim,
-               const ttnn::Tensor& index_tensor,
-               const ttnn::Tensor& source_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config,
-               const std::optional<std::string>& opt_reduction,
-               const std::optional<CoreRangeSet>& sub_core_grid) -> Tensor {
-                return self(
-                    input_tensor,
-                    dim,
-                    index_tensor,
-                    source_tensor,
-                    opt_out_memory_config,
-                    opt_reduction,
-                    sub_core_grid);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input").noconvert(),
             nb::arg("dim"),
             nb::arg("index").noconvert(),
@@ -98,21 +80,11 @@ void bind_scatter_add(nb::module_& mod) {
             * Input tensors must be interleaved and on device.
         )doc";
 
-    using OperationType = decltype(ttnn::scatter_add);
     bind_registered_operation(
         mod,
         ttnn::scatter_add,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t& dim,
-               const ttnn::Tensor& index_tensor,
-               const ttnn::Tensor& source_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config,
-               const std::optional<CoreRangeSet>& sub_core_grid) -> Tensor {
-                return self(input_tensor, dim, index_tensor, source_tensor, opt_out_memory_config, sub_core_grid);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input").noconvert(),
             nb::arg("dim"),
             nb::arg("index").noconvert(),
