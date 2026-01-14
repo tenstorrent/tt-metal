@@ -214,7 +214,6 @@ tt::stl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
     // - update_idxs: values are runtime-only (used only in runtime args), size is validated to match input tensor shape
     // (already in tensor_args)
     // - batch_offset: validated to be 0, doesn't affect program structure
-    // - noop: runtime-only parameter (used only in runtime args)
     // Include parameters that affect program structure:
     // - compute_kernel_config: affects compile-time args (fp32_dest_acc_en)
     // - share_cache: affects program structure (semaphore setup)

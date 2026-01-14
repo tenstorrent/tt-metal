@@ -6,25 +6,19 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt = get_compile_time_arg_val(5);
-
     const uint32_t cache_addr = get_arg_val<uint32_t>(0);
     const uint32_t cache_start_id = get_arg_val<uint32_t>(1);
     const uint32_t index_tensor_addr = get_arg_val<uint32_t>(2);
     const uint32_t my_batch_idx = get_arg_val<uint32_t>(3);
     const uint32_t page_table_tensor_addr = get_arg_val<uint32_t>(4);
     const bool wait_to_start_signal = get_arg_val<uint32_t>(5) == 1;
-    const uint32_t noop = get_arg_val<uint32_t>(6);
 
-    if (noop == 1) {
-        return;  // Early exit, no work done
-    }
-
+    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t input_cb_id = get_compile_time_arg_val(1);
     constexpr bool use_index_tensor = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t cb_index_id = get_compile_time_arg_val(3);
     constexpr uint32_t cache_batch_num_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t Wt = get_compile_time_arg_val(5);
     const uint32_t log_base_2_of_page_size = get_compile_time_arg_val(6);
     const uint32_t index_stick_size_B = get_compile_time_arg_val(7);
 
