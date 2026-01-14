@@ -1026,6 +1026,13 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     if (needs_vc1 && vc1_downstream_edm_size == 0) {
         vc1_downstream_edm_size = 1;
     }
+
+    auto actual_sender_channels_vc0 = actual_sender_channels_per_vc_.has_value()
+                                          ? actual_sender_channels_per_vc_.value()[0]
+                                          : config.num_used_sender_channels_per_vc[0];
+    auto actual_sender_channels_vc1 = actual_sender_channels_per_vc_.has_value()
+                                          ? actual_sender_channels_per_vc_.value()[1]
+                                          : config.num_used_sender_channels_per_vc[1];
     const std::vector<uint32_t> main_args_part1 = {
         static_cast<uint32_t>(num_sender_channels),
         static_cast<uint32_t>(num_receiver_channels),
@@ -1049,14 +1056,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         vc0_downstream_edm_size,  // VC0_DOWNSTREAM_EDM_SIZE: array size for VC0 downstream EDMs
         vc1_downstream_edm_size,  // VC1_DOWNSTREAM_EDM_SIZE: array size for VC1 downstream EDMs
         // Actual sender channel counts per VC for this router (may differ from MAX)
-        static_cast<uint32_t>(
-            actual_sender_channels_per_vc_.has_value()
-                ? actual_sender_channels_per_vc_.value()[0]
-                : config.num_used_sender_channels_per_vc[0]),  // ACTUAL_VC0_SENDER_CHANNELS
-        static_cast<uint32_t>(
-            actual_sender_channels_per_vc_.has_value()
-                ? actual_sender_channels_per_vc_.value()[1]
-                : config.num_used_sender_channels_per_vc[1])};  // ACTUAL_VC1_SENDER_CHANNELS
+        static_cast<uint32_t>(actual_sender_channels_vc0),   // ACTUAL_VC0_SENDER_CHANNELS
+        static_cast<uint32_t>(actual_sender_channels_vc1)};  // ACTUAL_VC1_SENDER_CHANNELS
 
     const std::vector<uint32_t> main_args_part2 = {
         static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[0]),
@@ -1139,11 +1140,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // Emit pool data via multi-pool coordinator (steps 1-4 of schema: special tag, num_pools, pool_types, individual
     // pool CT args)
-    auto num_used_sender_channels =
-        z_router_enabled ? actual_sender_channels_per_vc_.value()[0] + actual_sender_channels_per_vc_.value()[1]
-                         : num_sender_channels;
     config.multi_pool_allocator->emit_ct_args(
-        ct_args, num_used_sender_channels, num_receiver_channels, z_router_enabled);
+        ct_args, actual_sender_channels_vc0, actual_sender_channels_vc1, num_receiver_channels);
 
     // Emit channel-to-pool mappings (steps 5-8 of schema)
     ct_args.push_back(0xabaddad8);
@@ -1159,7 +1157,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         {config.remote_channels_allocator}, {FabricChannelPoolType::STATIC});
 
     // Emit remote channel pool data via multi-pool coordinator
-    remote_multi_pool_allocator.emit_ct_args(ct_args, 0, num_receiver_channels, false);
+    remote_multi_pool_allocator.emit_ct_args(ct_args, 0, 0, num_receiver_channels);
 
     config.remote_channel_to_pool_mapping->emit_ct_args(ct_args);
 

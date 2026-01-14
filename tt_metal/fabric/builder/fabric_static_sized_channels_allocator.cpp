@@ -313,7 +313,13 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             {16, 32, 0, 0},  // Option 2
             {16, 16, 0, 0},  // Option 3
             {8, 16, 0, 0},   // Option 4
-            {8, 8, 0, 0}     // Option 5
+            {8, 8, 0, 0},    // Option 5
+            {4, 8, 2, 4},    // Option 6: supports both VCs
+            {4, 8, 2, 2},    // Option 7: supports both VCs, smaller VC1 receiver
+            {2, 4, 2, 2},    // Option 8: supports both VCs, smaller overall
+            {2, 4, 1, 1},    // Option 9: supports both VCs, smaller overall
+            {2, 2, 1, 1},    // Option 10: supports both VCs, smaller overall
+            {1, 1, 1, 1}     // Option 11: supports both VCs, smaller overall
         }};
 
     auto get_num_buffer_slots = [](Topology topology, size_t arch_index) -> const std::vector<PerVcBufferSlots>& {
