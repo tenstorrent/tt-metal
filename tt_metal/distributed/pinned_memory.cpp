@@ -360,11 +360,21 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     return params;
 }
 
+class HostBufferPinnedMemoryHelper {
+public:
+    static void SetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
+        host_buffer.pinned_memory_ = std::move(pinned_memory);
+    }
+    static std::shared_ptr<PinnedMemory> GetPinnedMemory(HostBuffer& host_buffer) { return host_buffer.pinned_memory_; }
+};
+
 void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
-    host_buffer.pinned_memory_ = std::move(pinned_memory);
+    HostBufferPinnedMemoryHelper::SetPinnedMemory(host_buffer, std::move(pinned_memory));
 }
 
-std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer) { return host_buffer.pinned_memory_; }
+std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer) {
+    return HostBufferPinnedMemoryHelper::GetPinnedMemory(host_buffer);
+}
 
 class ShardDataTransferHelper {
 public:
