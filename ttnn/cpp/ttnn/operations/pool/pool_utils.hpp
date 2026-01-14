@@ -97,7 +97,8 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     std::optional<int32_t> divisor_override,
     bool return_indices,
     const Layout& output_layout,
-    const DataType& output_dtype);
+    const DataType& output_dtype,
+    bool config_tensor_in_dram);
 
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,
@@ -129,7 +130,8 @@ uint32_t calculate_L1_usage(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     const Layout& output_layout,
-    const DataType& output_dtype);
+    const DataType& output_dtype,
+    bool config_tensor_in_dram);
 
 // pool specific validations are done in validate_pool2d, but we want to validate basic inputs to ensure
 // they are sensical to avoid problems in sliding window config, halo and other setup procedures
