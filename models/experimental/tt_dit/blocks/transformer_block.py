@@ -42,6 +42,7 @@ class TransformerBlock(Module):
         padding_config: PaddingConfig | None,
         attention_k_chunk_size: int = 512,
         attention_q_chunk_size: int = 128,
+        is_fsdp: bool = False,
     ) -> None:
         super().__init__()
 
@@ -58,12 +59,17 @@ class TransformerBlock(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
+        # FSDP: shard weights on sequence parallel axis to reduce memory
+        fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+
         self.norm1_linear = ColParallelLinear(
             modulation_dim,
             6 * dim,
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         self.norm1_norm = DistributedLayerNorm(
@@ -83,6 +89,8 @@ class TransformerBlock(Module):
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
@@ -109,6 +117,7 @@ class TransformerBlock(Module):
             padding_config=padding_config,
             k_chunk_size=attention_k_chunk_size,
             q_chunk_size=attention_q_chunk_size,
+            is_fsdp=is_fsdp,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -127,6 +136,7 @@ class TransformerBlock(Module):
             activation_fn=ff_activation_fn,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
 
@@ -149,6 +159,7 @@ class TransformerBlock(Module):
                 activation_fn=ff_activation_fn,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
             )
 
