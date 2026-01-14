@@ -36,16 +36,11 @@ void bind_experimental_plusone_operation(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::plus_one);
     bind_registered_operation(
         mod,
         ttnn::plus_one,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               bool skip_negative_entries) { return self(input_tensor, sub_core_grids, skip_negative_entries); },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("skip_negative_entries") = false});
