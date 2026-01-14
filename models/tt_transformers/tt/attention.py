@@ -801,24 +801,29 @@ class Attention(LightweightModule):
             fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
         if batch_size > 1:
-            # For batched prefill, following 70B Galaxy approach:
-            # 1. Reshape k_fill/v_fill from [B, K, S, D] back to [1, 1, B*S, -1] (concatenated sequence)
-            # 2. Use single paged_fill_cache call with batch_idx_tensor (pre-created tensor of user IDs)
-            k_fill = ttnn.reshape(k_fill, [1, 1, seq_len, -1])
-            v_fill = ttnn.reshape(v_fill, [1, 1, seq_len, -1])
+            # For batched prefill: KV computed together but paged_fill_cache only supports single batch_idx
+            # So we need to loop over users and fill each user's KV cache individually
+            # k_fill/v_fill have shape [batch_size, n_kv_heads, seq_len_per_user, head_dim]
+            per_user_seq_len = seq_len // batch_size
+            num_pages_per_user = fill_page_table.shape[1] // batch_size
 
-            page_len = fill_page_table.shape[1] * block_size
-            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
-            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+            for i in range(batch_size):
+                # Slice this user's KV from the batch dimension
+                k_user = k_fill[i : i + 1, :, :, :]
+                v_user = v_fill[i : i + 1, :, :, :]
 
-            # user_id_tensor is pre-created in model.prepare_inputs_prefill to avoid tensor creation during trace
-            assert user_id_tensor is not None, "user_id_tensor must be provided for batched prefill"
-            ttnn.experimental.paged_fill_cache(
-                keys_BKSD, k_fill_sliced, fill_page_table, batch_idx_tensor=user_id_tensor
-            )
-            ttnn.experimental.paged_fill_cache(
-                values_BKSD, v_fill_sliced, fill_page_table, batch_idx_tensor=user_id_tensor
-            )
+                # Slice this user's page table - pages are concatenated [user0_pages, user1_pages, ...]
+                page_start = i * num_pages_per_user
+                page_end = (i + 1) * num_pages_per_user
+                page_table_user = fill_page_table[:, page_start:page_end]
+
+                page_len = num_pages_per_user * block_size
+                k_user_sliced = k_user[:, :, :page_len, :] if page_len < per_user_seq_len else k_user
+                v_user_sliced = v_user[:, :, :page_len, :] if page_len < per_user_seq_len else v_user
+
+                # Use batch_idx=0 since page_table_user is [1, num_pages] with this user's pages in row 0
+                ttnn.experimental.paged_fill_cache(keys_BKSD, k_user_sliced, page_table_user, batch_idx=0)
+                ttnn.experimental.paged_fill_cache(values_BKSD, v_user_sliced, page_table_user, batch_idx=0)
         elif page_table:
             # Single user path with page_table
             page_len = fill_page_table.shape[1] * block_size

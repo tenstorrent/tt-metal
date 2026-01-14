@@ -196,6 +196,7 @@ class Generator:
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
             batch_size=batch_size,
+            user_id=user_id,
             user_id_tensor=transformed_inputs[3],
         )
         ttnn.synchronize_device(self.model_args[model_id].mesh_device)
@@ -212,6 +213,7 @@ class Generator:
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
             batch_size=batch_size,
+            user_id=user_id,
             user_id_tensor=transformed_inputs[3],
         )
         ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
@@ -421,7 +423,7 @@ class Generator:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
                     page_table=page_table_user,
-                    user_id=0 if use_batched_prefill else group_user_id,
+                    user_id=user_id if use_batched_prefill else group_user_id,
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
@@ -433,7 +435,7 @@ class Generator:
                 logits = self.prefill_forward_single_user_text(
                     prefill_ids,
                     page_table=page_table_user,
-                    user_id=group_user_id,
+                    user_id=user_id if use_batched_prefill else group_user_id,
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
