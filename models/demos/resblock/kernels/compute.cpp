@@ -97,7 +97,6 @@ void MAIN {
     relu_tile_init();
 
     matmul_with_relu_block<in0_cb, weight0_cb, interm_cb, num_tiles_k>();
-
     matmul_with_bias_block<interm_cb2, weight1_cb, in0_cb, out_cb, num_tiles_k, num_output_tiles>();
 }
 }  // namespace NAMESPACE

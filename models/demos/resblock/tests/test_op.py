@@ -15,6 +15,16 @@ Test fused ResBlock operation with inputs [B, K] @ [K, K] -> [B, K]
 """
 
 
+def create_random_tensor(shape, random_tensor_gen):
+    if random_tensor_gen == "uniform":
+        return torch.empty(shape, dtype=torch.bfloat16).uniform_(-5.0, 5.0)
+    if random_tensor_gen == "rand":
+        return torch.rand(shape, dtype=torch.bfloat16)
+    if random_tensor_gen == "randn":
+        return torch.randn(shape, dtype=torch.bfloat16)
+    raise ValueError(f"Unsupported random_tensor_gen: {random_tensor_gen}")
+
+
 @pytest.mark.parametrize(
     "B, K",
     [
@@ -22,7 +32,13 @@ Test fused ResBlock operation with inputs [B, K] @ [K, K] -> [B, K]
         (1, 64),
     ],
 )
-def test_resblock(device, B, K):
+@pytest.mark.parametrize(
+    "generation_type",
+    ["uniform", "rand", "randn"],
+)
+def test_resblock(device, B, K, generation_type):
+    torch.manual_seed(1234)
+
     a_tile = ttnn.Tile([B, 32])
     weight_tile = ttnn.Tile([32, 32])
     out_tile = ttnn.Tile([B, 32])
@@ -36,13 +52,11 @@ def test_resblock(device, B, K):
 
     logger.info(f"Testing fused ResBlock with shape [{B}, {K}] x [{K}, {K}] on {number_of_matmul_cores} cores")
 
-    torch.manual_seed(0)
+    torch_a = create_random_tensor((B, K), generation_type)
+    weight0 = create_random_tensor((K, K), generation_type)
+    weight1 = create_random_tensor((K, K), generation_type)
 
-    torch_a = torch.randn((B, K), dtype=torch.bfloat16)
-    weight0 = torch.randn((K, K), dtype=torch.bfloat16)
-    weight1 = torch.randn((K, K), dtype=torch.bfloat16)
-
-    expected = FusedResblock.golden(torch_a.float(), weight0.float(), weight1.float()).bfloat16()
+    expected = FusedResblock.golden(torch_a, weight0, weight1)
 
     input_a_shard_shape = (B, K)  # This tensor is unique because it is replicated across all matmul cores
     input_a_shard_spec = ttnn.ShardSpec(

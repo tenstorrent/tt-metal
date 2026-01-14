@@ -34,6 +34,8 @@ class FusedResblock:
         page_size: int,
         tile: ttnn.TileDescriptor,
         receiver_semaphore_descriptor: ttnn.SemaphoreDescriptor,
+        sender_semaphore_descriptor: ttnn.SemaphoreDescriptor,
+        device: ttnn.Device,
     ) -> tuple[ttnn.KernelDescriptor, ttnn.KernelDescriptor, ttnn.CBDescriptor]:
         logger.debug(f"All mcast cores: {all_mcast_cores}")
         logger.debug(f"Number of mcast cores: {all_mcast_cores.size()}")
@@ -57,14 +59,42 @@ class FusedResblock:
             format_descriptors=[mcast_cb_format],
         )
 
+        def get_mcast_sender_noc_coords(all_sender_cores: ttnn.CoreRangeSet):
+            all_sender_cores_list = (
+                device.worker_core_from_logical_core(all_sender_cores.ranges()[0].start),
+                device.worker_core_from_logical_core(all_sender_cores.ranges()[0].end),
+            )
+            return (
+                all_sender_cores_list[0].x,
+                all_sender_cores_list[0].y,
+                all_sender_cores_list[1].x,
+                all_sender_cores_list[1].y,
+            )
+
+        (
+            mcast_sender_noc_coord_x_start,
+            mcast_sender_noc_coord_y_start,
+            mcast_sender_noc_coord_x_end,
+            mcast_sender_noc_coord_y_end,
+        ) = get_mcast_sender_noc_coords(all_sender_cores)
+        logger.debug(
+            f"Mcast sender NOC coords: {mcast_sender_noc_coord_x_start}, {mcast_sender_noc_coord_y_start}, {mcast_sender_noc_coord_x_end}, {mcast_sender_noc_coord_y_end}"
+        )
+
         mcast_reader_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/mcast_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_mcast_cores,
             compile_time_args=[
                 FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
+                FusedResblock.MatmulCoreCBIndex.INTERM_CB2,
                 number_of_senders,
                 receiver_semaphore_descriptor.id,
+                sender_semaphore_descriptor.id,
+                mcast_sender_noc_coord_x_start,
+                mcast_sender_noc_coord_y_start,
+                mcast_sender_noc_coord_x_end,
+                mcast_sender_noc_coord_y_end,
             ],
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -76,6 +106,7 @@ class FusedResblock:
                 FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
                 number_of_senders,
                 receiver_semaphore_descriptor.id,
+                sender_semaphore_descriptor.id,
             ],
             config=ttnn.WriterConfigDescriptor(),
         )
@@ -150,6 +181,10 @@ class FusedResblock:
         out_tile_size = out_tile.get_tile_size(out_dtype)
         out_tile_descriptor = ttnn.TileDescriptor(out_tile)
 
+        logger.debug(f"Placing mcast core at: {FusedResblock.MCAST_CORE}")
+        gather_destination_core = device.worker_core_from_logical_core(FusedResblock.MCAST_CORE)
+        all_mcast_cores = ttnn.CoreRangeSet({ttnn.CoreRange(FusedResblock.MCAST_CORE, FusedResblock.MCAST_CORE)})
+
         interm_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=FusedResblock.MatmulCoreCBIndex.INTERM_CB,
             data_format=out_dtype,
@@ -169,13 +204,11 @@ class FusedResblock:
         )
         interm_cb2_descriptor = ttnn.CBDescriptor(
             total_size=out_tile_size,
-            core_ranges=all_matmul_cores,
+            core_ranges=all_matmul_cores.merge(
+                all_mcast_cores
+            ),  # Include mcast cores to ensure all cores can get the correct CB address with get_write_ptr
             format_descriptors=[interm_cb2_format],
         )
-
-        logger.debug(f"Placing mcast core at: {FusedResblock.MCAST_CORE}")
-        gather_destination_core = device.worker_core_from_logical_core(FusedResblock.MCAST_CORE)
-        all_mcast_cores = ttnn.CoreRangeSet({ttnn.CoreRange(FusedResblock.MCAST_CORE, FusedResblock.MCAST_CORE)})
 
         all_cores = all_matmul_cores.merge(all_mcast_cores)
         assert (
@@ -185,6 +218,11 @@ class FusedResblock:
 
         mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=0,
+            core_ranges=all_cores,
+            initial_value=0,
+        )
+        mcast_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=1,
             core_ranges=all_cores,
             initial_value=0,
         )
@@ -200,6 +238,8 @@ class FusedResblock:
             out_tile_size,
             out_tile_descriptor,
             mcast_receiver_semaphore_descriptor,
+            mcast_sender_semaphore_descriptor,
+            device,
         )
 
         reader_kernel_descriptor = ttnn.KernelDescriptor(
@@ -217,6 +257,7 @@ class FusedResblock:
                 gather_destination_core.y,
                 mcast_receiver_semaphore_descriptor.id,
                 FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
+                mcast_sender_semaphore_descriptor.id,
             ],
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -268,6 +309,6 @@ class FusedResblock:
                     interm_cb2_descriptor,
                     mcast_cb_descriptor,
                 ],
-                semaphores=[mcast_receiver_semaphore_descriptor],
+                semaphores=[mcast_receiver_semaphore_descriptor, mcast_sender_semaphore_descriptor],
             ),
         )

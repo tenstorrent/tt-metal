@@ -17,11 +17,11 @@ template <
     uint32_t MCastReceiverNocY,
     uint32_t MCastReceiverSemaphoreId>
 void gather(uint32_t receiver_data_addr, uint32_t offset) {
-    cb_wait_front(CbIn, NumTiles);
     cb_reserve_back(CbOut, NumTiles);
+    cb_wait_front(CbIn, NumTiles);
 
     // Write all tiles from CbIn to CbOut using noc_async_write (will remove once the gather+mcast is implemented)
-    noc_async_write(get_read_ptr(CbIn), get_noc_addr(get_write_ptr(CbOut)), get_tile_size(CbIn) * NumTiles);
+    // noc_async_write(get_read_ptr(CbIn), get_noc_addr(get_write_ptr(CbOut)), get_tile_size(CbIn) * NumTiles);
 
     // Gather to receiver core (write and then signal using semaphore)
     const uint64_t mcast_reciever_noc_coord = get_noc_addr(MCastReceiverNocX, MCastReceiverNocY, 0);
@@ -34,7 +34,8 @@ void gather(uint32_t receiver_data_addr, uint32_t offset) {
     noc_semaphore_inc<true>(mcast_receiver_semaphore_noc_addr, 1);
     noc_async_posted_writes_flushed();
 
-    cb_push_back(CbOut, NumTiles);
+    // cb_push_back(CbOut, NumTiles); Don't pop because we want to wait for mcast to finish before starting second
+    // matmul
     cb_pop_front(CbIn, NumTiles);
 }
 
@@ -50,6 +51,10 @@ void kernel_main() {
     constexpr uint32_t mcast_receiver_noc_y = get_compile_time_arg_val(7);
     constexpr uint32_t mcast_receiver_semaphore_id = get_compile_time_arg_val(8);
     constexpr uint32_t mcast_reciever_cb = get_compile_time_arg_val(9);
+
+    const uint32_t mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr =
+        (volatile tt_l1_ptr uint32_t*)mcast_sender_semaphore_addr;
 
     const uint32_t mcast_reciever_base_address = get_write_ptr(mcast_reciever_cb);
 
@@ -73,5 +78,7 @@ void kernel_main() {
         mcast_receiver_noc_y,
         mcast_receiver_semaphore_id>(mcast_reciever_base_address, 0);  // TODO: Add correct offset/addr
 
-    DPRINT << "Reader kernel finished" << ENDL();
+    cb_reserve_back(interm_cb2, num_tiles_k);
+    noc_semaphore_wait(mcast_sender_semaphore_addr_ptr, VALID);
+    cb_push_back(interm_cb2, num_tiles_k);
 }
