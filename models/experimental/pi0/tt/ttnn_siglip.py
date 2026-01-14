@@ -27,6 +27,7 @@ import ttnn
 import tt_lib.fallback_ops as fallback_ops
 
 from models.experimental.pi0.common.configs import SigLIPConfig
+from models.experimental.pi0.tt.ttnn_common import tensor_1d_to_2d_ttnn
 
 
 # ============================================================================
@@ -122,13 +123,7 @@ class PatchEmbeddingTTNN:
 
         # Bias (if present)
         if conv_bias is not None:
-            self._linear_bias = ttnn.from_torch(
-                conv_bias.unsqueeze(0),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self._linear_bias = tensor_1d_to_2d_ttnn(conv_bias, device, dtype=ttnn.bfloat16)
         else:
             self._linear_bias = None
 
@@ -331,10 +326,10 @@ class SigLIPAttentionTTNN:
             bk_padded = pad_head_dim_bias_ttnn(weights["self_attn.k_proj.bias"])
             bv_padded = pad_head_dim_bias_ttnn(weights["self_attn.v_proj.bias"])
 
-            # Concatenate biases on device
-            bq_ttnn = ttnn.from_torch(bq_padded.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            bk_ttnn = ttnn.from_torch(bk_padded.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            bv_ttnn = ttnn.from_torch(bv_padded.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            # Concatenate biases on device (using tensor_1d_to_2d_ttnn to avoid torch.unsqueeze)
+            bq_ttnn = tensor_1d_to_2d_ttnn(bq_padded, device, dtype=ttnn.bfloat16)
+            bk_ttnn = tensor_1d_to_2d_ttnn(bk_padded, device, dtype=ttnn.bfloat16)
+            bv_ttnn = tensor_1d_to_2d_ttnn(bv_padded, device, dtype=ttnn.bfloat16)
             self.bqkv = ttnn.concat([bq_ttnn, bk_ttnn, bv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             self.bqkv = None
@@ -350,13 +345,7 @@ class SigLIPAttentionTTNN:
         )
 
         if "self_attn.out_proj.bias" in weights:
-            self.bo = ttnn.from_torch(
-                weights["self_attn.out_proj.bias"].unsqueeze(0),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.bo = tensor_1d_to_2d_ttnn(weights["self_attn.out_proj.bias"], device, dtype=ttnn.bfloat16)
         else:
             self.bo = None
 
@@ -507,13 +496,7 @@ class SigLIPMLPTTNN:
         )
 
         if "mlp.fc1.bias" in weights:
-            self.fc1_bias = ttnn.from_torch(
-                weights["mlp.fc1.bias"].unsqueeze(0),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.fc1_bias = tensor_1d_to_2d_ttnn(weights["mlp.fc1.bias"], device, dtype=ttnn.bfloat16)
         else:
             self.fc1_bias = None
 
@@ -528,13 +511,7 @@ class SigLIPMLPTTNN:
         )
 
         if "mlp.fc2.bias" in weights:
-            self.fc2_bias = ttnn.from_torch(
-                weights["mlp.fc2.bias"].unsqueeze(0),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.fc2_bias = tensor_1d_to_2d_ttnn(weights["mlp.fc2.bias"], device, dtype=ttnn.bfloat16)
         else:
             self.fc2_bias = None
 
@@ -788,21 +765,9 @@ class SigLIPVisionTowerTTNN:
         post_ln_bias = weights.get("post_layernorm.bias") or weights.get("vision_model.post_layernorm.bias")
 
         if post_ln_weight is not None:
-            self.post_ln_weight = ttnn.from_torch(
-                post_ln_weight.unsqueeze(0),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.post_ln_weight = tensor_1d_to_2d_ttnn(post_ln_weight, device, dtype=ttnn.bfloat16)
             self.post_ln_bias = (
-                ttnn.from_torch(
-                    post_ln_bias.unsqueeze(0),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+                tensor_1d_to_2d_ttnn(post_ln_bias, device, dtype=ttnn.bfloat16)
                 if post_ln_bias is not None
                 else None
             )
@@ -948,13 +913,7 @@ class MultiModalProjectorTTNN:
         )
 
         if "linear.bias" in weights:
-            self.bias = ttnn.from_torch(
-                weights["linear.bias"].unsqueeze(0),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.bias = tensor_1d_to_2d_ttnn(weights["linear.bias"], device, dtype=ttnn.bfloat16)
         else:
             self.bias = None
 

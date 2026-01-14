@@ -192,12 +192,24 @@ class PI0ModelTTNN:
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
-        timestep_ttnn = ttnn.from_torch(
-            timestep.float().unsqueeze(-1) if timestep.dim() == 1 else timestep.float(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
+        # Convert timestep - handle 1D [batch] by reshaping on device
+        timestep_float = timestep.float()
+        if timestep.dim() == 1:
+            timestep_ttnn = ttnn.from_torch(
+                timestep_float,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+            timestep_ttnn = ttnn.reshape(timestep_ttnn, (timestep_float.shape[0], 1))
+            timestep_ttnn = ttnn.to_layout(timestep_ttnn, ttnn.TILE_LAYOUT)
+        else:
+            timestep_ttnn = ttnn.from_torch(
+                timestep_float,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
 
         # Convert language tokens to TTNN (uint32 for embedding lookup)
         lang_tokens_ttnn = ttnn.from_torch(

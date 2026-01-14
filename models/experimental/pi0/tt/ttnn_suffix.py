@@ -23,7 +23,7 @@ import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import SuffixConfig
-from .ttnn_common import create_sinusoidal_pos_embedding_ttnn
+from .ttnn_common import create_sinusoidal_pos_embedding_ttnn, tensor_1d_to_2d_ttnn
 
 
 class SuffixEmbeddingTTNN:
@@ -323,14 +323,8 @@ def convert_suffix_weights_to_ttnn(
 
     for key, value in torch_weights.items():
         if "bias" in key:
-            # Bias: expand to [1, out_features]
-            ttnn_weights[key] = ttnn.from_torch(
-                value.unsqueeze(0),
-                dtype=bias_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            # Bias: expand to [1, out_features] using TTNN (no torch.unsqueeze)
+            ttnn_weights[key] = tensor_1d_to_2d_ttnn(value, device, dtype=bias_dtype)
         else:
             # Weight: transpose for TTNN [in, out] format
             ttnn_weights[key] = ttnn.from_torch(

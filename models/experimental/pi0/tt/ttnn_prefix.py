@@ -85,14 +85,17 @@ class PrefixEmbeddingTTNN:
             batch_size, num_tokens = shape[0], shape[1]
 
             if isinstance(mask, torch.Tensor):
-                # Convert PyTorch mask to TTNN, then expand on device
+                # Convert PyTorch mask to TTNN, reshape on device (no torch.unsqueeze)
                 mask_ttnn = ttnn.from_torch(
-                    mask.float().unsqueeze(-1),  # (batch_size, 1)
+                    mask.float(),  # (batch_size,)
                     dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=self.device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
+                # Reshape to 2D and convert to TILE on device
+                mask_ttnn = ttnn.reshape(mask_ttnn, (batch_size, 1))
+                mask_ttnn = ttnn.to_layout(mask_ttnn, ttnn.TILE_LAYOUT)
                 # Expand on device using ttnn.repeat (no round-trip!)
                 expanded_mask = ttnn.repeat(mask_ttnn, (1, num_tokens), memory_config=ttnn.L1_MEMORY_CONFIG)
             else:

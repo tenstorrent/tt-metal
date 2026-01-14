@@ -213,6 +213,53 @@ def torch_to_ttnn(
     )
 
 
+def tensor_1d_to_2d_ttnn(
+    tensor: "torch.Tensor",
+    device: ttnn.Device,
+    dtype: Optional[ttnn.DataType] = None,
+    memory_config: Optional[ttnn.MemoryConfig] = None,
+) -> ttnn.Tensor:
+    """
+    Convert 1D PyTorch tensor to 2D TTNN tensor without using torch.unsqueeze().
+
+    Converts [features] -> [1, features] on device using TTNN operations.
+    Used for biases, layer norm weights, and other 1D tensors.
+
+    Args:
+        tensor: 1D PyTorch tensor of shape [features]
+        device: TTNN device
+        dtype: TTNN data type (default: bfloat16)
+        memory_config: Memory configuration (default: DRAM)
+
+    Returns:
+        TTNN tensor of shape [1, features] in TILE_LAYOUT
+    """
+    if dtype is None:
+        dtype = ttnn.bfloat16
+    if memory_config is None:
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    # Get the feature size
+    features = tensor.shape[0]
+
+    # Transfer as 1D with ROW_MAJOR (TILE requires 2D+)
+    tensor_ttnn = ttnn.from_torch(
+        tensor,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    # Reshape to 2D: [features] -> [1, features]
+    tensor_ttnn = ttnn.reshape(tensor_ttnn, (1, features))
+
+    # Convert to TILE_LAYOUT
+    tensor_ttnn = ttnn.to_layout(tensor_ttnn, ttnn.TILE_LAYOUT)
+
+    return tensor_ttnn
+
+
 # Default exports
 create_sinusoidal_pos_embedding = create_sinusoidal_pos_embedding_ttnn
 safe_cat = safe_cat_ttnn

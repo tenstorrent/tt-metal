@@ -26,6 +26,7 @@ import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import PaliGemmaConfig
+from .ttnn_common import tensor_1d_to_2d_ttnn
 from .ttnn_gemma import (
     GemmaBlockTTNN,
     rms_norm_ttnn,
@@ -74,17 +75,12 @@ class PaliGemmaBackboneTTNN:
             self.vlm_embed_tokens = None
 
         # Convert norms - OPTIMIZATION: Pre-add Gemma-style +1 offset
-        self.vlm_norm = ttnn.from_torch(
-            (weights["vlm_language"]["model.norm.weight"] + 1.0).unsqueeze(0),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
+        # Note: +1.0 is done on host (torch), unsqueeze done on device via tensor_1d_to_2d_ttnn
+        self.vlm_norm = tensor_1d_to_2d_ttnn(
+            weights["vlm_language"]["model.norm.weight"] + 1.0, device, dtype=ttnn.bfloat16
         )
-        self.expert_norm = ttnn.from_torch(
-            (weights["action_expert"]["model.norm.weight"] + 1.0).unsqueeze(0),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
+        self.expert_norm = tensor_1d_to_2d_ttnn(
+            weights["action_expert"]["model.norm.weight"] + 1.0, device, dtype=ttnn.bfloat16
         )
 
         # Initialize vision tower
@@ -210,12 +206,16 @@ class PaliGemmaBackboneTTNN:
                 else:
                     layout = ttnn.TILE_LAYOUT
 
-                block_weights[new_key] = ttnn.from_torch(
-                    value if len(value.shape) > 1 else value.unsqueeze(0),
-                    dtype=ttnn.bfloat16,
-                    layout=layout,
-                    device=self.device,
-                )
+                # Handle 1D tensors (biases, norms) using tensor_1d_to_2d_ttnn (no torch.unsqueeze)
+                if len(value.shape) == 1:
+                    block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
+                else:
+                    block_weights[new_key] = ttnn.from_torch(
+                        value,
+                        dtype=ttnn.bfloat16,
+                        layout=layout,
+                        device=self.device,
+                    )
         return block_weights
 
     def _get_expert_block_weights_ttnn(
@@ -282,12 +282,16 @@ class PaliGemmaBackboneTTNN:
                 else:
                     layout = ttnn.TILE_LAYOUT
 
-                block_weights[new_key] = ttnn.from_torch(
-                    value if len(value.shape) > 1 else value.unsqueeze(0),
-                    dtype=ttnn.bfloat16,
-                    layout=layout,
-                    device=self.device,
-                )
+                # Handle 1D tensors (biases, norms) using tensor_1d_to_2d_ttnn (no torch.unsqueeze)
+                if len(value.shape) == 1:
+                    block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
+                else:
+                    block_weights[new_key] = ttnn.from_torch(
+                        value,
+                        dtype=ttnn.bfloat16,
+                        layout=layout,
+                        device=self.device,
+                    )
         return block_weights
 
     def embed_image(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
