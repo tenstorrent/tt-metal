@@ -172,8 +172,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t dest_addr,
     uint32_t len_bytes,
     uint32_t read_req_vc = 1) {
-    if(noc_mode == DM_DYNAMIC_NOC){
-        static_assert(noc_mode == DM_DYNAMIC_NOC && use_vc, "dynamic noc mode must have use_vc set as true");
+    if constexpr (noc_mode == DM_DYNAMIC_NOC){
+        static_assert(use_vc, "dynamic noc mode must have use_vc set as true");
     }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
