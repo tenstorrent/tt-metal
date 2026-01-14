@@ -254,9 +254,6 @@ jobs:
         HF_HUB_CACHE: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/hub' || '/mnt/MLPerf/huggingface/hub' }}
         HF_HOME: /tmp/hf_home
         SD_HF_DOWNLOAD_OVERRIDE: ${{ inputs.regenerate-ttnn-cache && '1' || '0' }}
-        # Set CI to false during cache regeneration to allow model downloads
-        # Models check os.getenv("CI") == "true" to enforce local_files_only
-        CI: ${{ inputs.regenerate-ttnn-cache && 'false' || 'true' }}
         TT_CACHE_HOME: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/tt_cache' || '/mnt/MLPerf/huggingface/tt_cache' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
