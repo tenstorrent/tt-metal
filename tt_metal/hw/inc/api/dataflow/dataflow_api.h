@@ -30,6 +30,11 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 
+#if !defined(KERNEL_BUILD)
+// This file uses noc_mode, which isn't defined in the firmware build.
+#error "dataflow_api.h is only supported in kernel build. Firmware build should use low-level APIs instead."
+#endif
+
 // clang-format off
 /**
  * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
