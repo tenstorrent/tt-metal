@@ -128,11 +128,10 @@ static_assert(
     "START_DISTANCE_FIELD_BIT_WIDTH + RANGE_HOPS_FIELD_BIT_WIDTH must equal 8");
 
 struct MulticastRoutingCommandHeader {
-    uint8_t start_distance_in_hops : RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
-    uint8_t range_hops : RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH;  // 0 implies unicast
+    uint8_t start_distance_in_hops;
+    uint8_t range_hops;  // 0 implies unicast
 };
-static_assert(
-    sizeof(MulticastRoutingCommandHeader) <= sizeof(RoutingFields), "MulticastRoutingCommandHeader size is not 1 byte");
+static_assert(sizeof(MulticastRoutingCommandHeader) == 2, "MulticastRoutingCommandHeader size is not 2 bytes");
 
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
