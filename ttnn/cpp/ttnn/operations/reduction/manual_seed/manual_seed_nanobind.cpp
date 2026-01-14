@@ -57,19 +57,11 @@ void bind_manual_seed_operation(nb::module_& mod) {
                     * - UINT32
                       - ROW_MAJOR_LAYOUT
         )doc";
-    using OperationType = decltype(ttnn::manual_seed);
     bind_registered_operation(
         mod,
         ttnn::manual_seed,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const std::variant<uint32_t, ttnn::Tensor>& seeds,
-               const std::optional<MeshDevice*> device,
-               const std::optional<std::variant<uint32_t, ttnn::Tensor>>& user_ids,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> Tensor {
-                return self(seeds, nbh::rewrap_optional(device), user_ids, sub_core_grids);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("seeds") = 0,
             nb::kw_only(),
             nb::arg("device") = nb::none(),
