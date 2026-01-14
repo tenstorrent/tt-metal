@@ -108,8 +108,9 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
     const split_tensor_args_t& tensor_args,
     split_tensor_return_value_t& tensor_return_value) {
     // Validate chunks == 3
-    TT_FATAL(
-        operation_attributes.chunks == 3, "Only chunks=3 is supported, got chunks={}", operation_attributes.chunks);
+    const uint32_t N_chunks = operation_attributes.chunks;
+
+    TT_FATAL(N_chunks == 3, "Only chunks=3 is supported, got chunks={}", N_chunks);
     TT_FATAL(tensor_return_value.size() == 3, "Expected 3 output tensors, got {}", tensor_return_value.size());
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -340,7 +341,8 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        true,               // is_injector_core
+        true,  // is_injector_core
+        N_chunks,
         N_tiles_per_chunk,  // NEW: for split logic
         in0_tile_size,      // placeholder for in3_tile_size
     };
@@ -378,7 +380,8 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        false,              // is_injector_core
+        false,  // is_injector_core
+        N_chunks,
         N_tiles_per_chunk,  // NEW: for split logic
         in0_tile_size,      // placeholder for in3_tile_size
     };
@@ -417,7 +420,8 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        true,               // is_injector_core
+        true,  // is_injector_core
+        N_chunks,
         N_tiles_per_chunk,  // NEW: for split logic
     };
     append_accessors_split(
@@ -454,7 +458,8 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        false,              // is_injector_core
+        false,  // is_injector_core
+        N_chunks,
         N_tiles_per_chunk,  // NEW: for split logic
     };
     append_accessors_split(

@@ -26,7 +26,8 @@ void kernel_main() {
     uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(19);  // NEW: for splitting
+    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);           // NEW: for splitting
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);  // NEW: for splitting
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -47,7 +48,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<20>();  // Updated offset
+    constexpr auto in1_args = TensorAccessorArgs<21>();  // Updated offset
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
     // NEW: 3 output accessors
