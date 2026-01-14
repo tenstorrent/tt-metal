@@ -20,6 +20,7 @@ struct operation_attributes_t {
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     const bool share_cache;
     const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
+    const bool noop = false;  // When true, kernels early exit
 };
 
 struct tensor_args_t {
