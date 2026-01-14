@@ -8,6 +8,7 @@ import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
+from models.common.utility_functions import is_blackhole
 
 
 @pytest.mark.parametrize(
@@ -252,7 +253,7 @@ def test_qwenimage_pipeline_performance(
                 )
         device_name_map = {
             (2, 4): "WH_T3K",
-            (4, 8): "BH_GLX",
+            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
