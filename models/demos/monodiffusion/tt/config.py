@@ -206,7 +206,7 @@ class TtMonoDiffusionConfigBuilder:
                 self.input_height, self.input_width, 32, 1,
                 self.parameters["decoder"]["final"],
                 kernel_size=(1, 1), padding=(0, 0),
-                activation=None,  # No activation for final depth output
+                activation=None, # No activation for final depth output
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=6 * 32),
             ),
 
@@ -220,7 +220,7 @@ class TtMonoDiffusionConfigBuilder:
                 self.input_height, self.input_width, 16, 1,
                 self.parameters["uncertainty"]["conv2"],
                 kernel_size=(1, 1), padding=(0, 0),
-                activation=None,  # Will apply softplus separately
+                activation=None, # Will apply softplus separately
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=6 * 32),
             ),
 
