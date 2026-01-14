@@ -21,6 +21,9 @@ import numpy as np
 DEMO_DIR = Path(__file__).parent
 OUTPUT_DIR = DEMO_DIR / "sample_images" / "libero"
 
+# Safety limit for dataset iteration to prevent infinite loops
+MAX_ITERATION_LIMIT = 10000
+
 
 def main():
     print("=" * 60)
@@ -77,7 +80,7 @@ def main():
             break
 
         # Safety limit
-        if i > 10000:
+        if i > MAX_ITERATION_LIMIT:
             print("Reached iteration limit")
             break
 
