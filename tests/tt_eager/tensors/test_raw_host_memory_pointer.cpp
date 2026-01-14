@@ -127,7 +127,8 @@ void test_raw_host_memory_pointer() {
     // Alternatively, we could allocate memory manually and create Tensors with borrowed storage on the fly to print the
     // data
     void* storage_of_alternative_tensor_for_printing = malloc(shape.volume() * sizeof(bfloat16));
-    tt::tt_metal::memcpy2(storage_of_alternative_tensor_for_printing, c_dev);
+    tt::tt_metal::copy_tensor_to_host_from_device(
+        c_dev.device()->mesh_command_queue(), storage_of_alternative_tensor_for_printing, c_dev);
 
     HostBuffer alternative_tensor_for_printing_buffer(
         tt::stl::Span<bfloat16>(static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing), shape.volume()),
