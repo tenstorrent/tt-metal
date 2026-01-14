@@ -80,7 +80,7 @@
   sku: wh_llmbox
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
-  timeout: 45
+  timeout: 50
   model-name: flux1-dev
   model-type: DiT
 
@@ -98,7 +98,7 @@
   sku: wh_llmbox
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
-  timeout: 30
+  timeout: 25
   model-name: qwenimage
   model-type: DiT
 
