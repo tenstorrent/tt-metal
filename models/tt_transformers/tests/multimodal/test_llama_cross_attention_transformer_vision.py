@@ -98,22 +98,21 @@ def test_vision_transformer_inference(mesh_device, reset_seeds):
     config.vision_config._attn_implementation = "sdpa"
     reference_model = CrossAttentionTransformerVisionModel(config)
 
-    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
+    # Partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights.
     # Because the custom class CrossAttentionTransformerVisionModel wraps the vision_model and multi_modal_projector,
-    # the following prefixes need to be added so the weight can be loaded correctly on the comutational graph.
+    # the following prefixes need to be added so the weights can be loaded correctly on the computational graph.
     add_prefix = lambda d, prefix: {f"{prefix}{k}": v for k, v in d.items()}
     partial_state_dict = add_prefix(
-        load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.vision_model."), "vision_model."
+        load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.vision_model."),
+        "vision_model.",
     )
-    # prefix = "vision_model."
-    # partial_state_dict = {f"{prefix}{key}": value for key, value in partial_state_dict.items()}
+
     multimodal_proj_weights = add_prefix(
         load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.multi_modal_projector."),
         "multi_modal_projector.",
     )
-    # prefix = "multi_modal_projector."
-    partial_state_dict.update(multimodal_proj_weights)
 
+    partial_state_dict.update(multimodal_proj_weights)
     reference_model.load_state_dict(partial_state_dict)
 
     tt_ccl = TT_CCL(mesh_device)
@@ -127,7 +126,7 @@ def test_vision_transformer_inference(mesh_device, reset_seeds):
         configuration=model_args,
         return_intermediate=return_intermediate,
     )
-    torch.manual_seed(42)
+
     # Create rand inputs of the right shape
     batch, num_media, num_chunks, n_channel, patch_size = (1, 1, 4, 3, model_args.vision_chunk_size)
     chunk_seq_len = model_args.vision_chunk_ntok  # tokens per chunk, including class token
