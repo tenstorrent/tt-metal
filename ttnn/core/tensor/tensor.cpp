@@ -514,7 +514,7 @@ void copy_tensor_to_host_from_device(
     queue.enqueue_read_shards(shard_data_transfers, src.mesh_buffer(), blocking);
 }
 
-void memcpy3(
+void copy_tensor_to_device_from_host(
     distributed::MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
     TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
@@ -537,7 +537,7 @@ void memcpy5(
         copy_tensor_to_host_from_device(queue, dst_buffer.view_bytes().data(), src, region);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
         auto src_buffer = host_buffer::get_host_buffer(src);
-        memcpy3(queue, dst, src_buffer.view_bytes().data(), region);
+        copy_tensor_to_device_from_host(queue, dst, src_buffer.view_bytes().data(), region);
     } else {
         TT_THROW("Unsupported memcpy");
     }
