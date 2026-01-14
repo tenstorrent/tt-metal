@@ -34,26 +34,7 @@ void bind_fold_operation(nb::module_& mod) {
                 stride_h (int): Stride along the H-dimension.
                 stride_w (int): Stride along the W-dimension.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::fold)& op,
-               const ttnn::Tensor& input,
-               uint32_t stride_h,
-               uint32_t stride_w,
-               bool use_transpose_as_fold,
-               std::optional<ttnn::Shape> output_shape,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding,
-               std::optional<CoreRangeSet> grid_size,
-               std::optional<MemoryConfig> override_memory_config) -> ttnn::Tensor {
-                return op(
-                    input,
-                    stride_h,
-                    stride_w,
-                    use_transpose_as_fold,
-                    output_shape,
-                    padding,
-                    grid_size,
-                    override_memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input"),
             nb::arg("stride_h"),
             nb::arg("stride_w"),
