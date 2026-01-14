@@ -50,7 +50,7 @@ jobs:
   t3000-fast-tests:
     name: T3000 fast tests
     runs-on:
-      - tt-ubuntu-2204-N300-llmbox-stable
+      - tt-metal-ci-vm-t3k-13
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
