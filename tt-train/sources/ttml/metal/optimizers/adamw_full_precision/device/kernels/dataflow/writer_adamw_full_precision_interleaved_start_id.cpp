@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 constexpr auto cb_param_out_idx = tt::CBIndex::c_16;
