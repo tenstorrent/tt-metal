@@ -181,7 +181,6 @@ void write_block_sync(
     uint32_t d1_end) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
-
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;

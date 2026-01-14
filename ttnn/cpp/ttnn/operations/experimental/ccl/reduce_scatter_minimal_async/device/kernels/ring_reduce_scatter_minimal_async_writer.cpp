@@ -474,6 +474,7 @@ void kernel_main() {
                 slice_idx++;
             }
         }
+
         // Reset the global semaphore before the next batch
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);

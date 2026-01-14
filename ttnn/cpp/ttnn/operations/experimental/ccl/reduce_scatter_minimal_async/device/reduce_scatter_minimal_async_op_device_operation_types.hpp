@@ -70,6 +70,7 @@ struct ReduceScatterMinimalAsyncInputs {
     Tensor input_tensor;
     std::optional<Tensor> optional_intermediate_tensor;
     std::optional<Tensor> optional_output_tensor;
+    std::optional<TensorSpec> input_tensor_spec;
 };
 
 // Common validation function

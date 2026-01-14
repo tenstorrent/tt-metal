@@ -19,18 +19,18 @@ void kernel_main() {
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t in0_tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
-    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
-    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
-    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
-
+    constexpr uint32_t M_block_multiplier = get_compile_time_arg_val(11);
+    constexpr uint32_t in0_tile_size = get_compile_time_arg_val(12);
+    constexpr uint32_t out_tile_size = get_compile_time_arg_val(13);
+    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(14);
+    uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
+    uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(18);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(19);
+    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(20);
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(21);
+    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(22);
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
@@ -49,7 +49,7 @@ void kernel_main() {
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<22>();
+    constexpr auto in0_args = TensorAccessorArgs<23>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
 
     // Always create tuple of output accessors (size = N_chunks)
@@ -142,7 +142,7 @@ void kernel_main() {
     bool defer_write = false;
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles * M_block_multiplier;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
         uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;

@@ -83,12 +83,15 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
 
 std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs(
     const ReduceScatterMinimalAsyncParams& operation_attributes, const ReduceScatterMinimalAsyncInputs& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto inter_shape = input_tensor.logical_shape();
+    auto input_tensor_spec = tensor_args.input_tensor.tensor_spec();
+    if (tensor_args.input_tensor_spec.has_value()) {
+        input_tensor_spec = tensor_args.input_tensor_spec.value();
+    }
+    auto inter_shape = input_tensor_spec.logical_shape();
 
     MemoryConfig adjusted_intermediate_mem_config,
         intermediate_mem_config =
-            operation_attributes.optional_intermediate_mem_config.value_or(input_tensor.memory_config());
+            operation_attributes.optional_intermediate_mem_config.value_or(input_tensor_spec.memory_config());
 
     if (operation_attributes.topology == ttnn::ccl::Topology::Linear) {
         inter_shape[0] *= 2;
@@ -106,19 +109,19 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::compute_
         adjusted_intermediate_mem_config = intermediate_mem_config;
     }
 
-    auto output_shape = input_tensor.logical_shape();
+    auto output_shape = input_tensor_spec.logical_shape();
     output_shape[operation_attributes.dim] /= operation_attributes.ring_size;
 
     return {
         TensorSpec(
             inter_shape,
             TensorLayout(
-                input_tensor.dtype(), input_tensor.tensor_spec().page_config(), adjusted_intermediate_mem_config)),
+                input_tensor_spec.data_type(), input_tensor_spec.page_config(), adjusted_intermediate_mem_config)),
         TensorSpec(
             output_shape,
             TensorLayout(
-                input_tensor.dtype(),
-                input_tensor.tensor_spec().page_config(),
+                input_tensor_spec.data_type(),
+                input_tensor_spec.page_config(),
                 operation_attributes.output_mem_config)),
     };
 }

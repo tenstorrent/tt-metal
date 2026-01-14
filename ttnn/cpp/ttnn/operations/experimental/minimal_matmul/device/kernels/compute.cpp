@@ -120,8 +120,9 @@ void kernel_main() {
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(4);
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
+    constexpr uint32_t M_block_multiplier = get_compile_time_arg_val(6);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(7);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(8);
 
     uint32_t argidx = 0;
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -158,7 +159,7 @@ void kernel_main() {
     uint32_t current_subblock_w = subblock_w;
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles * M_block_multiplier;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         current_M_block_tiles = m_tile_end - m_tile;
         current_subblock_h = std::min(current_M_block_tiles, subblock_h);

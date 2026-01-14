@@ -1,0 +1,55 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "minimal_matmul_reduce_scatter_async.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/experimental/ccl/minimal_matmul_reduce_scatter_async/device/minimal_matmul_reduce_scatter_async_device_operation.hpp"
+
+namespace ttnn::operations::experimental::ccl {
+
+std::vector<ttnn::Tensor> ExecuteMinimalMatmulReduceScatterAsync::invoke(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    ttnn::Tensor& persistent_intermediate_buffer,
+    std::optional<ttnn::Tensor>& persistent_output_buffer,
+    const uint32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const CoreCoord reduce_scatter_core_grid_offset,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<const Tensor>& bias,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config_rs,
+    const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
+    const tt::tt_fabric::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<ttnn::MemoryConfig>& memory_config_mm,
+    const std::optional<const DataType> dtype,
+    const std::optional<const ::ttnn::experimental::prim::MinimalMatmulConfig>& program_config,
+    const std::optional<const unary::UnaryWithParam>& activation,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    tt::tt_fabric::Topology usable_topology = ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
+    auto output_tensors = ttnn::prim::minimal_matmul_reduce_scatter_async(
+        input_tensor,
+        weight_tensor,
+        persistent_intermediate_buffer,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        reduce_scatter_core_grid_offset,
+        barrier_semaphore,
+        bias,
+        num_links,
+        memory_config_rs,
+        intermediate_memory_config_rs,
+        usable_topology,
+        sub_device_id,
+        memory_config_mm,
+        dtype,
+        program_config,
+        activation,
+        compute_kernel_config);
+    return {output_tensors.mm, output_tensors.reduce_scatter};
+}
+
+}  // namespace ttnn::operations::experimental::ccl
