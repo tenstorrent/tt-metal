@@ -23,12 +23,6 @@ void bind_nlp_create_qkv_heads_falcon7b(nb::module_& mod) {
         R"doc(
             Shuffles [B, 1, S, 4672] fused qkv matrix into 3 heads with shapes [B, 71, S, 64], [B, 1, S, 64], and [B, 1, S, 64].
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::nlp_create_qkv_heads_falcon7b)& self,
-               const ttnn::Tensor& input_tensor_q,
-               const std::optional<ttnn::MemoryConfig>& memory_config) { return self(input_tensor_q, memory_config); },
-            nb::arg("input").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        ttnn::nanobind_arguments_t{nb::arg("input").noconvert(), nb::kw_only(), nb::arg("memory_config") = nb::none()});
 };
 }  // namespace ttnn::operations::experimental::transformer::detail
