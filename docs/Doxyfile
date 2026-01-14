@@ -968,6 +968,7 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/threshold.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/selu.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/where.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/addcmul.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/log1p.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/comp.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/bitwise_or.h \

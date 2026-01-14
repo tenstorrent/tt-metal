@@ -6,13 +6,10 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/bcast.h"
-
+#include "compute_kernel_api/eltwise_unary/addcmul.h"
 namespace NAMESPACE {
 void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -99,31 +96,23 @@ void MAIN {
 #endif
 
         // Ensure sources available
+        cb_wait_front(cb_eff_a, num_tiles_per_cycle);
         cb_wait_front(cb_eff_b, num_tiles_per_cycle);
         cb_wait_front(cb_eff_c, num_tiles_per_cycle);
 
         tile_regs_acquire();
 
-        // (input_b * input_c)
-        mul_tiles_init(cb_eff_b, cb_eff_c);
-        mul_tiles(cb_eff_b, cb_eff_c, 0, 0, 0);
+        copy_tile_init(cb_eff_a);
+        copy_tile(cb_eff_a, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        // Done with cb_in1 and cb_in2, pop them early for pipeline efficiency
-        cb_pop_front(cb_eff_b, num_tiles_per_cycle);
-        cb_pop_front(cb_eff_c, num_tiles_per_cycle);
+        copy_tile_init(cb_eff_b);
+        copy_tile(cb_eff_b, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        // Step 2: (input_b * input_c) * value -> DST[0]
-        if (scalar_is_not_1) {
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, scalar_arg);  // DST[0] * scalar -> DST[0]
-        }
+        copy_tile_init(cb_eff_c);
+        copy_tile(cb_eff_c, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
-        // Wait for effective A
-        cb_wait_front(cb_eff_a, num_tiles_per_cycle);
-
-        // Step 3: Load A and add with result DST[0] + cb_post_a -> DST[0]
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_eff_a);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_eff_a, 0, 0);
+        TERNARY_SFPU_OP_INIT();
+        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);
 
         tile_regs_commit();
         tile_regs_wait();
@@ -138,6 +127,8 @@ void MAIN {
 
         cb_push_back(cb_out, num_tiles_per_cycle);
         cb_pop_front(cb_eff_a, num_tiles_per_cycle);
+        cb_pop_front(cb_eff_b, num_tiles_per_cycle);
+        cb_pop_front(cb_eff_c, num_tiles_per_cycle);
     }
 }
 }  // namespace NAMESPACE
