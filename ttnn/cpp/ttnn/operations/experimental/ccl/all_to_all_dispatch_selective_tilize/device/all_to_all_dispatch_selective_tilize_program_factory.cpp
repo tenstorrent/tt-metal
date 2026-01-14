@@ -121,20 +121,24 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
     auto scores_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_scores_tensor.dtype());
 
-    // input sharded buffer
-    [[maybe_unused]] uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
     // full indices buffer
     uint32_t indices_tensor_cb_id = tt::CBIndex::c_1;
     // full mapping buffer
     uint32_t mapping_tensor_cb_id = tt::CBIndex::c_2;
     // full scores buffer
     uint32_t scores_tensor_cb_id = tt::CBIndex::c_3;
-    // E-T buffer
+    // Send preparation buffer [E, T] for untilize, capped by -1 to indicate no more tokens to send for this expert
     uint32_t e_t_buffer_id = tt::CBIndex::c_4;
     // Tilizer input buffer for tokens to be tilized (row-major from reader)
     uint32_t tilizer_input_cb_id = tt::CBIndex::c_5;
     // Tilizer output buffer for tilized tokens (from compute to writer)
     uint32_t tilizer_output_cb_id = tt::CBIndex::c_6;
+    // Experts activation buffer [T, E + 1] {token id, expert_0_activated, expert_1_activated, ...}
+    // k+1 if not activated, k value in the indices tensor for that token if activated
+    uint32_t expert_activation_cb_id = tt::CBIndex::c_7;
+    // after determining the total number of tokens for each expert, this buffer will store the total number of tokens
+    // for each expert to pass to the other kernels
+    uint32_t per_expert_total_tokens_cb_id = tt::CBIndex::c_8;
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size_st(input_tensor);
     log_debug(
@@ -175,13 +179,10 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     CoreRangeSet selective_tilize_core_range_set = operation_attributes.selective_tilize_core_range_set.value();
 
     uint32_t num_cores = selective_tilize_core_range_set.num_cores();
-    uint32_t subtoken_bytes_aligned = tt::align(tt::div_up(aligned_input_page_size, num_cores), dram_alignment);
-    [[maybe_unused]] uint32_t subtoken_units_of_work = tt::div_up(aligned_input_page_size, subtoken_bytes_aligned);
 
     // Split token subregions across tilizer cores (similar to sender subtoken splitting)
     // Each tilizer core handles a portion of the hidden dimension for each token
-    uint32_t tilizer_subtoken_bytes_aligned =
-        tt::align(tt::div_up(aligned_input_page_size, selective_tilize_core_range_set.num_cores()), l1_alignment);
+    uint32_t tilizer_subtoken_bytes_aligned = tt::align(tt::div_up(aligned_input_page_size, num_cores), l1_alignment);
     uint32_t tilizer_subtoken_units_of_work = tt::div_up(aligned_input_page_size, tilizer_subtoken_bytes_aligned);
 
     auto
@@ -284,6 +285,22 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         operation_attributes.tokens_per_chunk * buffering_factor,  // double-buffered tokens_per_chunk
         input_data_format);
 
+    tt::tt_metal::create_cb(
+        expert_activation_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        selected_experts_k * sizeof(uint32_t),
+        tokens,
+        tt::DataFormat::UInt32);
+
+    tt::tt_metal::create_cb(
+        per_expert_total_tokens_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        sizeof(uint32_t),  // at most 512 for decode
+        experts_per_device,
+        tt::DataFormat::UInt32);
+
     // Tilizer output buffer: holds tilized output from compute kernel
     // page_size is the tile size, num_pages is tiles_per_chunk (based on max subtoken size)
     // Tile dimensions: height = tokens_per_chunk, width = 32
@@ -308,6 +325,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"indices_tensor_cb_id", indices_tensor_cb_id},
         {"scores_tensor_cb_id", scores_tensor_cb_id},
         {"mapping_tensor_cb_id", mapping_tensor_cb_id},
+        {"e_t_buffer_id", e_t_buffer_id},
+        {"expert_activation_cb_id", expert_activation_cb_id},
+        {"per_expert_total_tokens_cb_id", per_expert_total_tokens_cb_id},
         {"input_pages", input_pages},
         {"indices_pages", indices_pages},
         {"mapping_pages", mapping_pages},

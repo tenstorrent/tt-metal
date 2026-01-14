@@ -94,6 +94,9 @@ void kernel_main() {
     constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
     constexpr uint32_t tilizer_input_cb_id = get_named_compile_time_arg_val("tilizer_input_cb_id");
     constexpr uint32_t tilizer_output_cb_id = get_named_compile_time_arg_val("tilizer_output_cb_id");
+    constexpr uint32_t e_t_buffer_id = get_named_compile_time_arg_val("e_t_buffer_id");
+    constexpr uint32_t expert_activation_cb_id = get_named_compile_time_arg_val("expert_activation_cb_id");
+    constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
 
     constexpr uint32_t input_pages = get_named_compile_time_arg_val("input_pages");
     constexpr uint32_t indices_pages = get_named_compile_time_arg_val("indices_pages");
@@ -145,17 +148,21 @@ void kernel_main() {
     bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 4
 
     // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output
-    // We need to chain through to get the correct offset for mapping (index 3)
     constexpr auto input_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
+    constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
+
+    const auto input_tensor_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
+    const auto indices_tensor_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
+    const auto scores_tensor_addr_gen = TensorAccessor(scores_args, scores_tensor_address, indices_page_size);
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
+    // output_tensor_addr_gen will be set up when we have the output tensor address
 
     // TODO: Wait for reader_tilizer to populate E-T buffer, then compute total_chunks
 
     // Wait for compute kernel to push tilized output
-    // constexpr uint32_t tilizer_output_cb_id = get_named_compile_time_arg_val("tilizer_output_cb_id");
     // constexpr uint32_t tiles_per_chunk = get_named_compile_time_arg_val("tiles_per_chunk");
     // for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
     //     // cb_wait_front(tilizer_output_cb_id, tiles_per_chunk);

@@ -105,6 +105,9 @@ void kernel_main() {
     constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
     constexpr uint32_t tilizer_input_cb_id = get_named_compile_time_arg_val("tilizer_input_cb_id");
     constexpr uint32_t tilizer_output_cb_id = get_named_compile_time_arg_val("tilizer_output_cb_id");
+    constexpr uint32_t e_t_buffer_id = get_named_compile_time_arg_val("e_t_buffer_id");
+    constexpr uint32_t expert_activation_cb_id = get_named_compile_time_arg_val("expert_activation_cb_id");
+    constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
 
     constexpr uint32_t input_pages = get_named_compile_time_arg_val("input_pages");
     constexpr uint32_t indices_pages = get_named_compile_time_arg_val("indices_pages");
@@ -158,8 +161,47 @@ void kernel_main() {
     uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);  // 5
     uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);    // 6
 
-    // Wait for writer_tilizer (BRISC) to read the mapping tensor into the CB
-    // The writer produces pages, we consume by waiting for them all to arrive
+    // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output
+    constexpr auto input_args = TensorAccessorArgs<0>();
+    constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
+    constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
+    constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
+
+    const auto input_tensor_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
+    const auto indices_tensor_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
+    const auto scores_tensor_addr_gen = TensorAccessor(scores_args, scores_tensor_address, indices_page_size);
+    const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
+    const auto output_tensor_addr_gen =
+        TensorAccessor(output_args, 0, output_page_size);  // output address not needed for reader
+
+    // Read the mapping tensor page for this device (linearized_mesh_coord)
+    // This gives us the expert -> device mapping from this device's perspective
+    cb_reserve_back(mapping_tensor_cb_id, 1);
+    noc_async_read_page(linearized_mesh_coord, mapping_tensor_addr_gen, get_write_ptr(mapping_tensor_cb_id));
+    noc_async_read_barrier();
+    cb_push_back(mapping_tensor_cb_id, 1);
+
+    // Get pointer to the mapping data
+    uint16_t* expert_to_device_map = reinterpret_cast<uint16_t*>(get_read_ptr(mapping_tensor_cb_id));
+    uint16_t local_expert_ids[experts_per_device];
+    uint32_t local_expert_count = 0;
+    for (uint32_t i = 0; i < experts; i++) {
+        uint16_t expert_mesh_coord = expert_to_device_map[i];
+        if (expert_mesh_coord == linearized_mesh_coord) {
+            if (local_expert_count >= experts_per_device) {
+                DPRINT << "Error: more than " << experts_per_device << " experts on device " << linearized_mesh_coord
+                       << ENDL();
+                ASSERT(false);
+            }
+            local_expert_ids[local_expert_count] = i;
+            local_expert_count++;
+        }
+    }
+
+    for (uint32_t i = 0; i < local_expert_count; i++) {
+        DPRINT << "Local expert " << i << " is " << local_expert_ids[i] << ENDL();
+    }
 
     // TODO: Implement selective tilize logic
     // 1. Read through all indices to determine which tokens belong to this device's experts
