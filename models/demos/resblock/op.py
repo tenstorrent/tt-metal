@@ -5,12 +5,18 @@ import ttnn
 
 
 class FusedResblock:
-    IN0_CB = 0
-    WEIGHT0_CB = 1
-    WEIGHT1_CB = 2
-    OUT_CB = 3
-    INTERM_CB = 4
-    INTERM_CB2 = 5
+    class MatmulCoreCBIndex:
+        ACTIVATION_CB = 0
+        WEIGHT0_CB = 1
+        WEIGHT1_CB = 2
+        OUT_CB = 3
+        INTERM_CB = 4
+        INTERM_CB2 = 5
+
+    class McastCoreCBIndex:
+        MCAST_CORE_GATHER_CB = 6
+
+    MCAST_CORE = ttnn.CoreCoord(8, 8)
 
     @staticmethod
     def golden(input_a, weight0, weight1):
@@ -19,6 +25,41 @@ class FusedResblock:
         x = x @ weight1
         x = x + input_a
         return x
+
+    @staticmethod
+    def create_mcast_kernel(
+        core_coord: ttnn.CoreCoord, data_format, page_size: int, tile: ttnn.TileDescriptor
+    ) -> tuple[ttnn.KernelDescriptor, ttnn.KernelDescriptor, ttnn.CBDescriptor]:
+        all_mcast_cores = ttnn.CoreRangeSet({ttnn.CoreRange(core_coord, core_coord)})
+
+        # Create CBs for gather destination
+        mcast_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
+            data_format=data_format,
+            page_size=page_size,
+            tile=tile,
+        )
+        mcast_cb_descriptor = ttnn.CBDescriptor(
+            total_size=page_size,
+            core_ranges=all_mcast_cores,
+            format_descriptors=[mcast_cb_format],
+        )
+
+        mcast_reader_kernel_descriptor = ttnn.KernelDescriptor(
+            kernel_source="models/demos/resblock/kernels/mcast_reader.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=all_mcast_cores,
+            compile_time_args=[FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB],
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        mcast_writer_kernel_descriptor = ttnn.KernelDescriptor(
+            kernel_source="models/demos/resblock/kernels/mcast_writer.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=all_mcast_cores,
+            compile_time_args=[FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB],
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        return mcast_reader_kernel_descriptor, mcast_writer_kernel_descriptor, mcast_cb_descriptor
 
     @staticmethod
     def op(input_tensor, weight0, weight1, output_tensor, fp32_dest_acc_en=False):
@@ -62,10 +103,18 @@ class FusedResblock:
             weight0.memory_config().shard_spec.grid
         )  # All matmul cores are the same for weight0 and weight1
 
-        in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(FusedResblock.IN0_CB, input_tensor)
-        weight0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(FusedResblock.WEIGHT0_CB, weight0)
-        weight1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(FusedResblock.WEIGHT1_CB, weight1)
-        out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(FusedResblock.OUT_CB, output_tensor)
+        activation_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            FusedResblock.MatmulCoreCBIndex.ACTIVATION_CB, input_tensor
+        )
+        weight0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            FusedResblock.MatmulCoreCBIndex.WEIGHT0_CB, weight0
+        )
+        weight1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            FusedResblock.MatmulCoreCBIndex.WEIGHT1_CB, weight1
+        )
+        out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            FusedResblock.MatmulCoreCBIndex.OUT_CB, output_tensor
+        )
 
         out_shape = output_tensor.shape
         out_tile = output_tensor.get_tile()
@@ -80,7 +129,7 @@ class FusedResblock:
         out_tile_descriptor = ttnn.TileDescriptor(out_tile)
 
         interm_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=FusedResblock.INTERM_CB,
+            buffer_index=FusedResblock.MatmulCoreCBIndex.INTERM_CB,
             data_format=out_dtype,
             page_size=out_tile_size,
             tile=out_tile_descriptor,
@@ -91,7 +140,7 @@ class FusedResblock:
             format_descriptors=[interm_cb_format],
         )
         interm_cb2_format = ttnn.CBFormatDescriptor(
-            buffer_index=FusedResblock.INTERM_CB2,
+            buffer_index=FusedResblock.MatmulCoreCBIndex.INTERM_CB2,
             data_format=out_dtype,
             page_size=out_tile_size,
             tile=out_tile_descriptor,
@@ -107,11 +156,11 @@ class FusedResblock:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_matmul_cores,
             compile_time_args=[
-                FusedResblock.IN0_CB,
-                FusedResblock.WEIGHT0_CB,
-                FusedResblock.WEIGHT1_CB,
-                FusedResblock.INTERM_CB,
-                FusedResblock.INTERM_CB2,
+                FusedResblock.MatmulCoreCBIndex.ACTIVATION_CB,
+                FusedResblock.MatmulCoreCBIndex.WEIGHT0_CB,
+                FusedResblock.MatmulCoreCBIndex.WEIGHT1_CB,
+                FusedResblock.MatmulCoreCBIndex.INTERM_CB,
+                FusedResblock.MatmulCoreCBIndex.INTERM_CB2,
                 num_tiles_k,
             ],
             config=ttnn.ReaderConfigDescriptor(),
@@ -120,7 +169,7 @@ class FusedResblock:
             kernel_source="models/demos/resblock/kernels/writer.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_matmul_cores,
-            compile_time_args=[FusedResblock.OUT_CB],
+            compile_time_args=[FusedResblock.MatmulCoreCBIndex.OUT_CB],
             config=ttnn.WriterConfigDescriptor(),
         )
         compute_kernel_descriptor = ttnn.KernelDescriptor(
@@ -128,12 +177,12 @@ class FusedResblock:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_matmul_cores,
             compile_time_args=[
-                FusedResblock.IN0_CB,
-                FusedResblock.WEIGHT0_CB,
-                FusedResblock.WEIGHT1_CB,
-                FusedResblock.OUT_CB,
-                FusedResblock.INTERM_CB,
-                FusedResblock.INTERM_CB2,
+                FusedResblock.MatmulCoreCBIndex.ACTIVATION_CB,
+                FusedResblock.MatmulCoreCBIndex.WEIGHT0_CB,
+                FusedResblock.MatmulCoreCBIndex.WEIGHT1_CB,
+                FusedResblock.MatmulCoreCBIndex.OUT_CB,
+                FusedResblock.MatmulCoreCBIndex.INTERM_CB,
+                FusedResblock.MatmulCoreCBIndex.INTERM_CB2,
                 num_tiles_k,
                 1 if fp32_dest_acc_en else 0,
             ],
@@ -145,17 +194,31 @@ class FusedResblock:
             ),
         )
 
+        logger.debug(f"Placing mcast core at: {FusedResblock.MCAST_CORE}")
+        (
+            mcast_reader_kernel_descriptor,
+            mcast_writer_kernel_descriptor,
+            mcast_cb_descriptor,
+        ) = FusedResblock.create_mcast_kernel(FusedResblock.MCAST_CORE, out_dtype, out_tile_size, out_tile_descriptor)
+
         return ttnn.generic_op(
             [input_tensor, weight0, weight1, output_tensor],
             ttnn.ProgramDescriptor(
-                kernels=[reader_kernel_descriptor, writer_kernel_descriptor, compute_kernel_descriptor],
+                kernels=[
+                    reader_kernel_descriptor,
+                    writer_kernel_descriptor,
+                    compute_kernel_descriptor,
+                    mcast_reader_kernel_descriptor,
+                    mcast_writer_kernel_descriptor,
+                ],
                 cbs=[
-                    in0_cb_descriptor,
+                    activation_cb_descriptor,
                     weight0_cb_descriptor,
                     weight1_cb_descriptor,
                     out_cb_descriptor,
                     interm_cb_descriptor,
                     interm_cb2_descriptor,
+                    mcast_cb_descriptor,
                 ],
             ),
         )
