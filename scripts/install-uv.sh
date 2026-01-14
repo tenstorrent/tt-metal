@@ -21,7 +21,33 @@ UV_VERSION="0.7.12"
 if [[ "$(uname -s)" == "Darwin" ]]; then
     # macOS
     echo "Installing uv ${UV_VERSION} on macOS..."
-    python3 -m pip install --no-cache-dir "uv==${UV_VERSION}"
+    PIP_ARGS="--no-cache-dir"
+
+    # Check for PEP 668 (externally-managed-environment) restrictions
+    # This can occur on newer macOS Python installations
+    # Try installation first, and if it fails with PEP 668 error, retry with --break-system-packages
+    # Use || true to prevent script exit on failure, then check output for error type
+    PIP_OUTPUT=$(python3 -m pip install ${PIP_ARGS} "uv==${UV_VERSION}" 2>&1) || true
+
+    # Check if installation failed and if it's due to PEP 668
+    if ! command -v uv &>/dev/null; then
+        if echo "$PIP_OUTPUT" | grep -q "externally-managed-environment"; then
+            # PEP 668 restriction detected, use --break-system-packages if available
+            if python3 -m pip install --help 2>&1 | grep -q "\-\-break-system-packages"; then
+                echo "PEP 668 restriction detected, using --break-system-packages..."
+                python3 -m pip install ${PIP_ARGS} --break-system-packages "uv==${UV_VERSION}"
+            else
+                # Fall back to --user installation if --break-system-packages not available
+                echo "Warning: PEP 668 restriction detected but --break-system-packages not available, using --user installation..." >&2
+                python3 -m pip install --user --no-cache-dir "uv==${UV_VERSION}"
+            fi
+        elif echo "$PIP_OUTPUT" | grep -qi "error"; then
+            # Different error, re-raise it
+            echo "$PIP_OUTPUT" >&2
+            exit 1
+        fi
+    fi
+
     # Add pip's bin directory to PATH for the current session
     USER_BIN="${HOME}/.local/bin"
     if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
