@@ -347,14 +347,22 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         static const std::vector<std::vector<PerVcBufferSlots>> other_buffer_slot_options = {
             // WORMHOLE_B0
             {{16, 16, 0, 0},  // Only VC0 for non-mesh topologies.
-             {8, 16, 0, 0}},
+             {8, 16, 0, 0},
+             {8, 8, 0, 0},
+             {4, 8, 0, 0},
+             {4, 4, 0, 0},
+             {2, 4, 0, 0},
+             {2, 2, 0, 0}},
             // BLACKHOLE
             {{32, 32, 0, 0},  // Only VC0 for non-mesh topologies.
              {16, 32, 0, 0},
              {16, 16, 0, 0},
              {8, 16, 0, 0},
              {8, 8, 0, 0},
-             {4, 8, 0, 0}}};
+             {4, 8, 0, 0},
+             {4, 4, 0, 0},
+             {2, 4, 0, 0},
+             {2, 2, 0, 0}}};
 
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> mesh_slots(mesh_buffer_slot_options);
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
