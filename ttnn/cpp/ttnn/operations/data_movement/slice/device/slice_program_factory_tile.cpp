@@ -165,7 +165,7 @@ namespace slice::program {
 
 // Slice Tile Program Factory implementation
 SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
@@ -243,7 +243,7 @@ void SliceTileProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     const Tensor& src_tensor = tensor_args.input;
     const Tensor& dst_tensor = output;
     const auto& slice_start = args.slice_start;

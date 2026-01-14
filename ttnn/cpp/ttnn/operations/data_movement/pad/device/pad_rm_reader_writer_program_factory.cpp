@@ -11,9 +11,7 @@ using namespace tt::constants;
 
 namespace ttnn::operations::data_movement::pad::program {
 PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& pad_value = operation_attributes.pad_value;
     Program program{};
@@ -144,7 +142,7 @@ void PadRmReaderWriterProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
     CoreCoord core = {0, 0};
