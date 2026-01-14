@@ -65,7 +65,7 @@ struct BufferWriteDispatchParams {
 
     BufferWriteDispatchParams() = default;
     BufferWriteDispatchParams(uint32_t src_noc_xy, uint64_t src_addr, bool src_pinned = false) :
-        pinned_src_noc_xy{src_noc_xy),
+        pinned_src_noc_xy{src_noc_xy},
         pinned_src_addr{src_addr},
         use_pinned_transfer{src_pinned} {
     }
