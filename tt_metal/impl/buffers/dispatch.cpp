@@ -868,9 +868,6 @@ void write_to_device_buffer(
             } else {
                 const uint64_t src_offset_base = static_cast<uintptr_t>(src_region_start - pinned_host_base);
                 pinned_src_addr = pinned_noc_base + src_offset_base;
-                const auto& soc = cluster.get_soc_desc(mmio_device_id);
-                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
-                TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
                 pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
                 use_pinned_transfer = true;
             }
