@@ -75,6 +75,14 @@ void ReduceToAllOp::validate(const operation_attributes_t& operation_attributes,
             "Input mux cores size must be 4, got {}",
             operation_attributes.input_mux_cores.value().size());
     }
+
+    // extar worker cores should be 8
+    if (operation_attributes.extra_worker_cores.has_value()) {
+        TT_FATAL(
+            operation_attributes.extra_worker_cores.value().size() == 8,
+            "Extra worker cores size must be 8, got {}",
+            operation_attributes.extra_worker_cores.value().size());
+    }
 };
 
 ReduceToAllOp::spec_return_value_t ReduceToAllOp::compute_output_specs(
@@ -235,7 +243,8 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const std::optional<Tensor>& optional_fw_intermediate_tensor,
     const std::optional<Tensor>& optional_bw_intermediate_tensor,
     const std::optional<Tensor>& optional_coord_intermediate_tensor,
-    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
+    const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores) {
     using OperationType = ttnn::operations::ccl::ReduceToAllOp;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -243,6 +252,7 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
             scale_fp32,
             topology,
             input_mux_cores,
+            extra_worker_cores,
             {input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()}},
         OperationType::tensor_args_t{
             input_tensor_l,

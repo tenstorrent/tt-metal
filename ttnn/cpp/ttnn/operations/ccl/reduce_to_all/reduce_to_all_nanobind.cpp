@@ -35,6 +35,7 @@ void bind_reduce_to_all(nb::module_& mod) {
                 bw_intermediate_tensor (ttnn.Tensor,optional): Optional bw intermediate tensor.
                 coord_intermediate_tensor (ttnn.Tensor,optional): Optional coord intermediate tensor.
                 input_mux_cores (List[ttnn.CoreCoord], optional): List of mux core
+                extra_worker_cores (List[ttnn.CoreCoord], optional): We have total of 16 worker cores for neighbour exchange: 8 data cores and 8 extra worker cores.
 
            Returns:
                ttnn.Tensor output_tensor_l: the output tensor for values.
@@ -85,6 +86,7 @@ void bind_reduce_to_all(nb::module_& mod) {
                const std::optional<ttnn::Tensor>& bw_intermediate_tensor,
                const std::optional<ttnn::Tensor>& coord_intermediate_tensor,
                const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
+               const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores,
                const tt::tt_fabric::Topology topology) {
                 return self(
                     input_tensor_l,
@@ -99,7 +101,8 @@ void bind_reduce_to_all(nb::module_& mod) {
                     fw_intermediate_tensor,
                     bw_intermediate_tensor,
                     coord_intermediate_tensor,
-                    input_mux_cores);
+                    input_mux_cores,
+                    extra_worker_cores);
             },
             nb::arg("input_tensor_l").noconvert(),
             nb::arg("input_tensor_s").noconvert(),
@@ -114,6 +117,7 @@ void bind_reduce_to_all(nb::module_& mod) {
             nb::arg("bw_intermediate_tensor") = nb::none(),
             nb::arg("coord_intermediate_tensor") = nb::none(),
             nb::arg("input_mux_cores") = nb::none(),
+            nb::arg("extra_worker_cores") = nb::none(),
             nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Ring)});
 
     mod.def(
@@ -125,6 +129,7 @@ void bind_reduce_to_all(nb::module_& mod) {
         nb::arg("root_coord"),
         nb::arg("scale_fp32"),
         nb::arg("topology"),
-        nb::arg("input_mux_cores") = nb::none());
+        nb::arg("input_mux_cores") = nb::none(),
+        nb::arg("extra_worker_cores") = nb::none());
 }
 }  // namespace ttnn::operations::ccl
