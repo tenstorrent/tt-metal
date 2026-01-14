@@ -302,16 +302,16 @@ def prepare_generator_args(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            50,  # max_generated_tokens
+            200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {
                 "temperature": torch.ones(32).tolist(),
                 "top_p": torch.ones(32).tolist(),
                 "top_k": (32 * torch.ones(32)).tolist(),
-                "frequency_penalty": torch.ones(32).tolist(),
-                "presence_penalty": torch.ones(32).tolist(),
-                "repetition_penalty": torch.ones(32).tolist(),
+                # "frequency_penalty": torch.ones(32).tolist(),
+                # "presence_penalty": torch.ones(32).tolist(),
+                # "repetition_penalty": torch.ones(32).tolist(),
                 "seed": (456 * torch.ones(32).to(torch.int32)).tolist(),
                 # "seed": torch.linspace(0, 31, steps=32, dtype=torch.int32).tolist(), # int32 values from 0 to 31 inclusive
             },
