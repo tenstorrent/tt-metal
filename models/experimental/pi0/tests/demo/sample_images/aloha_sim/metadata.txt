@@ -1,7 +1,0 @@
-ALOHA Sim Sample Images
-========================================
-
-Dataset: lerobot/aloha_sim_transfer_cube_human
-Extracted samples: 5
-Episodes: [0, 1, 2, 3, 4]
-Task: Transfer cube
