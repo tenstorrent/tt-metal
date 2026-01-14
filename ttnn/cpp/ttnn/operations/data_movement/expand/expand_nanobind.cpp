@@ -23,13 +23,7 @@ void bind_expand(nb::module_& mod, const data_movement_operation_t& operation, c
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int32_t>& output_shape,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, output_shape, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("output_shape"),
             nb::kw_only(),
