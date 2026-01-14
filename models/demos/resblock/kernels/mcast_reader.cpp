@@ -47,8 +47,4 @@ void kernel_main() {
         mcast_sender_semaphore_addr);
     noc_semaphore_inc(mcast_sender_semaphore_noc_addr, VALID);
     noc_async_posted_writes_flushed();
-
-    DPRINT << "Semaphore set" << ENDL();
-
-    DPRINT << "Mcast reader kernel finished" << ENDL();
 }
