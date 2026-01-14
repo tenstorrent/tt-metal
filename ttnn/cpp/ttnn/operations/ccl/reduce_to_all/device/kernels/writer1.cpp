@@ -55,7 +55,6 @@ inline void write_data(
 }
 
 void kernel_main() {
-    DPRINT << " start of writer 1 kernel\n";
     constexpr uint32_t fabric_ct_idx = get_compile_time_arg_val(0);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(2);
@@ -77,7 +76,6 @@ void kernel_main() {
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(fabric_ct_idx + 4);
 
     // ROUND 1: send data to neighbor
-    DPRINT << "round1\n";
 
     size_t arg_idx = 0;
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(arg_idx++);
@@ -137,31 +135,23 @@ void kernel_main() {
 
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
-    DPRINT << "after wait for fabric endpoint ready\n";
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
-    DPRINT << "after fabric client connect\n";
 
     cb_reserve_back(packet_header_cb_id, 1);
     uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
-    DPRINT << "after reserving packet header buffer\n";
 
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
-    DPRINT << "AFTER fabric_set_unicast_route\n";
     //  wait for receiver to signal it is ready
-    DPRINT << "waiting for barrier semaphore at address: " << (uint32_t)receive_semaphore_addr << "\n";
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 0);
-    DPRINT << "after receiving ready signal from receiver\n";
 
     cb_wait_front(packet_cb_id, 1);
-    DPRINT << "after reserving packet buffer\n";
-    uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
 
-    DPRINT << "sending fabric sem at addr: " << (uint32_t)receive_semaphore_addr << "\n";
+    uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
     const uint64_t dst_noc_addr = get_noc_addr(current_core_noc_x, current_core_noc_y, receiver_base_address);
     const uint64_t receive_sem_noc_addr = get_noc_addr(current_core_noc_x, current_core_noc_y, receive_semaphore_addr);
 
@@ -171,16 +161,13 @@ void kernel_main() {
         align(new_payload_size_bytes, alignment));
 
     mux_connection.wait_for_empty_write_slot();
-    DPRINT << "after wait for empty write slot\n";
     mux_connection.send_payload_without_header_non_blocking_from_address(packet_base_addr, new_payload_size_bytes);
-    DPRINT << "after sending payload to receiver\n";
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
-    DPRINT << "after sending data to receiver\n";
 
     cb_pop_front(packet_cb_id, 1);
 
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
-    DPRINT << "after fabric_client_disconnect\n";
+    ;
 
     // Writer1 uses forward mux - signal the forward mux termination master (Reader2)
     {
@@ -188,12 +175,8 @@ void kernel_main() {
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
-        DPRINT << "signaled forward mux termination master\n";
     }
 
-    DPRINT << "end of round 1\n";
-
-    DPRINT << "round2\n";
     // ROUND 2: wait for compute and write output
     // receives l, m, s tensors from the compute kernel and writes to the final output buffers
     constexpr uint32_t onetile = 1;
@@ -209,5 +192,4 @@ void kernel_main() {
         cb_int_cb_m,
         onetile,
         input_num_tiles);
-    DPRINT << "end of writer 1 kernel\n";
 }

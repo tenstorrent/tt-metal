@@ -35,9 +35,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    DPRINT << "start of reader 1 kernel\n";
     // ROUND 1: read local data
-    DPRINT << "round1\n";
     cb_reserve_back(packet_cb_id0, 1);
     uint32_t l1_write_addr = get_write_ptr(packet_cb_id0);
     uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
@@ -48,8 +46,6 @@ void kernel_main() {
     noc_async_read(read_addr, l1_write_addr + (num_tiles_l + onetile) * page_bytes, onetile * page_bytes);
     noc_async_read_barrier();
     cb_push_back(packet_cb_id0, 1);
-
-    DPRINT << "end of round 1\n";
 
     constexpr uint32_t fabric_ct_idx = get_compile_time_arg_val(3);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(4);
@@ -124,27 +120,17 @@ void kernel_main() {
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
-    DPRINT << "after wait for fabric endpoint ready\n";
-
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
-
-    DPRINT << "after fabric client connect\n";
 
     cb_reserve_back(packet_header_cb_id, 1);
     const uint32_t sem_header_addr_2 = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
     // wait fot device semaphore
-    DPRINT << "waiting for device semaphore at address: " << (uint32_t)device_semaphore << "\n";
     auto device_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(device_semaphore);
     noc_semaphore_wait(device_semaphore_ptr, 1);
     noc_semaphore_set(device_semaphore_ptr, 0);
-    DPRINT << "after waiting for device semaphore\n";
-    DPRINT << "round2\n";
 
-    DPRINT << "sending barrier semaphore at address: " << (uint32_t)sender_semaphore_addr << "\n";
-    DPRINT << "dest noc coords: " << (uint32_t)current_core_x << ", " << (uint32_t)current_core_y << "\n";
-    DPRINT << "mux coords: " << (uint32_t)fabric_mux_x << ", " << (uint32_t)fabric_mux_y << "\n";
     const uint64_t sender_sem_noc_addr_2 = get_noc_addr(current_core_x, current_core_y, sender_semaphore_addr);
     auto* sem_header_ptr_2 = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr_2);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr_2, sender_num_hops);
@@ -153,12 +139,10 @@ void kernel_main() {
 
     mux_connection.wait_for_empty_write_slot();
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr_2, packet_header_size_bytes);
-    DPRINT << "after sending barrier sem\n";
 
     // read again l, s and m from device 2
     volatile tt_l1_ptr uint32_t* local_semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
-    DPRINT << "waiting for semaphore inc at address: " << (uint32_t)sender_semaphore_addr << "\n";
     noc_semaphore_wait(local_semaphore_ptr, 1);
     noc_semaphore_set(local_semaphore_ptr, 0);
 
@@ -168,8 +152,7 @@ void kernel_main() {
     cb_reserve_back(receiver_cb_id_l, input_num_tiles);
     uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
     uint64_t packet_noc_addr = get_noc_addr(current_core_x, current_core_y, pkt_base_addr);
-    DPRINT << "reading round2 data from core (" << current_core_x << ", " << current_core_y << ") addr "
-           << pkt_base_addr << "\n";
+
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();  // Wait for Round 2 data to be read before memmove
 
@@ -177,7 +160,6 @@ void kernel_main() {
     uint64_t bw_interm_data_core_addr = get_noc_addr(core_noc_x, core_noc_y, pkt_base_addr);
     noc_async_write(packet_l1_addr, bw_interm_data_core_addr, new_packet_size_bytes);
     noc_async_write_barrier();
-    DPRINT << "wrote round2 data to data core at (" << core_noc_x << ", " << core_noc_y << ")\n";
 
     tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
@@ -194,27 +176,20 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);
-    DPRINT << "after moving to receiver cbs\n";
-
-    DPRINT << "reading round1 interm from core (" << (uint32_t)core_noc_x << ", " << (uint32_t)core_noc_y << ") addr "
-           << (uint32_t)round1_interm_tensor_addr << "\n";
 
     uint32_t round1_l1_write_addr = get_write_ptr(round1_interm_cb_id);
-    DPRINT << "round1_l1_write_addr: " << (uint32_t)round1_l1_write_addr << " size: " << (uint32_t)new_packet_size_bytes
-           << "\n";
+
     // noc read the round1 intermediate tensor then push it to compute cbs
     noc_async_read(
         get_noc_addr(core_noc_x, core_noc_y, round1_interm_tensor_addr), round1_l1_write_addr, new_packet_size_bytes);
 
-    DPRINT << "after noc async read, waiting for barrier\n";
     noc_async_read_barrier();
-    DPRINT << "After noc async read barrier\n";
 
     // push to compute cbs
     cb_reserve_back(compute_cb_l, input_num_tiles);
     cb_reserve_back(compute_cb_s, 1);
     cb_reserve_back(compute_cb_m, 1);
-    DPRINT << "after reserving back cbs\n";
+
     tt_memmove<true, false, false, 0>(get_write_ptr(compute_cb_l), round1_l1_write_addr, packet_size_bytes);
     tt_memmove<true, false, false, 0>(
         get_write_ptr(compute_cb_s), round1_l1_write_addr + packet_size_bytes, aligned_page_size_bytes);
@@ -222,30 +197,23 @@ void kernel_main() {
         get_write_ptr(compute_cb_m),
         round1_l1_write_addr + packet_size_bytes + aligned_page_size_bytes,
         aligned_page_size_bytes);
-    DPRINT << "after tt memmove\n";
+
     cb_push_back(compute_cb_l, input_num_tiles);
     cb_push_back(compute_cb_s, 1);
     cb_push_back(compute_cb_m, 1);
-    DPRINT << "after pushing back cbs\n";
 
     // Disconnect from mux
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
-    DPRINT << "after fabric client disconnect\n";
 
     // Reader1 terminates its mux (backward for D0/D2, forward for D1/D3)
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        DPRINT << "waiting for 7 termination signals\n";
         noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
-        DPRINT << "terminated mux\n";
     } else {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
-        DPRINT << "signaled termination master\n";
     }
-
-    DPRINT << "end of reader 1 kernel\n";
 }
