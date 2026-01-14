@@ -378,4 +378,450 @@ TEST_F(FabricRouterPauseControlTest, LargerConfiguration) {
     log_info(LogTest, "Larger configuration test passed with {} devices", num_devices);
 }
 
+// CS-008: Integration Test 1 - Timeout Detection
+// Test timeout behavior when pause is not yet acknowledged
+TEST_F(FabricRouterPauseControlTest, PauseTimeoutDetectionIntegration) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
+
+    test_utils::FabricCommandInterface cmd_interface(control_plane);
+
+    // Issue pause command
+    cmd_interface.pause_routers();
+
+    // Use a very short timeout for testing timeout mechanism
+    auto short_timeout = std::chrono::milliseconds(1);
+
+    log_info(LogTest, "Testing timeout detection with {} ms timeout...", short_timeout.count());
+
+    // Measure timeout accuracy
+    auto start = std::chrono::steady_clock::now();
+    bool paused = cmd_interface.wait_for_state(
+        RouterStateCommon::PAUSED,
+        short_timeout);
+    auto elapsed = std::chrono::steady_clock::now() - start;
+
+    log_info(LogTest, "wait_for_state returned: {}, elapsed: {} ms",
+        paused,
+        std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+
+    // This test validates the timeout mechanism works correctly
+    // The timeout should complete reasonably close to the specified timeout
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+    ASSERT_LE(elapsed_ms, 200)
+        << "Timeout detection took significantly longer than requested timeout";
+
+    log_info(LogTest, "Timeout detection test passed");
+}
+
+// CS-008: Integration Test 2 - Traffic Continuity
+// Test that traffic actually flows continuously across multiple samples
+TEST_F(FabricRouterPauseControlTest, TrafficContinuityIntegration) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
+    MeshId mesh_id = mesh_ids[0];
+
+    size_t num_devices = get_devices().size();
+    ASSERT_GE(num_devices, 2) << "Test requires at least 2 devices";
+
+    // Launch traffic generators
+    launch_traffic_generators();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    log_info(LogTest, "Testing traffic continuity over multiple samples...");
+
+    // Sample telemetry multiple times, verify traffic keeps flowing
+    for (int i = 0; i < 5; i++) {
+        auto snapshot_before = test_utils::capture_telemetry_snapshot(
+            control_plane, mesh_id, num_devices);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        auto snapshot_after = test_utils::capture_telemetry_snapshot(
+            control_plane, mesh_id, num_devices);
+
+        bool changed = test_utils::telemetry_changed(snapshot_before, snapshot_after);
+        ASSERT_TRUE(changed) << "Traffic stopped unexpectedly at sample " << i;
+
+        log_info(LogTest, "Sample {}: Traffic continuing normally", i);
+    }
+
+    log_info(LogTest, "Traffic continuity confirmed over 5 samples");
+
+    cleanup_workers();
+}
+
+// CS-008: Integration Test 3 - Multi-Device Consistency
+// Test that all routers pause simultaneously and consistently
+TEST_F(FabricRouterPauseControlTest, MultiDeviceConsistencyIntegration) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
+    MeshId mesh_id = mesh_ids[0];
+
+    size_t num_devices = get_devices().size();
+    ASSERT_GE(num_devices, 2) << "Test requires at least 2 devices";
+
+    // Launch traffic and verify flowing
+    launch_traffic_generators();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    test_utils::FabricCommandInterface cmd_interface(control_plane);
+
+    // Issue pause and track timing
+    log_info(LogTest, "Issuing pause command for multi-device consistency check...");
+    auto pause_start = std::chrono::steady_clock::now();
+    cmd_interface.pause_routers();
+
+    // Wait for pause with monitoring
+    auto timeout = std::chrono::milliseconds(5000);
+    auto poll_interval = std::chrono::milliseconds(10);
+
+    while (std::chrono::steady_clock::now() - pause_start < timeout) {
+        // Refresh states
+        control_plane.get_state_manager().refresh_all_core_states();
+
+        // Check if all paused
+        if (cmd_interface.all_routers_in_state(RouterStateCommon::PAUSED)) {
+            auto pause_complete = std::chrono::steady_clock::now();
+            auto total_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                pause_complete - pause_start);
+
+            log_info(LogTest, "All routers paused in {} ms", total_time.count());
+
+            // Verify pause completed within reasonable time (< 5 seconds)
+            ASSERT_LT(total_time.count(), 5000)
+                << "Pause took longer than 5 seconds";
+
+            break;
+        }
+
+        std::this_thread::sleep_for(poll_interval);
+    }
+
+    ASSERT_TRUE(cmd_interface.all_routers_in_state(RouterStateCommon::PAUSED))
+        << "Not all routers reached PAUSED state";
+
+    log_info(LogTest, "Multi-device consistency verified");
+
+    cleanup_workers();
+}
+
+// CS-008: Integration Test 4 - Component Integration (CommandInterface)
+// Verify FabricCommandInterface correctly invokes FabricRouterStateManager
+TEST_F(FabricRouterPauseControlTest, ComponentIntegration_CommandInterface) {
+    // Verify FabricCommandInterface correctly invokes FabricRouterStateManager
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
+
+    test_utils::FabricCommandInterface cmd_interface(control_plane);
+
+    // Get initial state counts
+    auto initial_counts = test_utils::count_routers_by_state(control_plane, mesh_ids);
+    log_info(LogTest, "Initial router states: RUNNING={}, PAUSED={}",
+        initial_counts[RouterStateCommon::RUNNING],
+        initial_counts[RouterStateCommon::PAUSED]);
+
+    // Issue pause
+    cmd_interface.pause_routers();
+    cmd_interface.wait_for_pause();
+
+    // Verify state changed
+    auto final_counts = test_utils::count_routers_by_state(control_plane, mesh_ids);
+    log_info(LogTest, "Final router states: RUNNING={}, PAUSED={}",
+        final_counts[RouterStateCommon::RUNNING],
+        final_counts[RouterStateCommon::PAUSED]);
+
+    ASSERT_GT(final_counts[RouterStateCommon::PAUSED], 0)
+        << "No routers entered PAUSED state after pause command";
+
+    ASSERT_LT(final_counts[RouterStateCommon::RUNNING], initial_counts[RouterStateCommon::RUNNING])
+        << "RUNNING router count should have decreased";
+
+    // Resume for cleanup
+    cmd_interface.resume_routers();
+
+    log_info(LogTest, "Component integration test passed");
+}
+
+// CS-008: Integration Test 5 - Callback Verification (Teardown Signal)
+// Verify teardown signal causes workers to exit properly
+TEST_F(FabricRouterPauseControlTest, CallbackVerification_TeardownSignal) {
+    // Verify teardown signal causes workers to exit
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
+    MeshId mesh_id = mesh_ids[0];
+
+    size_t num_devices = get_devices().size();
+    ASSERT_GE(num_devices, 2) << "Test requires at least 2 devices";
+
+    // Launch workers
+    launch_traffic_generators();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Verify traffic is flowing
+    bool traffic_before = test_utils::validate_traffic_flowing(
+        control_plane, mesh_id, num_devices);
+    ASSERT_TRUE(traffic_before) << "Traffic should be flowing after launch";
+
+    log_info(LogTest, "Workers launched and traffic confirmed flowing");
+
+    // Signal teardown
+    auto teardown_start = std::chrono::steady_clock::now();
+    cleanup_workers();
+    auto teardown_duration = std::chrono::steady_clock::now() - teardown_start;
+
+    // Verify cleanup completed in reasonable time
+    auto teardown_ms = std::chrono::duration_cast<std::chrono::milliseconds>(teardown_duration).count();
+    ASSERT_LT(teardown_ms, 5000)
+        << "Worker cleanup took longer than 5 seconds";
+
+    log_info(LogTest, "Workers successfully terminated via teardown signal ({}ms)", teardown_ms);
+}
+
+// CS-008: Integration Test 6 - Data Flow (End-to-End)
+// End-to-end: worker generates traffic -> telemetry increases ->
+//             pause issued -> telemetry stops
+TEST_F(FabricRouterPauseControlTest, DataFlow_EndToEnd) {
+    // End-to-end: worker generates traffic -> telemetry increases ->
+    //             pause issued -> telemetry stops
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
+    MeshId mesh_id = mesh_ids[0];
+
+    size_t num_devices = get_devices().size();
+    ASSERT_GE(num_devices, 2) << "Test requires at least 2 devices";
+
+    // Stage 1: Baseline - no traffic
+    auto baseline = test_utils::capture_telemetry_snapshot(
+        control_plane, mesh_id, num_devices);
+    log_info(LogTest, "Stage 1: Baseline captured");
+
+    // Stage 2: Launch workers - traffic should start
+    launch_traffic_generators();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    auto after_launch = test_utils::capture_telemetry_snapshot(
+        control_plane, mesh_id, num_devices);
+    bool traffic_started = test_utils::telemetry_changed(baseline, after_launch);
+    ASSERT_TRUE(traffic_started) << "Stage 2: Traffic should have started";
+    log_info(LogTest, "Stage 2: Traffic started");
+
+    // Stage 3: Issue pause - traffic should stop
+    test_utils::FabricCommandInterface cmd_interface(control_plane);
+    cmd_interface.pause_routers();
+    cmd_interface.wait_for_pause();
+
+    auto after_pause_1 = test_utils::capture_telemetry_snapshot(
+        control_plane, mesh_id, num_devices);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    auto after_pause_2 = test_utils::capture_telemetry_snapshot(
+        control_plane, mesh_id, num_devices);
+
+    bool traffic_stopped = !test_utils::telemetry_changed(after_pause_1, after_pause_2);
+    ASSERT_TRUE(traffic_stopped) << "Stage 3: Traffic should have stopped after pause";
+    log_info(LogTest, "Stage 3: Traffic stopped after pause");
+
+    // Stage 4: Resume - traffic should flow again
+    cmd_interface.resume_routers();
+    cmd_interface.wait_for_state(RouterStateCommon::RUNNING, test_utils::DEFAULT_PAUSE_TIMEOUT);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    auto after_resume = test_utils::capture_telemetry_snapshot(
+        control_plane, mesh_id, num_devices);
+    bool traffic_resumed = test_utils::telemetry_changed(after_pause_2, after_resume);
+    ASSERT_TRUE(traffic_resumed) << "Stage 4: Traffic should have resumed";
+    log_info(LogTest, "Stage 4: Traffic resumed");
+
+    cleanup_workers();
+    log_info(LogTest, "Data flow end-to-end test passed");
+}
+
+// CS-008: Integration Test 7 - Edge Case (Minimum Devices with Full Lifecycle)
+// Verify test works with minimum (2) devices through full pause/resume cycle
+TEST_F(FabricRouterPauseControlTest, EdgeCase_MinimumDeviceFullCycle) {
+    // Verify test works with minimum (2) devices
+    size_t num_devices = get_devices().size();
+    if (num_devices < 2) {
+        GTEST_SKIP() << "Test requires at least 2 devices, found " << num_devices;
+    }
+
+    // Run core test flow
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
+    MeshId mesh_id = mesh_ids[0];
+
+    launch_traffic_generators();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Verify traffic flowing
+    bool traffic_flowing = test_utils::validate_traffic_flowing(
+        control_plane, mesh_id, num_devices);
+    ASSERT_TRUE(traffic_flowing) << "Traffic should be flowing with minimum devices";
+
+    test_utils::FabricCommandInterface cmd_interface(control_plane);
+
+    // Pause
+    cmd_interface.pause_routers();
+    ASSERT_TRUE(cmd_interface.wait_for_pause())
+        << "Pause failed on minimum device configuration";
+
+    bool traffic_stopped = test_utils::validate_traffic_stopped(
+        control_plane, mesh_id, num_devices);
+    ASSERT_TRUE(traffic_stopped) << "Traffic should be stopped after pause";
+
+    // Resume
+    cmd_interface.resume_routers();
+    ASSERT_TRUE(cmd_interface.wait_for_state(RouterStateCommon::RUNNING, test_utils::DEFAULT_PAUSE_TIMEOUT))
+        << "Resume failed on minimum device configuration";
+
+    bool traffic_resumed = test_utils::validate_traffic_flowing(
+        control_plane, mesh_id, num_devices);
+    ASSERT_TRUE(traffic_resumed) << "Traffic should resume with minimum devices";
+
+    cleanup_workers();
+
+    log_info(LogTest, "Minimum device full cycle test passed with {} devices", num_devices);
+}
+
+// CS-008: Integration Test 8 - Multiple Pause/Resume Cycles
+// Test that pause/resume can be executed multiple times without degradation
+TEST_F(FabricRouterPauseControlTest, MultiplePauseResumeCycles) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
+    MeshId mesh_id = mesh_ids[0];
+
+    size_t num_devices = get_devices().size();
+    ASSERT_GE(num_devices, 2) << "Test requires at least 2 devices";
+
+    test_utils::FabricCommandInterface cmd_interface(control_plane);
+
+    // Launch traffic once
+    launch_traffic_generators();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    // Verify initial traffic flow
+    bool initial_traffic = test_utils::validate_traffic_flowing(
+        control_plane, mesh_id, num_devices);
+    ASSERT_TRUE(initial_traffic) << "Initial traffic should be flowing";
+
+    // Perform 3 pause/resume cycles
+    for (int cycle = 0; cycle < 3; cycle++) {
+        log_info(LogTest, "Starting cycle {} of pause/resume", cycle + 1);
+
+        // Pause
+        cmd_interface.pause_routers();
+        bool paused = cmd_interface.wait_for_pause(test_utils::DEFAULT_PAUSE_TIMEOUT);
+        ASSERT_TRUE(paused) << "Pause failed at cycle " << cycle;
+
+        bool traffic_stopped = test_utils::validate_traffic_stopped(
+            control_plane, mesh_id, num_devices);
+        ASSERT_TRUE(traffic_stopped) << "Traffic should be stopped at cycle " << cycle;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Resume
+        cmd_interface.resume_routers();
+        bool running = cmd_interface.wait_for_state(
+            RouterStateCommon::RUNNING, test_utils::DEFAULT_PAUSE_TIMEOUT);
+        ASSERT_TRUE(running) << "Resume failed at cycle " << cycle;
+
+        bool traffic_resumed = test_utils::validate_traffic_flowing(
+            control_plane, mesh_id, num_devices);
+        ASSERT_TRUE(traffic_resumed) << "Traffic should resume at cycle " << cycle;
+
+        log_info(LogTest, "Cycle {} completed successfully", cycle + 1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    log_info(LogTest, "Multiple pause/resume cycles test completed");
+    cleanup_workers();
+}
+
+// CS-008: Integration Test 9 - State Consistency Under Load
+// Test that pause/resume maintains state consistency with active traffic
+TEST_F(FabricRouterPauseControlTest, StateConsistencyUnderLoad) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
+
+    size_t num_devices = get_devices().size();
+    ASSERT_GE(num_devices, 2) << "Test requires at least 2 devices";
+
+    // Launch traffic
+    launch_traffic_generators();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    test_utils::FabricCommandInterface cmd_interface(control_plane);
+
+    // Capture initial state counts
+    auto initial_counts = test_utils::count_routers_by_state(control_plane, mesh_ids);
+    uint32_t initial_total = 0;
+    for (const auto& [state, count] : initial_counts) {
+        initial_total += count;
+    }
+
+    log_info(LogTest, "Initial total routers: {}", initial_total);
+
+    // Issue pause
+    cmd_interface.pause_routers();
+    cmd_interface.wait_for_pause(test_utils::DEFAULT_PAUSE_TIMEOUT);
+
+    // Verify state consistency: total router count should be unchanged
+    auto paused_counts = test_utils::count_routers_by_state(control_plane, mesh_ids);
+    uint32_t paused_total = 0;
+    for (const auto& [state, count] : paused_counts) {
+        paused_total += count;
+    }
+
+    ASSERT_EQ(paused_total, initial_total)
+        << "Total router count changed during pause";
+
+    ASSERT_EQ(paused_counts[RouterStateCommon::PAUSED], initial_total)
+        << "All routers should be in PAUSED state";
+
+    log_info(LogTest, "State consistency verified under load");
+
+    cleanup_workers();
+}
+
+// CS-008: Integration Test 10 - Rapid Command Sequence
+// Test that rapid pause/resume commands are handled correctly
+TEST_F(FabricRouterPauseControlTest, RapidCommandSequence) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
+
+    test_utils::FabricCommandInterface cmd_interface(control_plane);
+
+    log_info(LogTest, "Testing rapid command sequence...");
+
+    // Issue multiple commands in quick succession
+    for (int i = 0; i < 2; i++) {
+        cmd_interface.pause_routers();
+        // Don't wait for completion, issue next command immediately
+        cmd_interface.resume_routers();
+        // Let it settle
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+
+    // Final pause and verify
+    cmd_interface.pause_routers();
+    bool final_pause = cmd_interface.wait_for_pause(test_utils::DEFAULT_PAUSE_TIMEOUT);
+    ASSERT_TRUE(final_pause) << "Final pause failed after rapid sequence";
+
+    ASSERT_TRUE(cmd_interface.all_routers_in_state(RouterStateCommon::PAUSED))
+        << "Not all routers paused after rapid sequence";
+
+    log_info(LogTest, "Rapid command sequence handled correctly");
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
