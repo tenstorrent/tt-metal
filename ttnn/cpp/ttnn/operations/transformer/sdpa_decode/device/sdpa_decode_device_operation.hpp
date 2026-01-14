@@ -19,8 +19,8 @@ namespace ttnn::operations::transformer::sdpa_decode {
 struct SdpaDecodeDeviceOperation {
     using operation_attributes_t = sdpa_decode::operation_attributes_t;
     using tensor_args_t = sdpa_decode::tensor_args_t;
-    using spec_return_value_t = sdpa_decode::spec_return_value_t;
-    using tensor_return_value_t = sdpa_decode::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<program::SdpaDecodeProgramFactory>;
     using shared_variables_t = program::SdpaDecodeProgramFactory::shared_variables_t;
