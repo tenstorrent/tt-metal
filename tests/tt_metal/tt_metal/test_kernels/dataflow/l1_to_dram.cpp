@@ -28,18 +28,24 @@ void kernel_main() {
     DPRINT << "semaphore_id: " << semaphore_id << ENDL();
     DPRINT << "semaphore_value: " << semaphore_value << ENDL();
 
-    experimental::Semaphore semaphore(semaphore_id);
-    semaphore.wait(semaphore_value);
+    // experimental::Semaphore semaphore(semaphore_id);
+    // semaphore.wait(semaphore_value);
+    volatile tt_l1_ptr std::uint32_t* signal_addr = (tt_l1_ptr uint32_t*)(MEM_L1_UNCACHED_BASE);
+    while (*signal_addr != semaphore_value) {
+        DPRINT << "signal_addr: " << *signal_addr << ENDL();
+    }
 
-    DPRINT << 8888 << ENDL();
+    DPRINT << "before write" << ENDL();
 
     noc.async_write(
         l1_buffer, dst_dram, dram_buffer_size, {}, {.bank_id = dram_dst_bank_id, .addr = dram_dst_address});
+    DPRINT << "after write" << ENDL();
     noc.async_write_barrier();
+    DPRINT << "after write barrier" << ENDL();
 
-    DPRINT << dram_dst_address << ENDL();
-
-    semaphore.up(1);
+    DPRINT << "signal_addr before update: " << *signal_addr << ENDL();
+    *signal_addr = semaphore_value + 1;
+    DPRINT << "signal_addr after update: " << *signal_addr << ENDL();
 
     DPRINT << 77777 << ENDL();
 }
