@@ -28,19 +28,11 @@ void bind_concatenate_heads(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor, if None then it gets set to input_tensor.memory_config()
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::concatenate_heads);
     ttnn::bind_registered_operation(
         mod,
         ttnn::experimental::concatenate_heads,
         concatenate_heads_doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const CoreCoord& compute_with_storage_grid_size,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("compute_with_storage_grid_size").noconvert(),
             nb::kw_only(),
