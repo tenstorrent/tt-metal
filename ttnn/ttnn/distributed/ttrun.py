@@ -61,10 +61,12 @@ class TTRunConfig(BaseModel):
     @field_validator("mesh_graph_desc_path")
     def validate_mesh_graph_exists(cls, path: str) -> str:
         """Ensure mesh graph descriptor file exists"""
-        mesh_path = Path(path).expanduser().resolve()
-        if not mesh_path.is_file():
-            raise ValueError(f"Mesh graph descriptor not found: {mesh_path}")
-        return str(mesh_path)
+        # print(f"Input path: {path}")
+        # mesh_path = Path(path).expanduser().resolve()
+        # print(f"Expanded path: {mesh_path}")
+        # if not mesh_path.is_file():
+        #     raise ValueError(f"Mesh graph descriptor not found: {mesh_path}")
+        return path
 
 
 def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None) -> TTRunConfig:
@@ -123,16 +125,16 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     cache_path = f"{base_path}_{hostname}_rank{binding.rank}"
 
     env = {
-        "TT_METAL_CACHE": cache_path,
+        # "TT_METAL_CACHE": cache_path,
         "TT_MESH_ID": str(binding.mesh_id),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
-        "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
-        "TT_METAL_RUNTIME_ROOT": os.environ.get(
-            "TT_METAL_RUNTIME_ROOT", os.environ.get("TT_METAL_HOME", str(Path.home()))
-        ),
-        "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
+        # "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
+        # "TT_METAL_RUNTIME_ROOT": os.environ.get(
+        #     "TT_METAL_RUNTIME_ROOT", os.environ.get("TT_METAL_HOME", str(Path.home()))
+        # ),
+        # "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
         # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
-        "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
+        # "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
     }
 
     # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
@@ -174,18 +176,26 @@ def build_mpi_command(
     config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None, debug_gdbserver: bool = False
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
+    mpi_launcher = [
+        "./mpi-docker",
+        "--image",
+        "ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:v0.66.0-dev20260106-14-g32aa28355e",
+        "--empty-entrypoint",
+    ]
+    print(f"Using mpi_launcher: {mpi_launcher}")
     # Check if running in SLURM interactive session
-    if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None:
-        logger.warning(f"{TT_RUN_PREFIX} SLURM interactive session detected, using mpirun")
-        mpi_launcher = "mpirun"
-    else:
-        # Find mpirun-ulfm executable, fall back to mpirun if not found
-        mpi_launcher = shutil.which("mpirun-ulfm")
-        if not mpi_launcher:
-            logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
-            mpi_launcher = "mpirun"
+    # if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None:
+    #     logger.warning(f"{TT_RUN_PREFIX} SLURM interactive session detected, using mpirun")
+    #     mpi_launcher = "mpirun"
+    # else:
+    # Find mpirun-ulfm executable, fall back to mpirun if not found
 
-    cmd = [mpi_launcher]
+    # mpi_launcher = shutil.which("mpirun-ulfm")
+    # if not mpi_launcher:
+    #     logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
+    #     mpi_launcher = "mpirun"
+
+    cmd = mpi_launcher
 
     # Check if --bind-to is already specified in mpi_args
     bind_to_already_specified = False
@@ -227,25 +237,26 @@ def build_mpi_command(
 
 def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     """Pretty print a command for readability."""
-    if len(cmd) > PRETTY_PRINT_THRESHOLD:
-        logger.info(f"{prefix} Command:")
-        parts = []
-        current_part = ["mpirun"]
+    print(" ".join(cmd))
+    # if len(cmd) > PRETTY_PRINT_THRESHOLD:
+    #     logger.info(f"{prefix} Command:")
+    #     parts = []
+    #     current_part = ["mpirun"]
 
-        for arg in cmd[1:]:
-            if arg == ":":
-                parts.append(" ".join(current_part))
-                current_part = [":"]
-            else:
-                current_part.append(arg)
+    #     for arg in cmd[1:]:
+    #         if arg == ":":
+    #             parts.append(" ".join(current_part))
+    #             current_part = [":"]
+    #         else:
+    #             current_part.append(arg)
 
-        if current_part:
-            parts.append(" ".join(current_part))
+    #     if current_part:
+    #         parts.append(" ".join(current_part))
 
-        logger.info(f"{prefix} Command: " + " ".join(parts))
+    #     logger.info(f"{prefix} Command: " + " ".join(parts))
 
-    else:
-        logger.info(f"{prefix} Command: " + " ".join(cmd))
+    # else:
+    #     logger.info(f"{prefix} Command: " + " ".join(cmd))
 
 
 @click.command(
@@ -436,6 +447,7 @@ def main(
         logger.info(f"{TT_RUN_PREFIX} (gdb) continue")
 
     try:
+        print(f"Running command: {mpi_cmd}")
         result = subprocess.run(mpi_cmd)
         sys.exit(result.returncode)
     except KeyboardInterrupt:

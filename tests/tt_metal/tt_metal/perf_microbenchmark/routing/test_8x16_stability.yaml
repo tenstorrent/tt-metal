@@ -1,11 +1,7 @@
-# allocation_policies:
-#     receiver:
-#       max_configs_per_core: 2
-
 Tests:
 
 # ================================================
-# 1D Ring (low latency)
+# Fabric 2D Tests (Mesh and Torus)
 # ================================================
 
   - name: "AllToAllMesh"
@@ -44,6 +40,10 @@ Tests:
     patterns:
       - type: all_to_all
         iterations: 1
+
+# ================================================
+# Fabric 1D Tests (Line and Ring)
+# ================================================
 
   - name: "AllToAllLinear"
     enable_flow_control: true
