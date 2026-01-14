@@ -816,7 +816,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
-        (uint32_t)(enable_split_reader && !split_reader_cb_shared ? act_block_num_tiles_split : act_block_num_tiles),
+        (uint32_t)(act_block_num_tiles_split),
         (uint32_t)filter_h,
         (uint32_t)filter_w,
         (uint32_t)conv_act_size_w + (pad_w),

@@ -489,16 +489,27 @@ FORCE_INLINE void multicast_data(
     if (is_receiver_core) {
         if constexpr (act_mcast_num_cores) {
             // num_dests will source, since we are copying to a different local CB as well
-            noc_async_write_multicast_loopback_src(
-                src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
+            {
+                DeviceZoneScopedN("1st BRANCH");
+                DPRINT << "total_bytes: " << total_bytes << ENDL();
+                noc_async_write_multicast_loopback_src(
+                    src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
+            }
         } else {
             // In this case sender core is the only receiver in the grid,
             // we can't use the multicast_loopback_src (hang)
-            noc_async_write(get_noc_addr(src_l1_addr), get_noc_addr(dst_l1_addr), total_bytes);
+
+            {
+                DeviceZoneScopedN("2nd BRANCH");
+                noc_async_write(get_noc_addr(src_l1_addr), get_noc_addr(dst_l1_addr), total_bytes);
+            }
         }
     } else {
         // If sender core is not the receiver core as well we can't use the loopback mcast. (hang)
-        noc_async_write_multicast(src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
+        {
+            DeviceZoneScopedN("3rd BRANCH");
+            noc_async_write_multicast(src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
+        }
     }
 }
 
@@ -551,7 +562,10 @@ FORCE_INLINE void mcast_block_chunked(
     uint32_t wait_tile_curr = wait_tile_start_cnt + tile_wait_offset;  // Apply tile wait offset
 
     for (uint32_t i = 0; i < mcast_full_burst_cnt; i++) {
-        cb_wait_front(src_cb, wait_tile_curr);
+        {
+            DeviceZoneScopedN("ACT-MCAST-TILE-WAIT");
+            cb_wait_front(src_cb, wait_tile_curr);
+        }
         multicast_data<act_mcast_num_dest_cores>(
             is_receiver_core, src_l1_addr, dst_l1_addr, multicast_noc_addr, mcast_noc_burst_size);
         src_l1_addr += mcast_noc_burst_size;
@@ -570,7 +584,10 @@ FORCE_INLINE void mcast_block_chunked(
     }
 
     if constexpr (mcast_leftover_burst_size > 0) {
-        cb_wait_front(src_cb, block_tile_count + tile_wait_offset);
+        {
+            DeviceZoneScopedN("ACT-MCAST-TILE-WAIT");
+            cb_wait_front(src_cb, block_tile_count + tile_wait_offset);
+        }
         multicast_data<act_mcast_num_dest_cores>(
             is_receiver_core, src_l1_addr, dst_l1_addr, multicast_noc_addr, mcast_leftover_burst_size);
     }

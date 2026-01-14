@@ -286,16 +286,19 @@ void kernel_main() {
                         uint32_t tile_id = weight_start_tile_id + height_block_offset + outer_block_offset;
                         // mcast args
                         uint32_t weights_start_address = weight_write_l1_addr;
-                        for (uint32_t block_weight_h = 0; block_weight_h < weight_block_height_ntiles;
-                             block_weight_h++) {
-                            uint32_t weight_tile_id = tile_id;
+                        {
+                            DeviceZoneScopedN("WEIGHTS-READ");
+                            for (uint32_t block_weight_h = 0; block_weight_h < weight_block_height_ntiles;
+                                 block_weight_h++) {
+                                uint32_t weight_tile_id = tile_id;
 
-                            for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles;
-                                 ++weight_tile_w_i) {
-                                noc_async_read_tile(weight_tile_id++, s_weight, weight_write_l1_addr);
-                                weight_write_l1_addr += weight_tile_nbytes;
+                                for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles;
+                                     ++weight_tile_w_i) {
+                                    noc_async_read_tile(weight_tile_id++, s_weight, weight_write_l1_addr);
+                                    weight_write_l1_addr += weight_tile_nbytes;
+                                }
+                                tile_id += weight_stride_h;
                             }
-                            tile_id += weight_stride_h;
                         }
                         noc_async_read_barrier();
 
@@ -306,21 +309,23 @@ void kernel_main() {
                         noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
                         noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
 
-                        // Now we have the block in the CB address, we can mcast to dests!
-                        uint64_t weights_multicast_data_addr = get_noc_multicast_addr(
-                            weights_mcast_dest_noc_start_x,
-                            weights_mcast_dest_noc_start_y,
-                            weights_mcast_dest_noc_end_x,
-                            weights_mcast_dest_noc_end_y,
-                            weights_start_address);
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc_async_write_multicast(
-                            weights_start_address,
-                            weights_multicast_data_addr,
-                            weights_block_size_bytes,
-                            weights_mcast_num_cores,
-                            true);
-
+                        {
+                            DeviceZoneScopedN("WEIGHTS-MCAST-DATA");
+                            // Now we have the block in the CB address, we can mcast to dests!
+                            uint64_t weights_multicast_data_addr = get_noc_multicast_addr(
+                                weights_mcast_dest_noc_start_x,
+                                weights_mcast_dest_noc_start_y,
+                                weights_mcast_dest_noc_end_x,
+                                weights_mcast_dest_noc_end_y,
+                                weights_start_address);
+                            // num_dests must not include source, since we are NOT really doing a local copy!
+                            noc_async_write_multicast(
+                                weights_start_address,
+                                weights_multicast_data_addr,
+                                weights_block_size_bytes,
+                                weights_mcast_num_cores,
+                                true);
+                        }
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                         // same vc even though cmd bufs are different Also, this only works because we are setting VCs
                         // statically (using NOC_CMD_STATIC_VC).
@@ -329,12 +334,15 @@ void kernel_main() {
                         // may not be sent in order they are issued
                         noc_async_writes_flushed();
 #endif
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc_semaphore_set_multicast(
-                            weights_mcast_receiver_semaphore_addr,
-                            weights_mcast_receiver_semaphore_noc_addr,
-                            weights_mcast_num_cores);
+                        {
+                            DeviceZoneScopedN("WEIGHTS-MCAST-SEM");
+                            // We should also multicast the flag to destinations
+                            // num_dests must not include source, since we are NOT really doing a local copy!
+                            noc_semaphore_set_multicast(
+                                weights_mcast_receiver_semaphore_addr,
+                                weights_mcast_receiver_semaphore_noc_addr,
+                                weights_mcast_num_cores);
+                        }
 #endif
                         cb_push_back(cb_id_weight, weight_block_num_tiles);
                     }
@@ -352,34 +360,43 @@ void kernel_main() {
 
                             // Multicast the second reader's portion with offsets
                             // mcast_block_chunked will wait for the tiles internally using tile_wait_offset
-                            mcast_block_chunked<
-                                act_mcast_num_cores,
-                                burst_size,
-                                act_block_num_tiles_split_last,
-                                act_mcast_tile_size>(
-                                is_receiver_core,
-                                act_tilized_cb,
-                                act_cb_id,
-                                act_multicast_noc_addr,
-                                src_cb_read_offset,
-                                dst_cb_write_offset,
-                                tile_wait_offset);
-
+                            {
+                                DeviceZoneScopedN("ACT-MCAST-sem-send-wait");
+                                DPRINT << "act_mcast_num_cores: " << act_mcast_num_cores << "burst_size: " << burst_size
+                                       << "tiles_to_multicast: " << act_block_num_tiles_split_last
+                                       << "act_mcast_tile_size_bytes: " << act_mcast_tile_size
+                                       << "act_multicast_noc_addr: " << act_multicast_noc_addr << ENDL();
+                                mcast_block_chunked<
+                                    act_mcast_num_cores,
+                                    burst_size,
+                                    act_block_num_tiles_split_last,
+                                    act_mcast_tile_size>(
+                                    is_receiver_core,
+                                    act_tilized_cb,
+                                    act_cb_id,
+                                    act_multicast_noc_addr,
+                                    src_cb_read_offset,
+                                    dst_cb_write_offset,
+                                    tile_wait_offset);
+                            }
                             // Multicast the semaphore to receivers
                             // Note: Second reader doesn't wait for receiver semaphore - only the main reader
                             // waits for both semaphores since it's responsible for the push_back
-                            if (is_receiver_core) {
-                                if constexpr (act_mcast_num_cores) {
-                                    noc_semaphore_set_multicast_loopback_src(
+                            {
+                                DeviceZoneScopedN("ACT-MCAST-sem-valid-wait");
+                                if (is_receiver_core) {
+                                    if constexpr (act_mcast_num_cores) {
+                                        noc_semaphore_set_multicast_loopback_src(
+                                            act_mcast_sender_semaphore_valid_addr,
+                                            act_multicast_receiver_semaphore_noc_addr,
+                                            act_mcast_num_cores + 1);
+                                    }
+                                } else {
+                                    noc_semaphore_set_multicast(
                                         act_mcast_sender_semaphore_valid_addr,
                                         act_multicast_receiver_semaphore_noc_addr,
                                         act_mcast_num_cores + 1);
                                 }
-                            } else {
-                                noc_semaphore_set_multicast(
-                                    act_mcast_sender_semaphore_valid_addr,
-                                    act_multicast_receiver_semaphore_noc_addr,
-                                    act_mcast_num_cores + 1);
                             }
                         }
                         act_write_offset_current = act_mcast_write_offset_sum - act_write_offset_current;

@@ -3166,7 +3166,7 @@ def test_conv2d_model_fruit(
 
     ),
 )
-
+@pytest.mark.parametrize("force_act_mcast_split", [True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 def test_conv2d_sdxl(
     device,
@@ -3192,6 +3192,7 @@ def test_conv2d_sdxl(
     packer_l1_acc,
     act_db,
     w_db,
+    force_act_mcast_split,
     perf_test_mode = False,
 ):
     core_grid = ttnn.CoreRangeSet(
@@ -3246,6 +3247,7 @@ def test_conv2d_sdxl(
         enable_weights_double_buffer=w_db,
         core_grid=core_grid,
         perf_test_mode=perf_test_mode,
+        force_act_mcast_split=force_act_mcast_split,
     )
 
 @pytest.mark.parametrize(
@@ -5051,16 +5053,25 @@ def test_resnet50_conv_p150(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, act_block_h_override",
     (
         # (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 64),# single core
-        (32, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
+        # (32, 64, 4, 32, 3, 3, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
         # (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
         # (32, 64, 4, 32, 3, 3, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
         # (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
+        # Split mcast showcase: 8 cores along C, small output channels, large spatial dimensions
+        # Key: small weights (32 output) + large activations (256x256 = 65536 locations)
+        # Per-core: 256/8 = 32 input channels, weights = 32*32*1*1 = 1KB per core
+        # Stride 2 ensures conv path (not linear), output = 128x128 = 16384 locations
+        # Per-core: 256*256 / 8 = 8192 activation locations to mcast -> split mcast distributes this
+        # (64, 1024, 40, 128, 3, 3, 1, 1, 1, 1, 0),  # 8 cores along C
+        # (256,256, 120, 128, 3, 3, 1, 1, 1, 1, 32*60),  # 8 cores along C
+        (256 ,256 * 8, 6, 32, 3, 3, 1, 1, 1, 1, 32*60),  # 8 cores along C
     ),
 )
-@pytest.mark.parametrize("act_double_buffer", [False])
-@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("act_double_buffer", [False,True])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("force_split_reader", [True])
-@pytest.mark.parametrize("force_act_mcast_split", [True])
+@pytest.mark.parametrize("force_act_mcast_split", [False,True])
+@pytest.mark.parametrize("enable_weights_double_buffer", [False,True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_block_sharding(
     device,
@@ -5079,7 +5090,9 @@ def test_conv_block_sharding(
     force_act_mcast_split,
     output_dtype,
     act_block_h_override,
-    act_double_buffer
+    act_double_buffer,
+    enable_weights_double_buffer,
+
 ):
 
     run_conv(
@@ -5106,6 +5119,9 @@ def test_conv_block_sharding(
         force_split_reader=force_split_reader,
         enable_act_double_buffer=act_double_buffer,
         force_act_mcast_split=force_act_mcast_split,
+        has_bias=False,
+        slice_config = ttnn.Conv2dL1FullSliceConfig,
+        enable_weights_double_buffer=enable_weights_double_buffer,
     )
 
 

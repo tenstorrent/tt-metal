@@ -144,8 +144,8 @@ void kernel_main() {
     // Always pop the full amount since main reader does full reserve/push even when split
     constexpr uint32_t tilize_pop_tiles = act_block_num_tiles;
     // When split is enabled, main reader only multicasts the first portion
-    // constexpr uint32_t tiles_to_multicast = act_mcast_split ? act_block_num_tiles_read : act_block_num_tiles;
-    constexpr uint32_t tiles_to_multicast = act_block_num_tiles;
+    constexpr uint32_t tiles_to_multicast = act_mcast_split ? act_block_num_tiles_read : act_block_num_tiles;
+    // constexpr uint32_t tiles_to_multicast = act_block_num_tiles;
     constexpr uint32_t burst_size = NOC_MAX_BURST_SIZE;
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
@@ -161,23 +161,26 @@ void kernel_main() {
                     signal_reserve_done(act_split_reader_reserve_done_semaphore_addr_ptr);
                     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                 }
-                read_activation_data<
-                    sliced_inner_dim,
-                    dilation_w,
-                    coalesced_read_bytes,
-                    conv_act_c_read_bytes,
-                    act_block_w_extra_align_bytes,
-                    stride_w_bytes,
-                    weight_size_w,
-                    stride_w,
-                    weight_size_h,
-                    window_outer_offset>(
-                    packed_reader_indices_ptr,
-                    reader_offset,
-                    l1_write_addr_act,
-                    reader_idx,
-                    act_l1_read_addr,
-                    stride_h_bytes);
+                {
+                    DeviceZoneScopedN("IMG2COL");
+                    read_activation_data<
+                        sliced_inner_dim,
+                        dilation_w,
+                        coalesced_read_bytes,
+                        conv_act_c_read_bytes,
+                        act_block_w_extra_align_bytes,
+                        stride_w_bytes,
+                        weight_size_w,
+                        stride_w,
+                        weight_size_h,
+                        window_outer_offset>(
+                        packed_reader_indices_ptr,
+                        reader_offset,
+                        l1_write_addr_act,
+                        reader_idx,
+                        act_l1_read_addr,
+                        stride_h_bytes);
+                }
                 if constexpr (split_reader_cb_shared) {
                     wait_write_done(act_split_reader_write_done_semaphore_addr_ptr);
                 }
@@ -188,7 +191,10 @@ void kernel_main() {
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
             // Compute should function like regular mm
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
-                cb_reserve_back(cb_id_act, act_block_num_tiles);
+                {
+                    DeviceZoneScopedN("ACT-MCAST-RESERVE");
+                    cb_reserve_back(cb_id_act, act_block_num_tiles);
+                }
                 if (act_w_outer_i == act_mcast_sender_id) {
                     // MCAST SENDER: send entire tilized input to other cores in column
                     // wait until all act mcast destinations have atomically incremented the act semaphore_addr
@@ -205,8 +211,19 @@ void kernel_main() {
                     }
 
                     // Main reader always multicasts from the beginning of the tilized CB (no offsets)
-                    mcast_block_chunked<act_mcast_num_cores, burst_size, tiles_to_multicast, act_mcast_tile_size_bytes>(
-                        is_receiver_core, tilized_in0_cb_id, cb_id_act, act_multicast_noc_addr);
+                    {
+                        DeviceZoneScopedN("ACT-MCAST");
+                        DPRINT << "act_mcast_num_cores: " << act_mcast_num_cores << "burst_size: " << burst_size
+                               << "tiles_to_multicast: " << tiles_to_multicast
+                               << "act_mcast_tile_size_bytes: " << act_mcast_tile_size_bytes
+                               << "act_multicast_noc_addr: " << act_multicast_noc_addr << ENDL();
+                        mcast_block_chunked<
+                            act_mcast_num_cores,
+                            burst_size,
+                            tiles_to_multicast,
+                            act_mcast_tile_size_bytes>(
+                            is_receiver_core, tilized_in0_cb_id, cb_id_act, act_multicast_noc_addr);
+                    }
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
                     // statically (using NOC_CMD_STATIC_VC).
@@ -216,23 +233,26 @@ void kernel_main() {
                     noc_async_writes_flushed();
 #endif
 
-                    if (is_receiver_core) {
-                        // We should also multicast VALID flag to destinations for receiver semaphore
-                        if constexpr (act_mcast_num_cores) {
-                            noc_semaphore_set_multicast_loopback_src(
+                    {
+                        DeviceZoneScopedN("ACT-MCAST-sem-send-wait");
+                        if (is_receiver_core) {
+                            // We should also multicast VALID flag to destinations for receiver semaphore
+                            if constexpr (act_mcast_num_cores) {
+                                noc_semaphore_set_multicast_loopback_src(
+                                    act_mcast_sender_semaphore_valid_addr,
+                                    act_mcast_receiver_semaphore_noc_addr,
+                                    act_mcast_num_cores + 1);
+                                noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                                if constexpr (act_mcast_split) {
+                                    noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
+                                }
+                            }
+                        } else {
+                            noc_semaphore_set_multicast(
                                 act_mcast_sender_semaphore_valid_addr,
                                 act_mcast_receiver_semaphore_noc_addr,
                                 act_mcast_num_cores + 1);
-                            noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-                            if constexpr (act_mcast_split) {
-                                noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
-                            }
                         }
-                    } else {
-                        noc_semaphore_set_multicast(
-                            act_mcast_sender_semaphore_valid_addr,
-                            act_mcast_receiver_semaphore_noc_addr,
-                            act_mcast_num_cores + 1);
                     }
                 } else if (is_receiver_core) {
                     // MCAST RECEIVER: receive entire tilized input from sender core
@@ -241,24 +261,27 @@ void kernel_main() {
                     if constexpr (act_mcast_split) {
                         noc_semaphore_set(act_mcast_receiver_second_semaphore_addr_ptr, INVALID);
                     }
-                    // Atomic increment source core counter
-                    uint64_t act_mcast_sender_semaphore_noc_addr;
-                    if constexpr (transpose_mcast) {
-                        act_mcast_sender_semaphore_noc_addr = get_noc_addr(
-                            act_mcast_sender_noc_x,
-                            act_mcast_sender_noc_y[act_w_outer_i],
-                            act_mcast_sender_semaphore_addr);
-                    } else {
-                        act_mcast_sender_semaphore_noc_addr = get_noc_addr(
-                            act_mcast_sender_noc_y[act_w_outer_i],
-                            act_mcast_sender_noc_x,
-                            act_mcast_sender_semaphore_addr);
-                    }
-                    noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
-                    // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-                    if constexpr (act_mcast_split) {
-                        noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
+                    {
+                        DeviceZoneScopedN("ACT-MCAST-sem-valid-wait");
+                        // Atomic increment source core counter
+                        uint64_t act_mcast_sender_semaphore_noc_addr;
+                        if constexpr (transpose_mcast) {
+                            act_mcast_sender_semaphore_noc_addr = get_noc_addr(
+                                act_mcast_sender_noc_x,
+                                act_mcast_sender_noc_y[act_w_outer_i],
+                                act_mcast_sender_semaphore_addr);
+                        } else {
+                            act_mcast_sender_semaphore_noc_addr = get_noc_addr(
+                                act_mcast_sender_noc_y[act_w_outer_i],
+                                act_mcast_sender_noc_x,
+                                act_mcast_sender_semaphore_addr);
+                        }
+                        noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
+                        // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
+                        noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                        if constexpr (act_mcast_split) {
+                            noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
+                        }
                     }
                 }
                 cb_push_back(cb_id_act, act_block_num_tiles);
