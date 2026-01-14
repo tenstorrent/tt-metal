@@ -2151,15 +2151,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 }
             }
         } else {
-            // if(did_something){
-            //     did_nothing_count = 0;
-            // }
-            // else{
-            //     if (did_nothing_count++ > SWITCH_INTERVAL){
-            //         did_nothing_count = 0;
             run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
-            //     }
-            // }
         }
 
         if constexpr (is_sender_channel_serviced[0]) {
