@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "hw/inc/internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -36,7 +37,7 @@ int main() {
         return 1;
     }
 
-    uint32_t l1_address = 100 * 1024;
+    uint32_t l1_address = MEM_L1_UNCACHED_BASE + 4;
     uint32_t dram_address = 30000 * 1024;
     std::vector<uint32_t> value = {0x12345678};
 
@@ -44,6 +45,8 @@ int main() {
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+    std::vector<uint32_t> initial_signal_value = {0};
+    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core, MEM_L1_UNCACHED_BASE, initial_signal_value);
     tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_address, value);
     std::cout << "WriteToDeviceDRAMChannel passed" << std::endl;
     MetalContext::instance().get_cluster().dram_barrier(mesh_device->get_devices()[0]->id());
@@ -58,7 +61,7 @@ int main() {
 
     // Configure and create Data Movement kernels
     std::vector<KernelHandle> dm_dram_to_l1_kernels;
-    for (uint32_t i = 0; i < 1; i++) {
+    for (uint32_t i = 0; i < 2; i++) {
         dm_dram_to_l1_kernels.push_back(experimental::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
@@ -67,7 +70,7 @@ int main() {
     }
 
     std::vector<KernelHandle> dm_l1_to_dram_kernels;
-    for (uint32_t i = 0; i < 1; i++) {
+    for (uint32_t i = 0; i < 2; i++) {
         dm_l1_to_dram_kernels.push_back(experimental::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
@@ -75,22 +78,19 @@ int main() {
             experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1}));
     }
 
-    uint32_t semaphore_value = 0;
-    const uint32_t sem_id = CreateSemaphore(program, core, semaphore_value);
+    // uint32_t semaphore_value = 0;
+    // const uint32_t sem_id = CreateSemaphore(program, core, semaphore_value);
 
-    for (uint32_t i = 0; i < 1; i++) {
+    for (uint32_t i = 0; i < 2; i++) {
         SetRuntimeArgs(
-            program, dm_dram_to_l1_kernels[i], core, {dram_address, l1_address, 4, 0, sem_id, semaphore_value});
-        // semaphore_value++;
-        // dram_address += 1024;
+            program, dm_dram_to_l1_kernels[i], core, {dram_address, l1_address, 4, 0, 0, initial_signal_value[0]});
+        initial_signal_value[0]++;
+        dram_address += 1024;
 
         SetRuntimeArgs(
-            program,
-            dm_l1_to_dram_kernels[i],
-            core,
-            {dram_address + 1024, l1_address, 4, 0, sem_id, semaphore_value + 1});
-        // semaphore_value++;
-        // l1_address += 1024;
+            program, dm_l1_to_dram_kernels[i], core, {dram_address, l1_address, 4, 0, 0, initial_signal_value[0]});
+        initial_signal_value[0]++;
+        l1_address += 32;
     }
 
     workload.add_program(device_range, std::move(program));
@@ -98,7 +98,8 @@ int main() {
     std::cout << "EnqueueMeshWorkload passed" << std::endl;
     std::vector<uint32_t> outputs{0};
     // MetalContext::instance().get_cluster().dram_barrier(mesh_device->get_devices()[0]->id());
-    tt_metal::detail::ReadFromDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_address, 4, outputs);
+    tt_metal::detail::ReadFromDeviceDRAMChannel(
+        mesh_device->get_devices()[0], 0, dram_address, sizeof(uint32_t), outputs);
     // tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], core, l1_address, 4, outputs);
     std::cout << "ReadFromDeviceDRAMChannel passed" << std::endl;
     mesh_device->close();
