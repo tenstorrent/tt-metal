@@ -4,18 +4,16 @@
 
 #pragma once
 
-#include <optional>
-#include <variant>
-
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_single_core_program_factory.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.hpp"
 
-namespace ttnn::prim {
+#include <optional>
+#include <variant>
 
+namespace ttnn::prim {
 struct TopKDeviceOperation {
     using operation_attributes_t = TopkParams;
     using tensor_args_t = TopkInputs;
