@@ -221,7 +221,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     assert item0["arguments"][1]["arg1"] == "1"
     assert item0["arguments"][2]["arg2"] == "2"
     assert item0["arguments"][3]["arg3"] == "nullopt"
-    assert item0["arguments"][4]["arg4"] == "nullopt"
+    assert item0["arguments"][4]["arg4"] == "0"
 
     item1 = data["content"][0]
     assert item1["operation"] == "ttnn::transpose"
@@ -230,7 +230,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     assert item1_arguments[1]["arg1"] == "1"
     assert item1_arguments[2]["arg2"] == "2"
     assert item1_arguments[3]["arg3"] == "nullopt"
-    assert item1_arguments[4]["arg4"] == "nullopt"
+    assert item1_arguments[4]["arg4"] == "0"
 
     # Content item 2
     item2 = data["content"][1]
