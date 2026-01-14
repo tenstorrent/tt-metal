@@ -7,7 +7,68 @@
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+
+using ttnn::ccl::Topology;
+
+///////////////////////////////////////////////////
+// COMPILE TIME ARGS
+///////////////////////////////////////////////////
+constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
+constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
+constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
+constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
+constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
+constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
+constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
+constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
+constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
+constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
+constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
+constexpr uint32_t in0_tile_size = get_compile_time_arg_val(11);
+constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
+constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
+uint32_t in0_sender_backward_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
+uint32_t in0_sender_forward_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
+uint32_t in0_receiver_backward_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+uint32_t in0_receiver_forward_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
+uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(18));
+constexpr uint32_t is_output_writer = get_compile_time_arg_val(19);
+constexpr uint32_t is_injector_core_backward = get_compile_time_arg_val(20);
+constexpr uint32_t is_injector_core_forward = get_compile_time_arg_val(21);
+constexpr uint32_t num_devices = get_compile_time_arg_val(22);
+constexpr uint32_t my_rank = get_compile_time_arg_val(23);
+constexpr uint32_t in3_tile_size = get_compile_time_arg_val(24);
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(25);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(26);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(27);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(28));
+ 
+#ifdef USE_MUX
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(29);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(30);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(31);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(32);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(33);
+
+constexpr uint32_t mux_arg_count = 34;
+
+constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
+  ccl_routing_utils::get_line_unicast_route_info_from_args<mux_arg_count>();
+
+constexpr ccl_routing_utils::line_unicast_route_info_t backward_unicast_route_info =
+  ccl_routing_utils::get_line_unicast_route_info_from_args<
+  mux_arg_count + ccl_routing_utils::num_line_unicast_args>();
+
+constexpr uint32_t ct_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
+
+const auto& unicast_route_info =
+  is_injector_core_backward ? forward_unicast_route_info : backward_unicast_route_info;
+#else
+constexpr uint32_t ct_arg_count = 29;
+#endif
 
 namespace detail {
 
@@ -37,59 +98,6 @@ bool valid_targets(const bool direction) {
 }  // namespace detail
 
 void kernel_main() {
-    constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t in0_tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
-    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    uint32_t in0_sender_backward_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in0_sender_forward_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    uint32_t in0_receiver_backward_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
-    uint32_t in0_receiver_forward_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
-    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(18));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(19);
-    constexpr uint32_t is_injector_core_backward = get_compile_time_arg_val(20);
-    constexpr uint32_t is_injector_core_forward = get_compile_time_arg_val(21);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(22);
-    constexpr uint32_t my_rank = get_compile_time_arg_val(23);
-    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(24);
-    constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(25);
-    constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(26);
-    constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(27);
-
-#ifdef USE_MUX
-    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(28);
-    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(29);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(30);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(31);
-    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(32);
-
-    constexpr uint32_t mux_arg_count = 33;
-
-    constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
-        ccl_routing_utils::get_line_unicast_route_info_from_args<rt_arg_count>();
-
-    constexpr ccl_routing_utils::line_unicast_route_info_t backward_unicast_route_info =
-        ccl_routing_utils::get_line_unicast_route_info_from_args<
-            rt_arg_count + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args>();
-
-    constexpr uint32_t ct_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
-
-    const auto& unicast_route_info =
-        is_injector_core_backward ? forward_unicast_route_info : backward_unicast_route_info;
-#else
-    constexpr uint32_t ct_arg_count = 28;
-#endif
-
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
@@ -255,7 +263,7 @@ void kernel_main() {
     if (detail::valid_targets(is_injector_core_forward)) {
         static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
-        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
+        uint16_t chunk_sizes[3] = {out_tile_size, out_tile_size, out_tile_size};
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr,
