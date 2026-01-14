@@ -37,6 +37,8 @@ constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t twice_block_size = 2 * block_size;
 
 void MAIN {
+    constexpr uint32_t fp32_one = 0x3F800000U;  // hexadecimal encoding of 1.0f in uint32_t
+
     uint32_t runtime_args_counter = 0;
     uint32_t lr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t beta1 = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -207,7 +209,7 @@ void MAIN {
             copy_tile(cb_param_idx, block_idx, block_size + block_idx);
         }
         // 0x3F800000 is hexadecimal encoding of 1 in fp32
-        if (decay_factor != 0x3F800000) {
+        if (decay_factor != fp32_one) {
             binop_with_scalar_tile_init();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 mul_unary_tile(block_size + block_idx, decay_factor);
