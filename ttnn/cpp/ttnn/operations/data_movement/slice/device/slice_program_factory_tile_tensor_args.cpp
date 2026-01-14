@@ -178,7 +178,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
 namespace slice::program {
 
 SliceTileTensorArgsProgramFactory::cached_program_t SliceTileTensorArgsProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     const auto& start_tensor = tensor_args.start_tensor.value();
     const auto& end_tensor = tensor_args.end_tensor.value();
@@ -277,7 +277,7 @@ void SliceTileTensorArgsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*args*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     const Tensor& src_tensor = tensor_args.input;
     const Tensor& start_tensor = tensor_args.start_tensor.value();
     const Tensor& end_tensor = tensor_args.end_tensor.value();

@@ -18,8 +18,8 @@ namespace ttnn::operations::reduction::moe {
 struct MoeDeviceOperation {
     using operation_attributes_t = moe::operation_attributes_t;
     using tensor_args_t = moe::tensor_args_t;
-    using spec_return_value_t = moe::spec_return_value_t;
-    using tensor_return_value_t = moe::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::MoeProgramFactory>;
     using shared_variables_t = program::MoeProgramFactory::shared_variables_t;
 

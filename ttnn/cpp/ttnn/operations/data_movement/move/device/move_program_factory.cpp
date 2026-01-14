@@ -9,11 +9,9 @@
 namespace ttnn::operations::data_movement::move::program {
 
 MoveProgramFactory::cached_program_t MoveProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
     const Tensor& input = tensor_args.input_tensor;
-    const tensor_return_value_t& output = tensor_return_value;
+    const Tensor& output = tensor_return_value;
     using copy_attrs_t = ttnn::operations::data_movement::copy::operation_attributes_t;
     using copy_args_t = ttnn::operations::data_movement::copy::tensor_args_t;
 
@@ -29,11 +27,11 @@ void MoveProgramFactory::override_runtime_arguments(
     MoveProgramFactory::cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     using copy_attrs_t = ttnn::operations::data_movement::copy::operation_attributes_t;
     using copy_args_t = ttnn::operations::data_movement::copy::tensor_args_t;
     const Tensor& input = tensor_args.input_tensor;
-    const tensor_return_value_t& output = tensor_return_value;
+    const Tensor& output = tensor_return_value;
 
     const copy_attrs_t copy_attrs{
         operation_attributes.output_mem_config, output.dtype(), operation_attributes.backwards};
