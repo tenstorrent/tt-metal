@@ -270,6 +270,9 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
+  APC-test-count-check:
+    uses: ./.github/workflows/validate-test-count.yaml
+
   ttsim-integration-tests:
     needs: [ build ]
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -417,6 +420,6 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build, build-tt-train"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs, APC-test-count-check"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
