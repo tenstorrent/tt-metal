@@ -1399,6 +1399,231 @@ AdjacencyGraph<NodeId> create_1d_ring_graph(size_t length) {
     return AdjacencyGraph<NodeId>(adj_map);
 }
 
+// Helper function to create a 2D torus graph (wraps around both dimensions)
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_2d_torus_graph(size_t rows, size_t cols) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+
+    auto get_node_id = [cols](size_t row, size_t col) -> size_t { return (row * cols) + col; };
+
+    for (size_t row = 0; row < rows; ++row) {
+        for (size_t col = 0; col < cols; ++col) {
+            size_t node_id = get_node_id(row, col);
+            std::vector<NodeId> neighbors;
+
+            // Add left neighbor (wraps around)
+            size_t left_col = (col == 0) ? cols - 1 : col - 1;
+            neighbors.push_back(static_cast<NodeId>(get_node_id(row, left_col)));
+
+            // Add right neighbor (wraps around)
+            size_t right_col = (col == cols - 1) ? 0 : col + 1;
+            neighbors.push_back(static_cast<NodeId>(get_node_id(row, right_col)));
+
+            // Add top neighbor (wraps around)
+            size_t top_row = (row == 0) ? rows - 1 : row - 1;
+            neighbors.push_back(static_cast<NodeId>(get_node_id(top_row, col)));
+
+            // Add bottom neighbor (wraps around)
+            size_t bottom_row = (row == rows - 1) ? 0 : row + 1;
+            neighbors.push_back(static_cast<NodeId>(get_node_id(bottom_row, col)));
+
+            adj_map[static_cast<NodeId>(node_id)] = neighbors;
+        }
+    }
+
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
+TEST_F(TopologySolverTest, RequiredConstraints_4x8MeshOn8x8Mesh_CornersToCorners) {
+    // Create global graph: 8x8 mesh (64 nodes, no wrap-around, has 4 corners)
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 8);
+
+    // Create target graph: 4x8 mesh without torus connections (32 nodes, has 4 corners)
+    auto target_graph = create_2d_mesh_graph<TestTargetNode>(4, 8);
+
+    // Verify graph sizes
+    EXPECT_EQ(global_graph.get_nodes().size(), 64u);
+    EXPECT_EQ(target_graph.get_nodes().size(), 32u);
+
+    // Verify global graph structure (8x8 mesh - corners have 2, edges have 3, interior have 4)
+    size_t global_corner_count = 0, global_edge_count = 0, global_interior_count = 0;
+    for (const auto& node : global_graph.get_nodes()) {
+        size_t degree = global_graph.get_neighbors(node).size();
+        if (degree == 2) {
+            global_corner_count++;
+        } else if (degree == 3) {
+            global_edge_count++;
+        } else if (degree == 4) {
+            global_interior_count++;
+        }
+    }
+    // 8x8 mesh: 4 corners, (8-2)*2 + (8-2)*2 = 12 + 12 = 24 edge nodes, (8-2)*(8-2) = 36 interior
+    EXPECT_EQ(global_corner_count, 4u);
+    EXPECT_EQ(global_edge_count, 24u);
+    EXPECT_EQ(global_interior_count, 36u);
+
+    // Verify target graph structure (4x8 mesh - corners have 2, edges have 3, interior have 4)
+    size_t target_corner_count = 0, target_edge_count = 0, target_interior_count = 0;
+    for (const auto& node : target_graph.get_nodes()) {
+        size_t degree = target_graph.get_neighbors(node).size();
+        if (degree == 2) {
+            target_corner_count++;
+        } else if (degree == 3) {
+            target_edge_count++;
+        } else if (degree == 4) {
+            target_interior_count++;
+        }
+    }
+    // 4x8 mesh: 4 corners, (4-2)*2 + (8-2)*2 = 4 + 12 = 16 edge nodes, (4-2)*(8-2) = 12 interior
+    EXPECT_EQ(target_corner_count, 4u);
+    EXPECT_EQ(target_edge_count, 16u);
+    EXPECT_EQ(target_interior_count, 12u);
+
+    // Identify corner nodes in target graph (nodes with degree 2)
+    std::map<TestTargetNode, std::string> target_traits;
+
+    // Mark corner nodes in target graph (4x8 mesh corners)
+    for (const auto& node : target_graph.get_nodes()) {
+        if (target_graph.get_neighbors(node).size() == 2) {
+            target_traits[node] = "corner";
+        }
+    }
+
+    // Verify we found the correct number of corners in target graph
+    EXPECT_EQ(target_traits.size(), 4u) << "Target graph should have 4 corners";
+
+    // Define specific allowed positions for corners in global graph
+    // Positions: 00, 03, 04, 07, 70, 73, 74, 77
+    // Node ID = row * 8 + col
+    std::map<TestGlobalNode, std::string> global_traits;
+    global_traits[0] = "corner";   // 00 = row 0, col 0
+    global_traits[3] = "corner";   // 03 = row 0, col 3
+    global_traits[4] = "corner";   // 04 = row 0, col 4
+    global_traits[7] = "corner";   // 07 = row 0, col 7
+    global_traits[56] = "corner";  // 70 = row 7, col 0
+    global_traits[59] = "corner";  // 73 = row 7, col 3
+    global_traits[60] = "corner";  // 74 = row 7, col 4
+    global_traits[63] = "corner";  // 77 = row 7, col 7
+
+    // Verify we have 8 allowed positions
+    EXPECT_EQ(global_traits.size(), 8u) << "Should have 8 allowed corner positions";
+
+    // Create constraints with trait-based required mappings (one-to-many)
+    // This constrains mesh corners to map to ANY of the 8 specified positions
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+
+    // Solve the mapping
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Verify mapping succeeded
+    EXPECT_TRUE(result.success)
+        << "4x8 mesh should fit in 8x8 mesh with corner-to-allowed-positions constraints. Error: "
+        << result.error_message;
+
+    if (result.success) {
+        // Verify all target nodes are mapped
+        EXPECT_EQ(result.target_to_global.size(), 32u) << "All 32 target nodes should be mapped";
+
+        // Verify all corner nodes are mapped to allowed positions
+        for (const auto& [target_node, trait] : target_traits) {
+            if (trait == "corner") {
+                auto it = result.target_to_global.find(target_node);
+                ASSERT_NE(it, result.target_to_global.end()) << "Corner node " << target_node << " should be mapped";
+
+                // Verify the mapped global node is one of the allowed positions
+                TestGlobalNode mapped_global = it->second;
+                auto global_it = global_traits.find(mapped_global);
+                EXPECT_NE(global_it, global_traits.end())
+                    << "Target corner " << target_node
+                    << " should map to one of the allowed positions (00, 03, 04, 07, 70, 73, 74, 77), "
+                    << "but mapped to " << mapped_global;
+                if (global_it != global_traits.end()) {
+                    EXPECT_EQ(global_it->second, "corner") << "Mapped global node should be in allowed positions";
+                }
+            }
+        }
+
+        // Verify all 4 target corners mapped to allowed positions
+        size_t corners_mapped_to_allowed = 0;
+        for (const auto& [target_node, trait] : target_traits) {
+            if (trait == "corner" && result.target_to_global.find(target_node) != result.target_to_global.end()) {
+                TestGlobalNode mapped_global = result.target_to_global.at(target_node);
+                if (global_traits.find(mapped_global) != global_traits.end()) {
+                    corners_mapped_to_allowed++;
+                }
+            }
+        }
+        EXPECT_EQ(corners_mapped_to_allowed, 4u) << "All 4 target corners should map to allowed positions";
+
+        // Verify mapping preserves adjacency
+        for (const auto& [target_node, global_node] : result.target_to_global) {
+            const auto& target_neighbors = target_graph.get_neighbors(target_node);
+            const auto& global_neighbors = global_graph.get_neighbors(global_node);
+
+            for (const auto& target_neighbor : target_neighbors) {
+                auto it = result.target_to_global.find(target_neighbor);
+                if (it != result.target_to_global.end()) {
+                    // Check if the mapped neighbor is adjacent to the mapped global node
+                    bool neighbor_adjacent = std::find(global_neighbors.begin(), global_neighbors.end(), it->second) !=
+                                             global_neighbors.end();
+                    EXPECT_TRUE(neighbor_adjacent)
+                        << "Target node " << target_node << " -> global " << global_node << " should have neighbor "
+                        << target_neighbor << " -> global " << it->second << " as adjacent";
+                }
+            }
+        }
+
+        // Log statistics
+        log_info(
+            tt::LogFabric,
+            "Corner-to-allowed-positions constraints test completed: corners_mapped={}, dfs_calls={}, backtracks={}",
+            corners_mapped_to_allowed,
+            result.stats.dfs_calls,
+            result.stats.backtrack_count);
+    } else {
+        log_error(tt::LogFabric, "Mapping failed: {}", result.error_message);
+    }
+}
+
+// Helper function to create a 2D mesh graph without torus connections (no wrap-around)
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_2d_mesh_no_torus_graph(size_t rows, size_t cols) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+
+    auto get_node_id = [cols](size_t row, size_t col) -> size_t { return (row * cols) + col; };
+
+    for (size_t row = 0; row < rows; ++row) {
+        for (size_t col = 0; col < cols; ++col) {
+            size_t node_id = get_node_id(row, col);
+            std::vector<NodeId> neighbors;
+
+            // Add left neighbor (no wrap-around)
+            if (col > 0) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row, col - 1)));
+            }
+            // Add right neighbor (no wrap-around)
+            if (col < cols - 1) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row, col + 1)));
+            }
+            // Add top neighbor (no wrap-around)
+            if (row > 0) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row - 1, col)));
+            }
+            // Add bottom neighbor (no wrap-around)
+            if (row < rows - 1) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row + 1, col)));
+            }
+
+            adj_map[static_cast<NodeId>(node_id)] = neighbors;
+        }
+    }
+
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
 // Helper function to create a disconnected graph with multiple components
 template <typename NodeId>
 AdjacencyGraph<NodeId> create_disconnected_graph(
