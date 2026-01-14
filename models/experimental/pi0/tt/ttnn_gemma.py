@@ -262,32 +262,6 @@ class GemmaAttentionTTNN:
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
         # OPTIMIZATION: Use bfloat8_b + L1 + HiFi2 for maximum throughput
 
-        '''
-        # Define core grid (8x4 = 32 cores for good parallelism)  
-        grid_size = (8, 8)  
-        core_grid = ttnn.CoreGrid(x=grid_size[0], y=grid_size[1])  
-        
-        def nearest_32(x):
-            return 32 * math.ceil(x / 32)  
-
-        # Calculate shard dimensions  
-        # Height: 544 (spatial dimensions collapsed)  
-        # Width: 2560 // 32 cores = 80 channels per core  
-        shard_height = 544  
-        shard_width = nearest_32(2560 // (grid_size[0] * grid_size[1]))
-
-        # Create width sharded memory config  
-        width_sharded_memory_config = ttnn.create_sharded_memory_config(  
-            shape=[shard_height, shard_width],  
-            core_grid=core_grid,
-            dtype=ttnn.bfloat8_b,  
-            strategy=ttnn.ShardStrategy.WIDTH,  
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,  
-            use_height_and_width_as_shard_shape=True,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
-        '''
-
         def create_width_sharded_memory_config(tensor_shape, grid_size=(8, 4)):  
             """  
             Create a width-sharded memory config for any tensor shape.  
