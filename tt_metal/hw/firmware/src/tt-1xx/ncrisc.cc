@@ -142,7 +142,7 @@ int main(int argc, char* argv[]) {
         setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
 
         brisc_noc_id_and_mode_t brisc_noc_id_and_mode{.brisc_noc_id_and_mode = launch_msg->kernel_config.brisc_noc_id_and_mode.brisc_noc_id_and_mode};
-        if (brisc_noc_id_and_mode.brisc_noc_id_and_mode != prev_brisc_noc_id_and_mode && brisc_noc_id_and_mode.brisc_noc_mode == DM_DEDICATED_NOC) {
+        if (brisc_noc_id_and_mode.brisc_noc_id_and_mode != prev_brisc_noc_id_and_mode.brisc_noc_id_and_mode && brisc_noc_id_and_mode.brisc_noc_mode == DM_DEDICATED_NOC) {
           noc_local_state_init(1 - brisc_noc_id_and_mode.brisc_noc_id);
         }
         prev_brisc_noc_id_and_mode = brisc_noc_id_and_mode;

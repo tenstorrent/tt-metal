@@ -446,15 +446,15 @@ int main() {
                 if (brisc_noc_id_and_mode.brisc_noc_mode == DM_DEDICATED_NOC) {
                     if (prev_brisc_noc_id_and_mode.brisc_noc_mode != brisc_noc_id_and_mode.brisc_noc_mode) {
                         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                        cmd_buf = BRISC_AT_CMD_BUF;
                     }
                     noc_local_state_init(noc_index);
-                    cmd_buf = BRISC_AT_CMD_BUF;
                 } else {
                     if (prev_brisc_noc_id_and_mode.brisc_noc_mode != brisc_noc_id_and_mode.brisc_noc_mode) {
                         dynamic_noc_init();
+                        cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
                     }
                     dynamic_noc_local_state_init();
-                    cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
                 }
             }
             prev_brisc_noc_id_and_mode = brisc_noc_id_and_mode;
@@ -501,7 +501,7 @@ int main() {
             trigger_sync_register_init();
 
             if constexpr (ASSERT_ENABLED) {
-                if (noc_mode == DM_DYNAMIC_NOC) {
+                if (brisc_noc_id_and_mode.brisc_noc_mode == DM_DYNAMIC_NOC) {
                     WAYPOINT("NKFW");
                     // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed
                     // and the NOC interface is in a known idle state for the next kernel.
