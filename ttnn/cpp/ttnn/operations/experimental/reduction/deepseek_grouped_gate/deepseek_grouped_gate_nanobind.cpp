@@ -36,28 +36,7 @@ void bind_deepseek_grouped_gate(nb::module_& mod) {
             Returns:
                 Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores and selected expert indices. The shape of the scores tensor should be [N, B, S, 8]. The shape of the indices tensor should be [N, B, S, 8]. N, B and S can be any value. 8 is the number of experts in the final selected groups.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::deepseek_grouped_gate)& self,
-               const ttnn::Tensor& scores,
-               const ttnn::Tensor& bias,
-               uint32_t n_groups,
-               uint32_t summed_experts_per_group,
-               uint32_t topk_groups,
-               uint32_t n_activated_experts,
-               float route_scale,
-               float epsilon,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(
-                    scores,
-                    bias,
-                    n_groups,
-                    summed_experts_per_group,
-                    topk_groups,
-                    n_activated_experts,
-                    route_scale,
-                    epsilon,
-                    memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("scores").noconvert(),
             nb::arg("bias").noconvert(),
             nb::kw_only(),
