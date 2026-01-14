@@ -69,6 +69,17 @@ void bind_fabric_api(nb::module_& mod) {
         .value("INIT_FABRIC", tt::tt_fabric::FabricManagerMode::INIT_FABRIC)
         .value("TERMINATE_FABRIC", tt::tt_fabric::FabricManagerMode::TERMINATE_FABRIC);
 
+    nb::class_<tt::tt_fabric::FabricRouterConfig>(mod, "FabricRouterConfig", R"(
+        Configuration for router-level parameters.
+        Extensible for future router tuning (buffer counts, VC settings, etc.)
+        )")
+        .def(nb::init<>())
+        .def_rw(
+            "max_packet_payload_size_bytes",
+            &tt::tt_fabric::FabricRouterConfig::max_packet_payload_size_bytes,
+            "Optional override for maximum packet payload size (bytes). If not set, uses architecture and routing mode "
+            "defaults.");
+
     mod.def(
         "set_fabric_config",
         &tt::tt_fabric::SetFabricConfig,
