@@ -27,39 +27,18 @@ tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim, std
         throw std::logic_error("All gather should not be called for a single device case");
     }
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
-        *mesh_device, /* cluster_axis */ cluster_axis);
+    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ std::nullopt);
 
-    if (cluster_axis.has_value()) {
-        // Use cluster_axis overload for 2D mesh
-        return ttnn::experimental::all_gather_async(
-            tensor,
-            dim,
-            cluster_axis.value(),
-            *mesh_device,
-            ttnn::ccl::Topology::Linear,
-            ccl_resources.get_all_gather_semaphore(),
-            /* persistent_output_tensor */ std::nullopt,
-            /* memory_config */ std::nullopt,
-            std::optional<size_t>(num_links),
-            /* subdevice_id */ std::nullopt,
-            /* use_optimal_ccl_for_llama */ false,
-            /* barrier_semaphore */ ccl_resources.get_barrier_semaphore(),
-            /* reverse_order */ false,
-            /* sub_core_grid */ std::nullopt);
-    } else {
-        // Use original overload for 1D mesh or when cluster_axis is not specified
-        return ttnn::experimental::all_gather_async(
-            tensor,
-            dim,
-            ccl_resources.get_all_gather_semaphore(),
-            num_links,
-            /* memory_config */ std::nullopt,
-            ttnn::ccl::Topology::Linear,
-            /* subdevice_id */ std::nullopt,
-            /* use_optimal_ccl_for_llama */ false,
-            /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
-    }
+    return ttnn::experimental::all_gather_async(
+        tensor,
+        dim,
+        ccl_resources.get_all_gather_semaphore(),
+        num_links,
+        /* memory_config */ std::nullopt,
+        ttnn::ccl::Topology::Linear,
+        /* subdevice_id */ std::nullopt,
+        /* use_optimal_ccl_for_llama */ false,
+        /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
 }
 
 tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, std::optional<uint32_t> cluster_axis) {
@@ -79,43 +58,24 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, std::optiona
     auto all_gather_semaphores = ccl_resources.get_all_gather_semaphore();
     auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores();
 
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
-        *mesh_device, /* cluster_axis */ cluster_axis);
+    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ std::nullopt);
 
-    if (cluster_axis.has_value()) {
-        // Use cluster_axis overload for 2D mesh
-        return ttnn::experimental::all_reduce_async(
-            tensor,
-            cluster_axis,
-            *mesh_device,
-            /* barrier_semaphores */ std::nullopt,
-            /* rs_global_semaphores */ std::nullopt,
-            /* ag_global_semaphores */ std::nullopt,
-            ttnn::operations::reduction::ReduceType::Sum,
-            /* memory_config */ std::nullopt,
-            ttnn::ccl::Topology::Linear,
-            std::optional<size_t>(num_links),
-            /* worker_subdevice_id_opt */ std::nullopt);
-    } else {
-        // Use original overload for 1D mesh
-        return ttnn::experimental::all_reduce_async(
-            tensor,
-            num_devices,
-            all_reduce_barrier_semaphores,
-            reduce_scatter_semaphores,
-            all_gather_semaphores,
-            ttnn::operations::reduction::ReduceType::Sum,
-            /* memory_config */ std::nullopt,
-            /* topology */ ttnn::ccl::Topology::Linear,
-            /* num_preferred_links */ num_links);
-    }
+    return ttnn::experimental::all_reduce_async(
+        tensor,
+        num_devices,
+        all_reduce_barrier_semaphores,
+        reduce_scatter_semaphores,
+        all_gather_semaphores,
+        ttnn::operations::reduction::ReduceType::Sum,
+        /* memory_config */ std::nullopt,
+        /* topology */ ttnn::ccl::Topology::Linear,
+        /* num_preferred_links */ num_links);
 }
 
 tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim, std::optional<uint32_t> cluster_axis) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     auto& mesh_device = ttml::autograd::ctx().get_device();
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
-        mesh_device, /* cluster_axis */ cluster_axis);
+    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(mesh_device, /* cluster_axis */ std::nullopt);
     return ttnn::experimental::reduce_scatter_minimal_async(
         tensor,
         /* persistent_output_buffers */ std::nullopt,
@@ -125,9 +85,7 @@ tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim,
         num_links,
         /* memory_config */ std::nullopt,
         /* intermediate_memory_config */ std::nullopt,
-        ttnn::ccl::Topology::Linear,
-        /* subdevice_id */ std::nullopt,
-        /* cluster_axis */ cluster_axis);
+        ttnn::ccl::Topology::Linear);
 }
 
 tt::tt_metal::Tensor ring_shift(
@@ -139,7 +97,8 @@ tt::tt_metal::Tensor ring_shift(
         (cluster_axis.has_value() && cluster_axis.value() < mesh_shape.dims() && cluster_axis.value() >= 0) ||
             (!cluster_axis.has_value() && tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D ||
              tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D_RING),
-        "cluster_axis must be > 0 and < {} for 2D mesh, got {} or nullopt for 1D mesh and linear topology, the actual "
+        "cluster_axis must be either > 0 and < {} for 2D mesh, got {} or nullopt for 1D mesh and linear topology, the "
+        "actual "
         "fabric config is {}",
         mesh_shape.dims() - 1,
         cluster_axis.value(),
