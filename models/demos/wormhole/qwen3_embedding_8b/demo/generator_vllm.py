@@ -279,26 +279,42 @@ class Qwen3ForEmbedding:
         # Initialize model if not already done
         self._initialize_model(batch_size, self.max_seq_len)
 
-        # Pad sequence length to max_seq_len if needed
-        if input_ids.shape[1] < self.max_seq_len:
-            padded_input_ids = torch.zeros([batch_size, self.max_seq_len], dtype=input_ids.dtype)
+        # Get max_prefill_chunk_size to avoid triggering chunked prefill
+        # Chunked prefill requires paged attention, but we're using non-paged attention
+        max_prefill_chunk_size = self.model_args[0].max_prefill_chunk_size
+
+        # Limit padding to max_prefill_chunk_size to avoid chunked prefill
+        # We can't use chunked prefill with non-paged attention KV cache
+        effective_max_seq_len = min(self.max_seq_len, max_prefill_chunk_size)
+
+        # Pad sequence length to effective_max_seq_len if needed (but not beyond max_prefill_chunk_size)
+        if input_ids.shape[1] < effective_max_seq_len:
+            padded_input_ids = torch.zeros([batch_size, effective_max_seq_len], dtype=input_ids.dtype)
             padded_input_ids[:, :seq_len] = input_ids
             input_ids = padded_input_ids
-        elif input_ids.shape[1] > self.max_seq_len:
-            input_ids = input_ids[:, : self.max_seq_len]
-            seq_len = self.max_seq_len
+            seq_len = effective_max_seq_len
+        elif input_ids.shape[1] > effective_max_seq_len:
+            # Truncate if longer than effective_max_seq_len
+            input_ids = input_ids[:, :effective_max_seq_len]
+            seq_len = effective_max_seq_len
+            logger.warning(
+                f"Sequence length {input_ids.shape[1]} exceeds max_prefill_chunk_size "
+                f"({max_prefill_chunk_size}). Truncating to {effective_max_seq_len} to avoid chunked prefill."
+            )
 
         # Prepare attention mask
         if attention_mask is None:
             attention_mask = torch.ones(batch_size, seq_len, dtype=torch.float32)
         else:
-            # Pad attention mask if needed
-            if attention_mask.shape[1] < self.max_seq_len:
-                padded_attention_mask = torch.zeros([batch_size, self.max_seq_len], dtype=attention_mask.dtype)
-                padded_attention_mask[:, :seq_len] = attention_mask
+            # Pad/truncate attention mask to match effective_max_seq_len
+            if attention_mask.shape[1] < effective_max_seq_len:
+                padded_attention_mask = torch.zeros([batch_size, effective_max_seq_len], dtype=attention_mask.dtype)
+                padded_attention_mask[:, : min(seq_len, attention_mask.shape[1])] = attention_mask[
+                    :, : min(seq_len, attention_mask.shape[1])
+                ]
                 attention_mask = padded_attention_mask
-            elif attention_mask.shape[1] > self.max_seq_len:
-                attention_mask = attention_mask[:, : self.max_seq_len]
+            elif attention_mask.shape[1] > effective_max_seq_len:
+                attention_mask = attention_mask[:, :effective_max_seq_len]
 
         # For Qwen3-Embedding, we need to run the model forward pass
         # Since Qwen3-Embedding works through tt-inference-server, we use the
@@ -308,6 +324,10 @@ class Qwen3ForEmbedding:
         # Convert input_ids to proper format
         input_tokens_pt = input_ids.view(batch_size, -1)
 
+        # Don't use chunked prefill - we're using non-paged attention
+        # By limiting sequence length to max_prefill_chunk_size, we avoid triggering chunked prefill
+        page_table = None
+
         # Run prefill to get model output
         # Note: For embedding models, we typically need hidden states before LM head
         # but the current Transformer model returns logits. We'll need to modify
@@ -315,7 +335,7 @@ class Qwen3ForEmbedding:
         # Pass allocated KV cache (even though we don't use it for embeddings)
         logits = self.generator.prefill_forward_text(
             input_tokens_pt,
-            page_table=None,
+            page_table=page_table,
             kv_cache=self._kv_cache,
             prompt_lens=[seq_len] * batch_size,
         )
