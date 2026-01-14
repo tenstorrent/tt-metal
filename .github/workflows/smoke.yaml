@@ -53,7 +53,6 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/download-artifact-with-retry
-        timeout-minutes: 10
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/

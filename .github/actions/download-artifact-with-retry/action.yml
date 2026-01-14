@@ -29,7 +29,13 @@ runs:
       continue-on-error: true
       run: |
         cd "${{ inputs.path }}"
-        for deb in *.deb; do
+        shopt -s nullglob
+        deb_files=(*.deb)
+        if [ ${#deb_files[@]} -eq 0 ]; then
+          echo "::error::No .deb files found in ${{ inputs.path }}"
+          exit 1
+        fi
+        for deb in "${deb_files[@]}"; do
           if dpkg-deb --info "$deb" > /dev/null 2>&1; then
             echo "OK: $deb"
           else
@@ -58,7 +64,13 @@ runs:
       shell: bash
       run: |
         cd "${{ inputs.path }}"
-        for deb in *.deb; do
+        shopt -s nullglob
+        deb_files=(*.deb)
+        if [ ${#deb_files[@]} -eq 0 ]; then
+          echo "::error::No .deb files found after retry"
+          exit 1
+        fi
+        for deb in "${deb_files[@]}"; do
           if dpkg-deb --info "$deb" > /dev/null 2>&1; then
             echo "OK: $deb"
           else
