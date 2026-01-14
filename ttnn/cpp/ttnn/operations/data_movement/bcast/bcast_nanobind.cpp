@@ -54,21 +54,11 @@ void bind_bcast(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::bcast);
     bind_registered_operation(
         mod,
         ttnn::bcast,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               ttnn::BcastOpMath bcast_op,
-               ttnn::BcastOpDim bcast_dim,
-               std::optional<Tensor> output_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, bcast_op, bcast_dim, memory_config, output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_a").noconvert(),
             nb::arg("input_b").noconvert(),
             nb::arg("math_op"),
