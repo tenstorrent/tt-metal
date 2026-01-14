@@ -43,20 +43,11 @@ void bind_mse_loss_function(nb::module_& mod) {
         )doc",
         ttnn::mse_loss.base_name());
 
-    using OperationType = decltype(ttnn::mse_loss);
     bind_registered_operation(
         mod,
         ttnn::mse_loss,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& ref,
-               const Tensor& prediction,
-               const LossReductionMode mode,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> optional_output_tensor) -> ttnn::Tensor {
-                return self(ref, prediction, mode, memory_config, optional_output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_reference"),
             nb::arg("input_prediction"),
             nb::kw_only(),
@@ -85,20 +76,11 @@ void bind_mae_loss_function(nb::module_& mod) {
         )doc",
         ttnn::l1_loss.base_name());
 
-    using OperationType = decltype(ttnn::l1_loss);
     bind_registered_operation(
         mod,
         ttnn::l1_loss,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& ref,
-               const Tensor& prediction,
-               const LossReductionMode mode,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> optional_output_tensor) -> ttnn::Tensor {
-                return self(ref, prediction, mode, memory_config, optional_output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_reference"),
             nb::arg("input_prediction"),
             nb::kw_only(),
