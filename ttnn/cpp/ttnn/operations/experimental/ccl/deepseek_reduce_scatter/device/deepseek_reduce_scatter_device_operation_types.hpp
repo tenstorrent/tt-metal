@@ -51,11 +51,4 @@ struct tensor_args_t {
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
-// Common validation function
-void deepseek_reduce_scatter_common_validates(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    const ttnn::MemoryConfig& output_memory_config,
-    uint32_t num_links,
-    uint32_t ring_size);
-
 }  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail

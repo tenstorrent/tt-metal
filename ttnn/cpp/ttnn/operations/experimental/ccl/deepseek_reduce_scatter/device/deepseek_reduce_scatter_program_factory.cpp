@@ -332,26 +332,29 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     auto reduce_kernel_id =
         tt::tt_metal::CreateKernel(program, reduce_kernel_path, worker_core_range_set, reduce_kernel_config);
 
-    // runtime args
-    const uint32_t slice_num_pages = input_tensors.at(0).buffer()->num_pages();
+    // NOTE: kernels work in sets of 2 pages
     const uint32_t total_num_workers_per_device = num_directions_per_link * num_links;
+
+    const uint32_t num_slice_pages = input_tensors.at(0).buffer()->num_pages();
+    const uint32_t num_slice_page_sets = num_slice_pages / tile_granularity;
+    const uint32_t num_slice_page_sets_per_worker = tt::div_up(num_slice_page_sets, total_num_workers_per_device);
+    const uint32_t num_tiles_per_worker = num_slice_page_sets_per_worker * tile_granularity;
+
+    // runtime args
     auto worker_core_iter = worker_core_range_set.ranges().cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t direction = 0; direction < num_directions_per_link; direction++) {
             auto core = *((worker_core_iter++)->begin());
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
-            // TODO: (GR) will break for certain tensors since processing in batches of 2 tiles (scatter_write)
-            uint32_t tiles_per_worker = tt::div_up(slice_num_pages, total_num_workers_per_device);
-            uint32_t start_tiles_read = tiles_per_worker * ((link * num_directions_per_link) + direction);
-            uint32_t start_tiles_to_read = tiles_per_worker * ((link * num_directions_per_link) + direction + 1);
-            start_tiles_to_read = std::min(start_tiles_to_read, slice_num_pages);
             /*
              * NOTE
-             * - need to create kernels even if worker not processing tiles
-             * - required for pre and post op barrier/sync
+             * - need to create kernels even if worker not processing tiles, required for pre and post op barrier/sync
              * - min so that we don't try to process non-existent tiles on that dummy worker
              */
+            uint32_t start_tiles_read = num_tiles_per_worker * ((link * num_directions_per_link) + direction);
+            uint32_t start_tiles_to_read = num_tiles_per_worker * ((link * num_directions_per_link) + direction + 1);
+            start_tiles_to_read = std::min(start_tiles_to_read, num_slice_pages);
 
             // reader
             std::vector<uint32_t> reader_rt_args = {
