@@ -52,63 +52,7 @@ void bind_rs_matmul(nb::module_& mod) {
             >>> all_gathered_mm_in, mm_out = ttnn.all_gather_matmul(tensor, weight_tensor, dim=0, (0, 0))
 
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::llama_rs_matmul)& self,
-               const ttnn::Tensor& input_tensor,               // mm0 used
-               const ttnn::Tensor& weight_tensor,              // mm1 used
-               ttnn::Tensor& intermediate_packet_buffer,       // rs2
-               int32_t dim,                                    // rs3
-               const GlobalSemaphore& cross_device_semaphore,  // rs4
-               const uint32_t cluster_axis,                    // rs 5
-               const MeshDevice& mesh_device,                  // rs 6
-               const uint32_t num_links,                       // rs 7 default 1
-               const tt::tt_metal::SubDeviceId& subdevice_id,
-               const std::optional<const ttnn::Tensor>& second_weight_tensor,
-               const std::optional<const ttnn::Tensor>& rs_tensor,  // rs1
-               tt::tt_fabric::Topology topology,
-               const std::optional<ttnn::MemoryConfig>& memory_config_rs,  // rs 8 default std::nullopt
-               const std::optional<ttnn::MemoryConfig>& memory_config_mm,  // mm4 used but default std::nullopt
-               const std::optional<const ttnn::DeviceComputeKernelConfig>&
-                   compute_kernel_config,                                   // mm8 used but default std::nullopt
-               const std::optional<const GlobalCircularBuffer>& global_cb,  // mm12 used but default std::nullopt
-               std::optional<const ttnn::CoreGrid>& core_grid,              // mm9 may use but default std::nullopt
-               const bool transpose_a,                                      // mm2 set false
-               const bool transpose_b,                                      // mm3 set false
-               const std::optional<const DataType>& dtype,                  // mm5 set false
-               const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,  // mm6 std::nullopt
-               const std::optional<const std::string>& activation,                                  // mm7 set false
-               const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
-               std::optional<Tensor>& optional_output_tensor,                                       // mm11 std::nullopt
-               bool use_noc1_only
-
-               ) -> std::vector<ttnn::Tensor> {
-                return self(
-                    input_tensor,
-                    weight_tensor,
-                    intermediate_packet_buffer,
-                    dim,
-                    cross_device_semaphore,
-                    cluster_axis,
-                    mesh_device,
-                    num_links,
-                    subdevice_id,
-                    second_weight_tensor,
-                    rs_tensor,
-                    topology,
-                    memory_config_rs,
-                    memory_config_mm,
-                    compute_kernel_config,
-                    global_cb,
-                    core_grid,
-                    transpose_a,
-                    transpose_b,
-                    dtype,
-                    program_config,
-                    activation,
-                    output_tile,
-                    optional_output_tensor,
-                    use_noc1_only);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
             nb::arg("intermediate_packet_buffer"),
