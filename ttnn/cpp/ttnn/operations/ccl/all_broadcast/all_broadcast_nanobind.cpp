@@ -48,11 +48,21 @@ void bind_all_broadcast(nb::module_& mod) {
             >>> # output is a list of 8 tensors, each with shape [1, 1, 32, 256]
     )doc";
 
+    using OperationType = decltype(ttnn::all_broadcast);
     ttnn::bind_registered_operation(
         mod,
         ttnn::all_broadcast,
         doc,
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<uint32_t> cluster_axis,
+               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<uint32_t> num_links,
+               const std::optional<ttnn::ccl::Topology> topology) {
+                return self(input_tensor, cluster_axis, subdevice_id, memory_config, num_links, topology);
+            },
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
