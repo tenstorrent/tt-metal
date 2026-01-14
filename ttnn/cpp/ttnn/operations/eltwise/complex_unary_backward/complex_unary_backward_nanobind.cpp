@@ -55,17 +55,8 @@ void bind_complex_unary_backward(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const complex_unary_backward_operation_t& self,
-               const ComplexTensor& grad_tensor,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config")});
+        ttnn::nanobind_arguments_t{
+            nb::arg("grad_tensor"), nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config")});
 }
 
 template <typename complex_unary_backward_operation_t>
@@ -104,17 +95,8 @@ void bind_complex_unary_backward_tensor(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const complex_unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config")});
+        ttnn::nanobind_arguments_t{
+            nb::arg("grad_tensor"), nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config")});
 }
 
 }  // namespace
