@@ -19,14 +19,15 @@ std::vector<Tensor> AddcmulBackwardOperation::invoke(
     const Tensor& tensor1,
     const Tensor& tensor2,
     float value,
-    const MemoryConfig& output_mem_config) {
+    const std::optional<MemoryConfig>& output_mem_config) {
+    auto mem_config = output_mem_config.value_or(grad.memory_config());
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor grad_a = ttnn::multiply(
-        ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
+    Tensor grad_a =
+        ttnn::multiply(ttnn::multiply(grad, tensor2, std::nullopt, mem_config), value, std::nullopt, mem_config);
     grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = ttnn::multiply(
-        ttnn::multiply(grad, tensor1, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
+    Tensor grad_b =
+        ttnn::multiply(ttnn::multiply(grad, tensor1, std::nullopt, mem_config), value, std::nullopt, mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
@@ -37,33 +38,31 @@ std::vector<Tensor> AddcdivBackwardOperation::invoke(
     const Tensor& tensor1,
     const Tensor& tensor2,
     float value,
-    const MemoryConfig& output_mem_config) {
+    const std::optional<MemoryConfig>& output_mem_config) {
+    auto mem_config = output_mem_config.value_or(grad.memory_config());
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
-    Tensor grad_a = ttnn::multiply(
-        ttnn::multiply(grad, value, std::nullopt, output_mem_config), ttnn::reciprocal(tensor2, output_mem_config));
+    Tensor grad_a =
+        ttnn::multiply(ttnn::multiply(grad, value, std::nullopt, mem_config), ttnn::reciprocal(tensor2, mem_config));
     grad_tensor.emplace_back(where(
-        ttnn::eqz(tensor2, output_mem_config),
-        where(ttnn::eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
+        ttnn::eqz(tensor2, mem_config),
+        where(ttnn::eqz(grad, mem_config), t_nan, t_inf, mem_config),
         grad_a,
-        output_mem_config));
+        mem_config));
     Tensor tmp = ttnn::multiply(
-        ttnn::multiply(ttnn::neg(grad, output_mem_config), value, std::nullopt, output_mem_config),
+        ttnn::multiply(ttnn::neg(grad, mem_config), value, std::nullopt, mem_config),
         tensor1,
         std::nullopt,
-        output_mem_config);
-    Tensor grad_b = ttnn::multiply(
-        tmp,
-        ttnn::reciprocal(ttnn::square(tensor2, output_mem_config), output_mem_config),
-        std::nullopt,
-        output_mem_config);
+        mem_config);
+    Tensor grad_b =
+        ttnn::multiply(tmp, ttnn::reciprocal(ttnn::square(tensor2, mem_config), mem_config), std::nullopt, mem_config);
     grad_tensor.emplace_back(where(
-        ttnn::eqz(tensor2, output_mem_config),
-        where(ttnn::eqz(grad, output_mem_config), t_nan, -t_inf, output_mem_config),
+        ttnn::eqz(tensor2, mem_config),
+        where(ttnn::eqz(grad, mem_config), t_nan, -t_inf, mem_config),
         grad_b,
-        output_mem_config));
+        mem_config));
     return grad_tensor;
 }
 

@@ -20,7 +20,7 @@ struct AddcmulBackwardOperation {
         const Tensor& tensor1,
         const Tensor& tensor2,
         float value,
-        const MemoryConfig& output_mem_config);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct AddcdivBackwardOperation {
@@ -30,7 +30,7 @@ struct AddcdivBackwardOperation {
         const Tensor& tensor1,
         const Tensor& tensor2,
         float value,
-        const MemoryConfig& output_mem_config);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct WhereBackwardOperation {
