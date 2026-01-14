@@ -34,47 +34,15 @@ def run_reduce_scatter_impl(
     verify_output=True,
     ones_tensor=False,
 ):
-    use_sub_devices = False
     torch.manual_seed(0)
 
-    tile = (32, 32)
-
-    ##### Fabric setup #####
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-
-    if use_sub_devices:
-        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-
-    # create global semaphore handles
-    ccl_semaphore_handles = [create_global_semaphores(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
-
-    barrier_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
-
-    ### Create persistent output buffers
-    logger.info("Creating persistent buffers")
-    intermediate_shape = rs_input_shape[:]
-    if rs_topology == ttnn.Topology.Linear:
-        # Line RS requires double-sized input for forward/backward
-        intermediate_shape.insert(0, 2)
 
     rs_output_shape = rs_input_shape[:]
     rs_output_shape[dim] //= num_devices
 
-    ##### All gather input setup #####
     logger.info(f"Reduce scatter shape: {rs_input_shape}")
     logger.info(f"Reduce scatter dim: {dim}")
     logger.info(f"input mem config: {mem_config_input}")
@@ -99,7 +67,7 @@ def run_reduce_scatter_impl(
             device=mesh_device,
             layout=layout,
             dtype=rs_input_dtype,
-            memory_config=mem_config_input,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
                 ttnn.MeshMapperConfig(
@@ -108,7 +76,11 @@ def run_reduce_scatter_impl(
             ),
         )
 
-        tt_input_tensor_mesh_list.append(input_tensor_mesh)
+        split_tensors = ttnn.split(input_tensor_mesh, split_size=int(rs_input_shape[-1] / num_devices), dim=dim)
+        for i in range(num_devices):
+            split_tensors[i] = ttnn.interleaved_to_sharded(split_tensors[i], mem_config_input)
+
+        tt_input_tensor_mesh_list.append(split_tensors)
 
     ##### Perform torch ops #####
     torch_reduce_scatter_output_list = []
@@ -126,7 +98,6 @@ def run_reduce_scatter_impl(
             output_memory_config=mem_config_rs,
             num_links=num_links,
             cluster_axis=cluster_axis,
-            sub_device_id=worker_sub_device_id,
         )
 
         return tt_reduce_scatter_output_tensor
@@ -187,8 +158,6 @@ def run_reduce_scatter_impl(
             assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
-    if use_sub_devices:
-        mesh_device.clear_loaded_sub_device_manager()
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -282,7 +251,7 @@ def test_reduce_scatter_async(
     rs_topology,
 ):
     shard_shape = [1, 1, 32, 128]
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))])
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0))])
     nd_shard_spec = ttnn.NdShardSpec(
         ttnn.Shape(shard_shape), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
     )

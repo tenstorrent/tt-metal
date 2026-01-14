@@ -72,61 +72,50 @@ void kernel_main() {
     constexpr uint32_t intermediate_slice_0_ct_val = initial_ct_idx;
     constexpr auto intermediate_slice_0_tensor_args = TensorAccessorArgs<intermediate_slice_0_ct_val>();
     constexpr uint32_t intermediate_slice_0_ct_offset = intermediate_slice_0_tensor_args.num_compile_time_args();
-    const TensorAccessor intermediate_slice_0_tensor_accesor =
+    const auto intermediate_slice_0_tensor_accesor =
         TensorAccessor(intermediate_slice_0_tensor_args, intermediate_slice_0_address, page_size);
 
     constexpr uint32_t intermediate_slice_1_ct_val = intermediate_slice_0_ct_val + intermediate_slice_0_ct_offset;
     constexpr auto intermediate_slice_1_tensor_args = TensorAccessorArgs<intermediate_slice_1_ct_val>();
     constexpr uint32_t intermediate_slice_1_ct_offset = intermediate_slice_1_tensor_args.num_compile_time_args();
-    const TensorAccessor intermediate_slice_1_tensor_accesor =
+    const auto intermediate_slice_1_tensor_accesor =
         TensorAccessor(intermediate_slice_1_tensor_args, intermediate_slice_1_address, page_size);
 
     constexpr uint32_t intermediate_slice_2_ct_val = intermediate_slice_1_ct_val + intermediate_slice_1_ct_offset;
     constexpr auto intermediate_slice_2_tensor_args = TensorAccessorArgs<intermediate_slice_2_ct_val>();
     constexpr uint32_t intermediate_slice_2_ct_offset = intermediate_slice_2_tensor_args.num_compile_time_args();
-    const TensorAccessor intermediate_slice_2_tensor_accesor =
+    const auto intermediate_slice_2_tensor_accesor =
         TensorAccessor(intermediate_slice_2_tensor_args, intermediate_slice_2_address, page_size);
 
     constexpr uint32_t intermediate_slice_3_ct_val = intermediate_slice_2_ct_val + intermediate_slice_2_ct_offset;
     constexpr auto intermediate_slice_3_tensor_args = TensorAccessorArgs<intermediate_slice_3_ct_val>();
     constexpr uint32_t intermediate_slice_3_ct_offset = intermediate_slice_3_tensor_args.num_compile_time_args();
-    const TensorAccessor intermediate_slice_3_tensor_accesor =
+    const auto intermediate_slice_3_tensor_accesor =
         TensorAccessor(intermediate_slice_3_tensor_args, intermediate_slice_3_address, page_size);
 
     constexpr uint32_t intermediate_slice_4_ct_val = intermediate_slice_3_ct_val + intermediate_slice_3_ct_offset;
     constexpr auto intermediate_slice_4_tensor_args = TensorAccessorArgs<intermediate_slice_4_ct_val>();
     constexpr uint32_t intermediate_slice_4_ct_offset = intermediate_slice_4_tensor_args.num_compile_time_args();
-    const TensorAccessor intermediate_slice_4_tensor_accesor =
+    const auto intermediate_slice_4_tensor_accesor =
         TensorAccessor(intermediate_slice_4_tensor_args, intermediate_slice_4_address, page_size);
 
     constexpr uint32_t intermediate_slice_5_ct_val = intermediate_slice_4_ct_val + intermediate_slice_4_ct_offset;
     constexpr auto intermediate_slice_5_tensor_args = TensorAccessorArgs<intermediate_slice_5_ct_val>();
     constexpr uint32_t intermediate_slice_5_ct_offset = intermediate_slice_5_tensor_args.num_compile_time_args();
-    const TensorAccessor intermediate_slice_5_tensor_accesor =
+    const auto intermediate_slice_5_tensor_accesor =
         TensorAccessor(intermediate_slice_5_tensor_args, intermediate_slice_5_address, page_size);
 
     constexpr uint32_t intermediate_slice_6_ct_val = intermediate_slice_5_ct_val + intermediate_slice_5_ct_offset;
     constexpr auto intermediate_slice_6_tensor_args = TensorAccessorArgs<intermediate_slice_6_ct_val>();
     constexpr uint32_t intermediate_slice_6_ct_offset = intermediate_slice_6_tensor_args.num_compile_time_args();
-    const TensorAccessor intermediate_slice_6_tensor_accesor =
+    const auto intermediate_slice_6_tensor_accesor =
         TensorAccessor(intermediate_slice_6_tensor_args, intermediate_slice_6_address, page_size);
 
     constexpr uint32_t intermediate_slice_7_ct_val = intermediate_slice_6_ct_val + intermediate_slice_6_ct_offset;
     constexpr auto intermediate_slice_7_tensor_args = TensorAccessorArgs<intermediate_slice_7_ct_val>();
     constexpr uint32_t intermediate_slice_7_ct_offset = intermediate_slice_7_tensor_args.num_compile_time_args();
-    const TensorAccessor intermediate_slice_7_tensor_accesor =
+    const auto intermediate_slice_7_tensor_accesor =
         TensorAccessor(intermediate_slice_7_tensor_args, intermediate_slice_7_address, page_size);
-
-    // NOTE: hardcoded for ring size of 8
-    const TensorAccessor intermediate_slice_tensor_accessors[8] =
-    { intermediate_slice_0_tensor_accesor,
-      intermediate_slice_1_tensor_accesor,
-      intermediate_slice_2_tensor_accesor,
-      intermediate_slice_3_tensor_accesor,
-      intermediate_slice_4_tensor_accesor,
-      intermediate_slice_5_tensor_accesor,
-      intermediate_slice_6_tensor_accesor,
-      intermediate_slice_7_tensor_accesor }
 
     // output TensorAccessor
     constexpr uint32_t output_ct_val = intermediate_slice_7_ct_val + intermediate_slice_7_ct_offset;
@@ -195,24 +184,59 @@ void kernel_main() {
         }
 
         uint32_t reduced_cb_id = i == 0 ? input_slice_cb_ids[actual_slice_idx] : compute_cb_id;
-        TensorAccessor intermediate_slice_tensor_accessor = intermediate_slice_tensor_accessors[actual_slice_idx];
 
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;
         if (i < (ring_size - 1)) {
             while (tiles_read < tiles_to_read) {
-                cb_wait_front(reduced_cb_id, tile_granularity);
-                size_t intermediate_slice_l1_read_addr = get_read_ptr(reduced_cb_id);
-
-                auto intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                    intermediate_slice_tensor_accessor, tiles_read, 0);
-                tiles_read++;
-
-                auto intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                    intermediate_slice_tensor_accessor, tiles_read, 0);
-                tiles_read++;
+                uint64_t intermediate_slice_noc_address_one;
+                uint64_t intermediate_slice_noc_address_two;
+                switch (actual_slice_idx) {
+                    case 0:
+                        intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_0_tensor_accesor, tiles_read++, 0);
+                        intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_0_tensor_accesor, tiles_read++, 0);
+                    case 1:
+                        intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_1_tensor_accesor, tiles_read++, 0);
+                        intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_1_tensor_accesor, tiles_read++, 0);
+                    case 2:
+                        intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_2_tensor_accesor, tiles_read++, 0);
+                        intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_2_tensor_accesor, tiles_read++, 0);
+                    case 3:
+                        intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_3_tensor_accesor, tiles_read++, 0);
+                        intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_3_tensor_accesor, tiles_read++, 0);
+                    case 4:
+                        intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_4_tensor_accesor, tiles_read++, 0);
+                        intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_4_tensor_accesor, tiles_read++, 0);
+                    case 5:
+                        intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_5_tensor_accesor, tiles_read++, 0);
+                        intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_5_tensor_accesor, tiles_read++, 0);
+                    case 6:
+                        intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_6_tensor_accesor, tiles_read++, 0);
+                        intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_6_tensor_accesor, tiles_read++, 0);
+                    case 7:
+                        intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_7_tensor_accesor, tiles_read++, 0);
+                        intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_slice_7_tensor_accesor, tiles_read++, 0);
+                }
 
                 // op hardcoded for each worker handling even multiple of 2 tiles, so always use scatter_write
+                cb_wait_front(reduced_cb_id, tile_granularity);
+                size_t intermediate_slice_l1_read_addr = get_read_ptr(reduced_cb_id);
                 fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                     fabric_connection,
                     unicast_scatter_write_route_id,

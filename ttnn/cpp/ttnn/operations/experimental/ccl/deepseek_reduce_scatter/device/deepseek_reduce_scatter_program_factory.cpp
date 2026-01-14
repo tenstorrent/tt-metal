@@ -64,8 +64,12 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     // choose cores
     // TODO: (GR) need to add an extra dummy core when moving to 4 links and the proper shape
     const NdShardSpec& input_nd_shard_spec = input_tensors.at(0).nd_shard_spec().value();
-    CoreRangeSet worker_core_range_set = input_nd_shard_spec.grid;
-    std::vector<CoreCoord> worker_cores = corerange_to_cores(worker_core_range_set);
+    std::vector<CoreCoord> worker_cores = corerange_to_cores(input_nd_shard_spec.grid);
+    std::vector<CoreRange> worker_core_ranges;
+    for (const CoreCoord& worker_core : worker_cores) {
+        worker_core_ranges.emplace_back(worker_core);
+    }
+    CoreRangeSet worker_core_range_set = CoreRangeSet(worker_core_ranges);
 
     // L1 Scratch CB Creation
     const uint32_t page_size = input_tensors.at(0).buffer()->page_size();
@@ -551,7 +555,7 @@ DeepseekReduceScatterMeshWorkloadFactory::create_at(
     const std::optional<MeshCoordinate> backward_coordinate = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
         input_tensors.at(0), mesh_coordinate, -1, tt::tt_fabric::Topology::Ring, cluster_axis);
     TT_FATAL(
-        forward_coordinate.has_value() || backward_coordinate.has_value(),
+        forward_coordinate.has_value() && backward_coordinate.has_value(),
         "DEBUG: forward_coord or backward_coord is null");
 
     uint32_t device_index =
