@@ -89,10 +89,18 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt_metal::Program program = tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+
     auto input0_dram_buffer = CreateBuffer(dram_config);
     const uint32_t in0_dram_addr = input0_dram_buffer->address();
     auto input1_dram_buffer = CreateBuffer(dram_config);
@@ -103,21 +111,21 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     tt_metal::CircularBufferConfig l1_input0_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{in0_cb_index, tt::DataFormat::Int8}})
             .set_page_size(in0_cb_index, byte_size);
-    tt_metal::CreateCircularBuffer(program, core, l1_input0_cb_config);
+    tt_metal::CreateCircularBuffer(program_, core, l1_input0_cb_config);
 
 
     tt_metal::CircularBufferConfig l1_input1_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{in1_cb_index, tt::DataFormat::Int8}})
             .set_page_size(in1_cb_index, byte_size);
-    tt_metal::CreateCircularBuffer(program, core, l1_input1_cb_config);
+    tt_metal::CreateCircularBuffer(program_, core, l1_input1_cb_config);
 
     tt_metal::CircularBufferConfig l1_output_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{out_cb_index, tt::DataFormat::Int8}})
             .set_page_size(out_cb_index, byte_size);
-    tt_metal::CreateCircularBuffer(program, core, l1_output_cb_config);
+    tt_metal::CreateCircularBuffer(program_, core, l1_output_cb_config);
 
     auto reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary.cpp",
         core,
         tt_metal::DataMovementConfig{
@@ -126,7 +134,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
             .compile_args = {in0_cb_index, in1_cb_index}});
 
     auto writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
@@ -135,7 +143,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
             .compile_args = {out_cb_index}});
 
     tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/single_tile_compute.cpp",
         core,
         tt_metal::ComputeConfig{.fp32_dest_acc_en = true, .compile_args = {in0_cb_index, in1_cb_index, out_cb_index}});
@@ -182,7 +190,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     tt_metal::detail::WriteToBuffer(input1_dram_buffer, input_1);
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         reader_kernel,
         core,
         {
@@ -193,7 +201,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
             (uint32_t)1,  // num_tiles
         });
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         writer_kernel,
         core,
         {
@@ -202,7 +210,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
             (uint32_t)1,  // num_tiles
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
