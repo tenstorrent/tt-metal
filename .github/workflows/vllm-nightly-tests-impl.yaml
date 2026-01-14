@@ -84,6 +84,19 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
+              "name": "[BH-QB-GE] Llama-3.1-8B-Instruct",
+              "model": "meta-llama/Llama-3.1-8B-Instruct",
+              "server-timeout": 20,
+              "benchmark-timeout": 5,
+              "runner-label": "BH-QB-GE",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-llama-text-ver": "tt_transformers",
+              "override-tt-config": "{\"data_parallel\": 1}",
+              "multimodal": false,
+              "owner_id": "U08GELBB1AP"
+            },
+            {
               "name": "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
