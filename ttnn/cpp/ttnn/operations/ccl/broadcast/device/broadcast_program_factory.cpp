@@ -25,7 +25,7 @@ BroadcastProgramFactory::cached_mesh_workload_t BroadcastProgramFactory::create_
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -59,7 +59,7 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& coord,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    Tensor& tensor_return_value,
     const tt::tt_metal::GlobalSemaphore& semaphore,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -323,7 +323,7 @@ void BroadcastProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
