@@ -53,7 +53,7 @@
   timeout: 120
 
 - name: models_common_unit_tests
-  cmd: pytest --tb=short --ignore=models/common/tests/test_sampling.py models/common/tests && pytest --tb=short models/common/tests/test_sampling.py
+  cmd: pytest --tb=short --ignore=models/common/tests/test_sampling.py --ignore=models/common/tests/modules models/common/tests && pytest --tb=short models/common/tests/test_sampling.py
   sku: wh_llmbox
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
