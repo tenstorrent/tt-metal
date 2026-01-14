@@ -11,7 +11,6 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
-#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
@@ -83,11 +82,11 @@ struct TopologyMappingResult {
  * - Optional pinning constraints are satisfied
  *
  * This function does NOT require MPI or any tt-metal runtime context. It operates purely
- * on the provided adjacency graphs and rank mappings.
+ * on the provided adjacency maps and rank mappings.
  *
  * @param mesh_id              The mesh ID being mapped
- * @param logical_adjacency    AdjacencyGraph for logical topology
- * @param physical_adjacency   AdjacencyGraph for physical topology
+ * @param logical_adjacency    Map from FabricNodeId to list of neighbor FabricNodeIds
+ * @param physical_adjacency   Map from AsicID to list of neighbor AsicIDs
  * @param node_to_host_rank    Map from FabricNodeId to the host rank that owns it
  * @param asic_to_host_rank    Map from AsicID to the host rank that owns it
  * @param config               Optional configuration (strict mode, pinning constraints)
@@ -96,40 +95,64 @@ struct TopologyMappingResult {
  *
  * @note If the mapping fails (no valid assignment exists), success will be false
  *       and error_message will contain diagnostic information.
+ *
+ * @example
+ * @code
+ * LogicalAdjacencyMap logical_adj;
+ * PhysicalAdjacencyMap physical_adj;
+ * std::map<FabricNodeId, MeshHostRankId> node_to_rank;
+ * std::map<AsicID, MeshHostRankId> asic_to_rank;
+ *
+ * // Populate adjacency maps from your topology data...
+ *
+ * TopologyMappingConfig config;
+ * config.strict_mode = true;  // Validate channel counts
+ *
+ * auto result = map_mesh_to_physical(
+ *     MeshId{0}, logical_adj, physical_adj, node_to_rank, asic_to_rank, config);
+ *
+ * if (result.success) {
+ *     for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+ *         // Use the mapping...
+ *     }
+ * } else {
+ *     std::cerr << "Mapping failed: " << result.error_message << std::endl;
+ * }
+ * @endcode
  */
 TopologyMappingResult map_mesh_to_physical(
     MeshId mesh_id,
-    const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_adjacency,
-    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_adjacency,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
     const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
     const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
     const TopologyMappingConfig& config = {});
 
 /**
- * @brief Build logical adjacency graphs from mesh graph connectivity
+ * @brief Build logical adjacency maps from mesh graph connectivity
  *
- * Creates adjacency graphs for each mesh based on the logical connectivity defined in the mesh graph.
+ * Creates adjacency maps for each mesh based on the logical connectivity defined in the mesh graph.
  * For each fabric node in a mesh, this function identifies its logical neighbors by examining
- * the intra-mesh connectivity from the mesh graph and creates an AdjacencyGraph.
+ * the intra-mesh connectivity from the mesh graph and creates a mapping of FabricNodeId to
+ * its vector of adjacent FabricNodeIds.
  *
  * @param mesh_graph Reference to the mesh graph object containing fabric topology
- * @return std::map<MeshId, AdjacencyGraph<FabricNodeId>> Map from mesh ID to logical adjacency graph
+ * @return std::map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
  */
-std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(
-    const ::tt::tt_fabric::MeshGraph& mesh_graph);
+std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt_fabric::MeshGraph& mesh_graph);
 
 /**
- * @brief Build physical adjacency graphs from system descriptor connectivity
+ * @brief Build physical adjacency maps from system descriptor connectivity
  *
- * Creates adjacency graphs for each mesh based on the physical connectivity defined in the physical system
+ * Creates adjacency maps for each mesh based on the physical connectivity defined in the physical system
  * descriptor. For each ASIC in a mesh, this function identifies its physical neighbors by examining the ASIC
  * neighbors from the physical system descriptor and filters them to only include neighbors that are also part of
- * the same mesh. The resulting graph contains ASIC IDs and their adjacent ASIC IDs within the mesh.
+ * the same mesh. The resulting map contains ASIC IDs mapped to their vectors of adjacent ASIC IDs within the mesh.
  *
  * @param cluster_type The type of the cluster
  * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
  * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
- * @return std::map<MeshId, AdjacencyGraph<AsicID>> Map from mesh ID to physical adjacency graph
+ * @return std::map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
  */
 std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
     tt::tt_metal::ClusterType cluster_type,

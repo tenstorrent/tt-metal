@@ -206,7 +206,7 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     // Build adjacency graphs using topology solver
     auto adjacency_graphs =
-        ::tt::tt_fabric::build_adjacency_graph_physical(physical_system_descriptor, asic_id_to_mesh_rank);
+        ::tt::tt_fabric::build_adjacency_graph_physical(cluster_type, physical_system_descriptor, asic_id_to_mesh_rank);
 
     // Convert from AdjacencyGraph format to map format
     std::map<MeshId, PhysicalAdjacencyMap> result;
