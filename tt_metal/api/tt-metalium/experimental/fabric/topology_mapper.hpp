@@ -84,22 +84,15 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding);
 
-    // Construct a TopologyMapper with fixed ASIC-position pinnings (tray, location).
+    // Construct a TopologyMapper with fixed ASIC-position pinnings.
+    // Each pinning maps a FabricNodeId to one or more ASIC positions (tray, location).
+    // For one-to-one pinnings, use a vector with a single position.
     // These pins must reference devices on the current host; if infeasible, construction will throw with details.
     TopologyMapper(
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
-        const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings);
-
-    // Construct a TopologyMapper with fixed ASIC-position pinnings and one-to-many pinnings.
-    // One-to-many pinnings allow a fabric node to be pinned to multiple ASIC positions.
-    TopologyMapper(
-        const MeshGraph& mesh_graph,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const LocalMeshBinding& local_mesh_binding,
-        const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings,
-        const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_one_to_many_pinnings);
+        const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_asic_position_pinnings);
 
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
     // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
@@ -400,8 +393,7 @@ private:
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
-    const std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings_;
-    const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_one_to_many_pinnings_;
+    const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings_;
     bool generate_mapping_locally_ = false;
 
     // Host-rank metadata for fabric-node-based queries (independent of MeshGraph's storage)

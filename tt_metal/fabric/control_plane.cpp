@@ -84,15 +84,15 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> get_ethernet_cores_grouped_by
 // o o o o
 // o o o o
 // o o o * < Bottom right corner pinned with *
-std::vector<std::pair<AsicPosition, FabricNodeId>> get_galaxy_fixed_asic_position_pinnings(size_t board_size) {
-    std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings(
+    size_t board_size) {
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
     // Top left corner: index 0
-    fixed_asic_position_pinnings.push_back(
-        {AsicPosition{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}}, FabricNodeId(MeshId{0}, 0)});
+    fixed_asic_position_pinnings.emplace_back(
+        FabricNodeId(MeshId{0}, 0), std::vector<AsicPosition>{AsicPosition{1, 1}});
     // Bottom right corner: last device index
-    fixed_asic_position_pinnings.push_back(
-        {AsicPosition{tt::tt_metal::TrayID{4}, tt::tt_metal::ASICLocation{1}},
-         FabricNodeId(MeshId{0}, board_size - 1)});
+    fixed_asic_position_pinnings.emplace_back(
+        FabricNodeId(MeshId{0}, board_size - 1), std::vector<AsicPosition>{AsicPosition{4, 1}});
     return fixed_asic_position_pinnings;
 }
 
@@ -456,7 +456,8 @@ void ControlPlane::init_control_plane(
             logical_mesh_chip_id_to_physical_chip_id_mapping->get());
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
-        std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
+        // FIXME: Change this
+        std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
         // TODO: Remove this when preferred pinnings are supported
         // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
@@ -549,7 +550,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
-    std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
     // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
     // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
@@ -561,6 +562,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Limiting this for single-host galaxy systems only because the dateline could be placed differently,
     // multi-host machines should be limited via rank bindings so should be ok
+    // FIXME: Change this
     if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
         distributed_size == 1) {  // Using full board size for UBB Galaxy
         fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);

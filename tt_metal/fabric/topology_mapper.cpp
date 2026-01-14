@@ -187,8 +187,7 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_({}),
-    fixed_one_to_many_pinnings_({}) {
+    fixed_asic_position_pinnings_({}) {
     // Initialize containers; population will occur during build_mapping
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
@@ -197,36 +196,15 @@ TopologyMapper::TopologyMapper(
     build_mapping();
 }
 
-// Removed bus-id pinning constructor
 TopologyMapper::TopologyMapper(
     const MeshGraph& mesh_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const LocalMeshBinding& local_mesh_binding,
-    const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings) :
+    const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_asic_position_pinnings) :
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_(fixed_asic_position_pinnings),
-    fixed_one_to_many_pinnings_({}) {
-    mesh_host_ranks_.clear();
-    mesh_host_rank_coord_ranges_.clear();
-    mesh_host_rank_to_mpi_rank_.clear();
-    build_asic_physical_chip_id_mappings();
-    initialize_chip_topology_mapping_map();
-    build_mapping();
-}
-
-TopologyMapper::TopologyMapper(
-    const MeshGraph& mesh_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const LocalMeshBinding& local_mesh_binding,
-    const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings,
-    const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_one_to_many_pinnings) :
-    mesh_graph_(mesh_graph),
-    physical_system_descriptor_(physical_system_descriptor),
-    local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_(fixed_asic_position_pinnings),
-    fixed_one_to_many_pinnings_(fixed_one_to_many_pinnings) {
+    fixed_asic_position_pinnings_(fixed_asic_position_pinnings) {
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
     mesh_host_rank_to_mpi_rank_.clear();
@@ -243,8 +221,7 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_({}),
-    fixed_one_to_many_pinnings_({}) {
+    fixed_asic_position_pinnings_({}) {
     log_debug(
         tt::LogFabric,
         "TopologyMapper: Building mapping directly from provided logical to physical chip mapping (skipping "
@@ -658,28 +635,20 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     constraints.add_required_trait_constraint(fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
 
     // Collect pinnings for this mesh
-    std::vector<std::pair<AsicPosition, FabricNodeId>> one_to_one_pinnings;
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> one_to_many_pinnings;
-
-    for (const auto& [pos, fabric_node] : fixed_asic_position_pinnings_) {
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> mesh_pinnings;
+    for (const auto& [fabric_node, positions] : fixed_asic_position_pinnings_) {
         if (fabric_node.mesh_id == mesh_id) {
-            one_to_one_pinnings.emplace_back(pos, fabric_node);
-        }
-    }
-
-    for (const auto& [fabric_node, positions] : fixed_one_to_many_pinnings_) {
-        if (fabric_node.mesh_id == mesh_id) {
-            one_to_many_pinnings.emplace_back(fabric_node, positions);
+            mesh_pinnings.emplace_back(fabric_node, positions);
         }
     }
 
     // Add extra manual pinnings here if needed
-    // Example for one-to-one:
-    // one_to_one_pinnings.emplace_back(
-    //     std::make_pair(tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0}),
-    //     FabricNodeId(mesh_id, chip_id));
-    // Example for one-to-many:
-    // one_to_many_pinnings.emplace_back(
+    // Example for one-to-one (single position):
+    // mesh_pinnings.emplace_back(
+    //     FabricNodeId(mesh_id, chip_id),
+    //     std::vector<AsicPosition>{std::make_pair(tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0})});
+    // Example for one-to-many (multiple positions):
+    // mesh_pinnings.emplace_back(
     //     FabricNodeId(mesh_id, chip_id),
     //     std::vector<AsicPosition>{
     //         std::make_pair(tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0}),
@@ -687,7 +656,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     //     });
 
     // Handle pinning constraints if any
-    if (!one_to_one_pinnings.empty() || !one_to_many_pinnings.empty()) {
+    if (!mesh_pinnings.empty()) {
         const auto& logical_nodes = adjacency_map_logical.get_nodes();
         const auto& physical_nodes = adjacency_map_physical.get_nodes();
         std::unordered_set<tt::tt_metal::AsicID> physical_node_set(physical_nodes.begin(), physical_nodes.end());
@@ -708,105 +677,102 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             }
         }
 
-        // Handle one-to-one pinnings (position -> fabric node)
-        std::map<FabricNodeId, AsicPosition> fabric_node_traits;
-        for (const auto& [pos, fabric_node] : one_to_one_pinnings) {
-            if (std::find(logical_nodes.begin(), logical_nodes.end(), fabric_node) == logical_nodes.end()) {
-                TT_FATAL(false, "Pinned fabric node {} not found in logical mesh {}", fabric_node, mesh_id.get());
-            }
-            auto [it, inserted] = fabric_node_traits.try_emplace(fabric_node, pos);
-            if (!inserted) {
-                TT_FATAL(
-                    false,
-                    "Fabric node {} in mesh {} is pinned to multiple ASIC positions: (tray {}, loc {}) and (tray {}, "
-                    "loc {})",
-                    fabric_node,
-                    mesh_id.get(),
-                    *it->second.first,
-                    *it->second.second,
-                    *pos.first,
-                    *pos.second);
-            }
-        }
-
-        // Handle one-to-many pinnings (fabric node -> multiple positions)
-        for (const auto& [fabric_node, positions] : one_to_many_pinnings) {
+        // Handle pinnings (unified format: fabric node -> vector of positions)
+        // Single position = one-to-one, multiple positions = one-to-many
+        std::map<FabricNodeId, AsicPosition> fabric_node_traits;  // For single-position pinnings
+        for (const auto& [fabric_node, positions] : mesh_pinnings) {
             if (std::find(logical_nodes.begin(), logical_nodes.end(), fabric_node) == logical_nodes.end()) {
                 TT_FATAL(false, "Pinned fabric node {} not found in logical mesh {}", fabric_node, mesh_id.get());
             }
 
-            // Find all ASIC IDs that match any of the specified positions
-            std::set<tt::tt_metal::AsicID> valid_asic_ids;
-            for (const auto& pos : positions) {
-                for (const auto& [asic_id, asic_pos] : asic_traits) {
-                    if (asic_pos.first == pos.first && asic_pos.second == pos.second) {
-                        valid_asic_ids.insert(asic_id);
+            if (positions.size() == 1) {
+                // Single position: use trait constraint (one-to-one)
+                auto [it, inserted] = fabric_node_traits.try_emplace(fabric_node, positions[0]);
+                if (!inserted) {
+                    TT_FATAL(
+                        false,
+                        "Fabric node {} in mesh {} is pinned to multiple ASIC positions: (tray {}, loc {}) and (tray "
+                        "{}, "
+                        "loc {})",
+                        fabric_node,
+                        mesh_id.get(),
+                        *it->second.first,
+                        *it->second.second,
+                        *positions[0].first,
+                        *positions[0].second);
+                }
+            } else {
+                // Multiple positions: use required constraint (one-to-many)
+                // Find all ASIC IDs that match any of the specified positions
+                std::set<tt::tt_metal::AsicID> valid_asic_ids;
+                for (const auto& pos : positions) {
+                    for (const auto& [asic_id, asic_pos] : asic_traits) {
+                        if (asic_pos.first == pos.first && asic_pos.second == pos.second) {
+                            valid_asic_ids.insert(asic_id);
+                        }
                     }
                 }
-            }
 
-            if (valid_asic_ids.empty()) {
-                TT_FATAL(
-                    false,
-                    "No ASICs found at any of the specified positions for fabric node {} in mesh {}",
-                    fabric_node,
-                    mesh_id.get());
-            }
+                if (valid_asic_ids.empty()) {
+                    TT_FATAL(
+                        false,
+                        "No ASICs found at any of the specified positions for fabric node {} in mesh {}",
+                        fabric_node,
+                        mesh_id.get());
+                }
 
-            // Add one-to-many constraint: fabric node can map to any of the valid ASIC IDs
-            constraints.add_required_constraint(fabric_node, valid_asic_ids);
+                // Add one-to-many constraint: fabric node can map to any of the valid ASIC IDs
+                constraints.add_required_constraint(fabric_node, valid_asic_ids);
+            }
         }
 
-        // Add position-based trait constraint for one-to-one pinnings
+        // Add position-based trait constraint for single-position pinnings
         if (!fabric_node_traits.empty() && !asic_traits.empty()) {
             constraints.add_required_trait_constraint<AsicPosition>(fabric_node_traits, asic_traits);
         }
 
         // Log pinnings
-        if (!fabric_node_traits.empty() || !one_to_many_pinnings.empty()) {
+        if (!mesh_pinnings.empty()) {
             std::string pinnings_str;
             bool first = true;
 
-            // Log one-to-one pinnings
-            for (const auto& [fabric_node, pos] : fabric_node_traits) {
+            for (const auto& [fabric_node, positions] : mesh_pinnings) {
                 if (!first) {
                     pinnings_str += ", ";
                 }
                 first = false;
-                pinnings_str += fmt::format(
-                    "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC position (tray={}, loc={})",
-                    fabric_node,
-                    fabric_node.mesh_id.get(),
-                    fabric_node.chip_id,
-                    *pos.first,
-                    *pos.second);
-            }
 
-            // Log one-to-many pinnings
-            for (const auto& [fabric_node, positions] : one_to_many_pinnings) {
-                if (!first) {
-                    pinnings_str += ", ";
-                }
-                first = false;
-                std::string positions_str;
-                for (size_t i = 0; i < positions.size(); ++i) {
-                    if (i > 0) {
-                        positions_str += ", ";
+                if (positions.size() == 1) {
+                    // Single position
+                    pinnings_str += fmt::format(
+                        "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC position (tray={}, loc={})",
+                        fabric_node,
+                        fabric_node.mesh_id.get(),
+                        fabric_node.chip_id,
+                        *positions[0].first,
+                        *positions[0].second);
+                } else {
+                    // Multiple positions
+                    std::string positions_str;
+                    for (size_t i = 0; i < positions.size(); ++i) {
+                        if (i > 0) {
+                            positions_str += ", ";
+                        }
+                        positions_str += fmt::format("(tray={}, loc={})", *positions[i].first, *positions[i].second);
                     }
-                    positions_str += fmt::format("(tray={}, loc={})", *positions[i].first, *positions[i].second);
+                    pinnings_str += fmt::format(
+                        "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC positions [{}]",
+                        fabric_node,
+                        fabric_node.mesh_id.get(),
+                        fabric_node.chip_id,
+                        positions_str);
                 }
-                pinnings_str += fmt::format(
-                    "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC positions [{}]",
-                    fabric_node,
-                    fabric_node.mesh_id.get(),
-                    fabric_node.chip_id,
-                    positions_str);
             }
 
             log_info(
                 tt::LogFabric,
                 "TopologyMapper: Using {} pinning(s) for mesh {}: [{}]",
-                fabric_node_traits.size() + one_to_many_pinnings.size(),
+                mesh_pinnings.size(),
                 mesh_id.get(),
                 pinnings_str);
         }
