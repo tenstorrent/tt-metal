@@ -156,7 +156,11 @@ struct StreamRegAssignments {
     // Local tensix relay free slots stream ID (UDM mode only)
     static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 29;
     // Multi-RISC teardown synchronization stream ID
+    // overlay scratch register
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
+    // Eth retrain synchronization stream ID
+    // overlay scratch register
+    static constexpr uint32_t eth_retrain_link_sync_stream_id = 30;
 
     static const auto& get_all_stream_ids() {
         static constexpr std::array stream_ids = {
@@ -190,7 +194,8 @@ struct StreamRegAssignments {
             sender_channel_6_free_slots_stream_id,
             sender_channel_7_free_slots_stream_id,
             tensix_relay_local_free_slots_stream_id,
-            multi_risc_teardown_sync_stream_id};
+            multi_risc_teardown_sync_stream_id,
+            eth_retrain_link_sync_stream_id};
         return stream_ids;
     }
 };

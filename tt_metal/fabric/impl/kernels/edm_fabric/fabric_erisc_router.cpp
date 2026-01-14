@@ -268,6 +268,26 @@ write to the same receiver channel.
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
 
+// read and write stream scratch register store values as uint32_t
+enum class CoordinatedEriscContextSwitchState : uint32_t {
+    // Initially set by the master (erisc0) in entrance of kernel_main() and is the default state. erisc1 polls for this
+    // state at the end of the handshake
+    NORMAL_EXECUTION = 0,
+    // Set by master to signal intent on beginning handshake. Checked by erisc1 before it begins handshake
+    RETRAIN_INTENT = 1,
+    // Set by erisc1 to indicate it's cooperation. Polled by master before it runs the retrain to ensure that it has
+    // erisc1's cooperation
+    INTENT_ACK = 2,
+    // Set by erisc0 to indicate completion of retrain. Polled by erisc1
+    RETRAIN_COMPLETE = 3,
+    // Set by erisc1 to indicate it has seen the completion of retrain. Polled by erisc0 before it sets register back to
+    // NORMAL_EXECUTION
+    COMPLETE_ACK = 4,
+};
+
+// In case underlying type for the enum class is changed later
+using CoordinatedEriscCtxType = std::underlying_type_t<CoordinatedEriscContextSwitchState> ;
+
 template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
 using SenderEthChannel = StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>;
 
@@ -1271,6 +1291,79 @@ bool any_sender_channels_active(
     return false;
 }
 
+/*
+ * In Blackhole, there are typically 2-eriscs running cooperatively to implement the fabric router. They
+ * execute the sender and receiver traffic flows, respectively (hence they run completely independently).
+ * However, in Blackhole, there is special behaviour that must be accommodated,  specifically around link
+ * training. During link training, the erisc does not have direct access to a part of the Ethernet subsystem
+ * that needs to be programmed; it is only accessible over the noc. Therefore, to avoid potential noc
+ * resource conflicts between the non-link-training erisc and the link training erisc (because we don't
+ * know exactly which nocs they will use), the router implements a coordinated context switch where
+ * the non-link-training erisc will spin idly while the retrain process takes place.
+ */
+constexpr bool IS_RETRAIN_SYNC_MASTER() { return enable_context_switch; }
+
+void run_routing_without_noc_sync_coordinated_as_master(
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    if constexpr (IS_RETRAIN_SYNC_MASTER()) {
+        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
+            static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT));
+        // Wait for erisc1 to ack
+        while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
+               static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK)) {
+            if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                return;
+            }
+        }
+        run_routing_without_noc_sync();
+        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
+            static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE));
+        // Wait for erisc1 to ack
+        while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
+               static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::COMPLETE_ACK)) {
+            if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                return;
+            }
+        }
+        // Resume normal operation
+        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
+            static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION));
+    }
+}
+FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    if constexpr (!IS_RETRAIN_SYNC_MASTER()) {
+        if (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() ==
+            static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT)) {
+            write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
+                static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK));
+            while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
+                   static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE)) {
+                if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                    return;
+                }
+            }
+            write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
+                static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::COMPLETE_ACK));
+            while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
+                   static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION)) {
+                if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                    return;
+                }
+            }
+        }
+    }
+}
+void run_coordinated_context_switch_to_base_firmware(
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    if constexpr (NUM_ACTIVE_ERISCS == 1) {
+        run_routing_without_noc_sync();
+    } else {
+        if constexpr (IS_RETRAIN_SYNC_MASTER()) {
+            run_routing_without_noc_sync_coordinated_as_master(termination_signal_ptr);
+        }
+    }
+}
 template <typename LocalTelemetryT>
 FORCE_INLINE void update_telemetry(
     const std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered,
@@ -2050,15 +2143,17 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 } else {
                     if (did_nothing_count++ > SWITCH_INTERVAL) {
                         did_nothing_count = 0;
-                        run_routing_without_noc_sync();
+                        run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                     }
                 }
             } else {
                 if (did_nothing_count++ > SWITCH_INTERVAL) {
                     did_nothing_count = 0;
-                    run_routing_without_noc_sync();
+                    run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                 }
             }
+        } else {
+            run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
         }
 
         if constexpr (is_sender_channel_serviced[0]) {
@@ -2372,6 +2467,12 @@ void kernel_main() {
     // The first sender channel in the array is always for the transient/worker connection
     init_ptr_val<sender_channel_free_slots_stream_ids[0]>(SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL WORKER
     init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);  // Compact index 0
+
+    // Init retrain sync reg
+    if (IS_RETRAIN_SYNC_MASTER()) {
+        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
+            static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION));
+    }
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
