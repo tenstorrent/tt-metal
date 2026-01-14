@@ -16,82 +16,10 @@ The MoE forward pass flow is:
 
 from math import prod
 
-import torch
-
 import ttnn
 
 from .config import AllToAllCombineConfig, AllToAllDispatchConfig, ThroughputExpertConfig, ThroughputProgramConfig
 from .weights import ThroughputExpertWeights
-
-
-def save_intermediate_sparse_matmul(
-    tensor: ttnn.Tensor, mesh_device: ttnn.MeshDevice, config: ThroughputExpertConfig, num_sparse_blocks: int, name: str
-) -> None:
-    # Save tensor for debugging - need to carefully combine sparse blocks
-    # Current shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
-    # Tokens are split across dim 1 (num_sparse_blocks) and dim 4 (block_size)
-    # Experts are in dim 3 (num_experts_per_device per device)
-
-    # Step 1: Squeeze the extra dim 2
-    # [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
-    # -> [1, num_sparse_blocks, num_experts_per_device, block_size, intermediate]
-    squeezed = ttnn.squeeze(tensor, 2)
-
-    # Step 2: Permute to group sparse_blocks and block_size together
-    # [1, num_sparse_blocks, num_experts_per_device, block_size, intermediate]
-    # -> [1, num_experts_per_device, num_sparse_blocks, block_size, intermediate]
-    permuted = ttnn.permute(squeezed, (0, 2, 1, 3, 4))
-
-    # Step 3: Reshape to combine sparse_blocks * block_size into tokens
-    # [1, num_experts_per_device, num_sparse_blocks, block_size, intermediate]
-    # -> [1, num_experts_per_device, num_tokens_per_device, intermediate]
-    num_tokens_per_device = num_sparse_blocks * config.sparsity_block_size
-    reshaped = ttnn.reshape(
-        permuted, (1, config.num_experts_per_device, num_tokens_per_device, config.intermediate_size)
-    )
-
-    # Step 4: Get tensors from all devices and concatenate manually
-    # Each device has: [1, num_experts_per_device, num_tokens_per_device, intermediate]
-    torch_w1_out_device0 = ttnn.to_torch(
-        reshaped,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-    )
-    # We only care about the first device so we can slice with [:1, :, :num_tokens_per_device, :]
-    torch_w1_out_device0 = torch_w1_out_device0[:1, :, :num_tokens_per_device, :]
-    # Now lets save the experts individually so we can easily compare with torch
-    for expert_idx in range(config.num_experts_per_device):
-        torch.save(
-            torch_w1_out_device0[:, expert_idx : expert_idx + 1, :, :],
-            f"gpt_oss_debug/{name}_tt_expert_{expert_idx}.pt",
-        )
-    ttnn.deallocate(squeezed)
-    ttnn.deallocate(permuted)
-    ttnn.deallocate(reshaped)
-
-
-def _apply_silu_mul(w1_out: ttnn.Tensor, w3_out: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
-    """Apply SiLU activation and multiply: silu(w1_out) * w3_out.
-
-    This implements the standard SwiGLU activation: silu(gate) * up
-
-    Args:
-        w1_out: Gate projection output [batch, experts, tokens, intermediate]
-        w3_out: Up projection output [batch, experts, tokens, intermediate]
-        memory_config: Output memory configuration
-
-    Returns:
-        Activated tensor with same shape as inputs
-    """
-    # Apply SiLU to gate output
-    w1_activated = ttnn.silu(w1_out)
-    ttnn.deallocate(w1_out)
-
-    # Element-wise multiply with up projection (SwiGLU pattern)
-    result = ttnn.mul(w1_activated, w3_out, memory_config=memory_config)
-    ttnn.deallocate(w1_activated)
-    ttnn.deallocate(w3_out)
-
-    return result
 
 
 def _apply_swiglu(
@@ -308,16 +236,6 @@ def decode_forward(
     # w1_out shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
     # Bias shape: [1, 1, 1, num_experts_per_device, 1, intermediate] - broadcasts correctly
     w1_out = ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
-    save_intermediate = False
-    if save_intermediate:
-        for expert_idx in range(4):
-            torch.save(
-                ttnn.to_torch(weights.w1, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
-                    :, expert_idx : expert_idx + 1, :, :
-                ],
-                f"gpt_oss_debug/gate_weights_tt_expert_{expert_idx}.pt",
-            )
-        save_intermediate_sparse_matmul(w1_out, mesh_device, config, num_sparse_blocks, "gate")
 
     # Up projection (w3): same shape as gate
     w3_out = ttnn.sparse_matmul(
@@ -336,15 +254,7 @@ def decode_forward(
     # w3_out shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
     # Bias shape: [1, 1, 1, num_experts_per_device, 1, intermediate] - broadcasts correctly
     w3_out = ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
-    if save_intermediate:
-        for expert_idx in range(4):
-            torch.save(
-                ttnn.to_torch(weights.w3, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
-                    :, expert_idx : expert_idx + 1, :, :
-                ],
-                f"gpt_oss_debug/up_weights_tt_expert_{expert_idx}.pt",
-            )
-        save_intermediate_sparse_matmul(w3_out, mesh_device, config, num_sparse_blocks, "up")
+
     # SwiGLU activation: (up + 1) * (gate * sigmoid(gate * alpha))
     activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
 

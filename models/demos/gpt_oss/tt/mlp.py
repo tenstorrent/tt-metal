@@ -95,17 +95,7 @@ class MLP:
         Returns:
             Expert output tensor [batch, seq_len, hidden_size]
         """
-
-        # router_scores, router_indices, router_logits = self.router(hidden_states)
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
-
-        # Save router indices for analysis (convert to CPU before deallocation)
-        # if hasattr(self, "track_routing") and self.track_routing:
-        #     self.last_router_indices = ttnn.to_torch(router_indices).cpu()
-
-        # router_logits.deallocate()
-        # router_indices.deallocate()
-        # expert_output = self.experts(hidden_states, router_scores)
         expert_output = self.experts(
             hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode
         )
