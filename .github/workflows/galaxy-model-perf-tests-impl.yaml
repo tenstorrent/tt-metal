@@ -146,8 +146,8 @@ jobs:
               "save-perf-data": true,
               "timeout": 35,
               "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k \"4x8\"",
-              "owner_id": "U03FJB5TM5Y"
-            } # Colman Glagovich
+              "owner_id": "U08TED0JM9D"
+            } # Samuel Adesoye
           ]' --compact-output)
 
           # Combine both arrays into full matrix
