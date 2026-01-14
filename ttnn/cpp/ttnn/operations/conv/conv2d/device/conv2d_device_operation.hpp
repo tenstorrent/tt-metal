@@ -28,8 +28,8 @@ struct Conv2dDeviceOperation {
     using operation_attributes_t = conv2d::operation_attributes_t;
     using hashable_operation_attributes_t = conv2d::hashable_operation_attributes_t;
     using tensor_args_t = conv2d::tensor_args_t;
-    using spec_return_value_t = conv2d::spec_return_value_t;
-    using tensor_return_value_t = conv2d::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<program::Conv2dShardedProgramFactory, program::Conv2dWidthShardedProgramFactory>;
 

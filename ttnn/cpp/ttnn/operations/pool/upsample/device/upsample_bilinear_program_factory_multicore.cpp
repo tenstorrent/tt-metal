@@ -20,9 +20,7 @@ constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
 static FixedPoint float_to_fixed(float value) { return static_cast<FixedPoint>(value * FIXED_ONE); }
 
 UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output_tensor) {
     const ttnn::Tensor& input = tensor_args.input_tensor;
     const ttnn::Tensor& output = output_tensor;
     const uint32_t scale_factor_h = operation_attributes.scale_factor_h;
@@ -317,7 +315,7 @@ void UpsampleBilinearProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     tt::tt_metal::Program& program = cached_program.program;
     tt::tt_metal::CBHandle& cb_src0 = cached_program.shared_variables.cb_src0;
     tt::tt_metal::CBHandle& out_cb = cached_program.shared_variables.out_cb;

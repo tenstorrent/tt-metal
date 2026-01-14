@@ -20,8 +20,8 @@ namespace ttnn::operations::experimental::cnn::to_chw {
 struct ConvertToCHWDeviceOperation {
     using operation_attributes_t = to_chw::operation_attributes_t;
     using tensor_args_t = to_chw::tensor_args_t;
-    using spec_return_value_t = to_chw::spec_return_value_t;
-    using tensor_return_value_t = to_chw::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::ConvertToCHWProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

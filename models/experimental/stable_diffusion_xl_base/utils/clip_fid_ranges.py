@@ -24,7 +24,14 @@ get_approx = lambda range_tuple: (range_tuple[0] * 0.97, range_tuple[1] * 1.03)
 
 
 def using_full_dataset(model_name, num_prompts):
-    if model_name in {"sdxl", "sdxl-tp", "sdxl-base-refiner", "sdxl-base-refiner-tp"}:
+    if model_name in {
+        "sdxl",
+        "sdxl-tp",
+        "sdxl-base-refiner",
+        "sdxl-base-refiner-tp",
+        "sdxl-img2img",
+        "sdxl-img2img-tp",
+    }:
         return num_prompts == SDXL_DATASET_SIZE
     elif model_name in {"sdxl-inpaint", "sdxl-inpaint-tp"}:
         return num_prompts == SDXL_INPAINT_DATASET_SIZE

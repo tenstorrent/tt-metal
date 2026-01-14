@@ -144,7 +144,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t ConcatDeviceOperation::compute_output_specs(
+TensorSpec ConcatDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const Tensor& ref_in_tensor = tensor_args.input_tensors.at(0);
     ttnn::Shape shape_out = ref_in_tensor.logical_shape();
@@ -158,7 +158,7 @@ spec_return_value_t ConcatDeviceOperation::compute_output_specs(
         shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
 }
 
-tensor_return_value_t ConcatDeviceOperation::create_output_tensors(
+Tensor ConcatDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());

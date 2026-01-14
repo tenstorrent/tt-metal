@@ -833,7 +833,7 @@ void issue_read_buffer_dispatch_command_sequence(
 
     if (has_pinned_inputs && is_unpadded) {
         auto noc_addr_pair_opt = dispatch_params.pinned_memory->get_noc_addr(dispatch_params.device->id());
-        if (noc_addr_pair_opt.has_value() && noc_addr_pair_opt->device_id == dispatch_params.device->id()) {
+        if (noc_addr_pair_opt.has_value()) {
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
             const uint8_t* pinned_host_base =
                 static_cast<const uint8_t*>(dispatch_params.pinned_memory->get_host_ptr());

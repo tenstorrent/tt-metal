@@ -272,9 +272,7 @@ Tensor compute_reshape_mapping_host_tensor(
 // the scratch page is copied to its output destination.
 
 ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_return_value;
 
@@ -414,7 +412,7 @@ void ReshapeTiledProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = shared_variables.writer_kernel_id;
