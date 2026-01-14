@@ -1,6 +1,8 @@
 set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/test_fabric_traffic_generator_defs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/fabric_router_state_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/fabric_router_state_utils_test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_fabric_router_pause_control.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_mesh_graph_descriptor.cpp
