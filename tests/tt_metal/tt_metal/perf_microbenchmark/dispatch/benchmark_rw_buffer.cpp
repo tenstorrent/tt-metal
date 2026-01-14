@@ -91,7 +91,7 @@ static void BM_write(
         DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
         mesh_device.get());
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), device_buffer, host_buffer, true);
     }
 
@@ -118,7 +118,7 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
         mesh_device.get());
     std::vector<ElementType> host_buffer;
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         // EnqueueReadMeshBuffer cannot read from a replicated buffer yet, have to use ReadShard
         ReadShard(mesh_device->mesh_command_queue(), host_buffer, device_buffer, MeshCoordinate(0, 0), true);
     }
