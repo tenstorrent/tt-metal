@@ -31,6 +31,7 @@ from models.common.utility_functions import profiler
 
 @dataclass
 class TtSDXLPipelineConfig:
+    image_resolution: tuple
     num_inference_steps: int
     guidance_scale: float
     is_galaxy: bool
@@ -192,6 +193,13 @@ class TtSDXLPipeline(LightweightModule):
         assert 0.0 <= guidance_rescale <= 1.0, (
             f"`guidance_rescale` must be in range [0.0, 1.0] but is {guidance_rescale}. "
             "Typical values are 0.0 (no rescale) to 0.7."
+        )
+
+        # Validate image_resolution
+        image_resolution = self.pipeline_config.image_resolution
+        assert image_resolution in [(1024, 1024), (512, 512)], (
+            f"`image_resolution` = {image_resolution} is not allowed. "
+            "Only (1024, 1024) and (512, 512) are supported."
         )
 
         # Validate crop_coords_top_left
