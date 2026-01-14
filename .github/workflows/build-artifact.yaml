@@ -239,8 +239,11 @@ jobs:
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
+        # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
+        TRACY_NO_INVARIANT_CHECK: 1
+        TRACY_NO_ISA_EXTENSIONS: 1
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
@@ -288,12 +291,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
-
-      - name: Set safe directory for Git
-        # The volume mount creates /work as an alias for the checkout directory,
-        # but git only recognizes the original path as safe. CMake runs git commands
-        # from /work, so we need to mark it as safe explicitly.
-        run: git config --global --add safe.directory /work
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
       - name: Create ccache tmpdir
         run: |
@@ -349,13 +347,6 @@ jobs:
           cmake --build build --target package
           ls -1sh build/*.deb build/*.ddeb || true
 
-      - name: Generate package checksums
-        run: |
-          cd build
-          sha256sum *.deb *.ddeb 2>/dev/null > SHA256SUMS || sha256sum *.deb > SHA256SUMS
-          echo "Generated checksums:"
-          cat SHA256SUMS
-
       - name: Publish ccache summary
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
@@ -372,7 +363,6 @@ jobs:
           path: |
             /work/build/*.deb
             /work/build/*.ddeb
-            /work/build/SHA256SUMS
           compression-level: 0
           if-no-files-found: error
 
@@ -414,6 +404,7 @@ jobs:
     needs: build-docker-image
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type }}
       python-version: ${{ inputs.version == '22.04' && '3.10' || '3.12' }}
       docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}
