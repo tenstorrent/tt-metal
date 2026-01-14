@@ -10,8 +10,7 @@
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
 
 namespace ttnn::operations::transformer {

@@ -10,7 +10,7 @@ namespace ttnn::operations::kv_cache {
 using namespace tt::constants;
 
 UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.op_type == UpdateCacheOpType::FILL) {
         return program::FillCacheMultiCoreProgramFactory{};
     }
@@ -160,13 +160,13 @@ void UpdateKVCacheOperation::validate_on_program_cache_hit(
 }
 
 spec_return_value_t UpdateKVCacheOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache.tensor_spec();
 }
 
 tensor_return_value_t UpdateKVCacheOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache;
 }

@@ -139,7 +139,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& /*tensor_return_value*/) {
     log_debug(tt::LogOp, "DEBUG: create_at is called");
     auto* mesh_device = tensor_args.input_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();

@@ -150,7 +150,7 @@ def _convert_metal_device_ids_to_device_ids(
                 break
         log_check(
             found,
-            f"Device with unique_id {unique_id} (metal_device_id {metal_device_id}) not found in context.devices",
+            f"Device {metal_device_id} [{unique_id}] not found. There is a mismatch between metal and exalens device IDs, most likely due to use of TT_VISIBLE_DEVICES. Please contact script owner.",
         )
     return device_ids
 

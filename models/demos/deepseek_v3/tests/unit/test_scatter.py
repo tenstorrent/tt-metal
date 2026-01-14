@@ -39,6 +39,7 @@ def test_scatter(
     index_mem_config,
     enable_trace,
 ):
+    torch.manual_seed(0)
     # Index tensor generation is somewhat hardcoded
     index_dtype = ttnn.uint16
     index_torch_dtype = torch.int64  # torch.scatter expects int64 for index tensor

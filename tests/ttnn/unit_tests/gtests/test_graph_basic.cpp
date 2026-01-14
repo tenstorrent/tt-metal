@@ -49,7 +49,7 @@ struct BufferTestParam {
 };
 
 class BufferTestFixture
-    : public TTNNFixtureWithDevice,
+    : public TTNNFixtureWithSuiteDevice<BufferTestFixture>,
       public testing::WithParamInterface<std::tuple<BufferTestParam, tt::tt_metal::IGraphProcessor::RunMode>> {};
 
 TEST_P(BufferTestFixture, BufferTest) {
@@ -500,7 +500,7 @@ TEST_F(TestScopedGraphCapture, MatmulDifferentOrdersTest) {
     std::vector<nlohmann::json> matmul_ops;
     for (const auto& node : trace) {
         if (node["node_type"] == "function_start" &&
-            node["params"]["name"].get<std::string>().find("matmul") != std::string::npos) {
+            node["params"]["name"].get<std::string>().find("ttnn::matmul") != std::string::npos) {
             matmul_ops.push_back(node);
         }
     }

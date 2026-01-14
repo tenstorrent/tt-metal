@@ -28,7 +28,7 @@
 
 namespace ttnn::operations::conv::conv2d {
 Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         // Use width sharded implementation
         return program::Conv2dWidthShardedProgramFactory{};
@@ -37,7 +37,7 @@ Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_f
 }
 
 spec_return_value_t Conv2dDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     const auto& input_tensor_a_shape = args.input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
 

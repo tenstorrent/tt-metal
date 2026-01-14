@@ -43,6 +43,13 @@ Lightweight kernel asserts provide a mechanism for assertion checks within the k
 .. toctree::
     :maxdepth: 1
 
+    llk_asserts
+
+LLK asserts provide validation checks within the low-level kernel library infrastructure code.
+
+.. toctree::
+    :maxdepth: 1
+
     inspector
 
 The Inspector is a tool that provides insights into Metal host runtime.

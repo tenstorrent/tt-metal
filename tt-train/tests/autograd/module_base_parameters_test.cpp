@@ -85,7 +85,6 @@ TEST_F(ModuleBaseParametersTest, AllParametersIncluded) {
 };
 
 TEST_F(ModuleBaseParametersTest, NIGHTLY_UnusedParametersInModuleSGD) {
-    GTEST_SKIP() << "Skipping due to segmentation fault - see GitHub issue 35082";
     auto* device = &ttml::autograd::ctx().get_device();
 
     ModelUnusedLayer model;
