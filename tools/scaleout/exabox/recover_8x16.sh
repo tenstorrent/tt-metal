@@ -25,4 +25,8 @@ sleep 5
 
 echo ""
 echo "Running cluster validation..."
+<<<<<<< HEAD
 mpirun --host $HOSTS --mca btl_tcp_if_exclude docker0,lo --tag-output ./build/tools/scaleout/run_cluster_validation --factory-descriptor-path /data/scaleout_configs/5xBH_8x16_intrapod/fsd.textproto --send-traffic --num-iterations 5
+=======
+mpirun --host $HOSTS --mca btl_tcp_if_exclude docker0,lo --tag-output ./build/tools/scaleout/run_cluster_validation --factory-descriptor-path /data/local-syseng-manual/5x8x16_fsd.textproto --send-traffic --num-iterations 5
+>>>>>>> a72bb141ab (Add Validation Scripts for BH Exabox)

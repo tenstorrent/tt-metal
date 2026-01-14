@@ -42,7 +42,11 @@ for i in {1..50}; do
 
         echo ""
         echo "Running cluster validation..."
+<<<<<<< HEAD
         ./tools/scaleout/exabox/mpi-docker --image $DOCKER_IMAGE --empty-entrypoint --host $HOSTS ./build/tools/scaleout/run_cluster_validation --factory-descriptor-path /data/scaleout_configs/5xBH_8x16_intrapod/fsd.textproto --send-traffic --num-iterations 10
+=======
+        ./tools/scaleout/exabox/mpi-docker --image $DOCKER_IMAGE --empty-entrypoint --host $HOSTS ./build/tools/scaleout/run_cluster_validation --factory-descriptor-path /data/local-syseng-manual/5x8x16_fsd.textproto --send-traffic --num-iterations 10
+>>>>>>> a72bb141ab (Add Validation Scripts for BH Exabox)
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
