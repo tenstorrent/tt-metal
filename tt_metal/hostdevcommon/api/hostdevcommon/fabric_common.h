@@ -307,6 +307,54 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
     set_hop_field(last_hop, LowLatencyFields::WRITE_ONLY);
 }
 
+/**
+ * Canonical 1D sparse multicast routing pattern encoder
+ *
+ * Generates bit pattern for multicast routing:
+ *   - FORWARD_ONLY (0b10) before range
+ *   - WRITE_AND_FORWARD (0b11) within range
+ *   - WRITE_ONLY (0b01) at final hop
+ *
+ * @param hops Bitmask of hops to write
+ * @param buffer Output buffer (uint32_t array)
+ * @param num_words Size of buffer (1 for ≤16 hops, 2 for ≤32 hops)
+ *
+ * Example: starting 3 hops away, multicasting to 2 chips (start_hop=3, range_hops=2)
+ *   Hop 0 (bits 0-1): FORWARD_ONLY = 0b10
+ *   Hop 1 (bits 2-3): FORWARD_ONLY = 0b10
+ *   Hop 2 (bits 4-5): WRITE_AND_FORWARD = 0b11 (start of multicast range)
+ *   Hop 3 (bits 6-7): WRITE_ONLY = 0b01 (end of range)
+ *   Result: buffer[0] = 0b01'11'10'10 = 0x7A
+ *
+ * Router consumes fields LSB-first (hop 0 at bits 0-1, hop 1 at bits 2-3, etc.)
+ */
+inline void encode_1d_sparse_multicast(uint16_t hops, uint32_t& buffer) {
+    using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+
+    auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
+        const uint32_t bit_pos = (hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
+        buffer |= (field_value << bit_pos);
+    };
+
+    buffer = 0;
+    uint32_t hop_index = 0;
+    while (hops > 0) {
+        // Case 1: We've arrived at the last hop. Write and stop.
+        if (hops == 1) {
+            set_hop_field(hop_index, LowLatencyFields::WRITE_ONLY);
+        }
+        // Case 2: This hop involves a write operation. Write and forward.
+        else if (hops & 1) {
+            set_hop_field(hop_index, LowLatencyFields::WRITE_AND_FORWARD);
+        }
+        // Case 3: This hop does not involve a write operation. Forward only.
+        else {
+            set_hop_field(hop_index, LowLatencyFields::FORWARD_ONLY);
+        }
+        hop_index++;
+        hops >>= 1;
+    }
+}
 //=============================================================================
 // 2D Routing Encoders
 //=============================================================================

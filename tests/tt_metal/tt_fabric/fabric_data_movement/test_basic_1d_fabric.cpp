@@ -3389,6 +3389,168 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicIncWithState
         true);
 }
 
+void FabricSparseMulticastCommon(
+    BaseFabricFixture* fixture, const std::vector<std::tuple<RoutingDirection, uint16_t>>& pair_ordered_dir_configs) {
+    CoreCoord sender_logical_core = {0, 0};
+    CoreCoord receiver_logical_core = {1, 0};
+    uint32_t num_packets = 10;
+    uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto topology = control_plane.get_fabric_context().get_fabric_topology();
+
+    // Limit directions per cluster (T3K: up to 3, TG: up to 4)
+    const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    size_t max_dirs = (cluster_type == tt::tt_metal::ClusterType::T3K) ? 3 : 4;
+    std::vector<std::tuple<RoutingDirection, uint16_t>> dir_configs = pair_ordered_dir_configs;
+    if (dir_configs.size() > max_dirs) {
+        dir_configs.resize(max_dirs);
+    }
+
+    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
+    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
+    for (auto [dir, hops] : dir_configs) {
+        // For sparse multicast, calculate the maximum hop from the bitmask
+        uint32_t max_hop = 0;
+        for (int i = 15; i >= 0; i--) {
+            if (hops & (1 << i)) {
+                max_hop = i + 1;
+                break;
+            }
+        }
+        fabric_hops[dir] = max_hop;
+    }
+
+    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
+    ChipId src_physical_device_id;
+    std::unordered_map<RoutingDirection, std::vector<ChipId>> physical_end_device_ids_by_dir;
+    if (!find_device_with_neighbor_in_multi_direction(
+            fixture,
+            src_fabric_node_id,
+            end_fabric_node_ids_by_dir,
+            src_physical_device_id,
+            physical_end_device_ids_by_dir,
+            fabric_hops)) {
+        GTEST_SKIP() << "No sparse multicast destinations found for requested directions";
+    }
+
+    // Build destination fabric node ID list (for routing plane connection manager)
+    std::vector<FabricNodeId> dest_fabric_node_ids;
+    for (auto [dir, hops] : dir_configs) {
+        // For sparse multicast, we need to add nodes for each bit set in the hops bitmask
+        for (int i = 0; i < 16; i++) {
+            if (hops & (1 << i)) {
+                // Use the fabric node ID at this hop distance from the pre-populated list
+                if (i < end_fabric_node_ids_by_dir[dir].size()) {
+                    dest_fabric_node_ids.push_back(end_fabric_node_ids_by_dir[dir][i]);
+                }
+            }
+        }
+    }
+
+    auto sender_device = fixture->get_device(src_physical_device_id);
+    CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
+
+    tt_metal::Program sender_program = tt_metal::CreateProgram();
+
+    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+
+    std::vector<uint32_t> compile_time_args = {
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        worker_mem_map.notification_mailbox_address,
+        worker_mem_map.target_address,
+        NOC_UNICAST_WRITE,  // Only support NOC_UNICAST_WRITE for sparse multicast
+        static_cast<uint32_t>(dir_configs.size()),
+        0,  // with_state = false (not supported for sparse multicast)
+        0,  // is_chip_multicast = false
+        1   // is_sparse_multicast = true
+    };
+
+    std::vector<uint32_t> sender_runtime_args = {
+        worker_mem_map.source_l1_buffer_address,
+        worker_mem_map.packet_payload_size_bytes,
+        num_packets,
+        time_seed,
+        receiver_virtual_core.x,
+        receiver_virtual_core.y,
+    };
+    for (auto [dir, hops] : dir_configs) {
+        sender_runtime_args.push_back(static_cast<uint32_t>(hops));
+    }
+
+    auto sender_kernel = tt_metal::CreateKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
+        {sender_logical_core},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = compile_time_args});
+
+    append_routing_plane_connection_manager_rt_args(
+        src_fabric_node_id,
+        dest_fabric_node_ids,
+        {},
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        sender_runtime_args);
+
+    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+
+    // Build and launch receiver programs for all destination devices in all configured directions
+    std::vector<std::pair<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program>> receiver_programs;
+    std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
+    for (auto& [dir, hops] : dir_configs) {
+        for (auto physical_end_device_id : physical_end_device_ids_by_dir[dir]) {
+            auto receiver_device = fixture->get_device(physical_end_device_id);
+            tt_metal::Program receiver_program = tt_metal::CreateProgram();
+            auto receiver_kernel = tt_metal::CreateKernel(
+                receiver_program,
+                "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
+                {receiver_logical_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = compile_time_args});
+
+            tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+            fixture->RunProgramNonblocking(receiver_device, receiver_program);
+            receiver_programs.emplace_back(receiver_device, std::move(receiver_program));
+        }
+    }
+
+    fixture->RunProgramNonblocking(sender_device, sender_program);
+    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+
+    for (auto& [dev, prog] : receiver_programs) {
+        fixture->WaitForSingleProgramDone(dev, prog);
+    }
+
+    std::vector<uint32_t> sender_status;
+    tt_metal::detail::ReadFromDeviceL1(
+        sender_device->get_devices()[0],
+        sender_logical_core,
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        sender_status,
+        CoreType::WORKER);
+    EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+
+    for (auto& [dev, _] : receiver_programs) {
+        std::vector<uint32_t> recv_status;
+        tt_metal::detail::ReadFromDeviceL1(
+            dev->get_devices()[0],
+            receiver_logical_core,
+            worker_mem_map.test_results_address,
+            worker_mem_map.test_results_size_bytes,
+            recv_status,
+            CoreType::WORKER);
+        EXPECT_EQ(recv_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+    }
+}
+
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWrite) {
     FabricMulticastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
 }
@@ -3489,6 +3651,29 @@ TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocUnicastWriteMux) {
 
 TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocAtomicIncMux) {
     FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
+}
+
+// Sparse multicast test cases
+TEST_F(NightlyFabric1DFixture, TestLinearFabricSparseMulticastNocUnicastWrite) {
+    FabricSparseMulticastCommon(this, {std::make_tuple(RoutingDirection::E, 0b0110)});  // Write to hops 1 and 2
+}
+
+TEST_F(NightlyFabric1DFixture, TestLinearFabricSparseMulticastNocUnicastWriteSingleHop) {
+    FabricSparseMulticastCommon(this, {std::make_tuple(RoutingDirection::E, 0b0001)});  // Write to hop 0 only
+}
+
+TEST_F(NightlyFabric1DFixture, TestLinearFabricSparseMulticastNocUnicastWriteMultiDir) {
+    FabricSparseMulticastCommon(
+        this,
+        {
+            std::make_tuple(RoutingDirection::E, 0b0011),  // Write to hops 0 and 1 eastward
+            std::make_tuple(RoutingDirection::W, 0b0100)   // Write to hop 2 westward
+        });
+}
+
+TEST_F(NightlyFabric1DFixture, TestLinearFabricSparseMulticastNocUnicastWriteSparseBits) {
+    FabricSparseMulticastCommon(
+        this, {std::make_tuple(RoutingDirection::E, 0b1010)});  // Write to hops 1 and 3 (sparse)
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

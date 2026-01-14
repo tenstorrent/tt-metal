@@ -25,6 +25,9 @@ union HopInfo {
         uint8_t start_distance[num_send_dir];
         uint8_t range[num_send_dir];
     } mcast;
+    struct {
+        uint16_t hops[num_send_dir];  // Sparse multicast hop bitmask
+    } sparse_mcast;
 #elif defined(API_TYPE_Mesh)
     struct {
         // For Mesh API: each connection has 4 directional ranges (e/w/n/s)
@@ -52,6 +55,23 @@ HopInfo<num_send_dir> get_hop_info_from_args(size_t& rt_arg_idx) {
             hop_info.mcast.w[i] = static_cast<uint8_t>(get_arg_val<uint32_t>(rt_arg_idx++));
             hop_info.mcast.n[i] = static_cast<uint8_t>(get_arg_val<uint32_t>(rt_arg_idx++));
             hop_info.mcast.s[i] = static_cast<uint8_t>(get_arg_val<uint32_t>(rt_arg_idx++));
+        }
+#endif
+    } else {
+        for (uint32_t i = 0; i < num_send_dir; i++) {
+            hop_info.ucast.num_hops[i] = static_cast<uint8_t>(get_arg_val<uint32_t>(rt_arg_idx++));
+        }
+    }
+    return hop_info;
+}
+
+template <bool is_sparse_multicast, uint8_t num_send_dir>
+HopInfo<num_send_dir> get_sparse_hop_info_from_args(size_t& rt_arg_idx) {
+    HopInfo<num_send_dir> hop_info;
+    if constexpr (is_sparse_multicast) {
+#ifdef API_TYPE_Linear
+        for (uint32_t i = 0; i < num_send_dir; i++) {
+            hop_info.sparse_mcast.hops[i] = static_cast<uint16_t>(get_arg_val<uint32_t>(rt_arg_idx++));
         }
 #endif
     } else {
