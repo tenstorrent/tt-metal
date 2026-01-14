@@ -181,7 +181,7 @@ class FusedResblock:
         ), f"All cores must be the same size as all matmul cores plus one for the mcast core"
         logger.debug(f"All cores: {all_cores}")
 
-        receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+        mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=0,
             core_ranges=all_cores,
             initial_value=0,
@@ -197,7 +197,7 @@ class FusedResblock:
             out_dtype,
             out_tile_size,
             out_tile_descriptor,
-            receiver_semaphore_descriptor,
+            mcast_receiver_semaphore_descriptor,
         )
 
         reader_kernel_descriptor = ttnn.KernelDescriptor(
@@ -213,7 +213,7 @@ class FusedResblock:
                 num_tiles_k,
                 gather_destination_core.x,
                 gather_destination_core.y,
-                receiver_semaphore_descriptor.id,
+                mcast_receiver_semaphore_descriptor.id,
             ],
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -265,6 +265,6 @@ class FusedResblock:
                     interm_cb2_descriptor,
                     mcast_cb_descriptor,
                 ],
-                semaphores=[receiver_semaphore_descriptor],
+                semaphores=[mcast_receiver_semaphore_descriptor],
             ),
         )
