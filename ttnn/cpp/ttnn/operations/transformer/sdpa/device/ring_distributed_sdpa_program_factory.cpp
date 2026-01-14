@@ -78,7 +78,6 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     const uint32_t chunk_1 = ring_id;
     const uint32_t chunk_2 = (2 * ring_size) - ring_id - 1;
 
-    // In chunked prefill mode, the offset of Q in terms of Q chunks
     bool is_chunked = chunk_start_idx.has_value();
 
     // Extract paged KV cache parameters first, before calculating Sk

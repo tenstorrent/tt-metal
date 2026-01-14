@@ -285,13 +285,13 @@ def run_test_ring_distributed_sdpa_with_prefix_and_paged_kv(
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize(
     "s",
-    [1024, 2048, 4096, 8192, 16384, 32768],
-    ids=["s1k", "s2k", "s4k", "s8k", "s16k", "s32k"],
+    [1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072],
+    ids=["s1k", "s2k", "s4k", "s8k", "s16k", "s32k", "s64k", "s128k"],
 )
 @pytest.mark.parametrize(
     "prefix_len",
     [0, 64, 128, 256, 512],
-    ids=["p0", "p32", "p128", "p512"],
+    ids=["p0", "p64", "p128", "p256", "p512"],
 )
 @pytest.mark.parametrize("page_block_size", [64], ids=["b64"])
 @pytest.mark.parametrize("q_chunk_size", [64, 256], ids=["q64", "q256"])
