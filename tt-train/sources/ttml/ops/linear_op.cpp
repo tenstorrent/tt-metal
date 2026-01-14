@@ -91,7 +91,7 @@ autograd::TensorPtr linear_op(
     auto out = autograd::create_tensor();
 
     const auto grid_size = tensor->get_value().device()->compute_with_storage_grid_size();
-    std::optional<ttnn::CoreGrid> core_grid = ttnn::CoreGrid{grid_size.x, grid_size.y};
+    auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
 
     out->set_value(ttnn::linear(
         tensor->get_value(),

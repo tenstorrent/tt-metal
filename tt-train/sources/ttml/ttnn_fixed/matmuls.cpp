@@ -10,7 +10,7 @@ namespace ttml::ttnn_fixed {
 tt::tt_metal::Tensor matmul(
     const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b, bool transpose_a, bool transpose_b) {
     const auto grid_size = a.device()->compute_with_storage_grid_size();
-    std::optional<ttnn::CoreGrid> core_grid = ttnn::CoreGrid{grid_size.x, grid_size.y};
+    auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
 
     return ttnn::matmul(
         a,
