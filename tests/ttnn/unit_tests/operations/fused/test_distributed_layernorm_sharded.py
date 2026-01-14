@@ -228,6 +228,8 @@ def run_pre_allgather_layernorm(
             torch_input_chunks[d] = torch_input_chunks[d] + torch_residual_input_chunks[d]
         else:
             tt_residual_input_tensor = None
+        device.clear_program_cache()
+
         tt_pre_allgather_output = compute_pre_allgather_stats(
             tt_input_tensor, core_grid, input_width, is_rmsnorm, tt_residual_input_tensor
         )

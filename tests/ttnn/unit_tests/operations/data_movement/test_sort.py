@@ -187,6 +187,7 @@ def test_sort_program_cache(shape, dim, descending, device):
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
 
+    device.clear_program_cache()
     test_iterations = 3
     for _ in range(test_iterations):
         # Run the sort operation multiple times to fill the program cache

@@ -725,8 +725,9 @@ bool can_construct_on_device(
         !memory_config.is_sharded() &&
         // on-device tiling operation expects 32x32. In some cases (`test_tiny_tiles_bfloat` test for example)
         // the tile size is provided explicitly and does not match x32 pattern.
-        (optional_tile.has_value() && ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
-         ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0)));
+        (!optional_tile.has_value() ||
+         (optional_tile.has_value() && ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
+          ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0))));
 }
 
 template <typename T>
@@ -768,6 +769,13 @@ Tensor create_tt_tensor_from_host_data(
         if (exec_on_device && construct_on_device && pydata_borrowable) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
+        } else if (exec_on_device && construct_on_device && src_dtype == dst_dtype) {
+            return Tensor::from_span(
+                tt::stl::make_const_span(host_buffer.view_as<T>()),
+                TensorSpec(tensor_shape, TensorLayout(src_dtype, PageConfig(Layout::ROW_MAJOR), memory_config)),
+                device,
+                std::nullopt,
+                static_cast<T>(pad_value));
         } else if (mesh_mapper != nullptr) {
             // sharded tensor must be created using factory function to avoid validation errors in the
             // `TensorSpec` constructor. Example `test_paged_cache_mask.py::test_update_cache`, fails

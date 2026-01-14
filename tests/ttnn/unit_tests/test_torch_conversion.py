@@ -331,6 +331,17 @@ def test_dtype_conversion_pcc(device, shape, dtype):
     assert_with_pcc(torch_tensor, torch.Tensor(input_tensor.to_list()), 0.999999)
 
 
+def test_bfloat_operations(device):
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    torch.manual_seed(2005)
+    torch_tensor = random_torch_tensor(ttnn.bfloat16, [1, 1, 32, 32])
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    captured_graph = ttnn.graph.end_graph_capture()
+    ttnn.graph.visualize(captured_graph, file_name="/tmp/from_torch_bfloat_operations.svg")
+
+    assert_with_pcc(torch_tensor, torch.Tensor(input_tensor.to_list()), 0.999999)
+
+
 def create_from_numpy_test_tensors(
     device,
     shape,
