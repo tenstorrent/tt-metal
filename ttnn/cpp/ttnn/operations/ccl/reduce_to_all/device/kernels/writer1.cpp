@@ -167,7 +167,6 @@ void kernel_main() {
     cb_pop_front(packet_cb_id, 1);
 
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
-    ;
 
     // Writer1 uses forward mux - signal the forward mux termination master (Reader2)
     {

@@ -30,15 +30,15 @@ void bind_reduce_to_all(nb::module_& mod) {
 
             Keyword Args:
                 topology (ttnn.Topology): Fabric topology.
-                output_tensor (ttnn.Tensor,optional): Optional output tensor.
-                fw_intermediate_tensor (ttnn.Tensor,optional): Optional fw intermediate tensor.
-                bw_intermediate_tensor (ttnn.Tensor,optional): Optional bw intermediate tensor.
-                coord_intermediate_tensor (ttnn.Tensor,optional): Optional coord intermediate tensor.
-                input_mux_cores (List[ttnn.CoreCoord], optional): List of mux core
+                output_tensor (ttnn.Tensor, optional): Optional output tensor.
+                fw_intermediate_tensor (ttnn.Tensor, optional): Optional fw intermediate tensor.
+                bw_intermediate_tensor (ttnn.Tensor, optional): Optional bw intermediate tensor.
+                coord_intermediate_tensor (ttnn.Tensor, optional): Optional coord intermediate tensor.
+                input_mux_cores (List[ttnn.CoreCoord], optional): List of mux cores
                 extra_worker_cores (List[ttnn.CoreCoord], optional): We have total of 16 worker cores for neighbour exchange: 8 data cores and 8 extra worker cores.
 
            Returns:
-               ttnn.Tensor output_tensor_l: the output tensor for values.
+                ttnn.Tensor output_tensor_l: the output tensor for values.
                 ttnn.Tensor output_tensor_s: the output tensor for sum.
                 ttnn.Tensor output_tensor_m: the output tensor for max.
 
