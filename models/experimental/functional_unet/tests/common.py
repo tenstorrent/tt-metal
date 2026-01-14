@@ -12,11 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 UNET_FULL_MODEL_PCC = 0.99840
 UNET_FULL_MODEL_PCC_BH = 0.99780
 
-<<<<<<< HEAD
-UNET_TRACE_REGION_SIZE = 768 * 1024
-=======
 UNET_TRACE_REGION_SIZE = 540672
->>>>>>> e78c3a0b1b (fix trace_region_size)
 UNET_L1_SMALL_REGION_SIZE = 9344
 
 
