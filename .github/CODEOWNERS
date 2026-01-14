@@ -368,6 +368,7 @@ models/experimental/retinanet @dvartaniansTT @tenstorrent/cse-developer-ttnn @te
 models/experimental/efficientdetd0 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 models/vllm_test_utils/ @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
+models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 
 # tracy
 tools/tracy/ @mo-tenstorrent @sagarwalTT @tenstorrent/codeowner-bypass
