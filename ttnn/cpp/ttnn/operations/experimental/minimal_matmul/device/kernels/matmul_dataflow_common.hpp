@@ -202,3 +202,105 @@ void write_block_sync_granular(
     }
     noc_async_writes_flushed();
 }
+
+/**
+ * Write a block of output to 3 separate output tensors (for split operation).
+ * Each tile is routed to the correct output tensor based on its chunk index.
+ */
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void write_block_sync_split(
+    const TensorAccessorType& out_accessor0,
+    const TensorAccessorType& out_accessor1,
+    const TensorAccessorType& out_accessor2,
+    const TensorShape2D& chunk_shape,
+    uint32_t N_tiles_per_chunk,
+    uint32_t read_ptr,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
+
+    for (uint32_t i = d0_start; i < d0_end; i++) {
+        if (i >= chunk_shape.logical_d0) {
+            break;
+        }
+        for (uint32_t j = d1_start; j < d1_end; j++) {
+            // Calculate which chunk this tile belongs to
+            uint32_t chunk_idx = j / N_tiles_per_chunk;
+            uint32_t n_in_chunk = j % N_tiles_per_chunk;
+
+            // Only write if within logical bounds
+            if (n_in_chunk < chunk_shape.logical_d1) {
+                uint32_t tile_id = i * N_tiles_per_chunk + n_in_chunk;
+
+                // Route to correct output tensor based on chunk index
+                if (chunk_idx == 0) {
+                    noc_async_write_tile(tile_id, out_accessor0, read_ptr);
+                } else if (chunk_idx == 1) {
+                    noc_async_write_tile(tile_id, out_accessor1, read_ptr);
+                } else if (chunk_idx == 2) {
+                    noc_async_write_tile(tile_id, out_accessor2, read_ptr);
+                }
+            }
+            read_ptr += tile_size_bytes;
+        }
+        // Finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
+        read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
+    }
+    noc_async_writes_flushed();
+}
+
+/**
+ * Granular write method for split operation with 3 output tensors.
+ * Waits on each row of output tiles before writing, routing each tile to the correct output.
+ */
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void write_block_sync_granular_split(
+    const TensorAccessorType& out_accessor0,
+    const TensorAccessorType& out_accessor1,
+    const TensorAccessorType& out_accessor2,
+    const TensorShape2D& chunk_shape,
+    uint32_t N_tiles_per_chunk,
+    uint32_t cb_id_out,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
+        // CRITICAL: Always wait for N_block_tiles (compute kernel produces this many)
+        cb_wait_front(cb_id_out, N_block_tiles);
+
+        uint32_t m_tile = d0_start + m_id;
+        if (m_tile < d0_end && m_tile < chunk_shape.logical_d0) {
+            uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+
+            // Iterate through the actual tiles in the logical range (not padding)
+            for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
+                uint32_t chunk_idx = n_tile_id / N_tiles_per_chunk;
+                uint32_t n_in_chunk = n_tile_id % N_tiles_per_chunk;
+
+                // Only write if within chunk bounds
+                if (n_in_chunk < chunk_shape.logical_d1) {
+                    uint32_t tile_id = m_tile * N_tiles_per_chunk + n_in_chunk;
+
+                    // Route to correct output tensor
+                    if (chunk_idx == 0) {
+                        noc_async_write_tile(tile_id, out_accessor0, out_read_ptr);
+                    } else if (chunk_idx == 1) {
+                        noc_async_write_tile(tile_id, out_accessor1, out_read_ptr);
+                    } else if (chunk_idx == 2) {
+                        noc_async_write_tile(tile_id, out_accessor2, out_read_ptr);
+                    }
+                }
+                out_read_ptr += tile_size_bytes;
+            }
+        }
+
+        cb_pop_front(cb_id_out, N_block_tiles);
+    }
+    noc_async_writes_flushed();
+}
