@@ -420,8 +420,19 @@ public:
     static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
 
     // Architecture-specific maximum packet payload size limits
-    // The maximum payload size is calculated based on the maximum NoC packet size (wormhole: 8192 bytes, blackhole:
-    // 16384 bytes)
+    //
+    // Calculated from NoC constraints:
+    //   max_payload = floor((max_noc_packet_size - max_packet_header_size) / tile_size) * tile_size
+    //
+    // Where:
+    //   - Max NoC packet size: Wormhole = 8192 bytes, Blackhole = 16384 bytes
+    //   - Max packet header size: 96 bytes (HybridMeshPacketHeaderT<35> for 2D mesh routing)
+    //   - Tile size (Bfp8_b): 1088 bytes
+    //
+    // Payload is rounded down to tile boundaries for efficient tile-aligned transfers.
+    //
+    // Wormhole:  (8192 - 96) / 1088 = 7.44 tiles → 7 tiles = 7616 bytes
+    // Blackhole: (16384 - 96) / 1088 = 14.97 tiles → 14 tiles = 15232 bytes
     static constexpr size_t max_packet_payload_size_bytes_wormhole =
         tt::tile_size(tt::DataFormat::Bfp8_b) * 7;  // 7616 bytes
     static constexpr size_t max_packet_payload_size_bytes_blackhole =
