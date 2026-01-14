@@ -85,62 +85,29 @@ class BEVFormerV2(MVXTwoStageDetector):
 
     def extract_img_feat(self, img):
         """Extract features of images."""
-        B = img.size(0)
-        if img is not None:
-            if img.dim() == 5 and img.size(0) == 1:
-                img.squeeze_()
-            elif img.dim() == 5 and img.size(0) > 1:
-                B, N, C, H, W = img.size()
-                img = img.reshape(B * N, C, H, W)
-            if self.use_grid_mask:
-                img = self.grid_mask(img)
-
-            img_feats = self.img_backbone(img)
-            if isinstance(img_feats, dict):
-                img_feats = list(img_feats.values())
-        else:
+        if img is None:
             return None
+        if img.dim() == 3:
+            img = img.unsqueeze(0)
+        if img.dim() == 4:
+            img = img.unsqueeze(0)
+        B = img.size(0)
+        if img.dim() == 5 and img.size(0) == 1:
+            img = img.squeeze(0)
+        elif img.dim() == 5 and img.size(0) > 1:
+            B, N, C, H, W = img.size()
+            img = img.reshape(B * N, C, H, W)
+        if self.use_grid_mask:
+            img = self.grid_mask(img)
 
-        # Debug: Check backbone features before neck
-        if not hasattr(self, "_debug_count"):
-            self._debug_count = 0
-        if self._debug_count < 1:  # Only print first time
-            if img_feats:
-                print(f"\n[DEBUG] Backbone features before neck: {len(img_feats)} levels")
-                for i, feat in enumerate(img_feats):
-                    print(
-                        f"  Level {i}: shape={feat.shape}, mean={feat.mean().item():.6f}, std={feat.std().item():.6f}"
-                    )
+        print("Saving input img after processing", img.shape)
+
+        img_feats = self.img_backbone(img)
+        if isinstance(img_feats, dict):
+            img_feats = list(img_feats.values())
 
         if self.with_img_neck:
-            img_feats_before_neck = img_feats
             img_feats = self.img_neck(img_feats)
-            # Debug: Check neck output
-            if self._debug_count < 1:
-                print(f"[DEBUG] After img_neck: {len(img_feats)} levels")
-                for i, feat in enumerate(img_feats):
-                    mean_val = feat.mean().item()
-                    std_val = feat.std().item()
-                    max_val = feat.max().item()
-                    min_val = feat.min().item()
-                    print(
-                        f"  Level {i}: shape={feat.shape}, mean={mean_val:.6f}, std={std_val:.6f}, min={min_val:.6f}, max={max_val:.6f}"
-                    )
-                    # Warn if std is very high (potential numerical instability)
-                    if std_val > 100:
-                        print(
-                            f"    ⚠ WARNING: Level {i} has very high std ({std_val:.2f}), possible numerical instability!"
-                        )
-                # Check if neck actually modified features
-                if len(img_feats) == len(img_feats_before_neck):
-                    for i in range(len(img_feats)):
-                        if torch.equal(img_feats[i], img_feats_before_neck[i]):
-                            print(f"  WARNING: Level {i} unchanged by neck!")
-                self._debug_count += 1
-        else:
-            if self._debug_count < 1:
-                print(f"[DEBUG] WARNING: with_img_neck is False, skipping neck!")
-                self._debug_count += 1
 
         img_feats_reshaped = []
         for img_feat in img_feats:
