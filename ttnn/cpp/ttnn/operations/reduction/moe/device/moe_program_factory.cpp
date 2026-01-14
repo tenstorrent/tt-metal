@@ -14,9 +14,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::reduction::moe::program {
 
 MoeProgramFactory::cached_program_t MoeProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
     const auto& expert_mask_tensor = tensor_args.expert_mask;
     const auto& topk_mask_tensor = tensor_args.topk_mask;
@@ -219,7 +217,7 @@ void MoeProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     auto& unary_reader_kernel_id = shared_vars.unary_reader_kernel_id;
