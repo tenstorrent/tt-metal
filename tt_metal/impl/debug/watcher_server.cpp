@@ -27,7 +27,7 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -537,9 +537,8 @@ void WatcherServer::Impl::poll_watcher_data() {
             if (rtoptions.get_test_mode_enabled()) {
                 server_killed_due_to_error_ = true;
                 break;
-            } else {
-                throw e;
             }
+            throw e;
         }
 
         fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());

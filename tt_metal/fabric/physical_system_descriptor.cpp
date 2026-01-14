@@ -80,31 +80,30 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         auto pcie_id = cluster_desc->get_chips_with_mmio().at(chip_id);
         pcie_devices_per_tray[ubb_id.tray_id].insert(pcie_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
-    } else {
-        auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
-        ASICLocation asic_location;
-        tt::ARCH arch = cluster_desc->get_arch(chip_id);
-        if (arch == tt::ARCH::WORMHOLE_B0) {
-            // Derive ASIC Location based on the tunnel depth for Wormhole systems
-            // TODO: Remove this once UMD populates the ASIC Location for WH systems.
-            auto mmio_device = cluster_desc->get_closest_mmio_capable_chip(chip_id);
-            auto tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster);
-            const auto& tunnels = tunnels_from_mmio_device.at(mmio_device);
-            for (const auto& devices_on_tunnel : tunnels) {
-                auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
-                if (device_it != devices_on_tunnel.end()) {
-                    asic_location = ASICLocation{static_cast<unsigned int>(device_it - devices_on_tunnel.begin())};
-                    break;
-                }
-            }
-        } else if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
-            // Query ASIC Location from the Cluster Descriptor for BH/QUASAR.
-            asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};
-        } else {
-            TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
-        }
-        return {tray_id, asic_location};
     }
+    auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
+    ASICLocation asic_location;
+    tt::ARCH arch = cluster_desc->get_arch(chip_id);
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        // Derive ASIC Location based on the tunnel depth for Wormhole systems
+        // TODO: Remove this once UMD populates the ASIC Location for WH systems.
+        auto mmio_device = cluster_desc->get_closest_mmio_capable_chip(chip_id);
+        auto tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster);
+        const auto& tunnels = tunnels_from_mmio_device.at(mmio_device);
+        for (const auto& devices_on_tunnel : tunnels) {
+            auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
+            if (device_it != devices_on_tunnel.end()) {
+                asic_location = ASICLocation{static_cast<unsigned int>(device_it - devices_on_tunnel.begin())};
+                break;
+            }
+        }
+    } else if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
+        // Query ASIC Location from the Cluster Descriptor for BH/QUASAR.
+        asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};
+    } else {
+        TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
+    }
+    return {tray_id, asic_location};
 }
 
 struct EthEndpoint {
@@ -839,6 +838,10 @@ LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() co
         hal_->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
     auto uncorr_addr = hal_->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
+    bool arch_blackhole = cluster_->get_cluster_description()->get_arch(0) == tt::ARCH::BLACKHOLE;
+    // Memory layout for 64B metrics is different on WH vs BH systems/
+    uint64_t hi_offset = arch_blackhole ? sizeof(uint32_t) : 0;
+    uint64_t lo_offset = arch_blackhole ? 0 : sizeof(uint32_t);
 
     for (const auto& asic : local_asics) {
         const auto& asic_connections = local_asic_graph.at(asic);
@@ -856,13 +859,14 @@ LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() co
                 cluster.read_from_device(
                     &retrain_count_val, src_chip_id, translated_eth_core, retrain_count_addr, sizeof(uint32_t));
                 cluster.read_from_device(&crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
-                cluster.read_from_device(&corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
                 cluster.read_from_device(
-                    &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + 4, sizeof(uint32_t));
+                    &corr_val_hi, src_chip_id, translated_eth_core, corr_addr + hi_offset, sizeof(uint32_t));
                 cluster.read_from_device(
-                    &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr, sizeof(uint32_t));
+                    &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + lo_offset, sizeof(uint32_t));
                 cluster.read_from_device(
-                    &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + 4, sizeof(uint32_t));
+                    &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr + hi_offset, sizeof(uint32_t));
+                cluster.read_from_device(
+                    &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + lo_offset, sizeof(uint32_t));
 
                 local_ethernet_metrics[asic][src_eth_chan] = {
                     .retrain_count = retrain_count_val,

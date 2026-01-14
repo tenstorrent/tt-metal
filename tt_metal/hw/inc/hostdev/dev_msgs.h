@@ -192,57 +192,9 @@ struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
 } __attribute__((packed));
 
+// save space for the structure, device side will cast to the corrrect structure
 struct subordinate_sync_msg_t {
-#if defined(ARCH_QUASAR)
-    // Quasar: expanded structure for multiple DM cores
-    union {
-        struct {
-            volatile uint64_t allDMs;
-            volatile uint32_t allNeo0;
-            volatile uint32_t allNeo1;
-            volatile uint32_t allNeo2;
-            volatile uint32_t allNeo3;
-        };
-        struct {
-            volatile uint8_t dm1;  // Keep dm1 name for compatibility
-            volatile uint8_t dm2;
-            volatile uint8_t dm3;
-            volatile uint8_t dm4;
-            volatile uint8_t dm5;
-            volatile uint8_t dm6;
-            volatile uint8_t dm7;
-            volatile uint8_t padding;
-            volatile uint8_t neo0Trisc0;
-            volatile uint8_t neo0Trisc1;
-            volatile uint8_t neo0Trisc2;
-            volatile uint8_t neo0Trisc3;
-            volatile uint8_t neo1Trisc0;
-            volatile uint8_t neo1Trisc1;
-            volatile uint8_t neo1Trisc2;
-            volatile uint8_t neo1Trisc3;
-            volatile uint8_t neo2Trisc0;
-            volatile uint8_t neo2Trisc1;
-            volatile uint8_t neo2Trisc2;
-            volatile uint8_t neo2Trisc3;
-            volatile uint8_t neo3Trisc0;
-            volatile uint8_t neo3Trisc1;
-            volatile uint8_t neo3Trisc2;
-            volatile uint8_t neo3Trisc3;
-            uint8_t pad[12];
-        };
-    } __attribute__((packed));
-#else
-    // WH/BH: original compact structure for single DM core + triscs
-    union {
-        volatile uint32_t all;
-        struct {
-            volatile uint8_t dm1;  // ncrisc must come first, see ncrisc-halt.S
-            volatile uint8_t trisc0;
-            volatile uint8_t trisc1;
-            volatile uint8_t trisc2;
-        };
-    };
-#endif
+    volatile uint8_t map[subordinate_map_size];
 };
 
 constexpr int num_waypoint_bytes_per_riscv = 4;

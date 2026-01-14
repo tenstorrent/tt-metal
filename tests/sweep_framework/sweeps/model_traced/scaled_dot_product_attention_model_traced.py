@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -51,13 +50,10 @@ def invalidate_vector(test_vector) -> tuple:
     Filter out configs that are known to cause timeouts or resource issues.
     """
     input_shape = test_vector.get("input_shape")
-    input_a_memory_config = test_vector.get("input_a_memory_config")
 
     # If we have shape info, check for very large configs
     if isinstance(input_shape, dict):
         shape_q = input_shape.get("input_a") or input_shape.get("self")
-        shape_k = input_shape.get("input_b") or input_shape.get("other")
-        shape_v = input_shape.get("input_c")
 
         # Calculate approximate memory requirement
         if shape_q and isinstance(shape_q, (list, tuple)) and len(shape_q) >= 4:
@@ -95,7 +91,6 @@ def run(
     input_c_layout=None,
     input_c_memory_config=None,
     output_memory_config=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,

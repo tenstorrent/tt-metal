@@ -4,7 +4,7 @@
 
 #include "llama_reduce_scatter.hpp"
 #include "device/llama_reduce_scatter_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 

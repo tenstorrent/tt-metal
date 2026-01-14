@@ -261,6 +261,14 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
                 "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
+
+            // Validate that chunk_start_idx is a multiple of q_chunk_size
+            // This is required because chunk_start_idx is divided by q_chunk_size to compute chunked_q_chunk_offset
+            TT_FATAL(
+                attrs.chunk_start_idx.value() % q_chunk_size == 0,
+                "chunk_start_idx must be a multiple of q_chunk_size. Got chunk_start_idx: {}, q_chunk_size: {}",
+                attrs.chunk_start_idx.value(),
+                q_chunk_size);
         }
 
         // In chunked mode, K's sequence dimension should be >= Q's sequence dimension + chunk_start_idx
@@ -359,6 +367,7 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
         attrs.scale,
+        attrs.sliding_window_size,
         attrs.output_mem_config,
         attrs.program_config,
         attrs.is_causal,

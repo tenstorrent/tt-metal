@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <string>
 #include <vector>
+#include <atomic>
 #include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
@@ -180,7 +181,7 @@ class RunTimeOptions {
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
-    uint32_t experimental_device_debug_dump_interval_seconds = 0;
+    bool experimental_device_debug_dump_enabled = false;
 
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
@@ -192,6 +193,7 @@ class RunTimeOptions {
 
     bool skip_loading_fw = false;
 
+    bool jit_analytics_enabled = false;
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
 
@@ -234,7 +236,7 @@ class RunTimeOptions {
     uint32_t arc_debug_buffer_size = 0;
 
     // Force disables using DMA for reads and writes
-    bool disable_dma_ops = false;
+    std::atomic<bool> disable_dma_ops = false;
 
     // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
@@ -522,12 +524,7 @@ public:
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
-    bool get_experimental_device_debug_dump_enabled() const {
-        return experimental_device_debug_dump_interval_seconds > 0;
-    }
-    uint32_t get_experimental_device_debug_dump_interval_seconds() const {
-        return experimental_device_debug_dump_interval_seconds;
-    }
+    bool get_experimental_device_debug_dump_enabled() const { return experimental_device_debug_dump_enabled; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
@@ -546,6 +543,9 @@ public:
     bool get_tracy_mid_run_push() const { return tracy_mid_run_push; }
 
     bool get_skip_loading_fw() const { return skip_loading_fw; }
+
+    bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
+    void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
@@ -595,8 +595,8 @@ public:
     uint32_t get_arc_debug_buffer_size() const { return arc_debug_buffer_size; }
     void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
-    bool get_disable_dma_ops() const { return disable_dma_ops; }
-    void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
+    bool get_disable_dma_ops() const { return disable_dma_ops.load(std::memory_order_relaxed); }
+    void set_disable_dma_ops(bool disable) { disable_dma_ops.store(disable, std::memory_order_relaxed); }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
 
