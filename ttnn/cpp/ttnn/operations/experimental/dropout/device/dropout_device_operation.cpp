@@ -87,7 +87,7 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t DropoutDeviceOperation::compute_output_specs(
+TensorSpec DropoutDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -102,7 +102,7 @@ spec_return_value_t DropoutDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
 }
 
-tensor_return_value_t DropoutDeviceOperation::create_output_tensors(
+Tensor DropoutDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
