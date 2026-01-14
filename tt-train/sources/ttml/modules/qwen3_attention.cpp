@@ -1,5 +1,7 @@
 #include "qwen3_attention.hpp"
 
+#include <core/ttnn_all_includes.hpp>
+
 #include "dropout_module.hpp"
 #include "linear_module.hpp"
 #include "modules/rotary_embedding.hpp"
@@ -43,7 +45,11 @@ Qwen3Attention::Qwen3Attention(const Qwen3AttentionConfig& config) :
 }
 
 ttml::autograd::TensorPtr Qwen3Attention::operator()(
-    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
+    const ttml::autograd::TensorPtr& x,
+    const ttml::autograd::TensorPtr& mask,
+    std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
+    const uint32_t layer_idx,
+    const uint32_t new_tokens) {
     auto q = (*m_q_linear)(x);
     auto k = (*m_k_linear)(x);
     auto v = (*m_v_linear)(x);
@@ -67,13 +73,19 @@ ttml::autograd::TensorPtr Qwen3Attention::operator()(
     auto [query_with_heads, key_with_heads, value_with_heads] =
         ops::grouped_heads_creation(q, kv, m_num_heads, m_num_groups);
 
+    const uint32_t token_position = kv_cache ? kv_cache->get_cache_position() : 0;
+
     if (m_embedding) {
-        query_with_heads = (*m_embedding)(query_with_heads);
-        key_with_heads = (*m_embedding)(key_with_heads);
+        query_with_heads = (*m_embedding)(query_with_heads, token_position);
+        key_with_heads = (*m_embedding)(key_with_heads, token_position);
+    }
+
+    if (kv_cache) {
+        std::tie(key_with_heads, value_with_heads) = models::common::transformer::update_kv_cache_and_get_slices(
+            kv_cache, layer_idx, key_with_heads, value_with_heads, mask, new_tokens);
     }
 
     auto attention = ttml::ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
-
     attention = ops::heads_fusion(attention);
 
     auto out = (*m_out_linear)(attention);

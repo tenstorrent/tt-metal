@@ -223,17 +223,27 @@ Qwen3::Qwen3(const Qwen3Config& config) : m_config(config) {
 }
 
 ttml::autograd::TensorPtr Qwen3::operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
+    return (*this)(x, mask, nullptr, 0);
+}
+
+ttml::autograd::TensorPtr Qwen3::operator()(
+    const ttml::autograd::TensorPtr& x,
+    const ttml::autograd::TensorPtr& mask,
+    std::shared_ptr<common::transformer::KvCache> kv_cache,
+    const uint32_t new_tokens) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = tok_emb_out;
-    for (auto& block : blocks) {
+
+    for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
+        auto& block = blocks[block_idx];
         if (runner_type == RunnerType::MemoryEfficient) {
-            out = common::transformer::memory_efficient_runner(*block, out, mask);
-        } else if (runner_type == RunnerType::Default) {
-            out = (*block)(out, mask);
+            out = common::transformer::memory_efficient_runner(
+                *block, out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
         } else {
-            throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
+            out = (*block)(out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
         }
     }
+
     out = (*ln_fc)(out);
     auto logits = (*fc)(out);
     return logits;

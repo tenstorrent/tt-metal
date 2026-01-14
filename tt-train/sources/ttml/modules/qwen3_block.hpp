@@ -5,6 +5,7 @@
 #pragma once
 
 #include "autograd/tensor.hpp"
+#include "models/common/transformer_common.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/qwen3_attention.hpp"
@@ -61,7 +62,12 @@ public:
         float rms_norm_eps = 1e-6F,  // Qwen3 uses 1e-6
         std::optional<uint32_t> intermediate_dim = std::nullopt);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
+    autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input,
+        const autograd::TensorPtr& mask,
+        std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
+        const uint32_t layer_idx,
+        const uint32_t new_tokens);
 
     // Getters for accessing sub-modules
     [[nodiscard]] std::shared_ptr<Qwen3Attention> get_attention() const {

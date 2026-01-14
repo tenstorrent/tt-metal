@@ -227,26 +227,13 @@ ttml::autograd::TensorPtr Llama::operator()(
         out = autograd::create_tensor(out_tensor);
     }
 
-    // llama does positional embedding in the attention blocks
-
-    if (kv_cache) {
-        // Inference mode with KV cache
-        for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
-            auto& block = blocks[block_idx];
-            // Cast block to LlamaBlock to access the cache-aware operator
-            auto llama_block = std::dynamic_pointer_cast<ttml::modules::LlamaBlock>(block);
-            out = (*llama_block)(out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
-        }
-    } else {
-        // Training mode or inference without cache
-        for (auto& block : blocks) {
-            if (runner_type == RunnerType::MemoryEfficient) {
-                out = common::transformer::memory_efficient_runner(*block, out, mask);
-            } else if (runner_type == RunnerType::Default) {
-                out = (*block)(out, mask);
-            } else {
-                throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
-            }
+    for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
+        auto& block = blocks[block_idx];
+        if (runner_type == RunnerType::MemoryEfficient) {
+            out = common::transformer::memory_efficient_runner(
+                *block, out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
+        } else {
+            out = (*block)(out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
         }
     }
 

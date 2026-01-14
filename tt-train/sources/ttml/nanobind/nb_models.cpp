@@ -366,6 +366,33 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
         auto py_qwen3 = static_cast<nb::class_<models::qwen3::Qwen3>>(py_qwen3_module.attr("Qwen3"));
         py_qwen3.def(nb::init<models::qwen3::Qwen3Config>());
+
+        py_qwen3.def(
+            "__call__",
+            [](models::qwen3::Qwen3& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& mask) { return self(tensor, mask); },
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            "Model forward pass without KV cache.");
+
+        py_qwen3.def(
+            "__call__",
+            [](models::qwen3::Qwen3& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& mask,
+               std::shared_ptr<models::common::transformer::KvCache> kv_cache,
+               uint32_t new_tokens) { return self(tensor, mask, kv_cache, new_tokens); },
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            nb::arg("kv_cache"),
+            nb::arg("new_tokens"),
+            "Model forward pass with KV cache for inference.");
+
+        py_qwen3.def(
+            "get_original_vocab_size",
+            &models::qwen3::Qwen3::get_original_vocab_size,
+            "Get the original vocabulary size");
     }
 
     {

@@ -10,8 +10,11 @@
 #include "autograd/tensor.hpp"
 #include "base_transformer.hpp"
 #include "common/transformer_common.hpp"
+#include "modules/embedding_module.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "modules/qwen3_block.hpp"
+#include "modules/rms_norm_module.hpp"
 #include "ops/rope_op.hpp"
 #include "yaml-cpp/yaml.h"
 
@@ -46,10 +49,10 @@ class Qwen3 : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
     Qwen3Config m_config;
-    std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
-    std::vector<std::shared_ptr<ModuleBase>> blocks;
-    std::shared_ptr<ModuleBase> ln_fc;
-    std::shared_ptr<ttml::modules::ModuleBase> fc;
+    std::shared_ptr<modules::Embedding> tok_emb;
+    std::vector<std::shared_ptr<modules::Qwen3Block>> blocks;
+    std::shared_ptr<modules::RMSNormLayer> ln_fc;
+    std::shared_ptr<modules::LinearLayer> fc;
     ops::RotaryEmbeddingParams m_rope_params;
     uint32_t m_original_vocab_size = 0U;
 
@@ -59,14 +62,18 @@ public:
     void load_from_safetensors(const std::filesystem::path& model_path) override;
     ttml::autograd::TensorPtr operator()(
         const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
+    ttml::autograd::TensorPtr operator()(
+        const ttml::autograd::TensorPtr& x,
+        const ttml::autograd::TensorPtr& mask,
+        std::shared_ptr<common::transformer::KvCache> kv_cache,
+        const uint32_t new_tokens);
 
     // Get the original vocabulary size for token validation
     [[nodiscard]] uint32_t get_original_vocab_size() const {
         return m_original_vocab_size;
     }
 
-    // Get a specific block for testing
-    [[nodiscard]] std::shared_ptr<ModuleBase> get_block(size_t index) const {
+    [[nodiscard]] std::shared_ptr<modules::Qwen3Block> get_block(size_t index) const {
         if (index >= blocks.size()) {
             throw std::out_of_range(fmt::format("Block index {} out of range (max: {})", index, blocks.size() - 1));
         }

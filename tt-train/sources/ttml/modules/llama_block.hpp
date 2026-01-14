@@ -42,9 +42,6 @@ public:
         float dropout_prob = 0.0F,
         std::optional<uint32_t> intermediate_dim = std::nullopt);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
-
-    // Forward with KV cache for inference
     autograd::TensorPtr operator()(
         const autograd::TensorPtr& input,
         const autograd::TensorPtr& mask,

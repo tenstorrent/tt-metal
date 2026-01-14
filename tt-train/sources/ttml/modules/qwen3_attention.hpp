@@ -5,8 +5,12 @@
 #pragma once
 
 #include "autograd/tensor.hpp"
+#include "models/common/transformer_common.hpp"
+#include "modules/dropout_module.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "modules/rms_norm_module.hpp"
+#include "modules/rotary_embedding.hpp"
 #include "ops/rope_op.hpp"
 
 namespace ttml::modules {
@@ -31,32 +35,35 @@ private:
     uint32_t m_num_heads{};
     uint32_t m_num_groups{};
     uint32_t m_head_dim{};
-    std::shared_ptr<ModuleBase> m_q_linear;    // embedding_dim → num_heads * head_dim
-    std::shared_ptr<ModuleBase> m_k_linear;    // embedding_dim → num_groups * head_dim
-    std::shared_ptr<ModuleBase> m_v_linear;    // embedding_dim → num_groups * head_dim
-    std::shared_ptr<ModuleBase> m_out_linear;  // num_heads * head_dim → embedding_dim
-    std::shared_ptr<ModuleBase> m_dropout;
-    std::shared_ptr<ModuleBase> m_embedding;  // RoPE
-    std::shared_ptr<RMSNormLayer> m_q_norm;   // Q normalization per head (CRITICAL!)
-    std::shared_ptr<RMSNormLayer> m_k_norm;   // K normalization per head (CRITICAL!)
+    std::shared_ptr<LinearLayer> m_q_linear;
+    std::shared_ptr<LinearLayer> m_k_linear;
+    std::shared_ptr<LinearLayer> m_v_linear;
+    std::shared_ptr<LinearLayer> m_out_linear;
+    std::shared_ptr<DropoutLayer> m_dropout;
+    std::shared_ptr<RotaryEmbedding> m_embedding;
+    std::shared_ptr<RMSNormLayer> m_q_norm;
+    std::shared_ptr<RMSNormLayer> m_k_norm;
 
 public:
     explicit Qwen3Attention(const Qwen3AttentionConfig& config);
 
     [[nodiscard]] autograd::TensorPtr operator()(
-        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+        const autograd::TensorPtr& x,
+        const autograd::TensorPtr& mask,
+        std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
+        const uint32_t layer_idx,
+        const uint32_t new_tokens);
 
-    // Getters for accessing sub-modules
-    [[nodiscard]] std::shared_ptr<ModuleBase> get_q_linear() const {
+    [[nodiscard]] std::shared_ptr<LinearLayer> get_q_linear() const {
         return m_q_linear;
     }
-    [[nodiscard]] std::shared_ptr<ModuleBase> get_k_linear() const {
+    [[nodiscard]] std::shared_ptr<LinearLayer> get_k_linear() const {
         return m_k_linear;
     }
-    [[nodiscard]] std::shared_ptr<ModuleBase> get_v_linear() const {
+    [[nodiscard]] std::shared_ptr<LinearLayer> get_v_linear() const {
         return m_v_linear;
     }
-    [[nodiscard]] std::shared_ptr<ModuleBase> get_out_linear() const {
+    [[nodiscard]] std::shared_ptr<LinearLayer> get_out_linear() const {
         return m_out_linear;
     }
     [[nodiscard]] std::shared_ptr<RMSNormLayer> get_q_norm() const {

@@ -67,20 +67,6 @@ LlamaBlock::LlamaBlock(
     register_module(m_attention, "attention");
 }
 
-autograd::TensorPtr LlamaBlock::operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
-    auto residual = input;
-    auto h = (*m_attention_norm)(input);
-    h = (*m_attention)(h, mask);  // TODO: pass in start_pos, freqs_cis for RoPE here
-    h = ops::add(h, residual);
-
-    residual = h;
-    auto x = (*m_mlp_norm)(h);
-    x = (*m_mlp)(x);
-    x = ops::add(x, residual);
-
-    return x;
-}
-
 autograd::TensorPtr LlamaBlock::operator()(
     const autograd::TensorPtr& input,
     const autograd::TensorPtr& mask,
