@@ -262,7 +262,7 @@ TEST_F(FabricTrafficGeneratorDefsTest, CanCreateBothStructsTogether) {
     TrafficGeneratorCompileArgs compile_args{0x1000, 64, 0, 0x2000, 1};
     TrafficGeneratorRuntimeArgs runtime_args{1, 0, 42};
 
-    EXPECT_NE(&compile_args, &runtime_args);
+    EXPECT_NE(static_cast<void*>(&compile_args), static_cast<void*>(&runtime_args));
     EXPECT_EQ(sizeof(TrafficGeneratorCompileArgs), 20u);
     EXPECT_EQ(sizeof(TrafficGeneratorRuntimeArgs), 12u);
 }
