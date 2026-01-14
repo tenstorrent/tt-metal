@@ -19,6 +19,7 @@ tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim)
  * @param forward If true, shift forward (device i sends to i+1), else backward (device i sends to i-1)
  * @return The tensor received from the neighbor device
  */
-tt::tt_metal::Tensor ring_shift(const tt::tt_metal::Tensor& tensor, uint32_t cluster_axis, bool forward = true);
+tt::tt_metal::Tensor ring_shift(
+    const tt::tt_metal::Tensor& tensor, std::optional<uint32_t> cluster_axis = std::nullopt, bool forward = true);
 
 }  // namespace ttml::ttnn_fixed::distributed

@@ -111,9 +111,20 @@ void py_module(nb::module_& m) {
         // Returns std::unique_ptr<TensorToMesh>
         py_distributed.def(
             "shard_tensor_to_mesh_mapper",
-            &ttnn::distributed::shard_tensor_to_mesh_mapper,
+            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(ttnn::distributed::MeshDevice&, int)>(
+                &ttnn::distributed::shard_tensor_to_mesh_mapper),
             nb::arg("device"),
-            nb::arg("rank"));
+            nb::arg("dim"));
+
+        // Returns std::unique_ptr<TensorToMesh>
+        py_distributed.def(
+            "shard_tensor_to_mesh_mapper",
+            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(
+                ttnn::distributed::MeshDevice&, int, std::optional<int>)>(
+                &ttnn::distributed::shard_tensor_to_mesh_mapper),
+            nb::arg("device"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = std::nullopt);
 
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
