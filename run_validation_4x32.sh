@@ -9,15 +9,16 @@
 # Check if host list is provided
 if [ $# -eq 0 ]; then
     echo "Error: No host list provided"
-    echo "Usage: $0 <comma-separated-host-list>"
-    echo "Example: $0 bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08"
+    echo "Usage: $0 <comma-separated-host-list> <docker-image>"
+    echo "Example: $0 bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08 ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:latest"
     exit 1
 fi
 
 # Get host list from command line argument
 HOSTS="$1"
-
+DOCKER_IMAGE="$2"
 echo "Using hosts: $HOSTS"
+echo "Using docker image: $DOCKER_IMAGE"
 echo ""
 
 # Create output directory if it doesn't exist
@@ -40,7 +41,7 @@ for i in {1..50}; do
 
         echo ""
         echo "Running cluster validation..."
-        mpirun --host $HOSTS --mca btl_tcp_if_include ens5f0np0 --tag-output ./build_Release/tools/scaleout/run_cluster_validation --factory-descriptor-path /data/local-syseng-manual/4x4x32_fsd.textproto --send-traffic --num-iterations 10
+        ./mpi-docker --image $DOCKER_IMAGE --empty-entrypoint --host $HOSTS ./build/tools/scaleout/run_cluster_validation --factory-descriptor-path /data/local-syseng-manual/4x4x32_fsd.textproto --send-traffic --num-iterations 10
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
