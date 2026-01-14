@@ -59,6 +59,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <impl/debug/noc_debugging.hpp>
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -797,6 +798,7 @@ bool onlyProfileDispatchCores(const ProfilerReadState state) {
            state == ProfilerReadState::ONLY_DISPATCH_CORES;
 }
 
+#if defined(TRACY_ENABLE)
 // Shared implementation for reading device profiler results
 static void ReadDeviceProfilerResultsImpl(
     distributed::MeshDevice* mesh_device,
@@ -804,7 +806,6 @@ static void ReadDeviceProfilerResultsImpl(
     const std::vector<CoreCoord>& virtual_cores,
     ProfilerReadState state,
     const std::optional<ProfilerOptionalMetadata>& metadata) {
-#if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState()) {
         return;
@@ -863,8 +864,8 @@ static void ReadDeviceProfilerResultsImpl(
     } else {
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
-#endif
 }
+#endif
 
 void ReadDeviceProfilerResults(
     distributed::MeshDevice* mesh_device,
@@ -1114,8 +1115,11 @@ void ReadMeshDeviceProfilerResults(
     }
 
     // Manual reading of device profiler results is not supported when there is already another thread reading the
-    // results
+    // results. Signal the debug dump thread to do a read instead.
     if (getDeviceDebugDumpEnabled()) {
+        if (auto& profiler_state_manager = MetalContext::instance().profiler_state_manager()) {
+            profiler_state_manager->signal_debug_dump_read();
+        }
         return;
     }
 

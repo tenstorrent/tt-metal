@@ -217,7 +217,6 @@ private:
         const std::string& op_name,
         ChipId device_id,
         const CoreCoord& physical_core,
-        const CoreCoord& virtual_core,
         tracy::RiscType risc_type,
         uint64_t data,
         const std::vector<uint64_t>& trailer_data,

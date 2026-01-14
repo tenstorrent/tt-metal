@@ -12,7 +12,6 @@
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
-#include "impl/profiler/profiler_state_manager.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -70,12 +69,6 @@ void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span
 
 void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     mesh_cq.finish(sub_device_ids);
-
-    // Signal the profiler to do a read when debug dump is enabled
-    // This allows detecting NOC issues mid-run rather than waiting until device close
-    if (auto& profiler_state_manager = MetalContext::instance().profiler_state_manager()) {
-        profiler_state_manager->signal_debug_dump_read();
-    }
 }
 
 bool UsingDistributedEnvironment() {

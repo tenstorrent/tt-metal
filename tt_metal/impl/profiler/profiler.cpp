@@ -1647,7 +1647,6 @@ void DeviceProfiler::readRiscProfilerResults(
                                 opname,
                                 device_id,
                                 phys_coord,
-                                worker_core,
                                 riscType,
                                 data,
                                 {trailer},
@@ -1767,12 +1766,12 @@ void DeviceProfiler::readTsData16BMarkerData(
     const std::string& op_name,
     ChipId device_id,
     const CoreCoord& physical_core,
-    const CoreCoord& virtual_core,
     tracy::RiscType risc_type,
     uint64_t data,
     const std::vector<uint64_t>& trailer_data,
     uint32_t timer_id,
     uint64_t timestamp) {
+#if defined(TRACY_ENABLE)
     ZoneScoped;
 
     using EMD = KernelProfilerNocEventMetadata;
@@ -1830,6 +1829,12 @@ void DeviceProfiler::readTsData16BMarkerData(
     auto& noc_debug_state = MetalContext::instance().noc_debug_state();
     if (noc_debug_state) {
         EMD::LocalNocEvent local_noc_event = std::get<EMD::LocalNocEvent>(event_contents);
+        const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+        // disable linting here; slicing is __intended__
+        // NOLINTBEGIN
+        const CoreCoord virtual_core =
+            soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
+        // NOLINTEND
         noc_debug_state->push_event(
             device_id,
             timestamp,
@@ -1840,6 +1845,7 @@ void DeviceProfiler::readTsData16BMarkerData(
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
     updateFirstTimestamp(timestamp);
+#endif
 }
 
 struct DispatchMetaData {
@@ -2585,7 +2591,7 @@ void DeviceProfiler::pollDebugDumpResults(
                         "DRAM "
                         "buffer address on device: {}, "
                         "Expected DRAM buffer address: {}, index: {}, "
-                        "Complimentary DRAM buffer address if switched indices: {}",
+                        "Complementary DRAM buffer address if switched indices: {}",
                         enchantum::to_string(risc_type),
                         virtual_core.str(),
                         dram_buffer_address,

@@ -30,25 +30,32 @@ void VerifyIssuesOnAllCores(
     const IssueChecker& has_issue,
     const std::string& issue_type) {
     auto* device = mesh_device->get_devices()[0];
+    auto device_id = device->id();
 
     for (uint32_t x = grid_start.x; x <= grid_end.x; ++x) {
         for (uint32_t y = grid_start.y; y <= grid_end.y; ++y) {
             CoreCoord logical_core = {x, y};
             auto virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
 
-            bool brisc_issue = has_issue(device->id(), virtual_core, BRISC_PROCESSOR_ID);
-            bool ncrisc_issue = has_issue(device->id(), virtual_core, NCRISC_PROCESSOR_ID);
+            bool brisc_issue = has_issue(device_id, virtual_core, BRISC_PROCESSOR_ID);
+            bool ncrisc_issue = has_issue(device_id, virtual_core, NCRISC_PROCESSOR_ID);
+
+            const auto make_error_string = [&issue_type, &device_id](
+                                               const std::string& msg, const CoreCoord& virtual_core) {
+                return fmt::format(
+                    "NOC debugger should have detected {} {} issue at device {} core {}",
+                    msg,
+                    issue_type,
+                    device_id,
+                    virtual_core.str());
+            };
 
             if (expect_issue) {
-                EXPECT_TRUE(brisc_issue) << "NOC debugger should have detected " << issue_type
-                                         << " issue on BRISC at core (" << x << ", " << y << ")";
-                EXPECT_TRUE(ncrisc_issue) << "NOC debugger should have detected " << issue_type
-                                          << " issue on NCRISC at core (" << x << ", " << y << ")";
+                EXPECT_TRUE(brisc_issue) << make_error_string("brisc", virtual_core);
+                EXPECT_TRUE(ncrisc_issue) << make_error_string("ncrisc", virtual_core);
             } else {
-                EXPECT_FALSE(brisc_issue)
-                    << "NOC debugger should NOT have detected any issue on BRISC at core (" << x << ", " << y << ")";
-                EXPECT_FALSE(ncrisc_issue)
-                    << "NOC debugger should NOT have detected any issue on NCRISC at core (" << x << ", " << y << ")";
+                EXPECT_FALSE(brisc_issue) << make_error_string("NO brisc issue", virtual_core);
+                EXPECT_FALSE(ncrisc_issue) << make_error_string("NO ncrisc issue", virtual_core);
             }
         }
     }
@@ -110,6 +117,8 @@ void RunWritesTest(
     workload.add_program(device_range, std::move(program));
 
     fixture->RunProgram(mesh_device, workload);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
 
     VerifyIssuesOnAllCores(
         mesh_device,
@@ -177,6 +186,8 @@ void RunReadsTest(
     workload.add_program(device_range, std::move(program));
 
     fixture->RunProgram(mesh_device, workload);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
 
     VerifyIssuesOnAllCores(
         mesh_device,
@@ -251,6 +262,8 @@ void RunInterleavedReadsWritesTest(
     workload.add_program(device_range, std::move(program));
 
     fixture->RunProgram(mesh_device, workload);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
 
     VerifyIssuesOnAllCores(
         mesh_device,

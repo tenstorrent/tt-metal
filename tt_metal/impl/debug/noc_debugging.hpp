@@ -6,6 +6,7 @@
 
 #include <bitset>
 #include <cstdint>
+#include <mutex>
 #include <umd/device/types/xy_pair.hpp>
 #include <unordered_map>
 #include <array>
@@ -42,7 +43,7 @@ struct NocReadEvent {
 struct NocReadBarrierEvent {
     int8_t src_x;
     int8_t src_y;
-    bool noc;
+    uint8_t noc;
 };
 
 struct NocWriteBarrierEvent {
@@ -136,11 +137,12 @@ private:
 
     void update_latest_risc_timestamp(tt_cxy_pair core, int processor_id, uint64_t timestamp);
 
-    CoreDebugState& get_state(tt_cxy_pair core, int processor_id);
+    CoreDebugState& get_state(tt_cxy_pair core);
 
-    const CoreDebugState& get_state(tt_cxy_pair core, int processor_id) const;
+    const CoreDebugState& get_state(tt_cxy_pair core) const;
 
     mutable std::unordered_map<tt_cxy_pair, CoreDebugState> cores;
+    mutable std::mutex cores_mutex;
 };
 
 }  // namespace tt::tt_metal

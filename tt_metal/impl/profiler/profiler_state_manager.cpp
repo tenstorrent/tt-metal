@@ -155,11 +155,10 @@ void ProfilerStateManager::add_runtime_id_to_trace(ChipId device_id, uint32_t tr
 
 void ProfilerStateManager::signal_debug_dump_read() {
     if (this->debug_dump_thread.joinable()) {
+        std::unique_lock<std::mutex> lock{this->debug_dump_thread_mutex};
         this->force_read_complete = false;
         this->force_read_debug_dump = true;
         this->stop_debug_dump_thread_cv.notify_all();
-
-        std::unique_lock<std::mutex> lock{this->debug_dump_thread_mutex};
         this->force_read_complete_cv.wait(lock, [&] { return this->force_read_complete.load(); });
     }
 }
