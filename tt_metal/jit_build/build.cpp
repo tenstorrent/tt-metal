@@ -358,9 +358,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->cflags_ += common_flags;
         this->lflags_ += common_flags;
     }
+
     this->linker_script_ = env_.root_ + jit_build_query.linker_script(params);
-    // this->lflags_ += jit_build_query.linker_flags(params);
-    // this->lflags_ += fmt::format("-T{} ", this->linker_script_);
+
     // Source files
     {
         auto srcs = jit_build_query.srcs(params);
@@ -398,11 +398,6 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Note the preceding slash which defies convention as this gets appended to
     // the kernel name used as a path which doesn't have a slash
     this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".elf";
-
-    // if (not this->is_fw_) {
-    //     // Emit relocations, so we can relocate the resulting binary
-    //     this->lflags_ += "-Wl,--emit-relocs ";
-    // }
 }
 
 void JitBuildState::compile_one(

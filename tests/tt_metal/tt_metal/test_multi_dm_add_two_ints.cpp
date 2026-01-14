@@ -68,11 +68,8 @@ int main() {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result{0, 0};
-    // std::vector<uint32_t> kernel_1_result{0};
     tt_metal::detail::ReadFromDeviceL1(
         mesh_device->get_devices()[0], core, MEM_L1_UNCACHED_BASE, sizeof(int) * 2, result);
-    // tt_metal::detail::ReadFromDeviceL1(
-    //     mesh_device->get_devices()[0], core, MEM_L1_UNCACHED_BASE + 4, sizeof(int), kernel_1_result);
 
     mesh_device->close();
 
@@ -86,11 +83,4 @@ int main() {
         std::cout << "Test failed! Got the value " << result[1] << " instead of " << 700 << std::endl;
         return 1;
     }
-    // if (result[0] == 300 && result[1] == 700) {
-    //     std::cout << "Test passed!" << std::endl;
-    //     return 0;
-    // } else {
-    //     std::cout << "Test failed! Got the value " << kernel_0_result[0] << " instead of " << 300 << std::endl;
-    //     return 1;
-    // }
 }
