@@ -33,6 +33,8 @@ void kernel_main() {
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
+    // Save the RT arg index where output addresses start (for make_tensor_accessor_tuple_uniform_page_size)
+    const uint32_t out_addr_rt_arg_idx = argidx;
     const uint32_t out0_addr = get_arg_val<uint32_t>(argidx++);  // NEW: 3 output addresses
     const uint32_t out1_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t out2_addr = get_arg_val<uint32_t>(argidx++);
@@ -53,16 +55,20 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<22>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
 
-    // NEW: 3 output accessors
-    constexpr auto out0_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto out0_reader = TensorAccessor(out0_args, out0_addr, out_tile_size);
-    constexpr auto out1_args = TensorAccessorArgs<out0_args.next_compile_time_args_offset()>();
-    const auto out1_reader = TensorAccessor(out1_args, out1_addr, out_tile_size);
-    constexpr auto out2_args = TensorAccessorArgs<out1_args.next_compile_time_args_offset()>();
-    const auto out2_reader = TensorAccessor(out2_args, out2_addr, out_tile_size);
+    // Create tuple of TensorAccessorArgs for all output tensors
+    // This uses template metaprogramming to create N accessor args at compile time
+    constexpr uint32_t tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
+    constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, tensor_args_cta_offset>();
+
+    // Create tuple of TensorAccessors with concrete types (required for noc_async_write_tile)
+    // Note: Using our custom helper that takes actual page_size value, not CTA index
+    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, out_addr_rt_arg_idx, out_tile_size);
 
 #ifdef FUSE_BIAS
-    constexpr auto in2_args = TensorAccessorArgs<out2_args.next_compile_time_args_offset()>();
+    // Compute the CTA offset for bias accessor dynamically - it comes after all N_chunks output tensor accessors
+    constexpr uint32_t in2_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, tensor_args_cta_offset>();
+    constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
     const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
 #endif
 
@@ -122,10 +128,8 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        write_block_sync_granular_split<M_block_tiles, N_block_tiles>(
-                            out0_reader,
-                            out1_reader,
-                            out2_reader,
+                        write_block_sync_granular_split_variadic<M_block_tiles, N_block_tiles>(
+                            outputs_tuple,
                             out0_shape,
                             N_tiles_per_chunk,
                             cb_id_out,
@@ -206,10 +210,8 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    write_block_sync_granular_split<M_block_tiles, N_block_tiles>(
-                        out0_reader,
-                        out1_reader,
-                        out2_reader,
+                    write_block_sync_granular_split_variadic<M_block_tiles, N_block_tiles>(
+                        outputs_tuple,
                         out0_shape,
                         N_tiles_per_chunk,
                         cb_id_out,
