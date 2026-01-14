@@ -49,7 +49,9 @@ class RopeSingleCore:
     """
 
     @staticmethod
-    def golden(input_tensor: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    def golden(
+        input_tensor: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, position_ids: torch.Tensor
+    ) -> torch.Tensor:
         """
         PyTorch reference implementation of RoPE for validation.
 
@@ -61,7 +63,13 @@ class RopeSingleCore:
         Returns:
             Output tensor with RoPE applied
         """
-        return (input_tensor * cos) + (rotate_half_meta_style(input_tensor) * sin)
+        # Index into cos/sin using position_ids
+        cos_selected = cos[position_ids].unsqueeze(1)  # [batch, 1, seq_len, head_dim]
+        sin_selected = sin[position_ids].unsqueeze(1)  # [batch, 1, seq_len, head_dim]
+
+        # Apply rotary embedding with Meta-style rotation
+        output = (input_tensor * cos_selected) + (rotate_half_meta_style(input_tensor) * sin_selected)
+        return output
 
     @staticmethod
     def op(

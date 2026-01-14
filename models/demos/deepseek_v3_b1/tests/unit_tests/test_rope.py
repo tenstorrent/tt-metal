@@ -14,38 +14,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, nearest_y
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding, rotate_half
+from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
-
-
-def reference_apply_rope(
-    x: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
-    position_ids: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Reference implementation for applying RoPE to a tensor.
-
-    Uses Meta-style format where frequencies are interleaved: [r, i, r, i, ...]
-
-    Args:
-        x: Input tensor [batch, num_heads, seq_len, head_dim]
-        cos: Cosine matrix [max_seq_len, head_dim]
-        sin: Sine matrix [max_seq_len, head_dim]
-        position_ids: Position indices [batch, seq_len] or [batch]
-
-    Returns:
-        Rotated tensor [batch, num_heads, seq_len, head_dim]
-    """
-    # Index into cos/sin using position_ids
-    cos_selected = cos[position_ids].unsqueeze(1)  # [batch, 1, seq_len, head_dim]
-    sin_selected = sin[position_ids].unsqueeze(1)  # [batch, 1, seq_len, head_dim]
-
-    # Apply rotary embedding with Meta-style rotation
-    x_embed = (x * cos_selected) + (rotate_half(x, meta_style=True) * sin_selected)
-    return x_embed
 
 
 @pytest.mark.parametrize(
@@ -92,7 +63,7 @@ def test_rope_decode(device, batch, num_heads, head_dim, pcc):
 
     # Reference output (original shape for comparison)
     position_ids_expanded = position_ids.unsqueeze(1)  # [batch, 1]
-    ref_out = reference_apply_rope(x, cos, sin, position_ids_expanded)
+    ref_out = RopeSingleCore.golden(x, cos, sin, position_ids_expanded)
 
     # For TTNN decode mode, reshape input to [1, batch, num_heads, head_dim]
     x_ttnn = x.permute(2, 0, 1, 3)  # [seq_len=1, batch, num_heads, head_dim]
@@ -259,7 +230,7 @@ def test_rope_decode_yarn(device, batch, num_heads, pcc):
     position_ids_expanded = position_ids.unsqueeze(1)
 
     # Reference output
-    ref_out = reference_apply_rope(x, cos, sin, position_ids_expanded)
+    ref_out = RopeSingleCore.golden(x, cos, sin, position_ids_expanded)
 
     # For TTNN decode mode, reshape input to [1, batch, num_heads, head_dim]
     x_ttnn = x.permute(2, 0, 1, 3)  # [seq_len=1, batch, num_heads, head_dim]
