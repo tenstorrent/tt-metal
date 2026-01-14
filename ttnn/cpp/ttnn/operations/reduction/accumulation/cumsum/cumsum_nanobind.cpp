@@ -63,21 +63,11 @@ void bind_reduction_cumsum_operation(nb::module_& mod) {
             - Preallocated output must have the same shape as the input
         )doc";
 
-    using OperationType = decltype(ttnn::cumsum);
     bind_registered_operation(
         mod,
         ttnn::cumsum,
         docstring,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t& dim,
-               std::optional<DataType>& dtype,
-               const bool& reverse_order,
-               std::optional<Tensor> preallocated_tensor,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, dim, dtype, reverse_order, preallocated_tensor, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input").noconvert(),
             nb::arg("dim"),
             nb::kw_only(),
