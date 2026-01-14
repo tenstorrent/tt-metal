@@ -96,7 +96,7 @@ def compute_reference_reduce_to_all(
     indirect=["device_params"],
     ids=["fabric_1d_ring"],
 )
-def test_reduce_to_all_simple_ones(bh_2d_mesh_device):
+def test_reduce_to_all_simple_ones(bh_1d_mesh_device):
     """Test reduce_to_all operation with all-ones input - simplest case for debugging."""
 
     print("\n=== Testing reduce_to_all with ALL ONES ===")
@@ -119,8 +119,8 @@ def test_reduce_to_all_simple_ones(bh_2d_mesh_device):
     topology = ttnn.Topology.Ring
 
     # Create submesh device
-    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     # Tensor config
     dtype = ttnn.bfloat16
@@ -369,7 +369,7 @@ def test_reduce_to_all_simple_ones(bh_2d_mesh_device):
     indirect=["device_params"],
     ids=["fabric_1d_ring"],
 )
-def test_reduce_to_all_random(bh_2d_mesh_device):
+def test_reduce_to_all_random(bh_1d_mesh_device):
     """Test reduce_to_all operation with random input values."""
 
     print("\n=== Testing reduce_to_all with RANDOM values ===")
@@ -393,8 +393,8 @@ def test_reduce_to_all_random(bh_2d_mesh_device):
     topology = ttnn.Topology.Ring
 
     # Create submesh device
-    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     # Tensor config
     dtype = ttnn.bfloat16
@@ -654,7 +654,7 @@ def test_reduce_to_all_random(bh_2d_mesh_device):
     indirect=["device_params"],
     ids=["fabric_1d_ring"],
 )
-def test_reduce_to_all_distinct_values(bh_2d_mesh_device):
+def test_reduce_to_all_distinct_values(bh_1d_mesh_device):
     """
     Test reduce_to_all with distinct values per device to trace neighbor exchange.
 
@@ -703,8 +703,8 @@ def test_reduce_to_all_distinct_values(bh_2d_mesh_device):
     topology = ttnn.Topology.Ring
 
     # Create submesh device
-    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     # Tensor config
     dtype = ttnn.bfloat16

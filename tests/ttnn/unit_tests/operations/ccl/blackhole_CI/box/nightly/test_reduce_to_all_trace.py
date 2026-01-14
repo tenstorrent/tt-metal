@@ -97,7 +97,7 @@ def compute_reference_reduce_to_all(
     indirect=["device_params"],
     ids=["fabric_1d_ring_trace"],
 )
-def test_reduce_to_all_with_trace(bh_2d_mesh_device):
+def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     """Test reduce_to_all operation with trace capture and replay for performance testing."""
 
     print("\n=== Testing reduce_to_all with TRACE ===")
@@ -120,8 +120,8 @@ def test_reduce_to_all_with_trace(bh_2d_mesh_device):
     topology = ttnn.Topology.Ring
 
     # Create submesh device
-    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     # Tensor config
     dtype = ttnn.bfloat16
