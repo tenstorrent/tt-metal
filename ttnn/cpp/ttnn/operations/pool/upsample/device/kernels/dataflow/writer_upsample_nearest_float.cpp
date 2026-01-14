@@ -16,7 +16,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);             // Output CB ID
     constexpr uint32_t aligned_stick_nbytes = get_compile_time_arg_val(1);  // Aligned stick size in bytes
 
-    // Tensor accessor compile-time args start at index 4
+    // Tensor accessor compile-time args start at index 2
     constexpr auto dst_args = TensorAccessorArgs<2>();
     const auto output_tensor_accessor = TensorAccessor(dst_args, output_buffer_addr, aligned_stick_nbytes);
 
