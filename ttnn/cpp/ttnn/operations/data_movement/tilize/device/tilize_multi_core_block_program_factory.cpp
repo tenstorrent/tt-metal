@@ -57,9 +57,6 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
          full_cores_per_col,
          single_sblock_size] =
             ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
-    if (single_sblock_size > 0 && single_block_size % single_sblock_size) {
-        TT_FATAL(false, "single_block_size is not divided by single_sblock_size");
-    }
 
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
