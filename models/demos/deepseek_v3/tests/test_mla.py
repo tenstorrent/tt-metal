@@ -73,6 +73,8 @@ def expand_test_cases_with_position_ids_ranges(base_cases):
             elif len(decode_position_ids) == 3:
                 # Expand range into individual position_ids with given step
                 start, end, step = decode_position_ids
+                if step <= 0:
+                    raise ValueError(f"step must be > 0, got {step}")
             else:
                 raise ValueError(
                     f"Invalid range format: {decode_position_ids}. Expected (start, end) or (start, end, step)"
@@ -86,6 +88,24 @@ def expand_test_cases_with_position_ids_ranges(base_cases):
             expanded_cases.append((mode, seq_len, batch_size_per_row, decode_position_ids))
 
     return expanded_cases
+
+
+def build_expanded_test_ids(expanded_cases):
+    """Build pytest ids for expanded test cases."""
+    expanded_ids = []
+    for val in expanded_cases:
+        if not isinstance(val, tuple):
+            expanded_ids.append(str(val))
+            continue
+
+        mode, seq_len, batch_size_per_row, decode_pos = val
+        if mode == "decode":
+            pos_str = decode_pos if decode_pos is not None else "random"
+            expanded_ids.append(f"mode_{mode}_seq_{seq_len}_batch_{batch_size_per_row}_pos_{pos_str}")
+        else:
+            # Prefill ignores decode_position_ids, so omit it from the ID
+            expanded_ids.append(f"mode_{mode}_seq_{seq_len}_batch_{batch_size_per_row}")
+    return expanded_ids
 
 
 def get_cache_on_host(tt_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
@@ -145,14 +165,17 @@ def generate_reference_io(
         if decode_position_id is None:
             # Generate random position_ids
             position_ids = position_ids_or_seq_lens = torch.randint(
-                0, hf_config.max_seq_len - 1, (batch_size,), dtype=torch.int32
+                0, hf_config.max_seq_len - 1, (batch_size,), dtype=torch.long
             )
         else:
             # Must be an int, use that value for all batches
-            assert isinstance(
-                decode_position_id, int
-            ), f"decode_position_id must be int or None, got {type(decode_position_id)}"
-            position_ids = position_ids_or_seq_lens = torch.ones(batch_size, dtype=torch.int32) * decode_position_id
+            if not isinstance(decode_position_id, int):
+                raise ValueError(f"decode_position_id must be int or None, got {type(decode_position_id)}")
+            if not (0 <= decode_position_id < hf_config.max_seq_len):
+                raise ValueError(
+                    f"decode_position_id must be in [0, {hf_config.max_seq_len - 1}], got {decode_position_id}"
+                )
+            position_ids = position_ids_or_seq_lens = torch.ones(batch_size, dtype=torch.long) * decode_position_id
     reference_output, input_cache, output_cache = run_reference_with_attention(
         reference_model, torch_input, position_ids_or_seq_lens, layer_idx, hf_config, mode, zeroed_cache=True
     )
@@ -503,7 +526,7 @@ def run_test_forward_pass_mla2d(
 
 # Base test cases - ranges will be expanded into individual test cases
 # see documentation for expand_test_cases_with_position_ids_ranges for more details
-_BASE_TEST_CASES = [
+BASE_TEST_CASES = [
     # mode, seq_len, batch_size_per_row, decode_position_ids
     ("decode", 1, USERS_PER_ROW, None),
     # ("decode", 1, USERS_PER_ROW, (4096, 8192, 32)), # Example.
@@ -512,19 +535,14 @@ _BASE_TEST_CASES = [
 ]  # decode_position_ids is not applicable for prefill
 
 # Expand ranges into individual position_ids for pytest
-_EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(_BASE_TEST_CASES)
+EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
+EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 
 
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row, decode_position_ids",
-    _EXPANDED_TEST_CASES,
-    ids=lambda val: (
-        f"mode_{val[0]}_seq{val[1]}_batch{val[2]}_pos{val[3]}"
-        if val[3] is not None
-        else f"mode_{val[0]}_seq{val[1]}_batch{val[2]}_random"
-    )
-    if isinstance(val, tuple)
-    else str(val),
+    EXPANDED_TEST_CASES,
+    ids=EXPANDED_TEST_IDS,
 )
 @pytest.mark.parametrize(
     "device_params",
