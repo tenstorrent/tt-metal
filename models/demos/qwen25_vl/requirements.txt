@@ -1,4 +1,5 @@
 # git+https://github.com/huggingface/transformers@27ef46e84662b74cbd6e228d0bb4ddcde46057b3
+numpy==1.26.4  # Pin to 1.26.4 for vLLM compatibility
 accelerate >= 0.27.2
 torch>=2.6.0
 torchvision>=0.21.0
