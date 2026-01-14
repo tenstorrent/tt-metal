@@ -48,31 +48,11 @@ void bind_sdpa_windowed(nb::module_& mod) {
                 )
         )doc";
 
-    using OperationType = decltype(ttnn::transformer::windowed_scaled_dot_product_attention);
     ttnn::bind_registered_operation(
         mod,
         ttnn::transformer::windowed_scaled_dot_product_attention,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor_q,
-               const ttnn::Tensor& input_tensor_k,
-               const ttnn::Tensor& input_tensor_v,
-               const ttnn::Tensor& cu_window_seqlens,
-               std::optional<float> scale,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(
-                    input_tensor_q,
-                    input_tensor_k,
-                    input_tensor_v,
-                    cu_window_seqlens,
-                    scale,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("input_tensor_v").noconvert(),
