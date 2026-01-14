@@ -46,38 +46,7 @@ void bind_conv3d(nb::module_& mod) {
         Returns:
             ttnn.Tensor: Output tensor after applying the Conv3D operation.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::conv3d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               const std::optional<ttnn::Tensor>& bias_tensor,
-               const Conv3dConfig& config,
-               const tt::tt_metal::DataType& dtype,
-               const uint32_t& output_channels,
-               const std::array<uint32_t, 3>& kernel_size,
-               const std::array<uint32_t, 3>& stride,
-               const std::array<uint32_t, 3>& padding,
-               const std::array<uint32_t, 3>& dilation,
-               const std::string& padding_mode,
-               const uint32_t& groups,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-                return self(
-                    input_tensor,
-                    weight_tensor,
-                    bias_tensor,
-                    config,
-                    dtype,
-                    output_channels,
-                    kernel_size,
-                    stride,
-                    padding,
-                    dilation,
-                    padding_mode,
-                    groups,
-                    memory_config,
-                    compute_kernel_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::kw_only(),
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
