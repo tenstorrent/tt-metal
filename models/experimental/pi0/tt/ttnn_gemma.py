@@ -260,58 +260,6 @@ class GemmaAttentionTTNN:
 
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
-        # OPTIMIZATION: Use bfloat8_b + L1 + HiFi2 for maximum throughput
-
-        def create_width_sharded_memory_config(tensor_shape, grid_size=(8, 4)):  
-            """  
-            Create a width-sharded memory config for any tensor shape.  
-            
-            Width sharding distributes the last dimension (channels/features) of the input   
-            tensor across cores, which is optimal for linear layers with large channel dimensions.  
-            
-            Args:  
-                tensor_shape: The shape of the input tensor (e.g., [1, 1, 544, 2048])  
-                grid_size: Core grid size (default: 8x4 = 32 cores)  
-            
-            Returns:  
-                ttnn.MemoryConfig: Width-sharded memory configuration  
-            
-            Example:  
-                # For hidden_states with shape [1, 1, 544, 2048]  
-                memory_config = create_width_sharded_memory_config(hidden_states.shape)  
-                xqkv = ttnn.linear(hidden_states, self.wqkv, memory_config=memory_config)  
-            """  
-            # Calculate effective height (product of all dimensions except last)
-            # Convert ttnn.Shape to list for slicing compatibility
-            shape_list = list(tensor_shape)
-            effective_height = math.prod(shape_list[:-1])  
-            tensor_width = shape_list[-1]  
-            
-            # Calculate shard dimensions  
-            num_cores = grid_size[0] * grid_size[1]
-            
-            # Align to tile size (32) for optimal performance  
-            def nearest_32(x):  
-                return 32 * math.ceil(x / 32)
-
-            shard_height = nearest_32(effective_height)  
-            shard_width = nearest_32(tensor_width // num_cores)
-
-            # Verify divisibility
-            assert tensor_width % num_cores == 0, \
-                f"tensor_width ({tensor_width}) must be divisible by num_cores ({num_cores})"
-            
-            # Create core grid  
-            core_grid = ttnn.CoreGrid(x=grid_size[0], y=grid_size[1])
-            
-            # Create memory config using TTNN's API  
-            return ttnn.create_sharded_memory_config(  
-                shape=[shard_height, shard_width],  
-                core_grid=core_grid,  
-                strategy=ttnn.ShardStrategy.WIDTH,  
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,  
-                use_height_and_width_as_shard_shape=True,  
-            )
 
         # Use WIDTH_SHARDED L1 memory config
         xqkv = ttnn.linear(
