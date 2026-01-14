@@ -346,6 +346,7 @@ class QwenImagePipeline:
     @staticmethod
     def create_pipeline(
         *,
+        checkpoint_name: str = "Qwen/Qwen-Image",
         mesh_device: ttnn.MeshDevice,
         dit_cfg: tuple[int, int] | None = None,
         dit_sp: tuple[int, int] | None = None,
@@ -354,11 +355,11 @@ class QwenImagePipeline:
         vae_tp: tuple[int, int] | None = None,
         use_torch_text_encoder: bool = False,
         use_torch_vae_decoder: bool = False,
-        num_links: int,
+        num_links: int | None = None,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         width: int = 1024,
         height: int = 1024,
-        is_fsdp: bool = None,
+        is_fsdp: bool | None = None,
         dynamic_load_encoder: bool | None = None,
         dynamic_load_vae: bool | None = None,
     ) -> QwenImagePipeline:
@@ -417,6 +418,7 @@ class QwenImagePipeline:
 
         return QwenImagePipeline(
             mesh_device=mesh_device,
+            checkpoint_name=checkpoint_name,
             use_torch_text_encoder=use_torch_text_encoder,
             use_torch_vae_decoder=use_torch_vae_decoder,
             parallel_config=dit_parallel_config,
