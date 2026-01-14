@@ -150,8 +150,6 @@ tt::tt_metal::Tensor ring_shift(
     socket_mem_config.socket_storage_type = ttnn::BufferType::L1;
     socket_mem_config.fifo_size = 128U * 1024U;  // 128KB FIFO
 
-    auto output_tensor = ttnn::empty_like(tensor);
-
     auto send_through_sockets = [&](const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
                                     const tt::tt_metal::Tensor& input_tensor,
                                     tt::tt_metal::Tensor& output_tensor) {
@@ -162,12 +160,13 @@ tt::tt_metal::Tensor ring_shift(
         auto [send_socket, recv_socket] =
             tt::tt_metal::distributed::MeshSocket::create_socket_pair(mesh_device_ptr, mesh_device_ptr, config);
 
-        ttnn::experimental::send_async(tensor, send_socket);
+        ttnn::experimental::send_async(input_tensor, send_socket);
         ttnn::experimental::recv_async(output_tensor, recv_socket);
         tt::tt_metal::distributed::Synchronize(
             mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
     };
 
+    auto output_tensor = ttnn::empty_like(tensor);
     // Phase 1: Even → Odd (even sends, odd receives)
     send_through_sockets(even_to_odd_connections, tensor, output_tensor);
     // Phase 2: Odd → Even (odd sends, even receives)
