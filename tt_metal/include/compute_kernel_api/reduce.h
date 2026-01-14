@@ -7,6 +7,7 @@
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
+#include "llk_math_common.h"
 #endif
 
 #ifdef TRISC_UNPACK
