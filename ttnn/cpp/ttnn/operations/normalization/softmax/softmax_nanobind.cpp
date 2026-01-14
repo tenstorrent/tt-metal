@@ -127,21 +127,11 @@ void bind_normalization_softmax_operation(nb::module_& mod) {
                 * Using the attention-optimized kernels requires a 4D input tensor and reducing on the last dimension.
     )doc";
 
-    using OperationType = decltype(ttnn::softmax);
-
     ttnn::bind_registered_operation(
         mod,
         ttnn::softmax,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int8_t dim,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable) -> ttnn::Tensor {
-                return self(input_tensor, dim, memory_config, compute_kernel_config, numeric_stable);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim") = -1,
             nb::kw_only(),
@@ -203,24 +193,12 @@ void bind_normalization_softmax_scale_mask_operation(nb::module_& mod) {
                 * All tensors must be on-device.
                 * For ROW_MAJOR masks: intermediate dimensions (except last two) must be 1; last dimension must equal TILE_WIDTH; width must align to input tensor's tile width.
     )doc";
-    using OperationType = decltype(ttnn::scale_mask_softmax);
 
     ttnn::bind_registered_operation(
         mod,
         ttnn::scale_mask_softmax,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<float> scale,
-               const std::optional<const Tensor>& mask,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const bool is_causal_mask,
-               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable) -> ttnn::Tensor {
-                return self(
-                    input_tensor, scale, mask, memory_config, is_causal_mask, compute_kernel_config, numeric_stable);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("scale").noconvert() = nb::none(),
             nb::arg("mask").noconvert() = nb::none(),
@@ -273,21 +251,11 @@ void bind_normalization_softmax_inplace_operation(nb::module_& mod) {
                 * Supports both default and sharded multi-core program configurations.
     )doc";
 
-    using OperationType = decltype(ttnn::softmax_in_place);
-
     ttnn::bind_registered_operation(
         mod,
         ttnn::softmax_in_place,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int8_t dim,
-               const SoftmaxProgramConfig& program_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable) -> ttnn::Tensor {
-                return self(input_tensor, dim, program_config, compute_kernel_config, numeric_stable);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim") = -1,
             nb::kw_only(),
@@ -354,24 +322,11 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
                 * Internal block size constraints may restrict in-place operation for very large width tensors.
     )doc";
 
-    using OperationType = decltype(ttnn::scale_mask_softmax_in_place);
-
     ttnn::bind_registered_operation(
         mod,
         ttnn::scale_mask_softmax_in_place,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<float> scale,
-               const std::optional<const Tensor>& mask,
-               const SoftmaxProgramConfig& program_config,
-               const bool is_causal_mask,
-               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable) -> ttnn::Tensor {
-                return self(
-                    input_tensor, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("scale") = nb::none(),
             nb::arg("mask") = nb::none(),
@@ -442,22 +397,11 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(nb::modul
                 * Scale parameter is typically provided for attention scaling
     )doc";
 
-    using OperationType = decltype(ttnn::scale_causal_mask_hw_dims_softmax_in_place);
-
     ttnn::bind_registered_operation(
         mod,
         ttnn::scale_causal_mask_hw_dims_softmax_in_place,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<float> scale,
-               const std::optional<const Tensor>& mask,
-               const SoftmaxProgramConfig& program_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable) -> ttnn::Tensor {
-                return self(input_tensor, scale, mask, program_config, compute_kernel_config, numeric_stable);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("scale").noconvert() = nb::none(),
             nb::arg("mask").noconvert() = nb::none(),
