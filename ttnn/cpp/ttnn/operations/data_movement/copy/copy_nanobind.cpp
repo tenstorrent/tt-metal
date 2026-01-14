@@ -54,10 +54,7 @@ void bind_copy(nb::module_& mod) {
         mod,
         ttnn::copy,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::copy)& self, const ttnn::Tensor& input_a, const ttnn::Tensor& input_b) {
-                return self(input_a, input_b);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_a").noconvert(),
             nb::arg("input_b").noconvert(),
         });
