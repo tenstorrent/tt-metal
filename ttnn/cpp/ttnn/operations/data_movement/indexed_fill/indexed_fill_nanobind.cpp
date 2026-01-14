@@ -34,18 +34,11 @@ void bind_indexed_fill(nb::module_& mod) {
         )doc",
         ttnn::indexed_fill.base_name());
 
-    using OperationType = decltype(ttnn::indexed_fill);
     ttnn::bind_registered_operation(
         mod,
         ttnn::indexed_fill,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& batch_id,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               int64_t dim) { return self(batch_id, input_tensor_a, input_tensor_b, memory_config, dim); },
+        ttnn::nanobind_arguments_t{
             nb::arg("batch_id").noconvert(),
             nb::arg("input_tensor_a").noconvert(),
             nb::arg("input_tensor_b").noconvert(),
