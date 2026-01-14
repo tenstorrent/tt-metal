@@ -92,7 +92,8 @@ if ! command -v uv &>/dev/null; then
         fi
     else
         echo "Warning: install-uv.sh not found, falling back to pip installation"
-        # Use the same pinned version as install-uv.sh to maintain consistency
+        # Use the same pinned version as install-uv.sh to maintain consistency.
+        # NOTE: Keep this version in sync with scripts/install-uv.sh (see UV_VERSION on line 18).
         UV_VERSION="0.7.12"
         if ! ${PYTHON_CMD} -m pip install --no-cache-dir "uv==${UV_VERSION}"; then
             echo "Initial 'pip install uv' failed. This can happen in PEP 668 externally-managed environments."
