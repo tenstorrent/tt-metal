@@ -280,8 +280,19 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
         buffer[i] = 0;
     }
 
-    // Last hop in the multicast range (inclusive)
-    const uint32_t last_hop = start_hop - 1 + range_hops - 1;
+    // Last hop in the multicast range (inclusive, may be negative if range_hops == 0)
+    //
+    // Multicast pattern (start_hop=3, range_hops=2 example):
+    //   Hop index:  0    1    2    3    4   ...
+    //   Action:     FWD  FWD  W+F  WR   -
+    //                          X----X           <- multicast range (writes to 2 chips)
+    //                          ^    ^
+    //                       start   last_hop
+    //
+    // Calculation: start_hop is 1-indexed -> convert to 0-indexed (hop 2)
+    //              Add range_hops to get end position, then -1 for inclusive last index
+    //              (3-1) + 2 - 1 = 3, simplified: (start_hop + range_hops) - 2
+    const int last_hop = static_cast<int>(start_hop + range_hops) - 2;
 
     auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
         const uint32_t word_idx = hop_index / LowLatencyFields::BASE_HOPS;
@@ -299,12 +310,14 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
     }
 
     // 2. Range: Write & Forward (for range_hops - 1 hops)
-    for (uint32_t hop = start_hop - 1; hop < last_hop; hop++) {
+    for (int hop = static_cast<int>(start_hop) - 1; hop < last_hop; hop++) {
         set_hop_field(hop, LowLatencyFields::WRITE_AND_FORWARD);
     }
 
-    // 3. Tail: Write Only (stop at last hop)
-    set_hop_field(last_hop, LowLatencyFields::WRITE_ONLY);
+    // 3. Tail: Write Only (only if we have a valid last hop)
+    if (last_hop >= 0) [[likely]] {
+        set_hop_field(last_hop, LowLatencyFields::WRITE_ONLY);
+    }
 }
 
 //=============================================================================
