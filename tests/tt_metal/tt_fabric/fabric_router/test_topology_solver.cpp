@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -23,8 +24,10 @@ protected:
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
     // Use 2x2 T3K multiprocess MGD (has 2 meshes: mesh_id 0 and 1)
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
     const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt_metal_home) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
 
     // Create mesh graph from descriptor
@@ -59,10 +62,10 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     // Load PSD from pre-written test file
-    const std::filesystem::path root_dir =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
     const std::filesystem::path psd_file_path =
-        root_dir / "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto";
+        std::filesystem::path(tt_metal_home) / "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto";
 
     // Verify the file exists
     ASSERT_TRUE(std::filesystem::exists(psd_file_path)) << "PSD test file not found: " << psd_file_path.string();

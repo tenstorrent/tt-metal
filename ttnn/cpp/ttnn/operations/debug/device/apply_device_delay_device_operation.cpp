@@ -47,7 +47,7 @@ void ApplyDeviceDelayDeviceOperation::validate_on_program_cache_miss(
 }
 
 void ApplyDeviceDelayDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // No additional validation needed on cache hit
 }
 
@@ -99,10 +99,10 @@ ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::create_at(
 }
 
 void ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    cached_mesh_workload_t& /*cached_workload*/,
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
     // No runtime arguments to override for this operation since delay cycles are compile-time
 }
 

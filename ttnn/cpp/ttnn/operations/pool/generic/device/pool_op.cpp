@@ -224,7 +224,8 @@ std::vector<ttnn::Tensor> pool2d(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
-    uint32_t memory_used) {
+    uint32_t memory_used,
+    bool config_tensor_in_dram) {
     using OperationType = ttnn::operations::pool::Pool2D;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -237,7 +238,8 @@ std::vector<ttnn::Tensor> pool2d(
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,
             .return_indices_ = return_indices,
-            .memory_used = memory_used},
+            .memory_used = memory_used,
+            .config_tensor_in_dram = config_tensor_in_dram},
         OperationType::tensor_args_t{input_tensor});
 }
 }  // namespace ttnn::prim
