@@ -160,7 +160,7 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
 
 void IsInProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& args,
+    const operation_attributes_t&  /*args*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     const auto& program = cached_program.program;
