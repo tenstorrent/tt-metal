@@ -35,8 +35,8 @@ GenericMeshProgramFactory::cached_mesh_workload_t GenericMeshProgramFactory::cre
 
 GenericMeshProgramFactory::cached_program_t GenericMeshProgramFactory::create_at(
     const tt::tt_metal::ProgramDescriptor& program_descriptor,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
     Program program{program_descriptor};
     shared_variables_t shared_vars;
 
@@ -116,8 +116,8 @@ void override_program_runtime_arguments(
 void GenericMeshProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_mesh_workload,
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
     auto& workload_programs = cached_mesh_workload.workload.get_programs();
     const auto& mesh_programs = operation_attributes.mesh_programs;
 
