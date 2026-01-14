@@ -21,17 +21,7 @@ namespace {
 template <typename data_movement_operation_t>
 void bind_chunk(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
     bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const uint32_t chunks,
-               const int dim) -> std::vector<ttnn::Tensor> { return self(input_tensor, chunks, dim); },
-            nb::arg("input_tensor"),
-            nb::arg("chunks"),
-            nb::arg("dim")});
+        mod, operation, doc, ttnn::nanobind_arguments_t{nb::arg("input_tensor"), nb::arg("chunks"), nb::arg("dim")});
 }
 
 }  // namespace
