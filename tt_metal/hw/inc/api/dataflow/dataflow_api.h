@@ -500,7 +500,7 @@ FORCE_INLINE void noc_async_read_one_packet(
         Read responses - assigned VCs dynamically
     */
     if constexpr (enable_noc_tracing) {
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1);
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, dst_local_l1_addr, src_noc_addr, size, -1, false);
     }
 
     WAYPOINT("RP2W");
@@ -545,7 +545,7 @@ inline void noc_async_read(
         Read responses - assigned VCs dynamically
     */
     if constexpr (enable_noc_tracing) {
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1);
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, dst_local_l1_addr, src_noc_addr, size, -1, false);
     }
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
@@ -584,7 +584,7 @@ FORCE_INLINE void noc_async_read_one_packet_set_state(
     */
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ_SET_STATE, src_noc_addr, size, (use_vc) ? static_cast<int8_t>(vc) : -1);
+        NocEventType::READ_SET_STATE, 0, src_noc_addr, size, (use_vc) ? static_cast<int8_t>(vc) : -1, false);
 
     WAYPOINT("NASW");
     ncrisc_noc_read_set_state<noc_mode, true /* one_packet */, use_vc>(noc, read_cmd_buf, src_noc_addr, size, vc);
@@ -617,9 +617,11 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
     */
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::READ_WITH_STATE,
+        dst_local_l1_addr,
         static_cast<uint64_t>(src_local_l1_addr),
         0,
-        (use_vc) ? static_cast<int8_t>(vc) : -1);
+        (use_vc) ? static_cast<int8_t>(vc) : -1,
+        false);
 
     WAYPOINT("NATW");
 
@@ -658,7 +660,7 @@ void noc_async_read_set_state(uint64_t src_noc_addr, uint8_t noc = noc_index) {
         Read responses - assigned VCs dynamically
     */
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, 0, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, 0, src_noc_addr, 0, -1, false);
 
     WAYPOINT("NAUW");
     ncrisc_noc_read_set_state<noc_mode>(noc, read_cmd_buf, src_noc_addr);
@@ -693,7 +695,8 @@ FORCE_INLINE void noc_async_read_with_state(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_local_l1_addr), size, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::READ_WITH_STATE, dst_local_l1_addr, static_cast<uint64_t>(src_local_l1_addr), size, -1, false);
 
     WAYPOINT("NAVW");
 
@@ -753,7 +756,7 @@ FORCE_INLINE void noc_async_write_one_packet(
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
     if constexpr (enable_noc_tracing) {
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, vc);
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, src_local_l1_addr, dst_noc_addr, size, vc, posted);
     }
 
     WAYPOINT("NWPW");
@@ -807,7 +810,7 @@ inline void noc_async_write(
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
     if constexpr (enable_noc_tracing) {
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, vc);
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, src_local_l1_addr, dst_noc_addr, size, vc, posted);
     }
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
@@ -837,7 +840,13 @@ FORCE_INLINE void noc_async_write_multicast_one_packet(
     uint8_t noc = noc_index) {
     if constexpr (enable_noc_tracing) {
         NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
+        RECORD_NOC_EVENT_WITH_ADDR(
+            NocEventType::WRITE_MULTICAST,
+            src_local_l1_addr,
+            dst_noc_addr_multicast,
+            size,
+            NOC_MULTICAST_WRITE_VC,
+            false);
     }
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
@@ -901,7 +910,8 @@ inline void noc_async_write_multicast(
     uint32_t num_dests,
     bool linked = false,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::WRITE_MULTICAST, src_local_l1_addr, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC, false);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
         noc_async_write_multicast_one_packet<false>(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
@@ -950,7 +960,7 @@ template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_set_state(
     uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, dst_noc_addr, size, vc);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, 0, dst_noc_addr, size, vc, posted);
 
     WAYPOINT("NWPW");
     ncrisc_noc_write_set_state<posted, true /* one_packet */>(noc, write_cmd_buf, dst_noc_addr, size, vc);
@@ -979,7 +989,7 @@ FORCE_INLINE void noc_async_write_one_packet_set_state(
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
     uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, src_local_l1_addr, 0ull, 0, -1, posted);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_local_l1_addr, src_local_l1_addr);
@@ -1029,7 +1039,7 @@ FORCE_INLINE void noc_async_read_page(
         page_size = (1 << addrgen.log_base_2_of_page_size);
     }
     if constexpr (enable_noc_tracing) {
-        RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen, offset, page_size, -1);
+        RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, page_size, -1, false);
     }
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
         addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
@@ -1052,7 +1062,7 @@ FORCE_INLINE void noc_async_read_tile(
     uint32_t dst_local_l1_addr,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen, offset, addrgen.page_size, -1);
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.page_size, -1, false);
     noc_async_read_page<InterleavedAddrGen<DRAM>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
@@ -1073,7 +1083,7 @@ FORCE_INLINE void noc_async_read_tile(
     uint32_t dst_local_l1_addr,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen, offset, addrgen.page_size, -1);
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.page_size, -1, false);
     noc_async_read_page<TensorAccessor<DSpec>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
@@ -1094,7 +1104,7 @@ FORCE_INLINE void noc_async_read_page(
     uint32_t dst_local_l1_addr,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen, offset, addrgen.page_size, -1);
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.page_size, -1, false);
     noc_async_read_page<InterleavedAddrGen<DRAM>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
@@ -1121,7 +1131,7 @@ FORCE_INLINE void noc_async_read_tile(
     uint32_t dst_local_l1_addr,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen, offset, addrgen.page_size, -1);
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.page_size, -1, false);
     noc_async_read_page<InterleavedAddrGenFast<DRAM, tile_hw>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
@@ -1142,7 +1152,8 @@ FORCE_INLINE void noc_async_read_page(
     uint32_t dst_local_l1_addr,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen, offset, 1 << addrgen.log_base_2_of_page_size, -1);
+    RECORD_NOC_EVENT_WITH_ID(
+        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, 1 << addrgen.log_base_2_of_page_size, -1, false);
     noc_async_read_page<InterleavedPow2AddrGenFast<DRAM>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
@@ -1190,7 +1201,14 @@ FORCE_INLINE void noc_async_write_page(
     }
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ID(
-            NocEventType::WRITE_, id, addrgen, offset, size ? size : page_size, NOC_UNICAST_WRITE_VC);
+            NocEventType::WRITE_,
+            src_local_l1_addr,
+            id,
+            addrgen,
+            offset,
+            size ? size : page_size,
+            NOC_UNICAST_WRITE_VC,
+            posted);
     }
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
@@ -1220,7 +1238,8 @@ FORCE_INLINE void noc_async_write_page(
     const uint32_t write_size_bytes,
     const uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, addrgen, offset, write_size_bytes, NOC_UNICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ID(
+        NocEventType::WRITE_, src_local_l1_addr, id, addrgen, offset, write_size_bytes, NOC_UNICAST_WRITE_VC, false);
     noc_async_write_page<InterleavedAddrGen<DRAM>, false>(
         id, addrgen, src_local_l1_addr, write_size_bytes, offset, noc);
 }
@@ -1237,7 +1256,7 @@ template <bool DRAM>
 [[deprecated("Use <typename AddrGen> noc_async_write_page instead.")]]
 FORCE_INLINE void noc_async_write_tile(
     const uint32_t id, const InterleavedAddrGen<DRAM>& addrgen, uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, addrgen, 0 /* offset */, addrgen.page_size, NOC_UNICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, src_local_l1_addr, id, addrgen, 0 /* offset */, addrgen.page_size, NOC_UNICAST_WRITE_VC, false);
     noc_async_write_page<InterleavedAddrGen<DRAM>, false>(
         id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
 }
@@ -1263,7 +1282,7 @@ FORCE_INLINE void noc_async_write_tile(
     const InterleavedAddrGenFast<DRAM, tile_hw>& addrgen,
     uint32_t src_local_l1_addr,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, addrgen, 0 /* offset */, addrgen.page_size, NOC_UNICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, src_local_l1_addr, id, addrgen, 0 /* offset */, addrgen.page_size, NOC_UNICAST_WRITE_VC, false);
     noc_async_write_page<InterleavedAddrGenFast<DRAM, tile_hw>, false>(
         id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
 }
@@ -1282,7 +1301,14 @@ template <typename DSpec>
 FORCE_INLINE void noc_async_write_tile(
     const uint32_t id, const TensorAccessor<DSpec>& addrgen, uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ID(
-        NocEventType::WRITE_, id, addrgen, 0 /* offset */, addrgen.page_size, NOC_UNICAST_WRITE_VC);
+        NocEventType::WRITE_,
+        src_local_l1_addr,
+        id,
+        addrgen,
+        0 /* offset */,
+        addrgen.page_size,
+        NOC_UNICAST_WRITE_VC,
+        false);
     noc_async_write_page<TensorAccessor<DSpec>, false>(
         id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
 }
@@ -1312,7 +1338,8 @@ FORCE_INLINE void noc_async_write_page(
     const uint32_t write_size_bytes,
     const uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, addrgen, offset, write_size_bytes, NOC_UNICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ID(
+        NocEventType::WRITE_, src_local_l1_addr, id, addrgen, offset, write_size_bytes, NOC_UNICAST_WRITE_VC, false);
     noc_async_write_page<InterleavedPow2AddrGenFast<DRAM>, false>(
         id, addrgen, src_local_l1_addr, write_size_bytes, offset, noc);
 }
@@ -1337,7 +1364,13 @@ template <typename DSpec>
 FORCE_INLINE void noc_async_read_shard(
     const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
     auto shard_volume = s.dspec().shard_volume();
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::READ,
+        dst_local_l1_addr,
+        s.get_shard_noc_addr(shard_id, noc),
+        s.page_size * shard_volume,
+        -1,
+        false);
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
         s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.page_size * shard_volume, noc);
 }
@@ -1365,7 +1398,12 @@ FORCE_INLINE void noc_async_write_shard(
     const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
     auto shard_volume = s.dspec().shard_volume();
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::WRITE_, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, NOC_UNICAST_WRITE_VC);
+        NocEventType::WRITE_,
+        src_local_l1_addr,
+        s.get_shard_noc_addr(shard_id, noc),
+        s.page_size * shard_volume,
+        NOC_UNICAST_WRITE_VC,
+        posted);
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, noc);
 }
@@ -1549,7 +1587,8 @@ inline void noc_async_write_multicast_loopback_src(
     constexpr bool multicast_path_reserve = true;
 
     NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::WRITE_MULTICAST, src_local_l1_addr, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC, false);
 
     WAYPOINT("NMLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
@@ -1580,7 +1619,7 @@ inline void noc_async_write_multicast_loopback_src(
  * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_START);
+    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_START, false);
 
     WAYPOINT("NRBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -1593,7 +1632,7 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
     invalidate_l1_cache();
     WAYPOINT("NRBD");
 
-    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_END);
+    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_END, false);
 }
 
 /**
@@ -1610,7 +1649,7 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_START);
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_START, false);
 
     WAYPOINT("NWBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -1623,7 +1662,7 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
     invalidate_l1_cache();
     WAYPOINT("NWBD");
 
-    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_END);
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_END, false);
 }
 
 /**
@@ -1639,7 +1678,7 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_writes_flushed(uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH);
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH, false);
 
     WAYPOINT("NWFW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -1692,7 +1731,7 @@ void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::ATOMIC_BARRIER);
+    RECORD_NOC_EVENT(NocEventType::ATOMIC_BARRIER, false);
 
     WAYPOINT("NABW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -1717,7 +1756,7 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
 FORCE_INLINE
 void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
     invalidate_l1_cache();
-    RECORD_NOC_EVENT(NocEventType::FULL_BARRIER);
+    RECORD_NOC_EVENT(NocEventType::FULL_BARRIER, false);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         WAYPOINT("NFBW");
         while (!ncrisc_dynamic_noc_reads_flushed(noc_idx)) {
@@ -1772,7 +1811,7 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
 // clang-format on
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT);
+    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false);
 
     WAYPOINT("NSW");
     do {
@@ -1798,7 +1837,7 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 // clang-format on
 FORCE_INLINE
 void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT);
+    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false);
 
     WAYPOINT("NSMW");
     do {
@@ -1824,7 +1863,7 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
 // clang-format on
 FORCE_INLINE
 void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_SET);
+    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_SET, false);
 
     // set semaphore value to val
     (*sem_addr) = val;
@@ -2021,7 +2060,7 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
 template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc(
     uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, addr, 0, vc);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, 0, addr, 0, vc, posted);
 
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
@@ -2070,7 +2109,7 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
 template <bool skip_ptr_update = false, bool skip_cmdbuf_chk = false>
 FORCE_INLINE void noc_async_read_one_packet_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID);
+    RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID, false);
 
     WAYPOINT("NRDW");
     ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update, skip_cmdbuf_chk>(
@@ -2092,7 +2131,7 @@ FORCE_INLINE void noc_async_read_one_packet_with_state_with_trid(
 // clang-format on
 FORCE_INLINE
 void noc_async_read_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
+    RECORD_NOC_EVENT(NocEventType::READ_SET_TRID, false);
 
     WAYPOINT("NSTW");
     ncrisc_noc_set_transaction_id(noc, read_cmd_buf, trid);
@@ -2113,7 +2152,7 @@ void noc_async_read_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
 // clang-format on
 FORCE_INLINE
 void noc_async_write_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::WRITE_SET_TRID);
+    RECORD_NOC_EVENT(NocEventType::WRITE_SET_TRID, false);
     WAYPOINT("NWSW");
     ncrisc_noc_set_transaction_id(noc, write_cmd_buf, trid);
     WAYPOINT("NWSD");
@@ -2137,7 +2176,7 @@ void noc_async_write_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
 FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
-    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_WITH_TRID);
+    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_WITH_TRID, false);
     while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid)) {
         continue;
     }
@@ -2171,7 +2210,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NAWW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_local_l1_addr, dst_noc_addr, size, -1, posted);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
 
@@ -2230,7 +2269,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, vc);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, 0, dst_noc_addr, 0, vc, posted);
 
     ncrisc_noc_write_set_state<posted, false /* one_packet */>(noc, cmd_buf, dst_noc_addr, 0 /* len_bytes */, vc);
     WAYPOINT("NAWD");
@@ -2267,7 +2306,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     uint32_t trid,
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_WITH_STATE, 0ull, size, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_WITH_STATE, src_local_l1_addr, 0ull, size, -1, posted);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
@@ -2329,7 +2368,7 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 // clang-format on
 FORCE_INLINE
 void noc_async_write_flushed_with_trid(uint32_t trid, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID);
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID, false);
     WAYPOINT("NFTW");
     while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, trid)) {
         continue;
