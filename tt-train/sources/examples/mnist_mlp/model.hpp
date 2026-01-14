@@ -13,7 +13,6 @@ public:
     ttml::autograd::TensorPtr operator()(ttml::autograd::TensorPtr tensor);
 
 private:
-    // Use ModuleBasePtr to allow replacement with LoRA layers
-    ttml::modules::ModuleBasePtr m_linear1;
-    ttml::modules::ModuleBasePtr m_linear2;
+    std::shared_ptr<ttml::modules::distributed::ColumnParallelLinear> m_linear1;
+    std::shared_ptr<ttml::modules::distributed::RowParallelLinear> m_linear2;
 };

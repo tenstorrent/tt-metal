@@ -20,7 +20,7 @@ struct MultiLayerPerceptronParameters {
 
 class MultiLayerPerceptron : public ModuleBase {
 private:
-    std::vector<ModuleBasePtr> m_layers;
+    std::vector<std::shared_ptr<LinearLayer>> m_layers;
 
 public:
     explicit MultiLayerPerceptron(const MultiLayerPerceptronParameters& params);

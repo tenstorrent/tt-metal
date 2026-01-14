@@ -12,12 +12,11 @@
 namespace ttml::modules {
 
 class SingleHeadAttention : public ttml::modules::ModuleBase {
-    // Use ModuleBasePtr to allow replacement with LoRA layers
-    ModuleBasePtr q_linear;
-    ModuleBasePtr k_linear;
-    ModuleBasePtr v_linear;
-    ModuleBasePtr out_linear;
-    ModuleBasePtr dropout;
+    std::shared_ptr<LinearLayer> q_linear;
+    std::shared_ptr<LinearLayer> k_linear;
+    std::shared_ptr<LinearLayer> v_linear;
+    std::shared_ptr<LinearLayer> out_linear;
+    std::shared_ptr<DropoutLayer> dropout;
 
 public:
     explicit SingleHeadAttention(uint32_t embedding_dim, float dropout_prob);

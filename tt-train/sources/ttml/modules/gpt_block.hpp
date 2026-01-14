@@ -16,10 +16,9 @@ namespace ttml::modules {
 
 class GPTMLP : public modules::ModuleBase {
 public:
-    // Use ModuleBasePtr to allow replacement with LoRA layers
-    ModuleBasePtr fc1;
-    ModuleBasePtr fc2;
-    ModuleBasePtr dropout;
+    std::shared_ptr<LinearLayer> fc1;
+    std::shared_ptr<LinearLayer> fc2;
+    std::shared_ptr<DropoutLayer> dropout;
     GPTMLP(uint32_t embedding_size, float dropout_prob);
 
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
@@ -27,11 +26,10 @@ public:
 
 class GPTBlock : public modules::ModuleBase {
 public:
-    // Use ModuleBasePtr to allow replacement with LoRA layers
-    ModuleBasePtr mlp;
-    ModuleBasePtr ln1;
-    ModuleBasePtr ln2;
-    ModuleBasePtr attention;
+    std::shared_ptr<GPTMLP> mlp;
+    std::shared_ptr<LayerNormLayer> ln1;
+    std::shared_ptr<LayerNormLayer> ln2;
+    std::shared_ptr<MultiHeadAttention> attention;
     explicit GPTBlock(
         uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm = false);
 

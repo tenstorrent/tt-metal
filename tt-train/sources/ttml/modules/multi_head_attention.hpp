@@ -21,7 +21,7 @@ private:
 public:
     ModuleBasePtr m_qkv_linear;
     ModuleBasePtr m_out_linear;
-    ModuleBasePtr m_dropout;
+    std::shared_ptr<DropoutLayer> m_dropout;
     explicit MultiHeadAttention(uint32_t embedding_dim, uint32_t num_heads, float dropout_prob);
 
     [[nodiscard]] autograd::TensorPtr operator()(

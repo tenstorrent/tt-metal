@@ -25,12 +25,11 @@ private:
     uint32_t m_num_local_heads{};
     uint32_t m_num_local_groups{};
     uint32_t m_num_groups{};
-    // Use ModuleBasePtr to allow replacement with LoRA layers
-    ModuleBasePtr m_q_linear;
-    ModuleBasePtr m_kv_linear;
-    ModuleBasePtr m_out_linear;
-    ModuleBasePtr m_dropout;
-    ModuleBasePtr m_embedding;
+    std::shared_ptr<ModuleBase> m_q_linear;
+    std::shared_ptr<ModuleBase> m_kv_linear;
+    std::shared_ptr<ModuleBase> m_out_linear;
+    std::shared_ptr<ModuleBase> m_dropout;
+    std::shared_ptr<ModuleBase> m_embedding;
 
 public:
     explicit DistributedGroupedQueryAttention(const GQAConfig& config);

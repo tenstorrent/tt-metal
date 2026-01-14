@@ -89,10 +89,7 @@ autograd::TensorPtr LlamaBlock::operator()(
     const uint32_t new_tokens) {
     auto residual = input;
     auto h = (*m_attention_norm)(input);
-    // Cast to GroupedQueryAttention for the KV cache forward method
-    auto* attention = dynamic_cast<GroupedQueryAttention*>(m_attention.get());
-    TT_ASSERT(attention != nullptr, "m_attention is not a GroupedQueryAttention");
-    h = (*attention)(h, mask, kv_cache, layer_idx, new_tokens);
+    h = (*m_attention)(h, mask, kv_cache, layer_idx, new_tokens);
     h = ops::add(h, residual);
 
     residual = h;

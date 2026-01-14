@@ -32,12 +32,11 @@ private:
     uint32_t m_num_groups{};
 
 public:
-    // Use ModuleBasePtr to allow replacement with LoRA layers
-    ModuleBasePtr m_q_linear;
-    ModuleBasePtr m_kv_linear;
-    ModuleBasePtr m_out_linear;
-    ModuleBasePtr m_dropout;
-    ModuleBasePtr m_embedding;
+    std::shared_ptr<ModuleBase> m_q_linear;
+    std::shared_ptr<ModuleBase> m_kv_linear;
+    std::shared_ptr<ModuleBase> m_out_linear;
+    std::shared_ptr<ModuleBase> m_dropout;
+    std::shared_ptr<RotaryEmbedding> m_embedding;
     explicit GroupedQueryAttention(const GQAConfig& config);
 
     [[nodiscard]] autograd::TensorPtr operator()(

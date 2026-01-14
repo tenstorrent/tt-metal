@@ -15,11 +15,10 @@ namespace ttml::modules {
 
 class LlamaMLP : public modules::ModuleBase {
 public:
-    // Use ModuleBasePtr to allow replacement with LoRA layers
-    ModuleBasePtr m_w1;
-    ModuleBasePtr m_w3;
-    ModuleBasePtr m_w2;
-    ModuleBasePtr m_dropout;
+    std::shared_ptr<LinearLayer> m_w1;
+    std::shared_ptr<LinearLayer> m_w3;
+    std::shared_ptr<LinearLayer> m_w2;
+    std::shared_ptr<DropoutLayer> m_dropout;
     LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob = 0.0F);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input);
@@ -27,11 +26,10 @@ public:
 
 class LlamaBlock : public modules::ModuleBase {
 public:
-    // Use ModuleBasePtr to allow replacement with LoRA layers
-    ModuleBasePtr m_mlp;
-    ModuleBasePtr m_attention_norm;
-    ModuleBasePtr m_mlp_norm;
-    ModuleBasePtr m_attention;
+    std::shared_ptr<LlamaMLP> m_mlp;
+    std::shared_ptr<RMSNormLayer> m_attention_norm;
+    std::shared_ptr<RMSNormLayer> m_mlp_norm;
+    std::shared_ptr<GroupedQueryAttention> m_attention;
     explicit LlamaBlock(
         uint32_t embedding_size,
         uint32_t num_heads,

@@ -41,11 +41,10 @@ class Llama : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
     LlamaConfig m_config;
-    // Use ModuleBasePtr to allow replacement with LoRA layers
-    ttml::modules::ModuleBasePtr tok_emb;
-    std::vector<ttml::modules::ModuleBasePtr> blocks;
-    ttml::modules::ModuleBasePtr ln_fc;
-    ttml::modules::ModuleBasePtr fc;
+    std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
+    std::vector<std::shared_ptr<ModuleBase>> blocks;
+    std::shared_ptr<ModuleBase> ln_fc;
+    std::shared_ptr<ttml::modules::ModuleBase> fc;
     ops::RotaryEmbeddingParams m_rope_params;
     uint32_t m_original_vocab_size = 0U;
 

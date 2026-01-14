@@ -78,10 +78,8 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
 
     if (m_embedding) {
         // Cast to RotaryEmbedding for the token_position overload
-        auto* rope = dynamic_cast<RotaryEmbedding*>(m_embedding.get());
-        TT_ASSERT(rope != nullptr, "m_embedding is not a RotaryEmbedding");
-        query_with_heads = (*rope)(query_with_heads, token_position);
-        key_with_heads = (*rope)(key_with_heads, token_position);
+        query_with_heads = (*m_embedding)(query_with_heads, token_position);
+        key_with_heads = (*m_embedding)(key_with_heads, token_position);
     }
 
     kv_cache->update(layer_idx, key_with_heads->get_value(), value_with_heads->get_value(), new_tokens);
