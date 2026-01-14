@@ -404,8 +404,8 @@ int main() {
                     uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
                     mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
                     // Notify dispatcher that this has been done
-                    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                    notify_dispatch_core_done(dispatch_addr, noc_index);
+                    DEBUG_SANITIZE_NOC_ADDR(prev_brisc_noc_id_and_mode.brisc_noc_id, dispatch_addr, 4);
+                    notify_dispatch_core_done(dispatch_addr, prev_brisc_noc_id_and_mode.brisc_noc_id);
                 }
             }
         }
@@ -448,7 +448,7 @@ int main() {
                         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                         cmd_buf = BRISC_AT_CMD_BUF;
                     }
-                    noc_local_state_init(noc_index);
+                    noc_local_state_init(brisc_noc_id_and_mode.brisc_noc_id);
                 } else {
                     if (prev_brisc_noc_id_and_mode.brisc_noc_mode != brisc_noc_id_and_mode.brisc_noc_mode) {
                         dynamic_noc_init();
@@ -536,12 +536,12 @@ int main() {
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                DEBUG_SANITIZE_NOC_ADDR(brisc_noc_id_and_mode.brisc_noc_id, dispatch_addr, 4);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch
                 // message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                notify_dispatch_core_done(dispatch_addr, noc_index);
+                notify_dispatch_core_done(dispatch_addr, brisc_noc_id_and_mode.brisc_noc_id);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
