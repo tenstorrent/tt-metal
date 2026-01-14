@@ -13,7 +13,7 @@ authors = [
     {email = "info@tenstorrent.com"},
 ]
 dependencies = [
-  "numpy>=1.24.4,<2",
+  "numpy==1.26.4",
   "loguru>=0.6.0",
   "networkx>=3.1",
   "graphviz>=0.20.3",
