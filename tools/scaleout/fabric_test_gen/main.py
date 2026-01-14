@@ -92,7 +92,7 @@ def ring_test(dir: int, idx: int, dim: int, src_core: list[int], dst_core: list[
     return tests
 
 
-def gen_tests(dev_dims: list[int], dim_types: list[int]):
+def gen_tests(dev_dims: list[int], dim_types: list[int], args):
     # Assume 2D for now
     if not dim_types:
         # For empty dim_types assume LINE for both
@@ -105,7 +105,7 @@ def gen_tests(dev_dims: list[int], dim_types: list[int]):
     ROWS, COLS = dev_dims[0], dev_dims[1]
 
     # iterate rows
-    for row in range(dev_dims[0]):
+    for row in range(ROWS):
         if dim_types[0] == TorusTopology.LINE.value:
             tests.extend(line_test(0, row, COLS, list(args.src_core), list(args.dst_core), args.ntype))
         elif dim_types[0] == TorusTopology.RING.value:
@@ -114,7 +114,7 @@ def gen_tests(dev_dims: list[int], dim_types: list[int]):
             raise ValueError("Bad Topology")
 
     # iterate cols
-    for col in range(dev_dims[1]):
+    for col in range(COLS):
         if dim_types[1] == TorusTopology.LINE.value:
             tests.extend(line_test(1, col, ROWS, list(args.src_core), list(args.dst_core), args.ntype))
         elif dim_types[1] == TorusTopology.RING.value:
@@ -144,7 +144,7 @@ if __name__ == "__main__":
 
     tests = []
     for m in cfg.mesh_descriptors:
-        tests.extend(gen_tests(m.device_topology.dims, m.device_topology.dim_types))
+        tests.extend(gen_tests(m.device_topology.dims, m.device_topology.dim_types, args))
 
     out = {"Tests": tests}
     with open(args.output, "w") as f:
