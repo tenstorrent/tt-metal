@@ -462,3 +462,21 @@ class WanPatchEmbed(Module):
         )
 
         return latent_1BND
+
+
+class Embedding(Module):
+    def __init__(
+        self, dictionary_size: int, embedding_size: int, *, device: ttnn.MeshDevice, mesh_axis: int | None = None
+    ) -> None:
+        super().__init__()
+
+        # use row major layout since ttnn.embedding allocates the embedding tensor again otherwise
+        self.weight = Parameter(
+            total_shape=[dictionary_size, embedding_size],
+            mesh_axes=[None, mesh_axis],
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+
+    def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
+        return ttnn.embedding(x, self.weight.data, layout=ttnn.TILE_LAYOUT)
