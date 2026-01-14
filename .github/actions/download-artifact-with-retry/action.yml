@@ -8,17 +8,12 @@ inputs:
   path:
     description: "Directory to download the artifact to"
     required: true
-  timeout-minutes:
-    description: "Timeout for download operations"
-    required: false
-    default: "10"
 
 runs:
   using: "composite"
   steps:
     - name: Download artifact
       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-      timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
       with:
         name: ${{ inputs.name }}
         path: ${{ inputs.path }}
@@ -54,7 +49,6 @@ runs:
     - name: Retry download
       if: steps.verify.outcome == 'failure'
       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-      timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
       with:
         name: ${{ inputs.name }}
         path: ${{ inputs.path }}
