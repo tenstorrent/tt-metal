@@ -16,16 +16,7 @@ namespace detail {
 
 template <typename data_movement_operation_t>
 void bind_unsqueeze(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const int dim) -> ttnn::Tensor {
-                return self(input_tensor, dim);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("dim")});
+    bind_registered_operation(mod, operation, doc, ttnn::nanobind_arguments_t{nb::arg("input_tensor"), nb::arg("dim")});
 }
 
 }  // namespace detail
