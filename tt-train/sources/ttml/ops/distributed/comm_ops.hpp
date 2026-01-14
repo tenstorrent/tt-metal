@@ -12,6 +12,7 @@ autograd::TensorPtr reduce_scatter(const autograd::TensorPtr& tensor, int dim);
 autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, bool noop_backward = false);
 autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim);
 autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor);
-autograd::TensorPtr ring_shift(const autograd::TensorPtr& tensor, uint32_t cluster_axis = 1, bool forward = true);
+autograd::TensorPtr ring_shift(
+    const autograd::TensorPtr& tensor, std::optional<uint32_t> cluster_axis = std::nullopt, bool forward = true);
 
 }  // namespace ttml::ops::distributed
