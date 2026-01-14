@@ -93,7 +93,7 @@ def ring_test(dir: int, idx: int, dim: int, src_core: list[int], dst_core: list[
     return tests
 
 
-def gen_lat_tests(dev_dims: list[int], dim_types: list[int]):
+def gen_tests(dev_dims: list[int], dim_types: list[int]):
     # Assume 2D for now
     if not dim_types:
         # For empty dim_types assume LINE for both
@@ -145,7 +145,7 @@ if __name__ == "__main__":
 
     tests = []
     for m in cfg.mesh_descriptors:
-        tests.extend(gen_lat_tests(m.device_topology.dims, m.device_topology.dim_types))
+        tests.extend(gen_tests(m.device_topology.dims, m.device_topology.dim_types))
 
     out = {"Tests": tests}
     with open(args.output, "w") as f:
