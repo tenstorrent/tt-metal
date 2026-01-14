@@ -439,11 +439,11 @@ size_t FabricContext::validate_and_apply_packet_size(size_t requested_size) cons
         max_allowed,
         tt::arch_to_str(arch));
 
+    TT_FATAL(requested_size > 0, "Packet size must be greater than 0");
+
     // Validate alignment (must be L1-aligned for NOC transfers)
     const auto alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
     TT_FATAL(requested_size % alignment == 0, "Packet size {} must be {}-byte aligned", requested_size, alignment);
-
-    TT_FATAL(requested_size > 0, "Packet size must be greater than 0");
 
     return requested_size;
 }
