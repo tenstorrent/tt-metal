@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::reduction::topk {
 
-struct operation_attributes_t {
+struct TopkParams {
     uint32_t k{};
     int8_t dim{};
     bool largest{};
@@ -21,7 +21,7 @@ struct operation_attributes_t {
     tt::tt_metal::CoreRangeSet sub_core_grids;
 };
 
-struct tensor_args_t {
+struct TopkInputs {
     Tensor input;
     std::optional<Tensor> indices;
     std::optional<std::tuple<Tensor, Tensor>> preallocated_outputs;
