@@ -14,7 +14,8 @@ template <uint32_t CbA, uint32_t CbB, uint32_t CbOut, uint32_t NumTilesK, uint32
 FORCE_INLINE void matmul_with_relu_block() {
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
-    cb_reserve_back(CbOut, NumTilesK);
+    constexpr uint32_t num_output_tiles = 1;
+    cb_reserve_back(CbOut, num_output_tiles);
 
     tile_regs_acquire();
 
@@ -32,7 +33,7 @@ FORCE_INLINE void matmul_with_relu_block() {
     pack_tile(0, CbOut, OutputTileId);  // Pack at offset OutputTileId
     tile_regs_release();
 
-    cb_push_back(CbOut, NumTilesK);
+    cb_push_back(CbOut, num_output_tiles);
 }
 
 constexpr uint32_t MATMUL_ACC_REG_ID = 0;
@@ -50,7 +51,8 @@ FORCE_INLINE void matmul_with_bias_block() {
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
     cb_wait_front(CbBias, NumTilesBias);
-    cb_reserve_back(CbOut, NumTilesK);
+    constexpr uint32_t num_output_tiles = 1;
+    cb_reserve_back(CbOut, num_output_tiles);
 
     tile_regs_acquire();
 
@@ -75,7 +77,7 @@ FORCE_INLINE void matmul_with_bias_block() {
     pack_tile(MATMUL_ACC_REG_ID, CbOut, OutputTileId);  // Pack at offset OutputTileId
     tile_regs_release();
 
-    cb_push_back(CbOut, NumTilesK);
+    cb_push_back(CbOut, num_output_tiles);
 }
 
 namespace NAMESPACE {

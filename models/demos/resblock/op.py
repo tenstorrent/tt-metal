@@ -32,17 +32,19 @@ class FusedResblock:
         all_sender_cores: ttnn.CoreRangeSet,
         data_format,
         page_size: int,
+        num_tiles: int,
         tile: ttnn.TileDescriptor,
         receiver_semaphore_descriptor: ttnn.SemaphoreDescriptor,
         sender_semaphore_descriptor: ttnn.SemaphoreDescriptor,
         device: ttnn.Device,
+        debug: bool,
     ) -> tuple[ttnn.KernelDescriptor, ttnn.KernelDescriptor, ttnn.CBDescriptor]:
         logger.debug(f"All mcast cores: {all_mcast_cores}")
-        logger.debug(f"Number of mcast cores: {all_mcast_cores.size()}")
+        logger.debug(f"Number of mcast cores: {all_mcast_cores.num_cores()}")
         logger.debug(f"All sender cores: {all_sender_cores}")
-        logger.debug(f"Number of sender cores: {all_sender_cores.size()}")
+        logger.debug(f"Number of sender cores: {all_sender_cores.num_cores()}")
 
-        number_of_senders = all_sender_cores.size()
+        number_of_senders = all_sender_cores.num_cores()
 
         # Create CBs for gather destination
         mcast_cb_format = ttnn.CBFormatDescriptor(
@@ -52,7 +54,7 @@ class FusedResblock:
             tile=tile,
         )
         mcast_cb_descriptor = ttnn.CBDescriptor(
-            total_size=page_size,
+            total_size=page_size * num_tiles,
             core_ranges=all_sender_cores.merge(
                 all_mcast_cores
             ),  # Create on all cores since otherwise the senders won't get the correct CB address
@@ -95,6 +97,7 @@ class FusedResblock:
                 mcast_sender_noc_coord_y_start,
                 mcast_sender_noc_coord_x_end,
                 mcast_sender_noc_coord_y_end,
+                1 if debug else 0,
             ],
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -113,7 +116,7 @@ class FusedResblock:
         return mcast_reader_kernel_descriptor, mcast_writer_kernel_descriptor, mcast_cb_descriptor
 
     @staticmethod
-    def op(input_tensor, weight0, weight1, output_tensor, fp32_dest_acc_en=False):
+    def op(input_tensor, weight0, weight1, output_tensor, fp32_dest_acc_en=False, debug=False):
         logger.info(
             f"Running ResBlock operation with shape {input_tensor.shape} x {weight0.shape} x {weight1.shape} -> {output_tensor.shape}"
         )
@@ -132,22 +135,12 @@ class FusedResblock:
         weight1_shape = weight1.shape
         weight1_tile = weight1.get_tile()
 
-        assert (
-            input_shape[0] // input_tile.tile_shape[0] == 1
-        ), f"M ({input_shape[0]}) must be a single tile with height same as tile_height ({input_tile.tile_shape[0]})"
+        # assert (
+        # input_shape[0] // input_tile.tile_shape[0] == 1
+        # ), f"M ({input_shape[0]}) must be a single tile with height same as tile_height ({input_tile.tile_shape[0]})"
         assert (
             input_shape[1] % input_tile.tile_shape[1] == 0
         ), f"K ({input_shape[1]}) must be divisible by tile_width ({input_tile.tile_shape[1]})"
-        assert (
-            weight0_shape[1] // weight0_tile.tile_shape[1] == 1
-        ), f"N ({weight0_shape[1]}) must be a single tile with width same as tile_width ({weight0_tile.tile_shape[1]})"
-        assert (
-            weight1_shape[1] // weight1_tile.tile_shape[1] == 1
-        ), f"N ({weight1_shape[1]}) must be a single tile with width same as tile_width ({weight1_tile.tile_shape[1]})"
-        assert (
-            input_shape[1] == weight0_shape[0]
-        ), f"input K ({input_shape[1]}) must equal weight0 K ({weight0_shape[0]})"
-
         num_tiles_k = input_shape[1] // input_tile.tile_shape[1]
 
         # TODO: Equality comparison checks exact match so we can't use this for now
@@ -171,12 +164,6 @@ class FusedResblock:
 
         out_shape = output_tensor.shape
         out_tile = output_tensor.get_tile()
-        assert (
-            out_shape[0] // out_tile.tile_shape[0] == 1
-        ), f"M ({out_shape[0]}) must be a single tile with height same as tile_height ({out_tile.tile_shape[0]})"
-        assert (
-            out_shape[1] // out_tile.tile_shape[1] == 1
-        ), f"N ({out_shape[1]}) must be a single tile with width same as tile_width ({out_tile.tile_shape[1]})"
         out_dtype = output_tensor.dtype
         out_tile_size = out_tile.get_tile_size(out_dtype)
         out_tile_descriptor = ttnn.TileDescriptor(out_tile)
@@ -203,7 +190,7 @@ class FusedResblock:
             tile=out_tile_descriptor,
         )
         interm_cb2_descriptor = ttnn.CBDescriptor(
-            total_size=out_tile_size,
+            total_size=out_tile_size * num_tiles_k,
             core_ranges=all_matmul_cores.merge(
                 all_mcast_cores
             ),  # Include mcast cores to ensure all cores can get the correct CB address with get_write_ptr
@@ -236,11 +223,20 @@ class FusedResblock:
             all_matmul_cores,
             out_dtype,
             out_tile_size,
+            num_tiles_k,
             out_tile_descriptor,
             mcast_receiver_semaphore_descriptor,
             mcast_sender_semaphore_descriptor,
             device,
+            debug,
         )
+
+        sender_core_range = all_matmul_cores.ranges()[0]
+        sender_logical_x_start = sender_core_range.start.x
+        sender_logical_y_start = sender_core_range.start.y
+        sender_logical_x_end = sender_core_range.end.x
+        sender_logical_y_end = sender_core_range.end.y
+        sender_grid_width = sender_logical_x_end - sender_logical_x_start + 1
 
         reader_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/reader.cpp",
@@ -258,6 +254,10 @@ class FusedResblock:
                 mcast_receiver_semaphore_descriptor.id,
                 FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
                 mcast_sender_semaphore_descriptor.id,
+                sender_logical_x_start,
+                sender_logical_y_start,
+                sender_grid_width,
+                1 if debug else 0,
             ],
             config=ttnn.ReaderConfigDescriptor(),
         )

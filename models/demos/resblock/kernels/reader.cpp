@@ -56,7 +56,17 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr =
         (volatile tt_l1_ptr uint32_t*)mcast_sender_semaphore_addr;
 
+    constexpr uint32_t sender_logical_x_start = get_compile_time_arg_val(11);
+    constexpr uint32_t sender_logical_y_start = get_compile_time_arg_val(12);
+    constexpr uint32_t sender_grid_width = get_compile_time_arg_val(13);
+    constexpr uint32_t debug_enabled = get_compile_time_arg_val(14);
+
     const uint32_t mcast_reciever_base_address = get_write_ptr(mcast_reciever_cb);
+
+    if (debug_enabled) {
+        DPRINT << "reader: start (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
+               << ")" << ENDL();
+    }
 
     cb_reserve_back(in0_cb, num_tiles_k);
     cb_push_back(in0_cb, num_tiles_k);
@@ -70,15 +80,34 @@ void kernel_main() {
     // Gather after first matmul so that we can mcast full result to all cores
     constexpr uint32_t num_output_tiles =
         1;  // This is always one because we only iterate over K tiles at a time for now
+    const uint32_t sender_logical_x = get_absolute_logical_x();
+    const uint32_t sender_logical_y = get_absolute_logical_y();
+    const uint32_t sender_tile_index =
+        (sender_logical_y - sender_logical_y_start) * sender_grid_width + (sender_logical_x - sender_logical_x_start);
+    const uint32_t tile_offset_bytes = sender_tile_index * get_tile_size(interm_cb);
+
     gather<
         interm_cb,
         interm_cb2,
         num_output_tiles,
         mcast_receiver_noc_x,
         mcast_receiver_noc_y,
-        mcast_receiver_semaphore_id>(mcast_reciever_base_address, 0);  // TODO: Add correct offset/addr
+        mcast_receiver_semaphore_id>(mcast_reciever_base_address, tile_offset_bytes);
+
+    if (debug_enabled) {
+        DPRINT << "reader: sent (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
+               << ")" << ENDL();
+    }
 
     cb_reserve_back(interm_cb2, num_tiles_k);
+    if (debug_enabled) {
+        DPRINT << "reader: wait mcast (" << (uint32_t)get_absolute_logical_x() << ","
+               << (uint32_t)get_absolute_logical_y() << ")" << ENDL();
+    }
     noc_semaphore_wait(mcast_sender_semaphore_addr_ptr, VALID);
+    if (debug_enabled) {
+        DPRINT << "reader: got mcast (" << (uint32_t)get_absolute_logical_x() << ","
+               << (uint32_t)get_absolute_logical_y() << ")" << ENDL();
+    }
     cb_push_back(interm_cb2, num_tiles_k);
 }
