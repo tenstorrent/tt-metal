@@ -25,6 +25,7 @@ UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpa
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
+    std::cout << "untilize_with_unpadding_single_core_program_factory.cpp" << std::endl;
     const auto& a = tensor_args.input_tensor;
     bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;

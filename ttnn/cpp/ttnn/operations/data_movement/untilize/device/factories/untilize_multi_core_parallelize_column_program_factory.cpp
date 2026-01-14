@@ -25,6 +25,7 @@ UntilizeMultiCoreParallelizeColumnProgramFactory::create(
     const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+        std::cout << "untilize_multi_core_parallelize_column_program_factory.cpp" << std::endl;
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;

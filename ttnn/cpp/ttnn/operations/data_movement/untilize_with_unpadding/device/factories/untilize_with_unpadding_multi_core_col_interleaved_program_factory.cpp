@@ -24,6 +24,7 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
+    std::cout << "untilize_with_unpadding_multi_core_col_interleaved_program_factory.cpp" << std::endl;
     const auto& a = tensor_args.input_tensor;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;

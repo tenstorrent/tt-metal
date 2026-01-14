@@ -115,11 +115,16 @@ TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddi
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     CreateKernel(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .compile_args = compute_args});
+        ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = unpack_to_dest_mode, .compile_args = compute_args});
 
     uint32_t packed_pad_value = detail::get_packed_value(a, pad_value);
 

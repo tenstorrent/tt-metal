@@ -91,15 +91,19 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args));
-    std::cout << "here" << std::endl;  // there are three files to change in total
-    /** compute
+
+        /** compute
      */
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }    
     if (!core_range.empty()) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range,
-            ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .compile_args = {nblocks_per_core, num_tiles_per_row}});
+            ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = unpack_to_dest_mode, .compile_args = {nblocks_per_core, num_tiles_per_row}});
     }
     if (has_cliff) {
         CreateKernel(
@@ -107,7 +111,7 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range_cliff,
             ComputeConfig{
-                .fp32_dest_acc_en = fp32_llk_acc, .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
+                .fp32_dest_acc_en = fp32_llk_acc, .unpack_to_dest_mode = unpack_to_dest_mode, .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
     }
 
     /* RUNTIME ARGS */

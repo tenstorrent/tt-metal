@@ -28,6 +28,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& output) {
+        std::cout << "untilize_multi_core_program_factory.cpp" << std::endl;
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
