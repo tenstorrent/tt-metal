@@ -321,6 +321,12 @@ python models/experimental/pi0/tests/download_pretrained_weights.py
 | Action Dimension | 32 |
 | Action Horizon | 50 |
 
+## Future Optimizations
+
+### Trace + 2CQ (Two Command Queue)
+
+**Status:** Not yet implemented
+
 ## License
 
 SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
