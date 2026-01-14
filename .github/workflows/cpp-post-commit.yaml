@@ -55,7 +55,7 @@ jobs:
         default-cpp-tests:
           [[
             # Nightly jobs that currently don't run any tests in the L2-Nightly pipeline are commented out
-            { name: "All C++", cmd: '{ [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && (echo "Running sdpa_reduce_c C++ nightly (nightly filter: $GTEST_FILTER)" && ./build/test/tt_metal/test_sdpa_reduce_c) && ./tests/scripts/run_cpp_unit_tests.sh', nightly: true }, # 15 minutes -  Only runs on Nightly-L2
+            { name: "All C++", cmd: '{ [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && (echo "Running unit_tests_legacy C++ nightly (nightly filter: $GTEST_FILTER)" && ./build/test/tt_metal/unit_tests_legacy --gtest_filter=*NIGHTLY_*) && ./tests/scripts/run_cpp_unit_tests.sh', nightly: true }, # 15 minutes -  Only runs on Nightly-L2
             { name: "dispatch", cmd: 'TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*', nightly: true },  # Only runs on Nightly-L2
             { name: "dispatch multicmd queue", cmd: 'TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*', nightly: true }, # Only runs on Nightly-L2
             { name: "distributed", cmd: './build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=*', nightly: true, auto-triage: true },  # Only runs on Nightly-L2
