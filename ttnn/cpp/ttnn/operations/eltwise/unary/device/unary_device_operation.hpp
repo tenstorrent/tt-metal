@@ -24,8 +24,8 @@ struct UnaryDeviceOperation {
 
     using operation_attributes_t = unary::operation_attributes_t;
     using tensor_args_t = unary::tensor_args_t;
-    using spec_return_value_t = unary::spec_return_value_t;
-    using tensor_return_value_t = unary::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::UnaryProgramFactory, program::UnarySubCoreGridProgramFactory, program::UnaryShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

@@ -61,13 +61,13 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t PagedFillCacheDeviceOperation::compute_output_specs(
+TensorSpec PagedFillCacheDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // In-place operation, return cache tensor's spec
     return tensor_args.cache_tensor.tensor_spec();
 }
 
-tensor_return_value_t PagedFillCacheDeviceOperation::create_output_tensors(
+Tensor PagedFillCacheDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // In-place operation, return the cache tensor
     return tensor_args.cache_tensor;

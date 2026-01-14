@@ -16,8 +16,8 @@ namespace ttnn::operations::reduction::argmax {
 struct ArgMaxDeviceOperation {
     using operation_attributes_t = argmax::operation_attributes_t;
     using tensor_args_t = argmax::tensor_args_t;
-    using spec_return_value_t = argmax::spec_return_value_t;
-    using tensor_return_value_t = argmax::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<program::ArgMaxSingleCoreProgramFactory, program::ArgMaxMultiCoreProgramFactory>;
 

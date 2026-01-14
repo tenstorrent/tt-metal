@@ -26,8 +26,8 @@ namespace ttnn::operations::data_movement::pad {
 struct PadDeviceOperation {
     using operation_attributes_t = ttnn::operations::data_movement::pad::operation_attributes_t;
     using tensor_args_t = ttnn::operations::data_movement::pad::tensor_args_t;
-    using spec_return_value_t = ttnn::operations::data_movement::pad::spec_return_value_t;
-    using tensor_return_value_t = ttnn::operations::data_movement::pad::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         program::PadRmReaderWriterMultiCoreProgramFactory,
         program::PadRmReaderWriterMultiCoreV2ProgramFactory,

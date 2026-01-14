@@ -28,8 +28,8 @@ namespace slice {
 struct SliceDeviceOperation {
     using operation_attributes_t = slice::operation_attributes_t;
     using tensor_args_t = slice::tensor_args_t;
-    using spec_return_value_t = slice::spec_return_value_t;
-    using tensor_return_value_t = slice::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         program::SliceRmProgramFactory,
         program::SliceRmShardedProgramFactory,

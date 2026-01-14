@@ -21,8 +21,8 @@ namespace ttnn::operations::experimental::gelu_backward {
 struct GeluBackwardDeviceOperation {
     using operation_attributes_t = gelu_backward::operation_attributes_t;
     using tensor_args_t = gelu_backward::tensor_args_t;
-    using spec_return_value_t = gelu_backward::spec_return_value_t;
-    using tensor_return_value_t = gelu_backward::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::GeluBackwardProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

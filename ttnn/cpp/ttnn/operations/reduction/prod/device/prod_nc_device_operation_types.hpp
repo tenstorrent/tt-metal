@@ -16,8 +16,4 @@ struct tensor_args_t {
     Tensor output;  // Note: output is passed as input (inplace pattern)
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
 }  // namespace ttnn::operations::reduction::prod_nc

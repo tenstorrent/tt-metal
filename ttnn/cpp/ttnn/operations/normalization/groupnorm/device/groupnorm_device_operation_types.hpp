@@ -51,7 +51,4 @@ struct tensor_args_t {
     std::optional<Tensor> reciprocals;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
 }  // namespace ttnn::operations::normalization::group_norm

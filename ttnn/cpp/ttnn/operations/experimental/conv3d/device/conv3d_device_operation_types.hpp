@@ -83,10 +83,6 @@ struct tensor_args_t {
     std::optional<const Tensor> bias_tensor;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
 namespace detail {
 std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t T_in,

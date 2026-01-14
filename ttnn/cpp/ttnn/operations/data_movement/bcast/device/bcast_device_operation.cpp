@@ -181,7 +181,7 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t BcastDeviceOperation::compute_output_specs(
+TensorSpec BcastDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -217,7 +217,7 @@ spec_return_value_t BcastDeviceOperation::compute_output_specs(
             input_tensor.padded_shape()));
 }
 
-tensor_return_value_t BcastDeviceOperation::create_output_tensors(
+Tensor BcastDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -245,8 +245,7 @@ tt::stl::hash::hash_t BcastDeviceOperation::compute_program_hash(
         operation_attributes.in_place);
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
-BcastDeviceOperation::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> BcastDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {

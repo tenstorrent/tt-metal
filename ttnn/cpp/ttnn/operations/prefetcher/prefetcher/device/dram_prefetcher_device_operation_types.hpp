@@ -21,7 +21,4 @@ struct tensor_args_t {
     std::vector<Tensor> input_tensors;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
 }  // namespace ttnn::operations::dram_prefetcher

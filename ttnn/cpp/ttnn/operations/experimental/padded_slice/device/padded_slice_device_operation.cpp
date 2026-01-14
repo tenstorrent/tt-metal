@@ -71,7 +71,7 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t PaddedSliceDeviceOperation::compute_output_specs(
+TensorSpec PaddedSliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
@@ -101,7 +101,7 @@ spec_return_value_t PaddedSliceDeviceOperation::compute_output_specs(
     return TensorSpec(output_tensor_shape, tensor_layout);
 }
 
-tensor_return_value_t PaddedSliceDeviceOperation::create_output_tensors(
+Tensor PaddedSliceDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
