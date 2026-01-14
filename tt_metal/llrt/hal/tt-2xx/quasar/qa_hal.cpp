@@ -78,13 +78,13 @@ public:
             flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
             flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
         } else {
-            flags += fmt::format(
-                "-Wl,--defsym=__kn_text={} ",
-                MEM_DM_KERNEL_BASE + (params.processor_id * MEM_DM_KERNEL_SIZE));  // this is for legacy kernels
+            flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_DM_KERNEL_BASE);  // this is for legacy kernels
             flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
-            flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
+            flags += fmt::format(
+                "-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
             flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
+            flags +=
+                fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE + (params.processor_id * MEM_DM_LOCAL_SIZE));
             flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
             flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
         }

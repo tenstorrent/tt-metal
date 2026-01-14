@@ -4,7 +4,7 @@
 
 // #include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"

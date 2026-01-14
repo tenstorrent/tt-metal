@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/command_queue_fixture.hpp"
+
 #include <algorithm>
 #include <functional>
 #include <random>
@@ -17,6 +19,7 @@
 using std::vector;
 using namespace tt;
 using std::string;
+using namespace tt::tt_metal;
 
 static std::vector<bfloat16> make_identity_scale_tile() {
     std::vector<bfloat16> tile(tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH, static_cast<bfloat16>(1.0f));
@@ -289,13 +292,9 @@ static bool test_sdpa_reduce_c(
     return pass;
 }
 
-int main(int argc, char** argv) {
+// NIGHTLY_ prefix ensures this test only runs in nightly CI pipelines
+TEST_F(UnitMeshCQSingleCardFixture, NIGHTLY_SdpaReduceC) {
     bool pass = true;
-
-    std::vector<std::string> input_args(argv, argv + argc);
-
-    int device_id = 0;
-    auto mesh_device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
     /**
      * Parameters to sweep over for correctness.
@@ -327,7 +326,7 @@ int main(int argc, char** argv) {
                 for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
                     for (bool do_elt : do_eltwise) {
                         bool this_passed = test_sdpa_reduce_c(
-                            mesh_device,
+                            devices_[0],
                             q_chunk_size,
                             k_chunk_size,
                             fp32_dest_acc_en,
@@ -353,11 +352,5 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass, "Error");
+    ASSERT_TRUE(pass);
 }

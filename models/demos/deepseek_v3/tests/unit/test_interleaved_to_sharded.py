@@ -121,6 +121,7 @@ DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
 @pytest.mark.parametrize("enable_trace", [True, False])
 def test_interleaved_to_sharded_deepseek(mesh_device, test_config, layout, enable_trace):
     output_mem_config, shape, dtype, input_mem_config = test_config
+    torch.manual_seed(0)
     torch_input = torch.rand(shape).bfloat16()
 
     tt_input = ttnn.from_torch(
@@ -137,7 +138,11 @@ def test_interleaved_to_sharded_deepseek(mesh_device, test_config, layout, enabl
 
     tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-    for tt_out_tensor in ttnn.get_device_tensors(tt_out_tensors):
+    coords = list(tt_out_tensors.tensor_topology().mesh_coords())
+    view = mesh_device.get_view()
+    for coord, tt_out_tensor in zip(coords, ttnn.get_device_tensors(tt_out_tensors)):
+        if not view.is_local(coord):
+            continue
         torch_out = ttnn.to_torch(tt_out_tensor)
         eq, output = comp_equal(torch_out, torch_input)
         assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"

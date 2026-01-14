@@ -103,7 +103,7 @@ void test_raw_host_memory_pointer() {
     // Check that numpy array's data is now set to that value
     for (auto index = 0; index < a_np_array.size(); index++) {
         auto a_np_array_element = static_cast<bfloat16*>(a_np_array_data)[index];
-        TT_ASSERT(a_np_array_element == a_value);
+        TT_FATAL(a_np_array_element == a_value, "a_np_array_element does not match expected value");
     }
     /* Sanity Check End */
 
@@ -117,7 +117,7 @@ void test_raw_host_memory_pointer() {
     // Check that cpu tensor has correct data
     bfloat16 output_value = 2.0f;
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
-        TT_ASSERT(element == output_value);
+        TT_FATAL(element == output_value, "Element does not match expected output_value");
     }
 
     std::cout << ttnn::to_string(tensor_for_printing) << "\n";
@@ -138,7 +138,7 @@ void test_raw_host_memory_pointer() {
     std::cout << ttnn::to_string(alternative_tensor_for_printing) << "\n";
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
-        TT_ASSERT(element == output_value);
+        TT_FATAL(element == output_value, "Element does not match expected output_value");
     }
 
     free(storage_of_alternative_tensor_for_printing);
@@ -164,7 +164,7 @@ void test_raw_host_memory_pointer() {
     tt::tt_metal::memcpy(tensor_for_printing, e_dev);
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
-        TT_ASSERT(element == bfloat16(10.0f));
+        TT_FATAL(element == bfloat16(10.0f), "Element does not match expected bfloat16(10.0f)");
     }
 }
 

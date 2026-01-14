@@ -55,8 +55,6 @@ def _get_tensors(
             torch_reference_slice = torch_reference[i].split(dim_per_device, dim=dim)[j]
             torch_reference_slices.append(torch_reference_slice)
 
-    torch_reference = torch.concat(torch_reference_slices, dim=0)
-
     shard_dims = (None, 0) if cluster_axis == 1 else (0, None)
     tt_input = ttnn.from_torch(
         torch_input,
@@ -67,7 +65,7 @@ def _get_tensors(
         device=device,
     )
 
-    return tt_input, torch_reference
+    return tt_input, torch_reference_slices
 
 
 @pytest.mark.requires_device(
@@ -105,7 +103,7 @@ def test_nd(
     if dim >= len(input_shape):
         pytest.skip("Invalid scatter dim")
 
-    tt_input, torch_reference = _get_tensors(
+    tt_input, torch_reference_slices = _get_tensors(
         input_shape,
         tuple(mesh_device.shape),
         dim,
@@ -131,6 +129,16 @@ def test_nd(
             topology=topology,
         )
 
-        tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
+        coords = list(tt_out_tensor.tensor_topology().mesh_coords())
+        view = mesh_device.get_view()
+        torch_outputs = []
+        torch_references = []
+        for coord, tt_out, torch_ref in zip(coords, ttnn.get_device_tensors(tt_out_tensor), torch_reference_slices):
+            if not view.is_local(coord):
+                continue
+            torch_outputs.append(ttnn.to_torch(tt_out))
+            torch_references.append(torch_ref)
+        tt_output_tensor = torch.cat(torch_outputs)
+        torch_reference = torch.cat(torch_references)
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
