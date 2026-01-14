@@ -44,16 +44,21 @@ void override_program_parameters(
         uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
         if (in1_idx == 0) {
             auto& in0_sender_args = in0_sender_backward_runtime_args[core.x][core.y];
+            // TODO FIX THIS AFTER MIGRATING TO NEW OP INFRA
+            //	    const auto& out_ready_semaphore = override_variables.semaphore.at(0);
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = output_addr;
             in0_sender_args[2] = in2_addr;
             in0_sender_args[3] = in3_addr;
-        } else if (in1_idx == override_variables.in0_backward_core) {
+            //	    in0_sender_args[20] = out_ready_semaphore.address();
+        } else if (in1_idx == override_variables.in0_forward_core) {
             auto& in0_sender_args = in0_sender_forward_runtime_args[core.x][core.y];
+            //	    const auto& out_ready_semaphore = override_variables.semaphore.at(1);
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = output_addr;
             in0_sender_args[2] = in2_addr;
             in0_sender_args[3] = in3_addr;
+            //	    in0_sender_args[20] = out_ready_semaphore.address();
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
             in0_receiver_args[1] = output_addr;
@@ -505,6 +510,11 @@ all_gather_minimal_matmul_async_factory_helper(
     }
 
     // Mux
+    auto [num_targets_forward, num_targets_backward] =
+        ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
+    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        topology, sender_device_coord, forward_coord, backward_coord, device);
+
     auto full_grid_size = device->compute_with_storage_grid_size();
     TT_FATAL(
         !((transpose_core_grid ? full_grid_size.x : full_grid_size.y) % num_links),
@@ -536,6 +546,18 @@ all_gather_minimal_matmul_async_factory_helper(
     const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
     };
+
+    // all gather
+    // L1 Scratch CB Creation
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    uint32_t l1_scratch_cb_page_size_bytes = in0_tile_size;
+
+    // scatter-write currently only supports 2 distinct noc addresses
+    uint32_t max_target_noc_addresses_per_packet = 2;
+
+    // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
+    uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
+    uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
 
     log_debug(tt::LogOp, "in0_cb_id: {}", in0_cb_id);
     log_debug(tt::LogOp, "in1_cb_id: {}", in1_cb_id);
@@ -613,12 +635,19 @@ all_gather_minimal_matmul_async_factory_helper(
         ring_size,
         ring_index,
         in3_tile_size,
+        num_tiles_to_write_per_packet,
+        num_targets_forward,
+        num_targets_backward,
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         in0_sender_backward_compile_time_args);
+    in0_sender_backward_compile_time_args.insert(
+        in0_sender_backward_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
+    in0_sender_backward_compile_time_args.insert(
+        in0_sender_backward_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
     append_accessors(
         in0_sender_backward_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
     auto in0_sender_backward_kernels_id = CreateKernel(
@@ -657,12 +686,19 @@ all_gather_minimal_matmul_async_factory_helper(
         ring_size,
         ring_index,
         in3_tile_size,
+        num_tiles_to_write_per_packet,
+        num_targets_forward,
+        num_targets_backward,
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         in0_sender_forward_compile_time_args);
+    in0_sender_forward_compile_time_args.insert(
+        in0_sender_forward_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
+    in0_sender_forward_compile_time_args.insert(
+        in0_sender_forward_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
     append_accessors(
         in0_sender_forward_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
     auto in0_sender_forward_kernels_id = CreateKernel(
@@ -701,6 +737,9 @@ all_gather_minimal_matmul_async_factory_helper(
         ring_size,
         ring_index,
         in3_tile_size,
+        num_tiles_to_write_per_packet,
+        num_targets_forward,
+        num_targets_backward,
     };
     append_accessors(
         in0_receiver_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, false);
@@ -860,6 +899,7 @@ all_gather_minimal_matmul_async_factory_helper(
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
+        CoreCoord virtual_core = device->worker_core_from_logical_core(core);
         uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
 
@@ -937,6 +977,9 @@ all_gather_minimal_matmul_async_factory_helper(
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            virtual_core.x,
+            virtual_core.y,
+            (in0_core_order_index == 0) ? semaphore.at(0).address() : semaphore.at(1).address(),
         };
         if (in0_core_order_index == 0) {
             // in0 backward sender
