@@ -27,7 +27,7 @@ tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim) {
         throw std::logic_error("All gather should not be called for a single device case");
     }
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, std::nullopt);
+    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ std::nullopt);
 
     return ttnn::experimental::all_gather_async(
         tensor,
@@ -58,7 +58,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
     auto all_gather_semaphores = ccl_resources.get_all_gather_semaphore();
     auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores();
 
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, std::nullopt);
+    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ std::nullopt);
 
     return ttnn::experimental::all_reduce_async(
         tensor,
@@ -75,7 +75,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
 tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     auto& mesh_device = ttml::autograd::ctx().get_device();
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(mesh_device, std::nullopt);
+    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(mesh_device, /* cluster_axis */ std::nullopt);
     return ttnn::experimental::reduce_scatter_minimal_async(
         tensor,
         /* persistent_output_buffers */ std::nullopt,
@@ -85,9 +85,7 @@ tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim)
         num_links,
         /* memory_config */ std::nullopt,
         /* intermediate_memory_config */ std::nullopt,
-        ttnn::ccl::Topology::Linear,
-        /* subdevice_id */ std::nullopt,
-        /* cluster_axis */ std::nullopt);
+        ttnn::ccl::Topology::Linear);
 }
 
 tt::tt_metal::Tensor ring_shift(
@@ -99,7 +97,8 @@ tt::tt_metal::Tensor ring_shift(
         (cluster_axis.has_value() && cluster_axis.value() < mesh_shape.dims() && cluster_axis.value() >= 0) ||
             (!cluster_axis.has_value() && tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D ||
              tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D_RING),
-        "cluster_axis must be > 0 and < {} for 2D mesh, got {} or nullopt for 1D mesh and linear topology, the actual "
+        "cluster_axis must be either > 0 and < {} for 2D mesh, got {} or nullopt for 1D mesh and linear topology, the "
+        "actual "
         "fabric config is {}",
         mesh_shape.dims() - 1,
         cluster_axis.value(),
