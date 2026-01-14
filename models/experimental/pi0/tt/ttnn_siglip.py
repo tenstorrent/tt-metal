@@ -24,7 +24,7 @@ from typing import Dict
 
 import torch
 import ttnn
-import tt_lib.fallback_ops as fallback_ops
+import tt_lib.fallback_ops as fallback_ops # Implemented tt_lib.fallback_ops.interpolate to replace torch.nn.functional.interpolate (Native TTNN interpolate does not exist)
 
 from models.experimental.pi0.common.configs import SigLIPConfig
 from models.experimental.pi0.tt.ttnn_common import tensor_1d_to_2d_ttnn
@@ -728,6 +728,7 @@ class SigLIPVisionTowerTTNN:
 
                 # Interpolate using bicubic (via TTNN fallback_ops)
                 # Note: This is still rare - only when checkpoint resolution differs
+                # fallback_ops.interpolate to replace torch.nn.functional.interpolate
                 pos_emb_interpolated = fallback_ops.interpolate(
                     pos_emb_2d,
                     size=(target_size, target_size),
@@ -821,6 +822,7 @@ class SigLIPVisionTowerTTNN:
                 pos_emb_2d = ttnn.permute(pos_emb_2d, (0, 3, 1, 2))
 
                 # Interpolate using bicubic (via TTNN fallback_ops - handles TTNN tensors)
+                # fallback_ops.interpolate to replace torch.nn.functional.interpolate
                 pos_emb_interpolated = fallback_ops.interpolate(
                     pos_emb_2d,
                     size=(target_size, target_size),
@@ -864,7 +866,7 @@ class SigLIPVisionTowerTTNN:
         # Run through TTNN transformer blocks
         for block in self.blocks:
             hidden_states = block.forward(hidden_states)
-            ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
+            ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Final layer norm (on device)
         if self.post_ln_weight is not None:

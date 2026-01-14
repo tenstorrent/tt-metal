@@ -188,7 +188,7 @@ class SuffixEmbeddingTTNN:
             bias=self.weights["action_time_mlp_out.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return x, None
 
@@ -274,7 +274,7 @@ class SuffixEmbeddingTTNN:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond
 
