@@ -314,7 +314,7 @@ jobs:
           pytest -n auto \
             models/experimental/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py \
             -k "4x8" \
-            --timeout 1500
+            --timeout 1200
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
