@@ -26,28 +26,7 @@ void bind_all_to_all_async_generic_op(nb::module_& mod, const ccl_operation_t& o
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t in_dim,
-               const int32_t out_dim,
-               const std::optional<ttnn::Tensor>& persistent_output_buffer,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               std::optional<uint32_t> cluster_axis) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    persistent_output_buffer,
-                    in_dim,
-                    out_dim,
-                    num_links,
-                    memory_config,
-                    topology,
-                    subdevice_id,
-                    cluster_axis);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("in_dim"),
             nb::arg("out_dim"),
