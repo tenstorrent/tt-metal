@@ -63,37 +63,11 @@ void bind_reduce_to_root(nb::module_& mod) {
                         topology=ttnn.Topology.Linear)
             )doc";
 
-    using OperationType = decltype(ttnn::reduce_to_root);
     ttnn::bind_registered_operation(
         mod,
         ttnn::reduce_to_root,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor_l,
-               const ttnn::Tensor& input_tensor_s,
-               const ttnn::Tensor& input_tensor_m,
-               const MeshCoordinate& root_coord,
-               const float scale_fp32,
-               const std::optional<ttnn::Tensor>& output_tensor_l,
-               const std::optional<ttnn::Tensor>& output_tensor_s,
-               const std::optional<ttnn::Tensor>& output_tensor_m,
-               const std::optional<ttnn::Tensor>& intermediate_tensor,
-               const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
-               const tt::tt_fabric::Topology topology) {
-                return self(
-                    input_tensor_l,
-                    input_tensor_s,
-                    input_tensor_m,
-                    root_coord,
-                    scale_fp32,
-                    topology,
-                    output_tensor_l,
-                    output_tensor_s,
-                    output_tensor_m,
-                    intermediate_tensor,
-                    input_mux_cores);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor_l").noconvert(),
             nb::arg("input_tensor_s").noconvert(),
             nb::arg("input_tensor_m").noconvert(),
