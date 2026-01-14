@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
+#include <iostream>
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
@@ -199,6 +200,8 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
 
         uint32_t original_size = out_shape[slice_dimension];
         uint32_t slice_size = original_size / num_parts;
+
+        std::cout << "original_size: " << original_size << std::endl;
 
         TT_FATAL(
             original_size % num_parts == 0,
