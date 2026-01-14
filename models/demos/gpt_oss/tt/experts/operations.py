@@ -91,18 +91,13 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, ccl_manage
     """
     # Synchronize for prefill
     if seq_len > 1:
-        ttnn.synchronize_device(mesh_device)
+        ttnn.synchronize_device(mesh_device)  # ✅ Use explicit mesh_device
 
-    # WORKAROUND: The mesh_config.allreduce using reduce_scatter_minimal_async
-    # and all_gather_async is causing memory corruption that affects the
-    # attention sinks tensor. Use the standard ttnn.all_reduce instead.
-    # See: attention_debug_investigation_20260113.md for root cause analysis.
-    tensor_allreduced = ttnn.all_reduce(
+    tensor_allreduced = mesh_config.allreduce(
         tensor,
-        num_links=ccl_manager.num_links,
-        topology=ccl_manager.topology,
-        cluster_axis=mesh_config.tp_axis,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ccl_manager,
+        pad_size=0,  # Optimal padding for TP=8
+        axis=mesh_config.tp_axis,
     )
     tensor.deallocate(True)
 
