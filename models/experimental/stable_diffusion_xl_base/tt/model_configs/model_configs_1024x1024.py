@@ -12,7 +12,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-class ModelOptimisations:
+class ModelOptimisations1024x1024:
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,
@@ -43,7 +43,7 @@ class ModelOptimisations:
             act_block_w_div=1,
             act_block_h_override=1024,
         )
-        self.conv_configs["ABH_256_ADB"] = ttnn.Conv2dConfig(
+        self.conv_configs["ABH_256_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
@@ -1142,7 +1142,7 @@ class ModelOptimisations:
             return None
 
         if "conv_in" == conv_path:
-            return self.conv_configs["ABH_256_ADB"]
+            return self.conv_configs["ABH_256_ADB_HS"]
 
         # DOWN BLOCK 0
         elif ("down_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):

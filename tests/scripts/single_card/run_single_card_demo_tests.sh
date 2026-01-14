@@ -197,6 +197,8 @@ run_resnet_func() {
 
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
+  # Once the VAE is implemented on device for 512x512 image resolution, this test will run on both resolutions with device_vae. For now, lets use this test config.
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo.py -k "512x512 and host_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }

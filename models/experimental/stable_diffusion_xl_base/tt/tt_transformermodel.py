@@ -15,7 +15,6 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 class TtTransformer2DModel(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config, query_dim, num_attn_heads, out_dim):
         super().__init__()
-
         self.device = device
 
         self.norm_groups = 32
