@@ -182,9 +182,54 @@ def generate_reference(
     print(f"Prompt tokens: {prompt_len}")
     print(f"bos_id={bos_id} eos_id={eos_id} pad_id={pad_id} safe_pad_id={safe_pad_id}")
 
+    reference_file.parent.mkdir(parents=True, exist_ok=True)
+
     # --- Generation (greedy, deterministic) ---
     # NOTE: use_cache=False avoids DynamicCache API mismatch with some transformers versions
     print(f"Generating up to {max_new_tokens} new tokens using model.generate()...")
+
+    def build_payload(reference_tokens_tensor: torch.Tensor, top5_tokens_full: torch.Tensor) -> dict:
+        generated_tokens_tensor = reference_tokens_tensor[0, prompt_len:]
+        generated_tokens = generated_tokens_tensor.tolist()
+        return {
+            "reference_tokens": reference_tokens_tensor,  # [1, L]
+            "prompt_tokens": torch.tensor(raw_prompt_tokens, dtype=torch.long).unsqueeze(0),  # [1, prompt_len]
+            "generated_tokens": generated_tokens_tensor,  # [1, gen_len]
+            "top5_tokens": top5_tokens_full,  # [L, 5]
+            "tf_prompt_len": prompt_len,
+            "max_new_tokens": max_new_tokens,
+            "prompt": prompt,
+            "decoded_generated_text": tokenizer.decode(generated_tokens, skip_special_tokens=False),
+            "token_ids_meta": {
+                "bos_id": bos_id,
+                "eos_id": eos_id,
+                "pad_id": pad_id,
+                "safe_pad_id_used_for_generate": safe_pad_id,
+            },
+        }
+
+    class ReferenceSnapshotter(StoppingCriteria):
+        def __init__(self, prompt_len: int, max_new_tokens: int, reference_file: Path) -> None:
+            self.prompt_len = prompt_len
+            self.reference_file = reference_file
+            self.max_total_len = prompt_len + max_new_tokens
+            self.top5_tokens_full = torch.zeros(self.max_total_len, 5, dtype=torch.long)
+            self.last_len = prompt_len
+
+        def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+            current_len = input_ids.shape[-1]
+            if current_len > self.last_len:
+                if scores is not None:
+                    top5 = torch.topk(scores[0], k=5, dim=-1).indices.to(torch.long).cpu()
+                    self.top5_tokens_full[current_len - 1] = top5
+                self.last_len = current_len
+                reference_tokens_tensor = input_ids.detach().cpu()
+                payload = build_payload(
+                    reference_tokens_tensor,
+                    self.top5_tokens_full[:current_len].cpu(),
+                )
+                torch.save(payload, self.reference_file)
+            return False
 
     class TokenProgress(StoppingCriteria):
         def __init__(self, prompt_len: int, pbar) -> None:
@@ -199,11 +244,13 @@ def generate_reference(
 
     pbar = None
     stopping_criteria = None
+    snapshotter = ReferenceSnapshotter(prompt_len, max_new_tokens, reference_file)
     if tqdm is not None and max_new_tokens > 0:
         pbar = tqdm(total=max_new_tokens, desc="Generating tokens", unit="tok", mininterval=1)
-        stopping_criteria = StoppingCriteriaList([TokenProgress(prompt_len, pbar)])
+        stopping_criteria = StoppingCriteriaList([TokenProgress(prompt_len, pbar), snapshotter])
     elif tqdm is None and max_new_tokens > 0:
         print("tqdm not available; generation progress bar disabled.")
+        stopping_criteria = StoppingCriteriaList([snapshotter])
 
     try:
         with torch.no_grad():
@@ -226,52 +273,14 @@ def generate_reference(
     full_sequence_tensor = outputs.sequences[0]  # [prompt_len + gen_len]
     generated_tokens_tensor = full_sequence_tensor[prompt_len:]
     generated_tokens = generated_tokens_tensor.tolist()
-
     print(f"Phase 1: Generated {len(generated_tokens)} tokens")
     print("Decoded generation (raw):", repr(tokenizer.decode(generated_tokens, skip_special_tokens=False)))
 
-    # --- Top-5 aligned to generated positions (from generate() logits) ---
-    logits_steps = outputs.logits if getattr(outputs, "logits", None) is not None else outputs.scores
-    if logits_steps is None:
-        raise RuntimeError("Generation did not return logits; expected output_logits=True.")
-
-    gen_len = int(generated_tokens_tensor.numel())
-    if gen_len != len(logits_steps):
-        raise RuntimeError(
-            f"Mismatch between generated tokens ({gen_len}) and logit steps ({len(logits_steps)})."
-        )
-
-    top5_generated = torch.empty((gen_len, 5), dtype=torch.long)
-    for i, step_logits in enumerate(logits_steps):
-        top5_generated[i] = torch.topk(step_logits[0], k=5, dim=-1).indices.to(torch.long).cpu()
-
     total_length = int(full_sequence_tensor.numel())
-    top5_tokens_full = torch.zeros(total_length, 5, dtype=torch.long)  # [L, 5]
-    if gen_len:
-        start = prompt_len
-        end = start + gen_len
-        top5_tokens_full[start:end] = top5_generated
+    top5_tokens_full = snapshotter.top5_tokens_full[:total_length].cpu()
 
     # --- Save payload (explicit prompt/generated + full sequence) ---
-    reference_file.parent.mkdir(parents=True, exist_ok=True)
-
-    payload = {
-        "reference_tokens": full_sequence_tensor.unsqueeze(0).cpu(),  # [1, L]
-        "prompt_tokens": torch.tensor(raw_prompt_tokens, dtype=torch.long).unsqueeze(0),  # [1, prompt_len]
-        "generated_tokens": generated_tokens_tensor.unsqueeze(0).cpu(),  # [1, gen_len]
-        "top5_tokens": top5_tokens_full,  # [L, 5]
-        "tf_prompt_len": prompt_len,
-        "max_new_tokens": max_new_tokens,
-        "prompt": prompt,
-        "decoded_generated_text": tokenizer.decode(generated_tokens, skip_special_tokens=False),
-        "token_ids_meta": {
-            "bos_id": bos_id,
-            "eos_id": eos_id,
-            "pad_id": pad_id,
-            "safe_pad_id_used_for_generate": safe_pad_id,
-        },
-    }
-
+    payload = build_payload(full_sequence_tensor.unsqueeze(0).cpu(), top5_tokens_full)
     torch.save(payload, reference_file)
 
     print(
