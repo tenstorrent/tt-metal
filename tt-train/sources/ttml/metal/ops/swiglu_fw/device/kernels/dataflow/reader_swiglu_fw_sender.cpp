@@ -61,7 +61,7 @@ void kernel_main() {
 
     // Uniform padding: loop for max_rows_for_sync to maintain multicast sync.
     // For padding rows (r >= end_row), we read the last valid row to keep all
-    // cores synchronized without producing extra output.  // For multicast sync
+    // cores synchronized without producing extra output.
 
     // Shared semaphore pointers for synchronization (reused by W1/W2/W3)
     volatile tt_l1_ptr uint32_t* mcast_sender_sem_ptr =
