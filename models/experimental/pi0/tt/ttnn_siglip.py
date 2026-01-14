@@ -24,7 +24,7 @@ from typing import Dict
 
 import torch
 import ttnn
-import tt_lib.fallback_ops as fallback_ops # Implemented tt_lib.fallback_ops.interpolate to replace torch.nn.functional.interpolate (Native TTNN interpolate does not exist)
+import tt_lib.fallback_ops as fallback_ops  # Implemented tt_lib.fallback_ops.interpolate to replace torch.nn.functional.interpolate (Native TTNN interpolate does not exist)
 
 from models.experimental.pi0.common.configs import SigLIPConfig
 from models.experimental.pi0.tt.ttnn_common import tensor_1d_to_2d_ttnn
@@ -396,7 +396,7 @@ class SigLIPAttentionTTNN:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
-        
+
         # OPTIMIZATION 2: Native TTNN head splitting
         # This splits the fused QKV into separate Q, K, V with proper head layout
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
@@ -442,7 +442,7 @@ class SigLIPAttentionTTNN:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output)
-        
+
         # Output projection - use L1 for intermediate computation
         output = ttnn.linear(
             attn_concat,
@@ -543,7 +543,7 @@ class SigLIPMLPTTNN:
             compute_kernel_config=self.compute_kernel_config,
             activation="gelu",
         )
-        
+
         # FC2 - use L1 for intermediate computation
         output = ttnn.linear(
             x,
@@ -648,11 +648,11 @@ class SigLIPBlockTTNN:
         # Native TTNN attention with padded head dim workaround
         attn_output = self.attention.forward(normed)
         ttnn.deallocate(normed)
-        
+
         # Residual connection - use L1 for intermediate computation
         hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
-        
+
         # Pre-MLP LayerNorm
         normed = ttnn.layer_norm(
             hidden_states,
@@ -661,7 +661,7 @@ class SigLIPBlockTTNN:
             epsilon=self.config.layer_norm_eps,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        
+
         # MLP with residual - use L1 for intermediate computation
         mlp_output = self.mlp.forward(normed)
         ttnn.deallocate(normed)
@@ -768,9 +768,7 @@ class SigLIPVisionTowerTTNN:
         if post_ln_weight is not None:
             self.post_ln_weight = tensor_1d_to_2d_ttnn(post_ln_weight, device, dtype=ttnn.bfloat16)
             self.post_ln_bias = (
-                tensor_1d_to_2d_ttnn(post_ln_bias, device, dtype=ttnn.bfloat16)
-                if post_ln_bias is not None
-                else None
+                tensor_1d_to_2d_ttnn(post_ln_bias, device, dtype=ttnn.bfloat16) if post_ln_bias is not None else None
             )
         else:
             self.post_ln_weight = None
@@ -866,7 +864,9 @@ class SigLIPVisionTowerTTNN:
         # Run through TTNN transformer blocks
         for block in self.blocks:
             hidden_states = block.forward(hidden_states)
-            ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
+            ttnn.ReadDeviceProfiler(
+                self.device
+            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Final layer norm (on device)
         if self.post_ln_weight is not None:

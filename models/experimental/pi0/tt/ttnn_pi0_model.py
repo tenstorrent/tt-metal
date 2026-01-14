@@ -375,7 +375,9 @@ class PI0ModelTTNN:
             x_t_ttnn = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
 
             # Clear profiler buffer after each denoising step (~500 ops)
-            ttnn.ReadDeviceProfiler(self.device) # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
+            ttnn.ReadDeviceProfiler(
+                self.device
+            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Convert back to PyTorch only at the very end (1 transfer instead of 10!)
         return ttnn.to_torch(x_t_ttnn)

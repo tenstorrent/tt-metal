@@ -188,7 +188,9 @@ class PrefixEmbeddingTTNN:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
+        ttnn.ReadDeviceProfiler(
+            self.device
+        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return prefix_embs, prefix_pad_masks, prefix_att_masks
 
