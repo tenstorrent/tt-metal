@@ -15,6 +15,15 @@ target_sources(
         device/minimal_matmul_split_program_factory.cpp
 )
 
+# Disable unity build for program factory files to avoid symbol collisions
+set_source_files_properties(
+    device/minimal_matmul_program_factory.cpp
+    device/minimal_matmul_split_program_factory.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
+
 target_include_directories(ttnn_op_experimental_minimal_matmul PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_experimental_minimal_matmul
