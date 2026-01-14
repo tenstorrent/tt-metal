@@ -26,6 +26,11 @@ class FusedResblock:
             f"Running ResBlock operation with shape {input_tensor.shape} x {weight0.shape} x {weight1.shape} -> {output_tensor.shape}"
         )
 
+        logger.debug(f"Input tensor sharding: {input_tensor.memory_config().shard_spec}")
+        logger.debug(f"Weight0 tensor sharding: {weight0.memory_config().shard_spec}")
+        logger.debug(f"Weight1 tensor sharding: {weight1.memory_config().shard_spec}")
+        logger.debug(f"Output tensor sharding: {output_tensor.memory_config().shard_spec}")
+
         input_shape = input_tensor.shape
         input_tile = input_tensor.get_tile()
         weight0_shape = weight0.shape
@@ -51,8 +56,11 @@ class FusedResblock:
 
         num_tiles_k = input_shape[1] // input_tile.tile_shape[1]
 
-        all_cores = input_tensor.memory_config().shard_spec.grid
-        assert all_cores.num_cores() == 1, f"Only single core is supported"
+        # TODO: Equality comparison checks exact match so we can't use this for now
+        # assert weight0.memory_config().shard_spec.grid == weight1.memory_config().shard_spec.grid, f"Weights must have the same core grid"
+        all_matmul_cores = (
+            weight0.memory_config().shard_spec.grid
+        )  # All matmul cores are the same for weight0 and weight1
 
         in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(FusedResblock.IN0_CB, input_tensor)
         weight0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(FusedResblock.WEIGHT0_CB, weight0)
@@ -79,7 +87,7 @@ class FusedResblock:
         )
         interm_cb_descriptor = ttnn.CBDescriptor(
             total_size=out_tile_size,
-            core_ranges=all_cores,
+            core_ranges=all_matmul_cores,
             format_descriptors=[interm_cb_format],
         )
         interm_cb2_format = ttnn.CBFormatDescriptor(
@@ -90,14 +98,14 @@ class FusedResblock:
         )
         interm_cb2_descriptor = ttnn.CBDescriptor(
             total_size=out_tile_size,
-            core_ranges=all_cores,
+            core_ranges=all_matmul_cores,
             format_descriptors=[interm_cb2_format],
         )
 
         reader_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=all_cores,
+            core_ranges=all_matmul_cores,
             compile_time_args=[
                 FusedResblock.IN0_CB,
                 FusedResblock.WEIGHT0_CB,
@@ -111,14 +119,14 @@ class FusedResblock:
         writer_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/writer.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=all_cores,
+            core_ranges=all_matmul_cores,
             compile_time_args=[FusedResblock.OUT_CB],
             config=ttnn.WriterConfigDescriptor(),
         )
         compute_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/compute.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=all_cores,
+            core_ranges=all_matmul_cores,
             compile_time_args=[
                 FusedResblock.IN0_CB,
                 FusedResblock.WEIGHT0_CB,

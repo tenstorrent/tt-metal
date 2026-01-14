@@ -19,17 +19,22 @@ Test fused ResBlock operation with inputs [B, K] @ [K, K] -> [B, K]
     "B, K",
     [
         (1, 32),
+        (1, 64),
     ],
 )
 def test_resblock(device, B, K):
-    a_tile = ttnn.Tile([B, K])
-    weight_tile = ttnn.Tile([K, K])
-    out_tile = ttnn.Tile([B, K])
+    a_tile = ttnn.Tile([B, 32])
+    weight_tile = ttnn.Tile([32, 32])
+    out_tile = ttnn.Tile([B, 32])
 
-    core = ttnn.CoreCoord(0, 0)
-    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core)})
+    # For now we only support cleanly divisible K by weight tile width
+    assert (
+        K % weight_tile.tile_shape[1] == 0
+    ), f"K ({K}) must be divisible by weight tile width ({weight_tile.tile_shape[1]})"
+    number_of_matmul_cores = K // weight_tile.tile_shape[1]
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(number_of_matmul_cores - 1, 0))})
 
-    logger.info(f"Testing fused ResBlock with shape [{B}, {K}] x [{K}, {K}]")
+    logger.info(f"Testing fused ResBlock with shape [{B}, {K}] x [{K}, {K}] on {number_of_matmul_cores} cores")
 
     torch.manual_seed(0)
 
@@ -38,12 +43,8 @@ def test_resblock(device, B, K):
     weight1 = torch.randn((K, K), dtype=torch.bfloat16)
 
     expected = FusedResblock.golden(torch_a.float(), weight0.float(), weight1.float()).bfloat16()
-    print(expected)
 
-    # TODO: Remove this once we support multiple cores
-    assert core_grid.num_cores() == 1, "Core grid must be a single core for now"
-
-    input_a_shard_shape = (B, K)
+    input_a_shard_shape = (B, K)  # This tensor is unique because it is replicated across all matmul cores
     input_a_shard_spec = ttnn.ShardSpec(
         core_grid,
         input_a_shard_shape,
@@ -52,8 +53,9 @@ def test_resblock(device, B, K):
     input_a_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_a_shard_spec
     )
+    # TODO: For now we replicate input across cores by replicating by number_of_matmul_times and then height sharding, but in the future we should have the op itself do the mcast
     ttnn_a = ttnn.from_torch(
-        torch_a,
+        torch_a.repeat(number_of_matmul_cores, 1),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -62,8 +64,9 @@ def test_resblock(device, B, K):
     )
     logger.info(f"Created TTNN input tensor with shard shape {input_a_shard_shape}")
 
-    def create_weight_tensor(weight, tile):
-        weight_shard_shape = weight.shape
+    def create_weight_tensor(weight, tile, core_grid):
+        # Weights are width-sharded across all cores
+        weight_shard_shape = (weight.shape[0], weight.shape[1] // number_of_matmul_cores)
         weight_shard_spec = ttnn.ShardSpec(
             core_grid,
             weight_shard_shape,
@@ -81,28 +84,24 @@ def test_resblock(device, B, K):
             tile=tile,
         )
 
-    weight0_tensor = create_weight_tensor(weight0, weight_tile)
-    weight1_tensor = create_weight_tensor(weight1, weight_tile)
+    weight0_tensor = create_weight_tensor(weight0, weight_tile, core_grid)
+    weight1_tensor = create_weight_tensor(weight1, weight_tile, core_grid)
 
-    output_shard_shape = (B, K)
+    output_shard_shape = (B, K // number_of_matmul_cores)
     output_shard_spec = ttnn.ShardSpec(
         core_grid,
         output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
-
-    # Create output tensor
-    torch_output_zeros = torch.zeros((B, K), dtype=torch.bfloat16)
     ttnn_output = ttnn.from_torch(
-        torch_output_zeros,
+        torch.zeros((B, K), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=output_mem_config,
         tile=out_tile,
     )
-    logger.info(f"Created output tensor with shard shape {output_shard_shape}")
 
     logger.info("Running Fused ResBlock operation")
     ttnn_output = FusedResblock.op(
