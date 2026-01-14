@@ -26,6 +26,9 @@ struct LoRALayerConfig {
 
     // Bias configuration specifies how biases are handled during fine-tuning.
     bool is_bias_trainable = false;
+
+    // Whether to use Rank-Stabilized LoRA - scale = alpha/sqrt(r) instead of standard scaling (alpha/r)
+    bool use_rslora = false;
 };
 
 class LoRALinearLayer : public ModuleBase {

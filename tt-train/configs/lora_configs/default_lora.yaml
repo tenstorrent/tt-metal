@@ -11,6 +11,17 @@ lora_config:
   # Whether bias should be trainable
   is_bias_trainable: false
 
+  # Whether to use Rank-Stabilized LoRA - scale = alpha/sqrt(r) instead of standard scaling (alpha/r)
+  use_rslora: false
+
+  # Optional: Per-layer ranks. Length must match target_modules length.
+  # If specified, overrides default r for each layer.
+  # ranks: [64, 128, 64, 128, ...]
+
+  # Optional: Per-layer alphas. Length must match target_modules length.
+  # If specified, overrides default lora_alpha for each layer.
+  # alphas: [1.0, 2.0, 1.0, 2.0, ...]
+
   # Target modules to apply LoRA (optional - if not specified, applies to all applicable modules)
   # Examples: [
   #   "llama/llama_block_9/attention/q_linear/",

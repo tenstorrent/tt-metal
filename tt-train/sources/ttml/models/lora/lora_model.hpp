@@ -17,6 +17,10 @@ namespace ttml::modules {
 class LinearLayer;
 }  // namespace ttml::modules
 
+namespace YAML {
+class Node;
+}  // namespace YAML
+
 namespace ttml::models {
 
 struct LoRAConfig {
@@ -25,6 +29,11 @@ struct LoRAConfig {
     float lora_alpha = 1.0F;
     float lora_dropout = 0.0F;
     bool is_bias_trainable = false;
+    bool use_rslora = false;
+    std::optional<std::vector<uint32_t>> ranks;
+    std::optional<std::vector<float>> alphas;
+
+    static LoRAConfig from_yaml(const YAML::Node& yaml_config);
 };
 
 class LoraModel : public BaseTransformer {

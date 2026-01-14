@@ -246,23 +246,6 @@ ModelConfig parse_model_config(const YAML::Node &yaml_config) {
     return config;
 }
 
-ttml::models::LoRAConfig parse_lora_config(const YAML::Node &yaml_config) {
-    ttml::models::LoRAConfig config;
-    auto lora_config = yaml_config["lora_config"];
-
-    config.r = lora_config["r"].as<uint32_t>(config.r);
-    config.lora_alpha = lora_config["lora_alpha"].as<float>(config.lora_alpha);
-    config.lora_dropout = lora_config["lora_dropout"].as<float>(config.lora_dropout);
-    config.is_bias_trainable = lora_config["is_bias_trainable"].as<bool>(config.is_bias_trainable);
-
-    auto target_modules_node = lora_config["target_modules"];
-    if (target_modules_node && target_modules_node.IsSequence()) {
-        config.target_modules = target_modules_node.as<std::vector<std::string>>();
-    }
-
-    return config;
-}
-
 const std::unordered_map<
     std::string,
     std::function<std::unique_ptr<ttml::schedulers::LRSchedulerBase>(ttml::optimizers::OptimizerBase *, size_t)>>
@@ -435,7 +418,7 @@ int main(int argc, char **argv) {
 
     std::optional<ttml::models::LoRAConfig> lora_config;
     if (training_config.lora_config_path.has_value()) {
-        lora_config = parse_lora_config(YAML::LoadFile(*training_config.lora_config_path));
+        lora_config = ttml::models::LoRAConfig::from_yaml(YAML::LoadFile(*training_config.lora_config_path));
     }
 
     // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage

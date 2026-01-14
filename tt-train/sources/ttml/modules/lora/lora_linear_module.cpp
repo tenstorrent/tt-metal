@@ -72,7 +72,11 @@ void LoRALinearLayer::register_tensors() {
 LoRALinearLayer::LoRALinearLayer(
     const LoRALayerConfig& config, uint32_t in_features, uint32_t out_features, bool has_bias) {
     m_weight = create_weight(in_features, out_features);
-    m_scale = config.alpha / static_cast<float>(config.rank);
+    if (config.use_rslora) {
+        m_scale = config.alpha / std::sqrt(static_cast<float>(config.rank));
+    } else {
+        m_scale = config.alpha / static_cast<float>(config.rank);
+    }
     m_lora_a = create_lora_a(in_features, config.rank);
     m_lora_b = create_lora_b(config.rank, out_features);
     m_dropout = std::make_shared<DropoutLayer>(config.dropout);
@@ -90,7 +94,11 @@ LoRALinearLayer::LoRALinearLayer(
 LoRALinearLayer::LoRALinearLayer(
     const LoRALayerConfig& config, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) :
     m_weight(weight), m_bias(bias) {
-    m_scale = config.alpha / static_cast<float>(config.rank);
+    if (config.use_rslora) {
+        m_scale = config.alpha / std::sqrt(static_cast<float>(config.rank));
+    } else {
+        m_scale = config.alpha / static_cast<float>(config.rank);
+    }
     auto weight_shape = m_weight->get_value().logical_shape();
     uint32_t in_features = weight_shape[weight_shape.rank() - 1];
     uint32_t out_features = weight_shape[weight_shape.rank() - 2];
@@ -107,7 +115,11 @@ LoRALinearLayer::LoRALinearLayer(
 
 LoRALinearLayer::LoRALinearLayer(const LoRALayerConfig& config, const autograd::TensorPtr& weight, bool has_bias) :
     m_weight(weight) {
-    m_scale = config.alpha / static_cast<float>(config.rank);
+    if (config.use_rslora) {
+        m_scale = config.alpha / std::sqrt(static_cast<float>(config.rank));
+    } else {
+        m_scale = config.alpha / static_cast<float>(config.rank);
+    }
     auto weight_shape = m_weight->get_value().logical_shape();
     uint32_t in_features = weight_shape[weight_shape.rank() - 1];
     uint32_t out_features = weight_shape[weight_shape.rank() - 2];
