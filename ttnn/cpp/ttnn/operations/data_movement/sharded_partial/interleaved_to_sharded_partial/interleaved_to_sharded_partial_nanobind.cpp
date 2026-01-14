@@ -25,26 +25,7 @@ void bind_interleaved_to_sharded_partial(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_sharded_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::variant<CoreCoord, CoreRangeSet>& grid,
-               const std::array<uint32_t, 2>& shard_shape,
-               int64_t& num_slices,
-               int64_t& slice_index,
-               tt::tt_metal::TensorMemoryLayout shard_scheme,
-               tt::tt_metal::ShardOrientation shard_orientation,
-               const std::optional<ttnn::DataType>& output_dtype) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    grid,
-                    shard_shape,
-                    num_slices,
-                    slice_index,
-                    shard_scheme,
-                    shard_orientation,
-                    output_dtype);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("grid"),
             nb::arg("shard_shape"),
