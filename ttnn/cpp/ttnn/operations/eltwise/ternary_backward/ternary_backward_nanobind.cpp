@@ -71,17 +71,7 @@ void bind_ternary_backward(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const ternary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const ttnn::Tensor& input_tensor_c,
-               float alpha,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
-                return self(grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c, alpha, output_memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -236,26 +226,7 @@ void bind_ternary_backward_optional_output(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const ternary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const ttnn::Tensor& input_tensor_c,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::vector<bool>& are_required_outputs,
-               const std::optional<ttnn::Tensor>& input_a_grad,
-               const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
-                    grad_tensor,
-                    input_tensor_a,
-                    input_tensor_b,
-                    input_tensor_c,
-                    memory_config,
-                    are_required_outputs,
-                    input_a_grad,
-                    input_b_grad);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
