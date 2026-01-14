@@ -69,15 +69,7 @@ void bind_ternary_composite_float(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const Tensor& input_tensor_c,
-               float value,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, input_tensor_c, value, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::arg("input_tensor_c"),
@@ -293,16 +285,7 @@ void bind_ternary_addcmul(nb::module_& mod, const ternary_operation_t& operation
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& input_a,
-               const Tensor& input_b,
-               const Tensor& input_c,
-               float value,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return self(input_a, input_b, input_c, value, memory_config, output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_a"),
             nb::arg("input_b"),
             nb::arg("input_c"),
