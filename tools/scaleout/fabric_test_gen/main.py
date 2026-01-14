@@ -1,7 +1,6 @@
 import yaml
 import argparse
 import mesh_graph_descriptor_pb2
-from google.protobuf import runtime_version
 from google.protobuf import text_format
 from enum import Enum
 
