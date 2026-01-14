@@ -58,6 +58,7 @@ def get_mesh_shape_from_vector(vector):
                     if isinstance(mesh_shape, list) and len(mesh_shape) == 2:
                         return tuple(mesh_shape)
                 except (ValueError, SyntaxError):
+                    # Invalid or malformed mesh_device_shape string; fall back to default handling below.
                     pass
             elif isinstance(mesh_shape_str, list) and len(mesh_shape_str) == 2:
                 return tuple(mesh_shape_str)
