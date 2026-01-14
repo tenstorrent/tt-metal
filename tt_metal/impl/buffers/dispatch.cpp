@@ -871,8 +871,7 @@ void write_to_device_buffer(
                 const auto& soc = cluster.get_soc_desc(mmio_device_id);
                 const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
                 TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
-                pinned_src_noc_xy =
-                    MetalContext::instance().hal().noc_xy_encoding(pcie_cores.front().x, pcie_cores.front().y);
+                pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
                 use_pinned_transfer = true;
             }
         }
