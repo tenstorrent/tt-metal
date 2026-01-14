@@ -66,21 +66,11 @@ void bind_reduction_cumprod_operation(nb::module_& mod) {
             - Preallocated output for integer types is not supported
         )doc";
 
-    using OperationType = decltype(ttnn::cumprod);
     bind_registered_operation(
         mod,
         ttnn::cumprod,
         docstring,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t dim,
-               std::optional<DataType>& dtype,
-               const bool& reverse_order,
-               std::optional<Tensor> optional_out,
-               const std::optional<MemoryConfig>& memory_config) -> Tensor {
-                return self(input_tensor, dim, dtype, reverse_order, optional_out, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
             nb::kw_only(),
