@@ -21,8 +21,8 @@ namespace ttnn::operations::normalization::layer_norm {
 struct LayerNormDeviceOperation {
     using operation_attributes_t = layer_norm::operation_attributes_t;
     using tensor_args_t = layer_norm::tensor_args_t;
-    using spec_return_value_t = layer_norm::spec_return_value_t;
-    using tensor_return_value_t = layer_norm::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory>;
 
     static program_factory_t select_program_factory(

@@ -19,7 +19,7 @@ static const std::string compute_root = "ttnn/cpp/ttnn/operations/eltwise/unary/
 using namespace tt::constants;
 
 UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -215,7 +215,7 @@ void UnaryProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     const uint32_t num_cores = cached_program.shared_variables.num_cores;
@@ -245,7 +245,7 @@ void UnaryProgramFactory::override_runtime_arguments(
 // Sub Core Grids : should be fused later with UnaryProgramFactory directing all_device_cores to use cores from
 // sub_core_grids and update the override args accordingly after adding cores as rtargs
 UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -418,7 +418,7 @@ void UnarySubCoreGridProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& cores_with_rtargs = cached_program.shared_variables.cores_with_rtargs;

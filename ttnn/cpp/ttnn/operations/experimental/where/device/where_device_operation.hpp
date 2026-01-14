@@ -24,7 +24,7 @@ struct WhereDeviceOperation {
     // Shared types with factory
     using operation_attributes_t = where_ttt_args::operation_attributes_type;
     using tensor_args_t = where_ttt_args::tensor_args_type;
-    using tensor_return_value_t = where_ttt_args::tensor_return_value_type;
+    using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<ElementWiseMultiCoreWhereProgram>;
 

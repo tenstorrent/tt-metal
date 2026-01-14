@@ -17,7 +17,7 @@ LlamaShardedMeshWorkloadFactory::cached_mesh_workload_t LlamaShardedMeshWorkload
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& coord : tensor_coords.coords()) {
@@ -32,7 +32,7 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
 
     const auto& sender_device_coord = mesh_coordinate;  // coord
@@ -325,7 +325,7 @@ void LlamaShardedMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     // Update runtime arguments for each program in the mesh workload
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);

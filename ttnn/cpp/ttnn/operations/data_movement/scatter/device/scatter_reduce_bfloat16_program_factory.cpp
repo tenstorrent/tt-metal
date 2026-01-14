@@ -18,7 +18,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 ScatterReduceBfloat16ProgramFactory::cached_program_t ScatterReduceBfloat16ProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, Tensor& output_tensor) {
     using namespace tt::tt_metal;
 
     Program program{};
@@ -179,7 +179,7 @@ void ScatterReduceBfloat16ProgramFactory::override_runtime_arguments(
     ScatterReduceBfloat16ProgramFactory::cached_program_t& cached_program,
     const operation_attributes_t& /*args*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
