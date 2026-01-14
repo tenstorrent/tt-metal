@@ -29,6 +29,13 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     # Use || true to prevent script exit on failure, then check output for error type
     PIP_OUTPUT=$(python3 -m pip install ${PIP_ARGS} "uv==${UV_VERSION}" 2>&1) || true
 
+    # Add pip's bin directory to PATH immediately after installation attempt
+    # This ensures that if uv was installed to ~/.local/bin, it will be found by command -v
+    USER_BIN="${HOME}/.local/bin"
+    if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+        export PATH="$USER_BIN:$PATH"
+    fi
+
     # Check if installation failed and if it's due to PEP 668
     if ! command -v uv &>/dev/null; then
         if echo "$PIP_OUTPUT" | grep -q "externally-managed-environment"; then
@@ -46,12 +53,6 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
             echo "$PIP_OUTPUT" >&2
             exit 1
         fi
-    fi
-
-    # Add pip's bin directory to PATH for the current session
-    USER_BIN="${HOME}/.local/bin"
-    if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
-        export PATH="$USER_BIN:$PATH"
     fi
 elif [[ -f /etc/os-release ]]; then
     # Linux: Detect distribution
