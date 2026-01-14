@@ -302,25 +302,12 @@ jobs:
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           ccache -z
 
-      - name: 🔍 Debug git state
+      - name: 🔧 Configure git safe.directory
         run: |
-          echo "=== Debug: Checking git state ==="
-          echo "PWD: $(pwd)"
-          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
-          echo "Listing /work:"
-          ls -la /work | head -20
-          echo "Listing /__w/tt-metal/tt-metal:"
-          ls -la /__w/tt-metal/tt-metal | head -10
-          echo "Git directory at /work: $(test -d /work/.git && echo YES || echo NO)"
-          echo "Git directory at /__w/tt-metal/tt-metal: $(test -d /__w/tt-metal/tt-metal/.git && echo YES || echo NO)"
-          echo "Are they the same inode? $(stat -c %i /work 2>/dev/null || echo N/A) vs $(stat -c %i /__w/tt-metal/tt-metal 2>/dev/null || echo N/A)"
-          echo "Git status from /work:"
-          cd /work && git status 2>&1 || echo "git status failed"
-          echo "Git describe from /work:"
-          cd /work && git describe --abbrev=10 --first-parent 2>&1 || echo "git describe failed"
-          echo "Git rev-parse HEAD from /work:"
-          cd /work && git rev-parse --short=10 HEAD 2>&1 || echo "git rev-parse failed"
-          echo "=== End debug ==="
+          # The checkout action adds $GITHUB_WORKSPACE (/__w/tt-metal/tt-metal) as a safe directory,
+          # but not /work which is mounted from the host. Git commands from /work fail due to
+          # ownership mismatch (host uid vs container root). Add /work to safe.directory.
+          git config --global --add safe.directory /work
 
       - name: 🔧 CMake configure
         run: |
