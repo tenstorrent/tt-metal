@@ -66,21 +66,11 @@ void bind_gather_tosa_operation(nb::module_& mod) {
             # Equivalent to PyTorch: gathered_tensor = torch.gather(input_tensor, dim=1, index=indices.unsqueeze(-1).expand(-1, -1, C))
     )doc";
 
-    using OperationType = decltype(ttnn::tosa::gather);
     bind_registered_operation(
         mod,
         ttnn::tosa::gather,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& input_index_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& memory_config) -> Tensor {
-                return self(input_tensor, input_index_tensor, memory_config);
-            },
-            nb::arg("input").noconvert(),
-            nb::arg("index"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        ttnn::nanobind_arguments_t{
+            nb::arg("input").noconvert(), nb::arg("index"), nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 }  // namespace ttnn::operations::data_movement::detail
