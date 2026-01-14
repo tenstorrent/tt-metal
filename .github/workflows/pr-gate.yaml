@@ -198,6 +198,9 @@ jobs:
           sparse-checkout: |
             tt-train
 
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
       - name: Submodules
         run: |
           set -euo pipefail

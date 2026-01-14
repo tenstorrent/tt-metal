@@ -122,6 +122,9 @@ jobs:
           submodules: recursive
           clean: true
 
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
       - name: Determine merge base
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
         run: |
