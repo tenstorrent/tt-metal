@@ -42,8 +42,6 @@ class CrossAttentionTransformerVisionModel(MllamaPreTrainedModel):
         )
         self.post_init()
 
-    # @can_return_tuple
-    # @auto_docstring
     def forward(
         self,
         pixel_values: Optional[torch.FloatTensor] = None,
@@ -90,31 +88,33 @@ def test_vision_transformer_inference(mesh_device, reset_seeds):
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "vision_model."
-    # partial_state_dict = {
-    #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    # }
 
     return_intermediate = "3,7,15,23,30"
     return_intermediate = [int(l) for l in return_intermediate.split(",")]
-
-    # reference_model = llama_reference_mod.CrossAttentionTransformerVision(model_args)
-    # reference_model.load_state_dict(partial_state_dict, strict=True)
 
     model_repo_name = os.getenv("HF_MODEL")
     # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(model_repo_name)
     config.vision_config._attn_implementation = "sdpa"
-    reference_model1 = CrossAttentionTransformerVisionModel(config)
-    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    # Because the custom class CrossAttentionTransformerVisionModel wraps the vision_model and multi_modal_projector the following prefixes need to be added so the weight can be loaded correctly on the comutational graph.
-    partial_state_dict = load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.vision_model.")
-    prefix = "vision_model."
-    partial_state_dict = {f"{prefix}{key}": value for key, value in partial_state_dict.items()}
-    partial_state_dict1 = load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.multi_modal_projector.")
-    prefix = "multi_modal_projector."
-    partial_state_dict.update({f"{prefix}{key}": value for key, value in partial_state_dict1.items()})
+    reference_model = CrossAttentionTransformerVisionModel(config)
 
-    reference_model1.load_state_dict(partial_state_dict)
+    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
+    # Because the custom class CrossAttentionTransformerVisionModel wraps the vision_model and multi_modal_projector,
+    # the following prefixes need to be added so the weight can be loaded correctly on the comutational graph.
+    add_prefix = lambda d, prefix: {f"{prefix}{k}": v for k, v in d.items()}
+    partial_state_dict = add_prefix(
+        load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.vision_model."), "vision_model."
+    )
+    # prefix = "vision_model."
+    # partial_state_dict = {f"{prefix}{key}": value for key, value in partial_state_dict.items()}
+    multimodal_proj_weights = add_prefix(
+        load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.multi_modal_projector."),
+        "multi_modal_projector.",
+    )
+    # prefix = "multi_modal_projector."
+    partial_state_dict.update(multimodal_proj_weights)
+
+    reference_model.load_state_dict(partial_state_dict)
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaCrossAttentionTransformerVision(
@@ -141,8 +141,7 @@ def test_vision_transformer_inference(mesh_device, reset_seeds):
     )
 
     with torch.no_grad():
-        reference_output = reference_model1(images, aspect_ratio_ids, aspect_ratio_mask)
-        # reference_output = reference_model(images, ars)
+        reference_output = reference_model(images, aspect_ratio_ids, aspect_ratio_mask)
         tt_out = tt_model(images, ars)
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
         tt_output_torch = tt_output_torch[0, :, :chunk_seq_len, :].view(reference_output.shape)
