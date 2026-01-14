@@ -33,19 +33,12 @@ void bind_non_zero(nb::module_& mod) {
     )doc",
         ttnn::nonzero.base_name());
 
-    using OperationType = decltype(ttnn::nonzero);
-
     ttnn::bind_registered_operation(
         mod,
         ttnn::nonzero,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
-            nb::arg("input_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        ttnn::nanobind_arguments_t{
+            nb::arg("input_tensor").noconvert(), nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace
