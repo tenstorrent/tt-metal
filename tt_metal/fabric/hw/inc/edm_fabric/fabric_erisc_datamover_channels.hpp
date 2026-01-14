@@ -169,7 +169,7 @@ public:
 
     FORCE_INLINE void set_cached_next_buffer_slot_addr_impl(size_t addr) {
         // TODO: Issue #26311
-    }    
+    }
 };
 
 // Elastic channel buffer implementation (stub for now)
