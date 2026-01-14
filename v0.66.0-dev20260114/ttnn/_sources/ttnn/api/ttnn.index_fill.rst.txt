@@ -1,0 +1,8 @@
+﻿ttnn.index\_fill
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.index_fill:
+
+.. autooperation:: ttnn.index_fill

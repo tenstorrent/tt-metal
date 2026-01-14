@@ -1,0 +1,8 @@
+﻿ttnn.manual\_seed
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.manual_seed:
+
+.. autooperation:: ttnn.manual_seed

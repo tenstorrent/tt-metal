@@ -1,0 +1,8 @@
+﻿ttnn.transformer.chunked\_scaled\_dot\_product\_attention
+=========================================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.chunked_scaled_dot_product_attention:
+
+.. autooperation:: ttnn.transformer.chunked_scaled_dot_product_attention
