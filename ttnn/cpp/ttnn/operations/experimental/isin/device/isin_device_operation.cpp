@@ -21,7 +21,7 @@ void IsInDeviceOperation::validate_on_program_cache_hit(
 }
 
 void IsInDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& elements = tensor_args.elements_tensor;
     const auto& test_elements = tensor_args.test_elements_tensor;
 
@@ -44,7 +44,7 @@ void IsInDeviceOperation::validate_on_program_cache_miss(
 // although Torch returns a strict `bool` tensor, the `uint8` available in ttnn usually carries the same meaning
 // e.g. check out https://docs.pytorch.org/docs/stable/generated/torch.any.html
 IsInDeviceOperation::spec_return_value_t IsInDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return {
         Shape{tensor_args.elements_tensor.logical_volume()},
         {common::OUTPUT_TENSOR_DATA_TYPE, {common::OUTPUT_TENSOR_LAYOUT}, tensor_args.elements_tensor.memory_config()},
