@@ -252,6 +252,7 @@ struct MinimalMatmulFusedOpSignaler {
     std::optional<tt::tt_metal::Tensor> ag_input;
 
     bool initialized_all_gather = false;
+    bool initialized_reduce_scatter = false;
     bool initialized_fused_op = false;
 
     MinimalMatmulFusedOpSignaler() = default;
@@ -269,6 +270,11 @@ struct MinimalMatmulFusedOpSignaler {
         const tt::tt_metal::IDevice* device,
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
+
+    void init_reduce_scatter(
+        const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
+        const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
+        FusedOpSignalerMode fused_op_signaler_mode);
 
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
