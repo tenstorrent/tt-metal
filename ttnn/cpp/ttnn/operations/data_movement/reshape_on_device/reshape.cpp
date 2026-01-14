@@ -4,7 +4,7 @@
 
 #include "clone/clone.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "reshape.hpp"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>

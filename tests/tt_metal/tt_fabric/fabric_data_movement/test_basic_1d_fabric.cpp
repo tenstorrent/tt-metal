@@ -75,6 +75,49 @@ WorkerMemMap generate_worker_mem_map(
         TEST_RESULTS_SIZE_BYTES};
 }
 
+// Helper struct for dual RISC memory layout generation
+// Provides memory map generation that supports both single and dual RISC modes
+struct DualRiscMemMapHelper {
+    static constexpr uint32_t packet_header_reserved_bytes = 45056;
+    static constexpr uint32_t test_results_size_bytes = 128;
+    static constexpr uint32_t notification_size_bytes = 4096;  // Support up to 32 devices (Galaxy) with 128B per slot
+    static constexpr uint32_t data_space_reserved_bytes = 851968;
+
+    uint32_t data_space_size;
+    uint32_t region_size;
+    uint32_t num_packets;
+
+    DualRiscMemMapHelper(bool dual_risc, uint32_t num_pkts) :
+        data_space_size(dual_risc ? data_space_reserved_bytes / 2 : data_space_reserved_bytes),
+        region_size(data_space_size + test_results_size_bytes + notification_size_bytes),
+        num_packets(num_pkts) {
+        static_assert(packet_header_reserved_bytes % 16 == 0, "packet_header_reserved_bytes must be 16-byte aligned");
+        static_assert(test_results_size_bytes % 16 == 0, "test_results_size_bytes must be 16-byte aligned");
+        static_assert(notification_size_bytes % 16 == 0, "notification_size_bytes must be 16-byte aligned");
+        static_assert(
+            data_space_reserved_bytes % 32 == 0, "data_space_reserved_bytes must be 32-byte aligned for halving");
+
+        TT_FATAL(region_size % 16 == 0, "region_size must be 16-byte aligned");
+        TT_FATAL(
+            data_space_size >= num_packets * get_tt_fabric_max_payload_size_bytes() * 2,
+            "data_space_size must be large enough for num_packets");
+    }
+
+    WorkerMemMap gen_mem_map(
+        const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, uint32_t base_offset) const {
+        TT_FATAL(base_offset % 16 == 0, "base_offset must be 16-byte aligned");
+        uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        uint32_t source_l1_buffer_address = base_addr + packet_header_reserved_bytes + base_offset;
+        return WorkerMemMap{
+            source_l1_buffer_address,
+            get_tt_fabric_max_payload_size_bytes(),
+            source_l1_buffer_address + data_space_size,
+            source_l1_buffer_address,
+            source_l1_buffer_address + data_space_size + test_results_size_bytes,
+            test_results_size_bytes};
+    }
+};
+
 std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint32_t end, uint32_t count) {
     std::vector<uint32_t> range(end - start + 1);
 
@@ -2281,7 +2324,8 @@ void UDMFabricUnicastCommon(
         std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
         std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
     std::optional<RoutingDirection> override_initial_direction,
-    std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list) {
+    std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list,
+    bool dual_risc) {
     // Build list of worker coordinate pairs - default to single pair (0,0) -> (1,0)
     std::vector<std::pair<CoreCoord, CoreCoord>> worker_pairs;
     if (worker_coords_list.has_value()) {
@@ -2291,9 +2335,11 @@ void UDMFabricUnicastCommon(
     }
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
+    // When two data movement kernels both write to fabric, we need to ensure packet ordering is preserved.
+    // Dynamic NOC mode forces both kernels to use the same NOC (NOC0) to maintain that ordering.
+    auto noc_mode = dual_risc ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt_metal::NOC_MODE::DM_DEDICATED_NOC;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto topology = control_plane.get_fabric_context().get_fabric_topology();
 
     // Determine source and destination based on routing_info variant
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
@@ -2346,13 +2392,47 @@ void UDMFabricUnicastCommon(
     tt_metal::Program sender_program = tt_metal::CreateProgram();
     tt_metal::Program receiver_program = tt_metal::CreateProgram();
 
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    DualRiscMemMapHelper mem_helper(dual_risc, num_packets);
+    auto worker_mem_map = mem_helper.gen_mem_map(sender_device, 0);
+    auto worker_mem_map_risc1 = mem_helper.gen_mem_map(sender_device, mem_helper.region_size);
 
     if (noc_send_type == NOC_UNICAST_INLINE_WRITE or noc_send_type == NOC_UNICAST_ATOMIC_INC) {
         worker_mem_map.packet_payload_size_bytes = 16;  // l1 aligned
+        worker_mem_map_risc1.packet_payload_size_bytes = 16;
     } else {
         auto single_payload_size_bytes = worker_mem_map.packet_payload_size_bytes;
         worker_mem_map.packet_payload_size_bytes = single_payload_size_bytes * 2 - 16;
+        worker_mem_map_risc1.packet_payload_size_bytes = single_payload_size_bytes * 2 - 16;
+    }
+
+    log_debug(
+        tt::LogTest,
+        "RISC0 mem_map: source_l1_buffer=0x{:x}, target=0x{:x}, test_results=0x{:x}, notification=0x{:x}, "
+        "payload_size={}, test_results_size={}",
+        worker_mem_map.source_l1_buffer_address,
+        worker_mem_map.target_address,
+        worker_mem_map.test_results_address,
+        worker_mem_map.notification_mailbox_address,
+        worker_mem_map.packet_payload_size_bytes,
+        worker_mem_map.test_results_size_bytes);
+
+    if (dual_risc) {
+        log_debug(
+            tt::LogTest,
+            "RISC1 mem_map: source_l1_buffer=0x{:x}, target=0x{:x}, test_results=0x{:x}, notification=0x{:x}, "
+            "payload_size={}, test_results_size={}",
+            worker_mem_map_risc1.source_l1_buffer_address,
+            worker_mem_map_risc1.target_address,
+            worker_mem_map_risc1.test_results_address,
+            worker_mem_map_risc1.notification_mailbox_address,
+            worker_mem_map_risc1.packet_payload_size_bytes,
+            worker_mem_map_risc1.test_results_size_bytes);
+        log_debug(
+            tt::LogTest,
+            "DualRisc: data_space_size={}, region_size={}, num_packets={}",
+            mem_helper.data_space_size,
+            mem_helper.region_size,
+            num_packets);
     }
 
     // Define req_notification_size_bytes for read operations
@@ -2404,14 +2484,44 @@ void UDMFabricUnicastCommon(
         dest_fabric_node_id.mesh_id.get(),
         req_notification_size_bytes};
 
-    auto sender_kernel = tt_metal::CreateKernel(
+    auto sender_kernel_risc0 = tt_metal::CreateKernel(
         sender_program,
         sender_kernel_path,
         sender_core_range,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
+            .noc_mode = noc_mode,
             .compile_args = sender_compile_time_args});
+
+    // Create RISCV_1 sender kernel if dual_risc mode is enabled
+    tt_metal::KernelHandle sender_kernel_risc1 = 0;
+    if (dual_risc) {
+        // Use separate memory map for RISC1
+        std::vector<uint32_t> sender_compile_time_args_risc1 = {
+            worker_mem_map_risc1.test_results_address,
+            worker_mem_map_risc1.test_results_size_bytes,
+            worker_mem_map_risc1.notification_mailbox_address,
+            worker_mem_map_risc1.target_address,
+            noc_send_type,
+            worker_mem_map_risc1.source_l1_buffer_address,
+            worker_mem_map_risc1.packet_payload_size_bytes,
+            num_packets,
+            time_seed,
+            dest_fabric_node_id.chip_id,
+            dest_fabric_node_id.mesh_id.get(),
+            req_notification_size_bytes};
+
+        sender_kernel_risc1 = tt_metal::CreateKernel(
+            sender_program,
+            sender_kernel_path,
+            sender_core_range,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .noc_mode = noc_mode,
+                .compile_args = sender_compile_time_args_risc1});
+    }
 
     // Receiver compile time args (per-core sender coords moved to runtime args)
     std::vector<uint32_t> receiver_compile_time_args = {
@@ -2427,14 +2537,43 @@ void UDMFabricUnicastCommon(
         src_fabric_node_id.chip_id,
         src_fabric_node_id.mesh_id.get()};
 
-    auto receiver_kernel = tt_metal::CreateKernel(
+    auto receiver_kernel_risc0 = tt_metal::CreateKernel(
         receiver_program,
         receiver_kernel_path,
         receiver_core_range,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
+            .noc_mode = noc_mode,
             .compile_args = receiver_compile_time_args});
+
+    // Create RISCV_1 receiver kernel if dual_risc mode is enabled
+    tt_metal::KernelHandle receiver_kernel_risc1 = 0;
+    if (dual_risc) {
+        // Use separate memory map for RISC1
+        std::vector<uint32_t> receiver_compile_time_args_risc1 = {
+            worker_mem_map_risc1.test_results_address,
+            worker_mem_map_risc1.test_results_size_bytes,
+            worker_mem_map_risc1.notification_mailbox_address,
+            worker_mem_map_risc1.target_address,
+            noc_send_type,
+            worker_mem_map_risc1.packet_payload_size_bytes,
+            num_packets,
+            time_seed,
+            req_notification_size_bytes,
+            src_fabric_node_id.chip_id,
+            src_fabric_node_id.mesh_id.get()};
+
+        receiver_kernel_risc1 = tt_metal::CreateKernel(
+            receiver_program,
+            receiver_kernel_path,
+            receiver_core_range,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .noc_mode = noc_mode,
+                .compile_args = receiver_compile_time_args_risc1});
+    }
 
     // Set per-core runtime args (receiver/sender coords + fabric connection)
     for (const auto& [sender_logical_core, receiver_logical_core] : worker_pairs) {
@@ -2443,11 +2582,18 @@ void UDMFabricUnicastCommon(
 
         // Sender runtime args: receiver coords first, then fabric connection
         std::vector<uint32_t> sender_runtime_args = {receiver_virtual_core.x, receiver_virtual_core.y};
-        tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::SetRuntimeArgs(sender_program, sender_kernel_risc0, sender_logical_core, sender_runtime_args);
+        if (dual_risc) {
+            tt_metal::SetRuntimeArgs(sender_program, sender_kernel_risc1, sender_logical_core, sender_runtime_args);
+        }
 
         // Receiver runtime args: sender coords first, then fabric connection
         std::vector<uint32_t> receiver_runtime_args = {sender_virtual_core.x, sender_virtual_core.y};
-        tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+        tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel_risc0, receiver_logical_core, receiver_runtime_args);
+        if (dual_risc) {
+            tt_metal::SetRuntimeArgs(
+                receiver_program, receiver_kernel_risc1, receiver_logical_core, receiver_runtime_args);
+        }
 
         // Clear target L1 memory for atomic increments
         if (noc_send_type == NOC_UNICAST_ATOMIC_INC) {
@@ -2459,6 +2605,15 @@ void UDMFabricUnicastCommon(
                 worker_mem_map.target_address,
                 zeros,
                 CoreType::WORKER);
+            // Clear RISC1 target memory as well
+            if (dual_risc) {
+                tt_metal::detail::WriteToDeviceL1(
+                    receiver_device->get_devices()[0],
+                    receiver_logical_core,
+                    worker_mem_map_risc1.target_address,
+                    zeros,
+                    CoreType::WORKER);
+            }
         }
     }
 
@@ -2468,41 +2623,52 @@ void UDMFabricUnicastCommon(
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
 
-    // Check results for all worker pairs
-    for (const auto& [sender_logical_core, receiver_logical_core] : worker_pairs) {
+    // Helper lambda to check test results for a given RISC
+    auto check_risc_results = [&](const CoreCoord& sender_core,
+                                  const CoreCoord& receiver_core,
+                                  const WorkerMemMap& mem_map,
+                                  const std::string& risc_name) {
         std::vector<uint32_t> sender_status;
         tt_metal::detail::ReadFromDeviceL1(
             sender_device->get_devices()[0],
-            sender_logical_core,
-            worker_mem_map.test_results_address,
-            worker_mem_map.test_results_size_bytes,
+            sender_core,
+            mem_map.test_results_address,
+            mem_map.test_results_size_bytes,
             sender_status,
             CoreType::WORKER);
         EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS)
-            << "Sender failed at core (" << sender_logical_core.x << ", " << sender_logical_core.y << ")";
+            << "Sender " << risc_name << " failed at core (" << sender_core.x << ", " << sender_core.y << ")";
 
         std::vector<uint32_t> receiver_status;
         tt_metal::detail::ReadFromDeviceL1(
             receiver_device->get_devices()[0],
-            receiver_logical_core,
-            worker_mem_map.test_results_address,
-            worker_mem_map.test_results_size_bytes,
+            receiver_core,
+            mem_map.test_results_address,
+            mem_map.test_results_size_bytes,
             receiver_status,
             CoreType::WORKER);
         EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS)
-            << "Receiver failed at core (" << receiver_logical_core.x << ", " << receiver_logical_core.y << ")";
+            << "Receiver " << risc_name << " failed at core (" << receiver_core.x << ", " << receiver_core.y << ")";
 
         uint64_t sender_words =
             ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
         uint64_t receiver_words =
             ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | receiver_status[TT_FABRIC_WORD_CNT_INDEX];
         EXPECT_EQ(sender_words, receiver_words)
-            << "Word count mismatch at sender (" << sender_logical_core.x << ", " << sender_logical_core.y
-            << ") -> receiver (" << receiver_logical_core.x << ", " << receiver_logical_core.y << ")";
+            << risc_name << " word count mismatch at sender (" << sender_core.x << ", " << sender_core.y
+            << ") -> receiver (" << receiver_core.x << ", " << receiver_core.y << ")";
+    };
+
+    // Check results for all worker pairs
+    for (const auto& [sender_logical_core, receiver_logical_core] : worker_pairs) {
+        check_risc_results(sender_logical_core, receiver_logical_core, worker_mem_map, "RISC0");
+        if (dual_risc) {
+            check_risc_results(sender_logical_core, receiver_logical_core, worker_mem_map_risc1, "RISC1");
+        }
     }
 }
 
-void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_send_type) {
+void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, bool dual_risc) {
     // All-to-all test: all devices send to all other devices simultaneously
     // Sender cores are in the top half of compute grid, receiver cores are in the bottom half
     // Each receiver core receives from N-1 senders (one from each other device)
@@ -2516,10 +2682,11 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
         GTEST_SKIP() << "Test requires at least 2 devices";
     }
 
-    const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-
-    uint32_t num_packets = 1;
+    uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
+    // When two data movement kernels both write to fabric, we need to ensure packet ordering is preserved.
+    // Dynamic NOC mode forces both kernels to use the same NOC (NOC0) to maintain that ordering.
+    auto noc_mode = dual_risc ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt_metal::NOC_MODE::DM_DEDICATED_NOC;
 
     // Get device info and create programs
     std::vector<FabricNodeId> fabric_node_ids;
@@ -2559,47 +2726,78 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
 
     log_info(
         tt::LogTest,
-        "All-to-all test: {} devices, {} sender-receiver pairs per device, sending to {} other devices",
+        "All-to-all test: {} devices, {} sender-receiver pairs per device, sending to {} other devices, dual_risc={}",
         num_active_devices,
         num_core_pairs,
-        num_other_devices);
+        num_other_devices,
+        dual_risc);
 
-    auto worker_mem_map = generate_worker_mem_map(device_ptrs[0], topology);
+    DualRiscMemMapHelper mem_helper(dual_risc, num_packets);
+    auto worker_mem_map = mem_helper.gen_mem_map(device_ptrs[0], 0);
+    auto worker_mem_map_risc1 = mem_helper.gen_mem_map(device_ptrs[0], mem_helper.region_size);
 
     if (noc_send_type == NOC_UNICAST_INLINE_WRITE or noc_send_type == NOC_UNICAST_ATOMIC_INC) {
         worker_mem_map.packet_payload_size_bytes = 16;  // l1 aligned
+        worker_mem_map_risc1.packet_payload_size_bytes = 16;
     } else {
         auto single_payload_size_bytes = worker_mem_map.packet_payload_size_bytes;
         worker_mem_map.packet_payload_size_bytes = single_payload_size_bytes;
+        worker_mem_map_risc1.packet_payload_size_bytes = single_payload_size_bytes;
+    }
+
+    log_info(
+        tt::LogTest,
+        "RISC0 mem_map: source_l1_buffer={}, target={}, test_results={}, notification={}, "
+        "payload_size={}, test_results_size={}",
+        worker_mem_map.source_l1_buffer_address,
+        worker_mem_map.target_address,
+        worker_mem_map.test_results_address,
+        worker_mem_map.notification_mailbox_address,
+        worker_mem_map.packet_payload_size_bytes,
+        worker_mem_map.test_results_size_bytes);
+
+    if (dual_risc) {
+        log_info(
+            tt::LogTest,
+            "RISC1 mem_map: source_l1_buffer={}, target={}, test_results={}, notification={}, "
+            "payload_size={}, test_results_size={}",
+            worker_mem_map_risc1.source_l1_buffer_address,
+            worker_mem_map_risc1.target_address,
+            worker_mem_map_risc1.test_results_address,
+            worker_mem_map_risc1.notification_mailbox_address,
+            worker_mem_map_risc1.packet_payload_size_bytes,
+            worker_mem_map_risc1.test_results_size_bytes);
+        log_info(
+            tt::LogTest,
+            "DualRisc: data_space_size={}, region_size={}, num_packets={}",
+            mem_helper.data_space_size,
+            mem_helper.region_size,
+            num_packets);
     }
 
     // Per-sender L1 region size on receiver
     uint32_t per_sender_l1_size = num_packets * worker_mem_map.packet_payload_size_bytes;
 
-    // Check if receiver has enough L1 space for N device slots (simple indexing: slot i for device i)
+    // Check if receiver has enough data space for N device slots (simple indexing: slot i for device i)
     // Note: slot receiver_device_idx is unused but we allocate it for simplicity
     uint32_t total_receiver_l1_needed = static_cast<uint32_t>(num_active_devices) * per_sender_l1_size;
-    const auto& hal = tt_metal::MetalContext::instance().hal();
-    uint32_t l1_base = hal.get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
-    uint32_t l1_size = hal.get_dev_size(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
-    uint32_t l1_end = l1_base + l1_size;
-    if (worker_mem_map.target_address + total_receiver_l1_needed > l1_end) {
-        GTEST_SKIP() << "Not enough L1 space on receiver for " << num_other_devices << " senders. Need "
-                     << total_receiver_l1_needed << " bytes starting at " << worker_mem_map.target_address
-                     << ", but L1 ends at " << l1_end;
+
+    // Check data space for RISC0 - data must fit between target_address and test_results_address
+    if (total_receiver_l1_needed > mem_helper.data_space_size) {
+        GTEST_SKIP() << "Not enough data space for RISC0. Need " << total_receiver_l1_needed
+                     << " bytes, but data_space_size is " << mem_helper.data_space_size;
     }
+
+    // RISC1 uses same data_space_size, so no separate check needed
 
     constexpr uint32_t req_notification_size_bytes = 128;
 
-    // Check if sender has enough L1 space for N notification slots (simple indexing: slot i for device i)
+    // Check if sender has enough notification space for N notification slots (simple indexing: slot i for device i)
     // Each provider writes to slot = provider_device_idx, reader polls all slots except its own
     uint32_t total_notification_l1_needed = static_cast<uint32_t>(num_active_devices) * req_notification_size_bytes;
-    if (worker_mem_map.notification_mailbox_address + total_notification_l1_needed > l1_end) {
-        GTEST_SKIP() << "Not enough L1 space for notification mailbox. Need " << total_notification_l1_needed
-                     << " bytes starting at " << worker_mem_map.notification_mailbox_address << ", but L1 ends at "
-                     << l1_end;
+    if (total_notification_l1_needed > DualRiscMemMapHelper::notification_size_bytes) {
+        GTEST_SKIP() << "Not enough notification space. Need " << total_notification_l1_needed
+                     << " bytes, but notification_size is " << DualRiscMemMapHelper::notification_size_bytes;
     }
 
     // Determine kernel paths based on operation type
@@ -2669,14 +2867,44 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
 
         // Create sender kernel for all sender cores on this device
         CoreRangeSet sender_core_range(sender_logical_cores);
-        auto sender_kernel = tt_metal::CreateKernel(
+        auto sender_kernel_risc0 = tt_metal::CreateKernel(
             programs[dev_idx],
             sender_kernel_path,
             sender_core_range,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
+                .noc_mode = noc_mode,
                 .compile_args = sender_compile_time_args});
+
+        // Create RISC1 sender kernel if dual_risc mode is enabled
+        tt_metal::KernelHandle sender_kernel_risc1 = 0;
+        if (dual_risc) {
+            std::vector<uint32_t> sender_compile_time_args_risc1 = {
+                worker_mem_map_risc1.test_results_address,
+                worker_mem_map_risc1.test_results_size_bytes,
+                worker_mem_map_risc1.notification_mailbox_address,
+                worker_mem_map_risc1.target_address,
+                noc_send_type,
+                worker_mem_map_risc1.source_l1_buffer_address,
+                worker_mem_map_risc1.packet_payload_size_bytes,
+                num_packets,
+                time_seed,
+                req_notification_size_bytes,
+                per_sender_l1_size,
+                num_other_devices,
+                this_device_idx};
+
+            sender_kernel_risc1 = tt_metal::CreateKernel(
+                programs[dev_idx],
+                sender_kernel_path,
+                sender_core_range,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                    .noc_mode = noc_mode,
+                    .compile_args = sender_compile_time_args_risc1});
+        }
 
         // Set runtime args per sender core
         // Each sender sends to the corresponding receiver on ALL other devices
@@ -2699,19 +2927,52 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
                 sender_runtime_args.push_back(dest_fabric_node_id.chip_id);
                 sender_runtime_args.push_back(dest_fabric_node_id.mesh_id.get());
             }
-            tt_metal::SetRuntimeArgs(programs[dev_idx], sender_kernel, sender_logical_core, sender_runtime_args);
+            tt_metal::SetRuntimeArgs(programs[dev_idx], sender_kernel_risc0, sender_logical_core, sender_runtime_args);
+            if (dual_risc) {
+                tt_metal::SetRuntimeArgs(
+                    programs[dev_idx], sender_kernel_risc1, sender_logical_core, sender_runtime_args);
+            }
         }
 
         // Create receiver kernel for all receiver cores on this device
         CoreRangeSet receiver_core_range(receiver_logical_cores);
-        auto receiver_kernel = tt_metal::CreateKernel(
+        auto receiver_kernel_risc0 = tt_metal::CreateKernel(
             programs[dev_idx],
             receiver_kernel_path,
             receiver_core_range,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
+                .noc_mode = noc_mode,
                 .compile_args = receiver_compile_time_args});
+
+        // Create RISC1 receiver kernel if dual_risc mode is enabled
+        tt_metal::KernelHandle receiver_kernel_risc1 = 0;
+        if (dual_risc) {
+            std::vector<uint32_t> receiver_compile_time_args_risc1 = {
+                worker_mem_map_risc1.test_results_address,
+                worker_mem_map_risc1.test_results_size_bytes,
+                worker_mem_map_risc1.notification_mailbox_address,
+                worker_mem_map_risc1.target_address,
+                noc_send_type,
+                worker_mem_map_risc1.packet_payload_size_bytes,
+                num_packets,
+                time_seed,
+                req_notification_size_bytes,
+                static_cast<uint32_t>(num_active_devices),
+                per_sender_l1_size,
+                this_device_idx};
+
+            receiver_kernel_risc1 = tt_metal::CreateKernel(
+                programs[dev_idx],
+                receiver_kernel_path,
+                receiver_core_range,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                    .noc_mode = noc_mode,
+                    .compile_args = receiver_compile_time_args_risc1});
+        }
 
         // For reads: receiver (data provider) needs to notify all readers
         // Runtime args: (noc_x, noc_y, dst_dev_id, dst_mesh_id) for each reader
@@ -2737,7 +2998,11 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
                     receiver_runtime_args.push_back(reader_fabric_node_id.mesh_id.get());
                 }
                 tt_metal::SetRuntimeArgs(
-                    programs[dev_idx], receiver_kernel, receiver_logical_core, receiver_runtime_args);
+                    programs[dev_idx], receiver_kernel_risc0, receiver_logical_core, receiver_runtime_args);
+                if (dual_risc) {
+                    tt_metal::SetRuntimeArgs(
+                        programs[dev_idx], receiver_kernel_risc1, receiver_logical_core, receiver_runtime_args);
+                }
             }
         }
 
@@ -2753,6 +3018,14 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
                     worker_mem_map.target_address,
                     zeros,
                     CoreType::WORKER);
+                if (dual_risc) {
+                    tt_metal::detail::WriteToDeviceL1(
+                        device_ptr->get_devices()[0],
+                        receiver_logical_core,
+                        worker_mem_map_risc1.target_address,
+                        zeros,
+                        CoreType::WORKER);
+                }
             }
         }
     }
@@ -2767,70 +3040,82 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
         fixture->WaitForSingleProgramDone(device_ptrs[dev_idx], programs[dev_idx]);
     }
     log_info(tt::LogTest, "All-to-all test done");
-    // Validate results for all devices
-    for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
-        const auto& device_ptr = device_ptrs[dev_idx];
-        const auto& fabric_node_id = fabric_node_ids[dev_idx];
 
-        uint64_t total_sender_bytes = 0;
-        uint64_t total_receiver_bytes = 0;
+    // Lambda to check results for a given RISC
+    auto check_risc_results = [&](const WorkerMemMap& mem_map, const std::string& risc_name) {
+        for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
+            const auto& device_ptr = device_ptrs[dev_idx];
+            const auto& fabric_node_id = fabric_node_ids[dev_idx];
 
-        // Check all sender-receiver core pairs
-        for (uint32_t core_idx = 0; core_idx < num_core_pairs; core_idx++) {
-            uint32_t x = core_idx % grid_size.x;
-            uint32_t sender_y = core_idx / grid_size.x;
-            uint32_t receiver_y = receiver_y_start + sender_y;
-            CoreCoord sender_logical_core = {x, sender_y};
-            CoreCoord receiver_logical_core = {x, receiver_y};
+            uint64_t total_sender_bytes = 0;
+            uint64_t total_receiver_bytes = 0;
 
-            // Check sender status
-            std::vector<uint32_t> sender_status;
-            tt_metal::detail::ReadFromDeviceL1(
-                device_ptr->get_devices()[0],
-                sender_logical_core,
-                worker_mem_map.test_results_address,
-                worker_mem_map.test_results_size_bytes,
-                sender_status,
-                CoreType::WORKER);
-            EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS)
-                << "Sender failed on device " << fabric_node_id.chip_id << " core (" << x << "," << sender_y << ")";
+            for (uint32_t core_idx = 0; core_idx < num_core_pairs; core_idx++) {
+                uint32_t x = core_idx % grid_size.x;
+                uint32_t sender_y = core_idx / grid_size.x;
+                uint32_t receiver_y = receiver_y_start + sender_y;
+                CoreCoord sender_logical_core = {x, sender_y};
+                CoreCoord receiver_logical_core = {x, receiver_y};
 
-            uint64_t sender_words =
-                ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
-            total_sender_bytes += sender_words;
+                // Check sender status
+                std::vector<uint32_t> sender_status;
+                tt_metal::detail::ReadFromDeviceL1(
+                    device_ptr->get_devices()[0],
+                    sender_logical_core,
+                    mem_map.test_results_address,
+                    mem_map.test_results_size_bytes,
+                    sender_status,
+                    CoreType::WORKER);
+                EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS)
+                    << risc_name << " Sender failed on device " << fabric_node_id.chip_id << " core (" << x << ","
+                    << sender_y << ")";
 
-            // Check receiver status
-            std::vector<uint32_t> receiver_status;
-            tt_metal::detail::ReadFromDeviceL1(
-                device_ptr->get_devices()[0],
-                receiver_logical_core,
-                worker_mem_map.test_results_address,
-                worker_mem_map.test_results_size_bytes,
-                receiver_status,
-                CoreType::WORKER);
-            EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS)
-                << "Receiver failed on device " << fabric_node_id.chip_id << " core (" << x << "," << receiver_y << ")";
+                uint64_t sender_words = ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) |
+                                        sender_status[TT_FABRIC_WORD_CNT_INDEX];
+                total_sender_bytes += sender_words;
 
-            uint64_t receiver_words = ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) |
-                                      receiver_status[TT_FABRIC_WORD_CNT_INDEX];
-            total_receiver_bytes += receiver_words;
+                // Check receiver status
+                std::vector<uint32_t> receiver_status;
+                tt_metal::detail::ReadFromDeviceL1(
+                    device_ptr->get_devices()[0],
+                    receiver_logical_core,
+                    mem_map.test_results_address,
+                    mem_map.test_results_size_bytes,
+                    receiver_status,
+                    CoreType::WORKER);
+                EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS)
+                    << risc_name << " Receiver failed on device " << fabric_node_id.chip_id << " core (" << x << ","
+                    << receiver_y << ")";
+
+                uint64_t receiver_words = ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) |
+                                          receiver_status[TT_FABRIC_WORD_CNT_INDEX];
+                total_receiver_bytes += receiver_words;
+            }
+
+            uint64_t expected_bytes_per_core = num_other_devices * num_packets * mem_map.packet_payload_size_bytes;
+            uint64_t expected_total_bytes = num_core_pairs * expected_bytes_per_core;
+            EXPECT_EQ(total_sender_bytes, expected_total_bytes)
+                << risc_name << " Total sender byte count mismatch on device " << fabric_node_id.chip_id;
+            EXPECT_EQ(total_receiver_bytes, expected_total_bytes)
+                << risc_name << " Total receiver byte count mismatch on device " << fabric_node_id.chip_id;
         }
+    };
 
-        // Expected bytes: num_core_pairs cores, each sending/receiving num_other_devices * num_packets * payload
-        uint64_t expected_bytes_per_core = num_other_devices * num_packets * worker_mem_map.packet_payload_size_bytes;
-        uint64_t expected_total_bytes = num_core_pairs * expected_bytes_per_core;
-        EXPECT_EQ(total_sender_bytes, expected_total_bytes)
-            << "Total sender byte count mismatch on device " << fabric_node_id.chip_id;
-        EXPECT_EQ(total_receiver_bytes, expected_total_bytes)
-            << "Total receiver byte count mismatch on device " << fabric_node_id.chip_id;
+    // Validate RISC0 results
+    check_risc_results(worker_mem_map, "RISC0");
+
+    // Validate RISC1 results if dual_risc mode is enabled
+    if (dual_risc) {
+        check_risc_results(worker_mem_map_risc1, "RISC1");
     }
 
     log_info(
         tt::LogTest,
-        "All-to-all test passed: {} devices, {} core pairs, each sending to {} other devices",
+        "All-to-all test passed: {} devices, {} core pairs, each sending to {} other devices, dual_risc={}",
         num_active_devices,
         num_core_pairs,
-        num_other_devices);
+        num_other_devices,
+        dual_risc);
 }
 
 void Fabric2DMulticastCommon(

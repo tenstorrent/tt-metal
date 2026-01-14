@@ -133,6 +133,11 @@ __attribute__((noinline)) void init_profiler(
             for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
                 profiler_data_buffer[riscID].data[i] = 0;
             }
+#if !defined(COMPILE_FOR_IDLE_ERISC)
+            // Update every risc's trace ID
+            profiler_data_buffer[riscID].data[ID_LH] =
+                (traceCount & 0xFFFF) << 11 | ((profiler_data_buffer[riscID].data[ID_LH] & 0x7FF));
+#endif
         }
         profiler_control_buffer[NOC_X] = my_x[0];
         profiler_control_buffer[NOC_Y] = my_y[0];
@@ -142,13 +147,6 @@ __attribute__((noinline)) void init_profiler(
         for (uint32_t i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i++) {
             // TODO(MO): Clean up magic numbers
             profiler_data_buffer[riscID].data[i] = 0x80000000;
-        }
-        for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
-#if !defined(COMPILE_FOR_IDLE_ERISC)
-            // Update every risc's trace ID
-            profiler_data_buffer[riscID].data[ID_LH] =
-                (traceCount & 0xFFFF) << 11 | ((profiler_data_buffer[riscID].data[ID_LH] & 0x7FF));
-#endif
         }
     }
 #endif
@@ -650,6 +648,13 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 inline __attribute__((always_inline)) void increment_trace_count() {
     if constexpr (!TRACE_ON_TENSIX) {
         traceCount++;
+        for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+#if !defined(COMPILE_FOR_IDLE_ERISC)
+            // Update every risc's trace ID
+            profiler_data_buffer[riscID].data[ID_LH] =
+                (traceCount & 0xFFFF) << 11 | ((profiler_data_buffer[riscID].data[ID_LH] & 0x7FF));
+#endif
+        }
     }
 }
 
