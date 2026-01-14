@@ -56,8 +56,6 @@ constexpr auto kGradQueryCbIndex = tt::CBIndex::c_15;
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 2U;
 
-const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
-const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kFP32DestAccEnKey = "FP32_DEST_ACC_EN";
 
 }  // namespace

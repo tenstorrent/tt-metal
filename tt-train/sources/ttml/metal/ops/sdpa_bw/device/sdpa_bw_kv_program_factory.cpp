@@ -60,8 +60,6 @@ constexpr auto kGradValueCbIndex = tt::CBIndex::c_18;
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 2U;
 
-const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
-const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kFP32DestAccEnKey = "FP32_DEST_ACC_EN";
 
 }  // namespace
@@ -186,7 +184,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =

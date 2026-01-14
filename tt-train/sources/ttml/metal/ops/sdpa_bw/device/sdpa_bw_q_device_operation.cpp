@@ -30,7 +30,6 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
-    const auto& intermediates = tensor_args.intermediates;
 
     // Validate that input and output tensor shapes are compatible
     const auto grad_output_shape = grad_output.logical_shape();
