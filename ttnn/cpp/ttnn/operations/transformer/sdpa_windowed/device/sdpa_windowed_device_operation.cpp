@@ -139,14 +139,14 @@ void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache
     validate_padding(v);
 }
 
-spec_return_value_t WindowedScaledDotProductAttentionDeviceOperation::compute_output_specs(
+TensorSpec WindowedScaledDotProductAttentionDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     const auto& input = tensors.q;
     return TensorSpec(
         input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
 }
 
-tensor_return_value_t WindowedScaledDotProductAttentionDeviceOperation::create_output_tensors(
+Tensor WindowedScaledDotProductAttentionDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
@@ -165,7 +165,7 @@ tt::stl::hash::hash_t WindowedScaledDotProductAttentionDeviceOperation::compute_
     return hash;
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor>
 WindowedScaledDotProductAttentionDeviceOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& tensors, tensor_return_value_t& output_tensor) {
     Tensors input_tensors = {tensors.q, tensors.k, tensors.v, tensors.cu_window_seqlens};

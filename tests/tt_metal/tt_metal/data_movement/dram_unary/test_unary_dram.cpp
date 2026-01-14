@@ -45,7 +45,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     const size_t total_size_bytes = test_config.pages_per_transaction * test_config.bytes_per_page;
 
     // DRAM Address
-    DramAddressInfo dram_info = unit_tests::dm::get_dram_address_and_size(mesh_device);
+    DramAddressInfo dram_info = unit_tests::dm::get_dram_address_and_size();
 
     uint32_t input_dram_address = dram_info.base_address;
     uint32_t output_dram_address = input_dram_address + total_size_bytes;

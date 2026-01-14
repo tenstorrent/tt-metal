@@ -199,6 +199,9 @@ jobs:
           tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml --mpi-args "--tag-output --allow-run-as-root"  python3 tests/ttnn/distributed/test_multi_mesh.py
           tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_mesh_rank_binding.yaml ./build/test/tt_metal/multi_host_socket_tests
           tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml  ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="*Socket*"
+          tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_wh_6u_quad_2x4_acyclic.yaml
+          tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_wh_6u_quad_2x4_cyclic.yaml
+          tt-run --rank-binding 4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_sanity_common.yaml
       - name: Run Llama3-70b unit tests
         if: ${{ matrix.test-group.model == 'llama3-70b' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}

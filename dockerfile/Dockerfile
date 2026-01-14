@@ -86,7 +86,7 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
-RUN uv pip install --no-cache build numpy setuptools
+RUN uv pip install --no-cache-dir build numpy setuptools
 
 RUN git config --global --add safe.directory '*'
 
@@ -135,7 +135,7 @@ COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
 RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
     echo "Installing debugger for Ubuntu 22.04..." && \
-    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh; \
+    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
     echo "Debugger installation completed" && \
     python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
     fi

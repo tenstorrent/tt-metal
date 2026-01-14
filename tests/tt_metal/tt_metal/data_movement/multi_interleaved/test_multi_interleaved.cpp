@@ -62,8 +62,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     auto output_buffer = CreateBuffer(interleaved_buffer_config);
     uint32_t output_buffer_address = output_buffer->address();
 
-    assert(input_buffer_address != output_buffer_address);
-    assert(test_config.read_kernel || test_config.write_kernel);  // At least one kernel must run
+    TT_FATAL(input_buffer_address != output_buffer_address, "Input and output buffer addresses must be different");
+    TT_FATAL(test_config.read_kernel || test_config.write_kernel, "At least one kernel must run");
 
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
@@ -105,7 +105,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     std::vector<CoreCoord> core_list = corerange_to_cores(test_config.cores);
     for (auto& core : core_list) {
         auto [l1_addr, l1_size] = get_l1_address_and_size(mesh_device, core);
-        assert(l1_size >= total_size_bytes);
+        TT_FATAL(l1_size >= total_size_bytes, "L1 size {} must be >= total_size_bytes {}", l1_size, total_size_bytes);
         l1_addrs.push_back(l1_addr);
     }
 

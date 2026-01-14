@@ -32,6 +32,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -817,14 +818,52 @@ void issue_read_buffer_dispatch_command_sequence(
         return;
     }
 
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
+
+    // Precompute whether pinned direct write is feasible, and derive dst noc params
+    const bool is_unpadded = (buffer.page_size() == dispatch_params.padded_page_size);
+    const bool has_pinned_inputs = (dispatch_params.dst != nullptr && dispatch_params.pinned_memory != nullptr);
+    const uint64_t xfer_bytes = static_cast<uint64_t>(dispatch_params.pages_per_txn) * dispatch_params.padded_page_size;
+    bool use_pinned_transfer = false;
+    uint32_t pinned_dst_noc_xy = 0;
+    uint64_t pinned_dst_addr = 0;
+
+    if (has_pinned_inputs && is_unpadded) {
+        auto noc_addr_pair_opt = dispatch_params.pinned_memory->get_noc_addr(dispatch_params.device->id());
+        if (noc_addr_pair_opt.has_value() && noc_addr_pair_opt->device_id == dispatch_params.device->id()) {
+            const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
+            const uint8_t* pinned_host_base =
+                static_cast<const uint8_t*>(dispatch_params.pinned_memory->get_host_ptr());
+            const uint8_t* dst_ptr = static_cast<const uint8_t*>(dispatch_params.dst);
+            const uint8_t* pinned_region_end = pinned_host_base + dispatch_params.pinned_memory->get_buffer_size();
+            const uint8_t* dst_region_start = dst_ptr + dispatch_params.unpadded_dst_offset;
+            const uint8_t* dst_region_end = dst_region_start + xfer_bytes;
+            if ((reinterpret_cast<uintptr_t>(dst_region_start) % hal.get_write_alignment(HalMemType::HOST) == 0) &&
+                (dst_region_start >= pinned_host_base) && (dst_region_end <= pinned_region_end)) {
+                const uint64_t dst_offset_base = static_cast<uint64_t>(dst_region_start - pinned_host_base);
+                pinned_dst_addr = dst_offset_base + pinned_noc_base;
+                pinned_dst_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
+                use_pinned_transfer = true;
+            }
+        }
+    }
+
+    // Build calculator with the chosen path
     tt::tt_metal::DeviceCommandCalculator calculator;
-    for (int i = 0; i < num_worker_counters; ++i) {
+    for (uint32_t i = 0; i < num_worker_counters; ++i) {
         calculator.add_dispatch_wait();
     }
     calculator.add_prefetch_stall();
-    calculator.add_dispatch_write_linear_host();
+    if (use_pinned_transfer) {
+        // When flush_prefetch=false and inline_data=false, size is ignored.
+        calculator.add_dispatch_write_linear_h<false, false>(0);
+    } else {
+        calculator.add_dispatch_write_linear_host();
+    }
+    // Prefetch relay cmd has fixed header size in calculator regardless of type
     calculator.add_prefetch_relay_paged();
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
@@ -848,9 +887,13 @@ void issue_read_buffer_dispatch_command_sequence(
         MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
         dispatch_params.expected_num_workers_completed[offset_index]);
 
-    bool flush_prefetch = false;
-    command_sequence.add_dispatch_write_host(
-        flush_prefetch, (DeviceAddr)dispatch_params.pages_per_txn * dispatch_params.padded_page_size, false, 0);
+    // Select write op once, then unify relay
+    if (use_pinned_transfer) {
+        command_sequence.add_dispatch_write_linear_h<false, false>(0, pinned_dst_noc_xy, pinned_dst_addr, xfer_bytes);
+    } else {
+        bool flush_prefetch = false;
+        command_sequence.add_dispatch_write_host(flush_prefetch, xfer_bytes, false, 0);
+    }
 
     // Buffer layout specific logic
     if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
@@ -858,7 +901,7 @@ void issue_read_buffer_dispatch_command_sequence(
             buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
         command_sequence.add_prefetch_relay_linear(
             dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
-            (DeviceAddr)dispatch_params.padded_page_size * dispatch_params.pages_per_txn,
+            xfer_bytes,
             dispatch_params.address);
     } else {
         command_sequence.add_prefetch_relay_paged(
@@ -868,6 +911,9 @@ void issue_read_buffer_dispatch_command_sequence(
             dispatch_params.padded_page_size,
             dispatch_params.pages_per_txn);
     }
+
+    // Mark whether completion read is needed
+    dispatch_params.requires_completion_read = !use_pinned_transfer;
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
     sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
@@ -907,7 +953,9 @@ void copy_interleaved_buffer_to_completion_queue(
     BufferReadDispatchParams& dispatch_params,
     Buffer& buffer,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    CoreType dispatch_core_type) {
+    CoreType dispatch_core_type,
+    void* dst,
+    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory) {
     if (dispatch_params.total_pages_to_read > 0) {
         // Only 8 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
         // To handle larger page offsets move bank base address up and update page offset to be relative to the new
@@ -916,8 +964,11 @@ void copy_interleaved_buffer_to_completion_queue(
             dispatch_params.update_params_to_be_within_bounds(buffer);
         }
 
+        dispatch_params.dst = dst;
+        dispatch_params.pinned_memory = pinned_memory;
         dispatch_params.calculate_num_pages_for_read_transaction();
         issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);
+
         dispatch_params.update_params_after_read_transaction();
     }
 }

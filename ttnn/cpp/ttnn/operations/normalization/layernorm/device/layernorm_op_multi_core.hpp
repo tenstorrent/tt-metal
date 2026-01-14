@@ -7,7 +7,7 @@
 #include <optional>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/device_operation.hpp"
@@ -31,13 +31,13 @@ struct LayerNormMultiCoreProgramFactory {
     static cached_program_t create(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::operations::normalization::layer_norm

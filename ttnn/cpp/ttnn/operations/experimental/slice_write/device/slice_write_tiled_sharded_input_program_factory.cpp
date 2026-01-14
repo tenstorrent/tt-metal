@@ -205,9 +205,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 }  // namespace
 
 SliceWriteTiledShardedInputProgramFactory::cached_program_t SliceWriteTiledShardedInputProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& output_tensor_start = operation_attributes.slice_start;
@@ -334,7 +332,7 @@ void SliceWriteTiledShardedInputProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     const auto& src_tensor = tensor_args.input;
     const auto& dst_tensor = tensor_return_value;
 

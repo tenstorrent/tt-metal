@@ -21,9 +21,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer::sdpa_decode::program {
 
 SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     bool use_mla = operation_attributes.use_mla.value_or(false);
@@ -1045,7 +1043,7 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
 
     const auto& shared_variables = cached_program.shared_variables;

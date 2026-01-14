@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
@@ -15,8 +15,8 @@ namespace ttnn::operations::data_movement::repeat {
 struct RepeatDeviceOperation {
     using operation_attributes_t = repeat::operation_attributes_t;
     using tensor_args_t = repeat::tensor_args_t;
-    using spec_return_value_t = repeat::spec_return_value_t;
-    using tensor_return_value_t = repeat::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<program::RepeatProgramFactoryLastDim, program::RepeatProgramFactoryHigherDim>;
 
