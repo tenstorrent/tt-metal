@@ -16,13 +16,35 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Fetch merge queue snapshot from GitHub API
+      - name: Fetch merge queue snapshot from GitHub GraphQL API
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p generated/merge_queue
-          gh api \
-            repos/tenstorrent/tt-metal/merge-queue \
+
+          gh api graphql \
+            -f query='
+            query {
+              repository(owner: "tenstorrent", name: "tt-metal") {
+                mergeQueue {
+                  entries(first: 50) {
+                    nodes {
+                      position
+                      state
+                      enqueuedAt
+                      pullRequest {
+                        number
+                        title
+                        headRefOid
+                        author {
+                          login
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }' \
             > generated/merge_queue/merge_queue.json
 
       - name: Add timestamp to filename
