@@ -267,10 +267,12 @@ def test_qwenimage_pipeline_performance(
                 "cfg_factor": cfg[0],
                 "sp_factor": sp[0],
                 "tp_factor": tp[0],
+                "num_frames": 1,
                 "encoder_tp_factor": encoder_tp[0],
                 "vae_tp_factor": vae_tp[0],
                 "topology": str(topology),
                 "num_links": num_links,
+                "fsdp": pipeline._is_fsdp,
             },
         )
 
