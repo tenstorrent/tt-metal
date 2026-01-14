@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,12 +45,11 @@ int main() {
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
-    std::vector<uint32_t> initial_signal_value = {0};
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core, MEM_L1_UNCACHED_BASE, initial_signal_value);
+
+    std::vector<uint32_t> signal = {0};
+    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core, MEM_L1_UNCACHED_BASE, signal);
     tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_address, value);
-    std::cout << "WriteToDeviceDRAMChannel passed" << std::endl;
     MetalContext::instance().get_cluster().dram_barrier(mesh_device->get_devices()[0]->id());
-    std::cout << "DRAM barrier passed" << std::endl;
 
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -61,7 +60,7 @@ int main() {
 
     // Configure and create Data Movement kernels
     std::vector<KernelHandle> dm_dram_to_l1_kernels;
-    for (uint32_t i = 0; i < 2; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
         dm_dram_to_l1_kernels.push_back(experimental::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
@@ -70,7 +69,7 @@ int main() {
     }
 
     std::vector<KernelHandle> dm_l1_to_dram_kernels;
-    for (uint32_t i = 0; i < 2; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
         dm_l1_to_dram_kernels.push_back(experimental::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
@@ -78,30 +77,23 @@ int main() {
             experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1}));
     }
 
-    // uint32_t semaphore_value = 0;
-    // const uint32_t sem_id = CreateSemaphore(program, core, semaphore_value);
-
-    for (uint32_t i = 0; i < 2; i++) {
-        SetRuntimeArgs(
-            program, dm_dram_to_l1_kernels[i], core, {dram_address, l1_address, 4, 0, 0, initial_signal_value[0]});
-        initial_signal_value[0]++;
+    for (uint32_t i = 0; i < 4; i++) {
+        SetRuntimeArgs(program, dm_dram_to_l1_kernels[i], core, {dram_address, l1_address, 4, 0, signal[0]});
+        signal[0]++;
         dram_address += 1024;
 
-        SetRuntimeArgs(
-            program, dm_l1_to_dram_kernels[i], core, {dram_address, l1_address, 4, 0, 0, initial_signal_value[0]});
-        initial_signal_value[0]++;
-        l1_address += 32;
+        SetRuntimeArgs(program, dm_l1_to_dram_kernels[i], core, {dram_address, l1_address, 4, 0, signal[0]});
+        signal[0]++;
+        l1_address += sizeof(uint32_t);
     }
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
-    std::cout << "EnqueueMeshWorkload passed" << std::endl;
+
     std::vector<uint32_t> outputs{0};
-    // MetalContext::instance().get_cluster().dram_barrier(mesh_device->get_devices()[0]->id());
     tt_metal::detail::ReadFromDeviceDRAMChannel(
         mesh_device->get_devices()[0], 0, dram_address, sizeof(uint32_t), outputs);
-    // tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], core, l1_address, 4, outputs);
-    std::cout << "ReadFromDeviceDRAMChannel passed" << std::endl;
+
     mesh_device->close();
 
     if (outputs[0] == value[0]) {

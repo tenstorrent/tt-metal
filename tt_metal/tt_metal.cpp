@@ -1592,11 +1592,6 @@ KernelHandle CreateQuasarDataMovementKernel(
     const experimental::QuasarDataMovementConfig& config) {
     const std::set<DataMovementProcessor> dm_cores =
         GetDataMovementProcessorsPerClusterQuasar(program, core_ranges, config.num_processors_per_cluster);
-    // log the dm_cores
-    log_info(tt::LogMetal, "DM cores: {}", dm_cores.size());
-    for (const auto& dm_core : dm_cores) {
-        log_info(tt::LogMetal, "DM core: {}", dm_core);
-    }
     std::shared_ptr<Kernel> kernel =
         std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_cores);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);

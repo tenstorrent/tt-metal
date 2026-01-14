@@ -131,6 +131,7 @@ protected:
         const std::string& obj) const;
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings) const;
+    void link_impl(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;
     std::string weakened_firmware_name() const;
     void extract_zone_src_locations(const std::string& out_dir) const;
