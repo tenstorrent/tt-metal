@@ -83,6 +83,13 @@ if ! command -v uv &>/dev/null; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [ -f "$SCRIPT_DIR/scripts/install-uv.sh" ]; then
         bash "$SCRIPT_DIR/scripts/install-uv.sh"
+        # Ensure uv is available in the current shell even if installed with --user
+        if ! command -v uv &>/dev/null; then
+            USER_BIN="${HOME}/.local/bin"
+            if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+                export PATH="$USER_BIN:$PATH"
+            fi
+        fi
     else
         echo "Warning: install-uv.sh not found, falling back to pip installation"
         # Use the same pinned version as install-uv.sh to maintain consistency
