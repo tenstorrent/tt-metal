@@ -17,6 +17,9 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     get_output_combined_contribs as gen_reference_reference,
 )
 
+from tests.nightly.t3000.ccl.test_all_to_all_dispatch import get_mesh_mapper
+
+
 torch.set_printoptions(threshold=float("inf"))
 
 
@@ -256,3 +259,67 @@ def test_gen_tensors(batch, experts, selected_experts_k, hidden_size, seq, mesh_
         devices,
         scheme="sequential",
     )
+
+
+# experts, batch * seq, hidden_size
+def _get_tt_sharded_dense_input(dense_contribs_tensor, core_grid, device, cluster_axis):
+    shape = dense_contribs_tensor.shape
+    assert shape[-1] % core_grid[-1] == 0
+
+    sharded_shape = [shape[0], shape[1] * core_grid[-1], shape[-1] // core_grid[-1]]
+    dense_contribs_tensor = dense_contribs_tensor.reshape(sharded_shape)
+
+    tt_core_grid = ttnn.CoreGrid(x=core_grid[0], y=core_grid[1])
+    mem_config = ttnn.create_sharded_memory_config(sharded_shape, tt_core_grid, ttnn.ShardStrategy.HEIGHT)
+
+    return ttnn.from_torch(
+        dense_contribs_tensor,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem_config,
+        mesh_mapper=get_mesh_mapper(device, device.shape, cluster_axis, 0),
+    )
+
+
+@pytest.mark.parametrize("batch", [64])
+@pytest.mark.parametrize("experts", [16])
+@pytest.mark.parametrize("selected_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [16])
+@pytest.mark.parametrize("seq", [1])
+@pytest.mark.parametrize("mesh_shape", [(2, 4)])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("devices", [NUM_DEVICES])
+@pytest.mark.parametrize("core_grid", [(8, 4)])
+@pytest.mark.parametrize("num_iters", [(8, 4)])
+def test_decode(
+    mesh_device,
+    batch,
+    experts,
+    selected_experts_k,
+    hidden_size,
+    seq,
+    mesh_shape,
+    cluster_axis,
+    devices,
+    core_grid,
+    num_iters,
+):
+    (
+        dense_metadata_tensor,
+        dense_token_counts_tensor,
+        dense_contribs_tensor,
+        output_ref,
+        output_data_map,
+    ) = gen_tensors(
+        batch,
+        experts,
+        selected_experts_k,
+        hidden_size,
+        seq,
+        mesh_shape,
+        cluster_axis,
+        devices,
+    )
+
+    tt_dense_contribs = _get_tt_sharded_dense_input(dense_contribs_tensor, core_grid, mesh_device, cluster_axis)
