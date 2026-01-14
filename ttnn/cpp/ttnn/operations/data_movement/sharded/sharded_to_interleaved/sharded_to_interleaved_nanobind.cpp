@@ -25,14 +25,7 @@ void bind_sharded_to_interleaved(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_sharded_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType>& output_dtype) -> ttnn::Tensor {
-                return self(
-                    input_tensor, memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG), output_dtype);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_dtype") = nb::none(),
