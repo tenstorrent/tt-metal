@@ -40,4 +40,3 @@ TT parity tests (require hardware + opt-in env vars):
 DPT_RUN_TT_TESTS=1 pytest -q models/experimental/dpt_large/tests/test_e2e_tt_vs_cpu.py
 DPT_RUN_TT_BACKBONE_PARITY=1 pytest -q models/experimental/dpt_large/tests/test_backbone_tt_vs_cpu_small.py
 ```
-
