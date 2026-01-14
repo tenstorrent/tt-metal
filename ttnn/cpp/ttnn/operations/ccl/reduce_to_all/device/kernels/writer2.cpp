@@ -164,7 +164,7 @@ void kernel_main() {
 
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
 
-    // Writer2 uses backward mux - signal the backward mux termination master (Reader1)l
+    // Writer2 uses backward mux - signal the backward mux termination master (Reader1)
     {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);

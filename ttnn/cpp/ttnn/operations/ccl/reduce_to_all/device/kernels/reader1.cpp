@@ -126,7 +126,7 @@ void kernel_main() {
     const uint32_t sem_header_addr_2 = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
-    // wait fot device semaphore
+    // wait for device semaphore
     auto device_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(device_semaphore);
     noc_semaphore_wait(device_semaphore_ptr, 1);
     noc_semaphore_set(device_semaphore_ptr, 0);

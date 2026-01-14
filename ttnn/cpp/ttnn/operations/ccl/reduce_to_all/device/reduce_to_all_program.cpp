@@ -76,7 +76,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     ReduceToAllOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
     // Reduce to all : reduce to root scheme 3 (with Ring)
-    // The output of the SDPA reduction is avaialble an on all devices at the end
+    // The output of the SDPA reduction is avaialble on all devices at the end
     // Round 1:
     // devices 0-1 and devices 2-3 exchange their local data and compute the partial reduction locally
     // Round 2:
@@ -754,8 +754,8 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     auto get_fwd_mux_term_master = [&](uint32_t link_idx) { return termination_masters[link_idx + 2]; };
 
     std::vector<uint32_t> shared_term_sync_sems;
-    for (size_t i = 0; i < termination_masters.size(); i++) {
-        shared_term_sync_sems.push_back(CreateSemaphore(program, {termination_masters[i]}, 0));
+    for (auto& termination_master : termination_masters) {
+        shared_term_sync_sems.push_back(CreateSemaphore(program, {termination_master}, 0));
     }
     auto get_bwd_mux_term_sem = [&](uint32_t link_idx) { return shared_term_sync_sems[link_idx]; };
     auto get_fwd_mux_term_sem = [&](uint32_t link_idx) { return shared_term_sync_sems[link_idx + 2]; };
@@ -810,7 +810,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                     CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
-                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+                        mesh_device->worker_core_from_logical_core(all_mux_cores[(link_idx * 2) + 1]);
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
@@ -870,7 +870,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                     CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
-                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+                        mesh_device->worker_core_from_logical_core(all_mux_cores[(link_idx * 2) + 1]);
 
                     // For D0/D2 second 4 cores, Writer2 needs to signal the paired Reader1 on first 4 cores
                     auto& worker_cores_for_link = (link_idx == 0) ? worker_cores_link_1 : worker_cores_link_2;
@@ -938,7 +938,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                     CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
-                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+                        mesh_device->worker_core_from_logical_core(all_mux_cores[(link_idx * 2) + 1]);
 
                     auto& worker_cores_for_link = (link_idx == 0) ? worker_cores_link_1 : worker_cores_link_2;
                     auto paired_reader1_core = worker_cores_for_link[core_idx + num_worker_cores_per_link_per_dir];
@@ -1002,7 +1002,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                     CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
-                        mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
+                        mesh_device->worker_core_from_logical_core(all_mux_cores[(link_idx * 2) + 1]);
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),

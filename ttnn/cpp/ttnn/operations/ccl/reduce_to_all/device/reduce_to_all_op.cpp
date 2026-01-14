@@ -76,7 +76,7 @@ void ReduceToAllOp::validate(const operation_attributes_t& operation_attributes,
             operation_attributes.input_mux_cores.value().size());
     }
 
-    // extar worker cores should be 8
+    // extra worker cores should be 8
     if (operation_attributes.extra_worker_cores.has_value()) {
         TT_FATAL(
             operation_attributes.extra_worker_cores.value().size() == 8,
@@ -103,7 +103,7 @@ ReduceToAllOp::spec_return_value_t ReduceToAllOp::compute_output_specs(
         intermediate_specs.push_back(tensor_args.optional_coord_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
     }
-    // intermediate shape is the shape of the 3 tenssors combined so that we can send them all in a single packet
+    // intermediate shape is the shape of the 3 tensors combined so that we can send them all in a single packet
     uint32_t shape_0 = final_output_spec[0].memory_config().shard_spec()->shape[0];
     uint32_t shape_1 = final_output_spec[0].memory_config().shard_spec()->shape[1] +
                        (2 * final_output_spec[1].memory_config().shard_spec()->shape[1]);
