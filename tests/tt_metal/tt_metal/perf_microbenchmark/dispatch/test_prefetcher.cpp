@@ -1055,12 +1055,6 @@ public:
         const uint32_t mmio_dram_base,
         const uint32_t dram_alignment,
         Common::DeviceData& device_data) {
-        const uint32_t max_read_size =
-            std::min(
-                DEFAULT_SCRATCH_DB_SIZE,
-                DEFAULT_PREFETCH_Q_ENTRIES * (uint32_t)sizeof(DispatchSettings::prefetch_q_entry_type)) -
-            64;
-
         // Compute NOC encoding: Destination (Worker on Remote Device) -> Use device_ (Chip 1)
         const CoreCoord first_virt_worker =
             remote_device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
@@ -1072,7 +1066,7 @@ public:
         while (remaining_bytes > 0) {
             uint32_t length = std::min(
                 tt::align(
-                    std::max(MIN_READ_SIZE, payload_generator_->get_rand<uint32_t>(0, max_read_size - 1)),
+                    std::max(MIN_READ_SIZE, payload_generator_->get_rand<uint32_t>(0, remaining_bytes)),
                     dram_alignment),
                 remaining_bytes);
 
