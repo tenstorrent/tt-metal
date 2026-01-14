@@ -17,14 +17,6 @@ void write_buffer(
     std::vector<std::shared_ptr<void>> src,
     const std::optional<tt::tt_metal::BufferRegion>& region = std::nullopt);
 
-void read_buffer(
-    QueueId cq_id,
-    Tensor& src,
-    std::vector<std::shared_ptr<void>> dst,
-    const std::optional<tt::tt_metal::BufferRegion>& region = std::nullopt,
-    size_t src_offset = 0,
-    bool blocking = true);
-
 void queue_synchronize(tt::tt_metal::distributed::MeshCommandQueue& cq);
 
 void event_synchronize(const tt::tt_metal::distributed::MeshEvent& event);

@@ -56,10 +56,6 @@ TEST_P(TensorLayoutComputeTests, TensorLayout_Generic) {
     EXPECT_EQ(layout.get_alignment(), params.expected.alignment);
     EXPECT_EQ(layout.compute_physical_shape(params.inputs.shape), params.expected.physical_size);
     EXPECT_EQ(layout.compute_strides(params.inputs.shape), params.expected.strides);
-
-    if (params.expected.tensor_creation_works) {
-        test_utils::test_tensor_on_device(params.inputs.shape, layout);
-    }
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -187,8 +183,6 @@ TEST_P(TensorLayoutLegacyPaddingRoundtipTests, Tensor_LagacyPaddingRoundtrip) {
     TensorLayout layout = TensorLayout::fromPaddedShape(
         DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, params.shape, params.padded_shape);
     EXPECT_EQ(layout.compute_padded_shape(params.shape), params.padded_shape);
-
-    test_utils::test_tensor_on_device(params.shape, layout);
 }
 
 INSTANTIATE_TEST_SUITE_P(

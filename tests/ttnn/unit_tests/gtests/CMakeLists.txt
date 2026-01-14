@@ -32,7 +32,6 @@ target_sources(
         test_sliding_window_infra.cpp
         test_async_runtime.cpp
         test_conv2d.cpp
-        test_multi_cq_multi_dev.cpp
         test_multiprod_queue.cpp
 )
 target_include_directories(unit_tests_ttnn_smoke PRIVATE ${PROJECT_SOURCE_DIR}/tests)
@@ -164,8 +163,6 @@ add_library(TTNN::Test::Basic::Tensor ALIAS unit_tests_ttnn_tensor_lib)
 target_sources(
     unit_tests_ttnn_tensor_lib
     PRIVATE
-        tensor/common_tensor_test_utils.cpp
-        tensor/test_create_tensor.cpp
         tensor/test_create_tensor_multi_device.cpp
         tensor/test_create_tensor_with_layout.cpp
         tensor/test_distributed_tensor.cpp
@@ -186,19 +183,6 @@ target_link_libraries(unit_tests_ttnn_tensor_lib PRIVATE xtensor)
 
 add_executable(unit_tests_ttnn_tensor)
 target_link_libraries(unit_tests_ttnn_tensor PRIVATE TTNN::Test::Basic::Tensor)
-
-# test_ccl_multi_cq_multi_device
-
-add_executable(test_ccl_multi_cq_multi_device)
-target_sources(test_ccl_multi_cq_multi_device PRIVATE multi_thread/test_ccl_multi_cq_multi_device.cpp)
-setup_ttnn_test_target(test_ccl_multi_cq_multi_device)
-target_link_libraries(
-    test_ccl_multi_cq_multi_device
-    PRIVATE
-        Boost::asio
-        Boost::lockfree
-        test_common_utils
-)
 
 # unit_tests_ttnn_emitc
 
