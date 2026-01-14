@@ -546,7 +546,7 @@ def main():
     print(f"Mesh Workloads: {len(mesh_workloads)} found {mesh_workloads.keys()}")
     for mesh_workload in mesh_workloads.values():
         print(f"  Mesh Workload ID {mesh_workload.meshWorkloadId}")
-        print(f".   Operation Name: {mesh_workload.name}")
+        print(f"    Operation Name: {mesh_workload.name}")
         print(f"    Operation Parameters: {mesh_workload.parameters}")
         print(f"    Programs:")
         for program in mesh_workload.programs:
