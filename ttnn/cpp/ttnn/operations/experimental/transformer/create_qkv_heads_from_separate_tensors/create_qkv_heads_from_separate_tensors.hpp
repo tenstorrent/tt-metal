@@ -5,7 +5,7 @@
 #pragma once
 
 #include "device/create_qkv_heads_from_separate_tensors_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn {
 namespace operations::experimental::transformer {
