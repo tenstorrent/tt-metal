@@ -50,19 +50,11 @@ void bind_tosa_scatter(nb::module_& mod) {
                 output = ttnn.tosa_scatter(input_ttnn, index_ttnn, source_ttnn)
         )doc";
 
-    using OperationType = decltype(ttnn::tosa_scatter);
     bind_registered_operation(
         mod,
         ttnn::tosa_scatter,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& index_tensor,
-               const ttnn::Tensor& source_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config) -> Tensor {
-                return self(input_tensor, index_tensor, source_tensor, opt_out_memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input").noconvert(),
             nb::arg("index").noconvert(),
             nb::arg("src").noconvert(),
