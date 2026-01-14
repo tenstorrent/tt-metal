@@ -20,7 +20,7 @@
 namespace ttnn::operations::pool::upsample::program {
 
 UpsampleMultiCoreInterleavedProgramFactory::cached_program_t UpsampleMultiCoreInterleavedProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output_tensor) {
+    const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     auto& output = output_tensor;
     const auto& scale_factor_h = operation_attributes.scale_factor_h;
@@ -257,8 +257,8 @@ UpsampleMultiCoreInterleavedProgramFactory::cached_program_t UpsampleMultiCoreIn
 
 void UpsampleMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const UpsampleParams& /*operation_attributes*/,
+    const UpsampleInputs& tensor_args,
     Tensor& output_tensor) {
     auto& program = cached_program.program;
     const auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
