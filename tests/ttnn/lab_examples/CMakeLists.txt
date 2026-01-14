@@ -3,6 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 add_executable(test_lab_eltwise_binary)
+
+set_target_properties(
+    test_lab_eltwise_binary
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/tests/ttnn/lab_examples
+)
+
 target_sources(
     test_lab_eltwise_binary
     PRIVATE
