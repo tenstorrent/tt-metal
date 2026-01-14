@@ -148,12 +148,12 @@ def test_max_pool2d_dram_slice(device, in_specs, input_spec):
         nightly_skips=False,
         dram_slice_config=dram_slice_config,
         output_layout=output_layout,
+        config_tensor_in_dram=False,
     )
 
 
 @pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["height_shard_tests"]["in_dtype"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
@@ -183,12 +183,12 @@ def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         nightly_skips=False,
+        config_tensor_in_dram=True,
     )
 
 
 @pytest.mark.parametrize("input_spec", parameters["width_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["width_shard_tests"]["in_dtype"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_max_pool2d_width_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
@@ -218,12 +218,12 @@ def test_max_pool2d_width_shard(device, in_dtype, input_spec, tensor_map):
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
         nightly_skips=False,
+        config_tensor_in_dram=True,
     )
 
 
 @pytest.mark.parametrize("input_spec", parameters["block_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["block_shard_tests"]["in_dtype"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_max_pool2d_block_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
@@ -253,13 +253,13 @@ def test_max_pool2d_block_shard(device, in_dtype, input_spec, tensor_map):
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
         nightly_skips=False,
+        config_tensor_in_dram=True,
     )
 
 
 @pytest.mark.parametrize("input_spec", parameters["out_mem_config_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["out_mem_config_tests"]["in_dtype"])
 @pytest.mark.parametrize("out_memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_max_pool2d_mem_config(device, in_dtype, input_spec, out_memory_config, tensor_map):
     (
         in_n,
@@ -290,13 +290,13 @@ def test_max_pool2d_mem_config(device, in_dtype, input_spec, out_memory_config, 
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         nightly_skips=False,
+        config_tensor_in_dram=True,
     )
 
 
 @pytest.mark.parametrize("input_spec", parameters["tiled_out_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["tiled_out_tests"]["in_dtype"])
 @pytest.mark.parametrize("out_dtype", parameters["tiled_out_tests"]["out_dtype"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_map):
     output_layout = ttnn.TILE_LAYOUT
 
@@ -330,12 +330,12 @@ def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_ma
         output_layout=output_layout,
         out_dtype=out_dtype,
         nightly_skips=False,
+        config_tensor_in_dram=True,
     )
 
 
 @pytest.mark.parametrize("input_spec", parameters["in_mem_config_tests"]["input_specs"])
 @pytest.mark.parametrize("cores", parameters["in_mem_config_tests"]["cores"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_max_pool2d_in_mem_config(device, input_spec, cores, tensor_map):
     (
         in_n,
@@ -386,4 +386,5 @@ def test_max_pool2d_in_mem_config(device, input_spec, cores, tensor_map):
         in_memory_config=in_memory_config,
         ceil_mode=ceil_mode,
         nightly_skips=False,
+        config_tensor_in_dram=True,
     )
