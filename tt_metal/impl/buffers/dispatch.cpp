@@ -60,13 +60,13 @@ struct BufferWriteDispatchParams {
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
     uint32_t pinned_src_noc_xy = 0;
-    uint32_t pinned_src_addr_lo = 0;
+    uint64_t pinned_src_addr = 0;
     bool use_pinned_transfer = false;
 
     BufferWriteDispatchParams() = default;
-    BufferWriteDispatchParams(uint32_t src_noc_xy, uint32_t src_addr_32B, bool src_pinned = false) :
+    BufferWriteDispatchParams(uint32_t src_noc_xy, uint64_t src_addr, bool src_pinned = false) :
         pinned_src_noc_xy{static_cast<uint32_t>(src_noc_xy | (MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 ? 8 : 0))},
-        pinned_src_addr_lo{src_addr_32B},
+        pinned_src_addr{src_addr},
         use_pinned_transfer{src_pinned} {
     }
 
@@ -87,9 +87,9 @@ public:
         uint32_t cq_id,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         uint32_t src_noc_xy,
-        uint32_t src_addr_32B,
+        uint64_t src_addr,
         bool src_pinned) :
-        BufferWriteDispatchParams(src_noc_xy, src_addr_32B, src_pinned), dst_page_index(dst_page_index) {
+        BufferWriteDispatchParams(src_noc_xy, src_addr, src_pinned), dst_page_index(dst_page_index) {
         this->num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
         this->address = buffer.address();
 
@@ -149,7 +149,7 @@ public:
         uint32_t cq_id,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         uint32_t src_noc_xy,
-        uint32_t src_addr_32B,
+        uint64_t src_addr,
         bool src_pinned) :
         InterleavedBufferWriteDispatchParams(
             buffer,
@@ -158,7 +158,7 @@ public:
             cq_id,
             expected_num_workers_completed,
             src_noc_xy,
-            src_addr_32B,
+            src_addr,
             src_pinned),
         buffer(buffer),
         curr_full_pages_start_address(buffer.address()),
@@ -286,9 +286,9 @@ public:
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         uint32_t pinned_noc_xy,
-        uint32_t pinned_addr_lo,
+        uint64_t pinned_addr,
         bool is_pinned) :
-        BufferWriteDispatchParams(pinned_noc_xy, pinned_addr_lo, is_pinned),
+        BufferWriteDispatchParams(pinned_noc_xy, pinned_addr, is_pinned),
         buffer_page_mapping(buffer->get_buffer_page_mapping()),
         buffer(buffer),
         are_pages_large(
@@ -461,7 +461,7 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
     const BufferRegion& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     uint32_t pinned_src_noc_xy,
-    uint32_t pinned_src_addr_lo,
+    uint64_t pinned_src_addr,
     bool use_pinned_transfer) {
     InterleavedBufferWriteDispatchParamsVariant dispatch_params;
 
@@ -481,7 +481,7 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
             cq_id,
             expected_num_workers_completed,
             pinned_src_noc_xy,
-            pinned_src_addr_lo,
+            pinned_src_addr,
             use_pinned_transfer);
     } else {
         dispatch_params.emplace<InterleavedBufferWriteDispatchParams>(
@@ -491,7 +491,7 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
             cq_id,
             expected_num_workers_completed,
             pinned_src_noc_xy,
-            pinned_src_addr_lo,
+            pinned_src_addr,
             use_pinned_transfer);
     }
     return dispatch_params;
@@ -710,7 +710,7 @@ void issue_buffer_dispatch_command_sequence(
         const uint64_t data_size_bytes =
             (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
         command_sequence.add_prefetch_relay_linear(
-            dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr_lo);
+            dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr);
 
         sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
         sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
@@ -835,7 +835,7 @@ void write_to_device_buffer(
     const bool is_unpadded = (buffer.page_size() == buffer.aligned_page_size());
     const bool has_pinned_inputs = (src != nullptr && pinned_memory != nullptr);
     uint32_t pinned_src_noc_xy = 0;
-    uint32_t pinned_src_addr_lo = 0;
+    uint64_t pinned_src_addr = 0;
     bool use_pinned_transfer = false;
     if (has_pinned_inputs && is_unpadded && !is_sharded(buffer.buffer_layout())) {
         auto device_id = buffer.device()->id();
@@ -866,10 +866,8 @@ void write_to_device_buffer(
                     (uintptr_t)src_ptr,
                     (uintptr_t)src_ptr + region.offset + region.size);
             } else {
-                const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(mmio_device_id);
                 const uint64_t src_offset_base = static_cast<uintptr_t>(src_region_start - pinned_host_base);
-                const uint64_t src_noc_addr = pinned_noc_base + src_offset_base;
-                pinned_src_addr_lo = static_cast<uint32_t>(src_noc_addr - pcie_base);
+                pinned_src_addr = pinned_noc_base + src_offset_base;
                 const auto& soc = cluster.get_soc_desc(mmio_device_id);
                 const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
                 TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
@@ -887,7 +885,7 @@ void write_to_device_buffer(
             expected_num_workers_completed,
             sub_device_ids,
             pinned_src_noc_xy,
-            pinned_src_addr_lo,
+            pinned_src_addr,
             use_pinned_transfer);
         const std::vector<CoreCoord>& cores = dispatch_params.buffer_page_mapping->all_cores;
         // Since we read core by core we are reading the device pages sequentially
@@ -917,7 +915,7 @@ void write_to_device_buffer(
                 region,
                 sub_device_ids,
                 pinned_src_noc_xy,
-                pinned_src_addr_lo,
+                pinned_src_addr,
                 use_pinned_transfer);
 
         InterleavedBufferWriteDispatchParams* dispatch_params = std::visit(
