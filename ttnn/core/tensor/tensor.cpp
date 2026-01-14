@@ -684,17 +684,13 @@ bool can_exec_ops_on_device(DataType type) {
         case DataType::FLOAT32:
             // https://github.com/tenstorrent/tt-metal/issues/23405 (layout precision loss)
             // https://github.com/tenstorrent/tt-metal/issues/30147 (typecast rounding error)
-            return false;
         case DataType::UINT32:
         case DataType::INT32:
             // https://github.com/tenstorrent/tt-metal/issues/23407 (to_layout(RM) is not working for uint32/int32)
-            return false;
         case DataType::UINT16:
             // Tilize doesn't support uint16.
-            return false;
         case DataType::UINT8:
             // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
-            return false;
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
             // TODO: Reproduce the bug and create github issue
@@ -768,7 +764,9 @@ Tensor create_tt_tensor_from_host_data(
         if (exec_on_device && construct_on_device && pydata_borrowable) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
-        } else if (mesh_mapper != nullptr) {
+        }
+
+        if (mesh_mapper != nullptr) {
             // sharded tensor must be created using factory function to avoid validation errors in the
             // `TensorSpec` constructor. Example `test_paged_cache_mask.py::test_update_cache`, fails
             // with `Number of shards along height 32 must not exceed number of cores 16` if the
@@ -790,15 +788,15 @@ Tensor create_tt_tensor_from_host_data(
                 device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
                 cq_id,
                 static_cast<T>(pad_value));
-        } else {
-            TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
-            return Tensor::from_span(
-                tt::stl::make_const_span(host_buffer.view_as<T>()),
-                tensor_spec,
-                nullptr,
-                std::nullopt,
-                static_cast<T>(pad_value));
         }
+
+        TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
+        return Tensor::from_span(
+            tt::stl::make_const_span(host_buffer.view_as<T>()),
+            tensor_spec,
+            nullptr,
+            std::nullopt,
+            static_cast<T>(pad_value));
     };
 
     switch (src_dtype) {
@@ -863,7 +861,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     Layout layout,
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
-    ttnn::PyDType src_dtype,
+    ttnn::PyDType src_data_type,
     const std::function<HostBuffer(DataType)>& get_host_data,
     std::optional<tt::tt_metal::distributed::MeshDevice*> device,
     std::optional<ttnn::QueueId> cq_id,
@@ -882,7 +880,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
         mesh_mapper,
         pad_value);
 
-    auto host_dtype = compute_host_dtype(src_dtype, dst_dtype, memory_config.is_sharded());
+    auto host_dtype = compute_host_dtype(src_data_type, dst_dtype, memory_config.is_sharded());
     auto host_buffer = get_host_data(host_dtype);
     Tensor output = create_tt_tensor_from_host_data(
         host_buffer,

@@ -370,65 +370,87 @@ PyDType get_py_tensor_type_info(const nb::object& py_tensor) {
         const auto py_dtype = py_tensor.attr("dtype");
         if (py_dtype.equal(torch.attr("float32"))) {
             return PyDType::FLOAT32;
-        } else if (py_dtype.equal(torch.attr("float64"))) {
-            return PyDType::FLOAT64;
-        } else if (py_dtype.equal(torch.attr("float16"))) {
-            return PyDType::FLOAT16;
-        } else if (py_dtype.equal(torch.attr("bfloat16"))) {
-            return PyDType::BFLOAT16;
-        } else if (py_dtype.equal(torch.attr("int8"))) {
-            return PyDType::INT8;
-        } else if (py_dtype.equal(torch.attr("int16"))) {
-            return PyDType::INT16;
-        } else if (py_dtype.equal(torch.attr("int32"))) {
-            return PyDType::INT32;
-        } else if (py_dtype.equal(torch.attr("int64"))) {
-            return PyDType::INT64;
-        } else if (py_dtype.equal(torch.attr("uint32"))) {
-            return PyDType::UINT32;
-        } else if (py_dtype.equal(torch.attr("uint8"))) {
-            return PyDType::UINT8;
-        } else if (py_dtype.equal(torch.attr("bool"))) {
-            return PyDType::BOOL;
-        } else if (py_dtype.equal(torch.attr("uint16"))) {
-            return PyDType::UINT16;
-        } else {
-            TT_THROW(
-                "Unsupported torch tensor dtype: {}. Cannot map provided torch type to the host buffer data type.",
-                nb::cast<std::string>(nb::str(py_dtype)));
         }
+        if (py_dtype.equal(torch.attr("float64"))) {
+            return PyDType::FLOAT64;
+        }
+        if (py_dtype.equal(torch.attr("float16"))) {
+            return PyDType::FLOAT16;
+        }
+        if (py_dtype.equal(torch.attr("bfloat16"))) {
+            return PyDType::BFLOAT16;
+        }
+        if (py_dtype.equal(torch.attr("int8"))) {
+            return PyDType::INT8;
+        }
+        if (py_dtype.equal(torch.attr("int16"))) {
+            return PyDType::INT16;
+        }
+        if (py_dtype.equal(torch.attr("int32"))) {
+            return PyDType::INT32;
+        }
+        if (py_dtype.equal(torch.attr("int64"))) {
+            return PyDType::INT64;
+        }
+        if (py_dtype.equal(torch.attr("uint32"))) {
+            return PyDType::UINT32;
+        }
+        if (py_dtype.equal(torch.attr("uint8"))) {
+            return PyDType::UINT8;
+        }
+        if (py_dtype.equal(torch.attr("bool"))) {
+            return PyDType::BOOL;
+        }
+        if (py_dtype.equal(torch.attr("uint16"))) {
+            return PyDType::UINT16;
+        }
+
+        TT_THROW(
+            "Unsupported torch tensor dtype: {}. Cannot map provided torch type to the host buffer data type.",
+            nb::cast<std::string>(nb::str(py_dtype)));
+
     } else if (nb::isinstance(py_tensor, nb::module_::import_("numpy").attr("ndarray"))) {
         nb::object np = nb::module_::import_("numpy");
         const auto py_dtype = py_tensor.attr("dtype");
         if (py_dtype.equal(np.attr("float32"))) {
             return PyDType::FLOAT32;
-        } else if (py_dtype.equal(np.attr("float64"))) {
-            return PyDType::FLOAT64;
-        } else if (py_dtype.equal(np.attr("float16"))) {
-            return PyDType::FLOAT16;
-        } else if (py_dtype.equal(np.attr("int8"))) {
-            return PyDType::INT8;
-        } else if (py_dtype.equal(np.attr("int16"))) {
-            return PyDType::INT16;
-        } else if (py_dtype.equal(np.attr("int32"))) {
-            return PyDType::INT32;
-        } else if (py_dtype.equal(np.attr("int64"))) {
-            return PyDType::INT64;
-        } else if (py_dtype.equal(np.attr("uint8"))) {
-            return PyDType::UINT8;
-        } else if (py_dtype.equal(np.attr("uint16"))) {
-            return PyDType::UINT16;
-        } else if (py_dtype.equal(np.attr("uint32"))) {
-            return PyDType::UINT32;
-        } else if (py_dtype.equal(np.attr("uint64"))) {
-            return PyDType::UINT64;
-        } else if (py_dtype.equal(np.attr("bool_"))) {
-            return PyDType::BOOL;
-        } else {
-            TT_THROW(
-                "Unsupported numpy array dtype: {}. Cannot map provided torch type to the host buffer data type.",
-                nb::cast<std::string>(nb::str(py_dtype)));
         }
+        if (py_dtype.equal(np.attr("float64"))) {
+            return PyDType::FLOAT64;
+        }
+        if (py_dtype.equal(np.attr("float16"))) {
+            return PyDType::FLOAT16;
+        }
+        if (py_dtype.equal(np.attr("int8"))) {
+            return PyDType::INT8;
+        }
+        if (py_dtype.equal(np.attr("int16"))) {
+            return PyDType::INT16;
+        }
+        if (py_dtype.equal(np.attr("int32"))) {
+            return PyDType::INT32;
+        }
+        if (py_dtype.equal(np.attr("int64"))) {
+            return PyDType::INT64;
+        }
+        if (py_dtype.equal(np.attr("uint8"))) {
+            return PyDType::UINT8;
+        }
+        if (py_dtype.equal(np.attr("uint16"))) {
+            return PyDType::UINT16;
+        }
+        if (py_dtype.equal(np.attr("uint32"))) {
+            return PyDType::UINT32;
+        }
+        if (py_dtype.equal(np.attr("uint64"))) {
+            return PyDType::UINT64;
+        }
+        if (py_dtype.equal(np.attr("bool_"))) {
+            return PyDType::BOOL;
+        }
+        TT_THROW(
+            "Unsupported numpy array dtype: {}. Cannot map provided torch type to the host buffer data type.",
+            nb::cast<std::string>(nb::str(py_dtype)));
     } else {
         TT_THROW("The argument must be of type torch.Tensor or numpy.ndarray!");
     }
@@ -521,45 +543,56 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::object& py_tensor, DataTyp
 std::optional<DataType> map_torch_data_type_to_ttnn(const nb::object& py_dtype, const nb::object& torch) {
     if (py_dtype.equal(torch.attr("float32"))) {
         return DataType::FLOAT32;
-    } else if (py_dtype.equal(torch.attr("float16"))) {
-        return DataType::BFLOAT16;
-    } else if (py_dtype.equal(torch.attr("bfloat16"))) {
-        return DataType::BFLOAT16;
-    } else if (py_dtype.equal(torch.attr("int64"))) {
-        return DataType::UINT32;
-    } else if (py_dtype.equal(torch.attr("int32"))) {
-        return DataType::INT32;
-    } else if (py_dtype.equal(torch.attr("int16"))) {
-        return DataType::UINT16;
-    } else if (py_dtype.equal(torch.attr("uint8"))) {
-        return DataType::UINT8;
-    } else {
-        return std::nullopt;
     }
+    if (py_dtype.equal(torch.attr("float16"))) {
+        return DataType::BFLOAT16;
+    }
+    if (py_dtype.equal(torch.attr("bfloat16"))) {
+        return DataType::BFLOAT16;
+    }
+    if (py_dtype.equal(torch.attr("int64"))) {
+        return DataType::UINT32;
+    }
+    if (py_dtype.equal(torch.attr("int32"))) {
+        return DataType::INT32;
+    }
+    if (py_dtype.equal(torch.attr("int16"))) {
+        return DataType::UINT16;
+    }
+    if (py_dtype.equal(torch.attr("uint8"))) {
+        return DataType::UINT8;
+    }
+    return std::nullopt;
 }
 
 std::optional<DataType> map_numpy_data_type_to_ttnn(const nb::object& py_dtype, const nb::object& np) {
     if (py_dtype.equal(np.attr("float32"))) {
         return DataType::FLOAT32;
-    } else if (py_dtype.equal(np.attr("float16"))) {
-        return DataType::BFLOAT16;
-    } else if (py_dtype.equal(np.attr("int64"))) {
-        return DataType::UINT32;
-    } else if (py_dtype.equal(np.attr("int32"))) {
-        return DataType::INT32;
-    } else if (py_dtype.equal(np.attr("int16"))) {
-        return DataType::UINT16;
-    } else if (py_dtype.equal(np.attr("uint8"))) {
-        return DataType::UINT8;
-    } else {
-        return std::nullopt;
     }
+    if (py_dtype.equal(np.attr("float16"))) {
+        return DataType::BFLOAT16;
+    }
+    if (py_dtype.equal(np.attr("int64"))) {
+        return DataType::UINT32;
+    }
+    if (py_dtype.equal(np.attr("int32"))) {
+        return DataType::INT32;
+    }
+    if (py_dtype.equal(np.attr("int16"))) {
+        return DataType::UINT16;
+    }
+    if (py_dtype.equal(np.attr("uint8"))) {
+        return DataType::UINT8;
+    }
+    return std::nullopt;
 }
 
 DataType get_target_type(std::optional<DataType> optional_data_type, const nb::object& py_tensor) {
     if (optional_data_type.has_value()) {
         return optional_data_type.value();
-    } else if (nb::isinstance(py_tensor, nb::module_::import_("torch").attr("Tensor"))) {
+    }
+
+    if (nb::isinstance(py_tensor, nb::module_::import_("torch").attr("Tensor"))) {
         nb::object torch = nb::module_::import_("torch");
         auto result = map_torch_data_type_to_ttnn(py_tensor.attr("dtype"), torch);
         TT_FATAL(
@@ -567,7 +600,9 @@ DataType get_target_type(std::optional<DataType> optional_data_type, const nb::o
             "Could not map torch type to TTNN: {}",
             nb::cast<std::string>(nb::str(py_tensor.attr("dtype"))));
         return result.value();
-    } else if (nb::isinstance(py_tensor, nb::module_::import_("numpy").attr("ndarray"))) {
+    }
+
+    if (nb::isinstance(py_tensor, nb::module_::import_("numpy").attr("ndarray"))) {
         nb::object np = nb::module_::import_("numpy");
         auto result = map_numpy_data_type_to_ttnn(py_tensor.attr("dtype"), np);
         TT_FATAL(
@@ -575,12 +610,12 @@ DataType get_target_type(std::optional<DataType> optional_data_type, const nb::o
             "Could not map numpy type to TTNN: {}",
             nb::cast<std::string>(nb::str(py_tensor.attr("dtype"))));
         return result.value();
-    } else {
-        TT_THROW(
-            "Could not get target type: the dtype was not explicitly specified and the input tensor object is not a "
-            "torch or numpy tensor: {}",
-            nb::cast<std::string>(nb::str(py_tensor.type())));
     }
+
+    TT_THROW(
+        "Could not get target type: the dtype was not explicitly specified and the input tensor object is not a "
+        "torch or numpy tensor: {}",
+        nb::cast<std::string>(nb::str(py_tensor.type())));
 }
 
 }  // namespace
