@@ -33,18 +33,11 @@ void bind_concat(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
     )doc";
 
-    using OperationType = decltype(ttnn::concat);
     ttnn::bind_registered_operation(
         mod,
         ttnn::concat,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const std::vector<ttnn::Tensor>& tensors,
-               const int dim,
-               std::optional<ttnn::Tensor>& optional_output_tensor,
-               std::optional<ttnn::MemoryConfig>& memory_config,
-               const int groups) { return self(tensors, dim, memory_config, optional_output_tensor, groups); },
+        ttnn::nanobind_arguments_t{
             nb::arg("tensors"),
             nb::arg("dim") = 0,
             nb::kw_only(),
