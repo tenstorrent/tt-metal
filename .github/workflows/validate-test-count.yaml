@@ -13,7 +13,7 @@ jobs:
 
       - name: Count and compare tests
         run: |
-          # Define locked directories to check with full paths
+          # Define directory paths to check test counts
           declare -A DIRS=(
             ["eltwise"]="tests/ttnn/unit_tests/operations/eltwise"
             ["conv"]="tests/ttnn/unit_tests/operations/conv"
