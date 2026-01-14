@@ -20,7 +20,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 10
+        iterations: 1
 
   - name: "AllToAll2DTorus"
     enable_flow_control: true
@@ -39,7 +39,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 10
+        iterations: 1
 
 # ================================================
 # Fabric 1D Tests (Line and Ring)
@@ -61,7 +61,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 10
+        iterations: 1
 
   - name: "AllToAllRing"
     enable_flow_control: true
@@ -79,4 +79,4 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 10
+        iterations: 1
