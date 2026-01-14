@@ -638,6 +638,7 @@ all_gather_minimal_matmul_async_factory_helper(
         num_tiles_to_write_per_packet,
         num_targets_forward,
         num_targets_backward,
+	static_cast<uint32_t>(topology),
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
@@ -689,6 +690,7 @@ all_gather_minimal_matmul_async_factory_helper(
         num_tiles_to_write_per_packet,
         num_targets_forward,
         num_targets_backward,
+	static_cast<uint32_t>(topology),
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
@@ -740,6 +742,7 @@ all_gather_minimal_matmul_async_factory_helper(
         num_tiles_to_write_per_packet,
         num_targets_forward,
         num_targets_backward,
+        static_cast<uint32_t>(topology),
     };
     append_accessors(
         in0_receiver_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, false);
