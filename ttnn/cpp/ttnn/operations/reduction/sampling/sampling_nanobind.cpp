@@ -119,23 +119,11 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
                 - :attr:`sub_core_grids` (if provided): number of cores must equal the number of users (which is constrained to 32).
         )doc";
 
-    using OperationType = decltype(ttnn::sampling);
     bind_registered_operation(
         mod,
         ttnn::sampling,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& input_values_tensor,
-               const Tensor& input_indices_tensor,
-               const Tensor& k,
-               const Tensor& p,
-               const Tensor& temp,
-               const std::optional<uint32_t>& seed,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_values_tensor").noconvert(),
             nb::arg("input_indices_tensor").noconvert(),
             nb::arg("k").noconvert(),
