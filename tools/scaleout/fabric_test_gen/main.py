@@ -97,8 +97,8 @@ def gen_tests(dev_dims: list[int], dim_types: list[int], args):
     if not dim_types:
         # For empty dim_types assume LINE for both
         dim_types = [TorusTopology.LINE.value, TorusTopology.LINE.value]
-    assert len(dim_types) == 2
-    assert len(dev_dims) == 2
+    assert len(dim_types) == 2, f"Expected 2D topology (2 dim_types), got {len(dim_types)}: {dim_types}"
+    assert len(dev_dims) == 2, f"Expected 2 device dimensions, got {len(dev_dims)}: {dev_dims}"
 
     tests = []
 
