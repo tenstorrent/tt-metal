@@ -109,6 +109,7 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/blackhole");
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/blackhole/noc");
+        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_common");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 
