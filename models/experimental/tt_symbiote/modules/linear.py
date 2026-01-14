@@ -31,7 +31,12 @@ class TTNNLinear(TTNNModule):
             out_features=linear.out_features,
         )
         new_linear._fallback_torch_layer = linear
+        new_linear.weight = linear.weight
         return new_linear
+
+    @property
+    def _parameters(self):
+        return self.torch_layer._parameters
 
     def preprocess_weights_impl(self):
         """Preprocess linear weights for TTNN."""

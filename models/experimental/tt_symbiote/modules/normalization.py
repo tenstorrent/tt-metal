@@ -19,6 +19,9 @@ class TTNNLayerNorm(TTNNModule):
     @classmethod
     def from_torch(cls, layer_norm: nn.LayerNorm):
         """Create TTNNLayerNorm from PyTorch LayerNorm."""
+        if layer_norm.weight is None:
+            print(f"Warning: LayerNorm layer {layer_norm} has no weight. Using standard LayerNorm.")
+            return layer_norm
         new_layer_norm = TTNNLayerNorm()
         new_layer_norm._fallback_torch_layer = layer_norm
         return new_layer_norm
