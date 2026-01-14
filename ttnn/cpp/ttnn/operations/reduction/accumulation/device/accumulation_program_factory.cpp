@@ -32,9 +32,7 @@ uint32_t AccumulationProgramFactory::calc_input_tile_offset(const Shape& input_s
 }
 
 AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -186,7 +184,7 @@ void AccumulationProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.accumulation_reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.accumulation_writer_kernel_id;

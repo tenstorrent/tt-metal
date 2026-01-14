@@ -38,7 +38,7 @@ AllToAllAsyncGenericProgram::cached_mesh_workload_t AllToAllAsyncGenericProgram:
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -72,7 +72,7 @@ AllToAllAsyncGenericProgram::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    Tensor& tensor_return_value,
     const tt::tt_metal::GlobalSemaphore& init_barrier_semaphore,
     const tt::tt_metal::GlobalSemaphore& final_barrier_semaphore) {
     log_debug(tt::LogOp, "DEBUG: create_at is called");
@@ -256,7 +256,7 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const auto& coord = coordinate_range.start_coord();
         TT_FATAL(

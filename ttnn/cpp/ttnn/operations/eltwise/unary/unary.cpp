@@ -6,7 +6,7 @@
 
 #include "common/unary_op_types.hpp"
 #include "device/unary_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -448,17 +448,17 @@ Tensor Clamp::invoke(
 Tensor Rdiv::invoke(
     const Tensor& input_tensor,
     float value,
-    const std::optional<std::string>& round_mode,
+    const std::optional<std::string>& rounding_mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     TT_FATAL(
-        (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
+        (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     UnaryOpType op_type = UnaryOpType::RDIV;
-    // Convert round_mode to numeric value: 0 = none, 1 = trunc, 2 = floor
-    uint32_t round_mode_value = !round_mode ? 0 : (*round_mode == "trunc" ? 1 : 2);
+    // Convert rounding_mode to numeric value: 0 = none, 1 = trunc, 2 = floor
+    uint32_t rounding_mode_value = !rounding_mode ? 0 : (*rounding_mode == "trunc" ? 1 : 2);
     return detail::unary_impl(
-        input_tensor, {UnaryWithParam{op_type, {value, round_mode_value}}}, memory_config, optional_output_tensor);
+        input_tensor, {UnaryWithParam{op_type, {value, rounding_mode_value}}}, memory_config, optional_output_tensor);
 }
 
 template <typename T>

@@ -31,8 +31,4 @@ struct tensor_args_t {
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
 }  // namespace ttnn::operations::normalization::layer_norm

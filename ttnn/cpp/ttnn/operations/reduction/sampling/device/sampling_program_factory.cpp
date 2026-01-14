@@ -16,9 +16,7 @@
 namespace ttnn::operations::reduction::sampling::program {
 
 SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output_tensor) {
     using namespace tt::constants;
 
     const auto& input_values_tensor = tensor_args.input_values;
@@ -324,7 +322,7 @@ void SamplingProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     auto& reader_kernel_id = shared_vars.reader_kernel_id;
