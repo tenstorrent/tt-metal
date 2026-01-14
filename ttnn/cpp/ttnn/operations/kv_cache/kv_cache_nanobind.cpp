@@ -43,17 +43,7 @@ void bind_fill_cache_for_user_(nb::module_& mod, const kv_cache_operation_t& ope
         operation.python_fully_qualified_name());
 
     bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const kv_cache_operation_t& self,
-               const ttnn::Tensor& cache,
-               const ttnn::Tensor& input,
-               const uint32_t batch_index) -> ttnn::Tensor { return self(cache, input, batch_index); },
-            nb::arg("cache"),
-            nb::arg("input"),
-            nb::arg("batch_index")});
+        mod, operation, doc, ttnn::nanobind_arguments_t{nb::arg("cache"), nb::arg("input"), nb::arg("batch_index")});
 }
 
 template <typename kv_cache_operation_t>
@@ -82,15 +72,7 @@ void bind_update_cache_for_token_(nb::module_& mod, const kv_cache_operation_t& 
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const kv_cache_operation_t& self,
-               const ttnn::Tensor& cache,
-               const ttnn::Tensor& input,
-               const uint32_t update_index,
-               const uint32_t batch_offset,
-               std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) -> ttnn::Tensor {
-                return self(cache, input, update_index, batch_offset, compute_kernel_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("cache"),
             nb::arg("input"),
             nb::arg("update_index"),
@@ -126,15 +108,7 @@ void bind_update_cache(nb::module_& mod, const update_cache_operation_t& operati
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const update_cache_operation_t& self,
-               const ttnn::Tensor& cache,
-               const ttnn::Tensor& input,
-               const uint32_t update_idx,
-               const uint32_t batch_offset,
-               std::optional<const DeviceComputeKernelConfig> compute_kernel_config) -> ttnn::Tensor {
-                return self(cache, input, update_idx, batch_offset, compute_kernel_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("cache"),
             nb::arg("input"),
             nb::arg("update_idx"),
@@ -167,14 +141,7 @@ void bind_fill_cache(nb::module_& mod, const update_cache_operation_t& operation
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const update_cache_operation_t& self,
-               const ttnn::Tensor& cache_tensor,
-               const ttnn::Tensor& input_tensor,
-               const uint32_t batch_idx) -> ttnn::Tensor { return self(cache_tensor, input_tensor, batch_idx); },
-            nb::arg("cache_tensor"),
-            nb::arg("input_tensor"),
-            nb::arg("batch_idx")});
+        ttnn::nanobind_arguments_t{nb::arg("cache_tensor"), nb::arg("input_tensor"), nb::arg("batch_idx")});
 }
 
 }  // namespace
