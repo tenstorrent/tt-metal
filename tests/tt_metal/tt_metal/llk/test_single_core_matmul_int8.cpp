@@ -25,6 +25,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -112,7 +113,6 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
         tt_metal::CircularBufferConfig(byte_size, {{in0_cb_index, tt::DataFormat::Int8}})
             .set_page_size(in0_cb_index, byte_size);
     tt_metal::CreateCircularBuffer(program_, core, l1_input0_cb_config);
-
 
     tt_metal::CircularBufferConfig l1_input1_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{in1_cb_index, tt::DataFormat::Int8}})
