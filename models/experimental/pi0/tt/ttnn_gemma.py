@@ -458,8 +458,10 @@ class GemmaMLPTTNN:
             x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [batch_size, 1, chunk_end, hidden])
 
             # Pad chunk if needed for tile alignment
+            # Move to DRAM for multicore pad support (avoids L1 fallback warning)
             if needs_chunk_padding:
                 pad_amount = padded_chunk_size - actual_chunk_size
+                x_chunk = ttnn.to_memory_config(x_chunk, ttnn.DRAM_MEMORY_CONFIG)
                 x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
 
             # Gate and up projections - use bfloat8_b for 2x memory savings
