@@ -9,5 +9,7 @@ namespace tt::tt_metal {
 // TODO:
 // DataType and associated utilities.
 // (Renamed from types.hpp.)
+// There prob is a metal alternative we should adopt here instead.
+struct DataType {};
 
 }  // namespace tt::tt_metal

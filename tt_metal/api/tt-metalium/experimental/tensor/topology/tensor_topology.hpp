@@ -9,5 +9,6 @@ namespace tt::tt_metal {
 // TODO: Implement tensor topology
 // TensorTopology holds a somewhat parallel role to TensorSpec
 // (though it’s a capture, not a specification)
+struct TensorTopology {};
 
 }  // namespace tt::tt_metal

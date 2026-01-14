@@ -5,8 +5,5 @@
 #pragma once
 
 namespace tt::tt_metal /*::tensor*/ {
-
-// TODO: Implement tensor specification
-struct TensorSpec {};
-
+struct MemoryConfig {};
 }  // namespace tt::tt_metal

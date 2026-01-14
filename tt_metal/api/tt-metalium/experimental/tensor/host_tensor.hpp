@@ -14,21 +14,10 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/buffer.hpp>
 
-// TODO: These are the Tensor related constructs
-#include <tt-metalium/shape.hpp>
+// Tensor related constructs
+#include <tt-metalium/experimental/tensor/spec/spec_fwd.hpp>
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/memory_pin.hpp>
-
-// All the stuff we need to move in
-namespace tt::tt_metal /*::tensor*/ {
-
-struct TensorSpec {};
-struct MemoryConfig {};
-struct TensorTopology {};
-struct NdShardSpec {};
-// There prob is a metal alternative we should adopt here instead.
-struct DataType {};
-
-}  // namespace tt::tt_metal
 
 namespace tt::tt_metal /*::tensor*/ {
 /**

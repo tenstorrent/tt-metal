@@ -4,10 +4,11 @@
 
 #pragma once
 
-namespace tt::tt_metal {
+namespace tt::tt_metal /*::tensor*/ {
 
 // TODO:
 // Structs related to ShardSpec and NDShardSpec,
 // some refactored from elsewhere in Metalium.
+struct NdShardSpec {};
 
 }  // namespace tt::tt_metal
