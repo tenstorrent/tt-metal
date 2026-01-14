@@ -6,6 +6,7 @@
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
@@ -148,10 +149,10 @@ void MAIN {
             copy_tile(cb_max_exp_avg_sq_in_idx, cb_tile_idx, block_idx + 1);
         }
         cb_pop_front(cb_max_exp_avg_sq_in_idx, block_size);
-        max_tile_init();
+        binary_max_tile_init();
         for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
-            // max_tile api is garbage, second argument is irrelevant
-            max_tile(block_idx, block_idx + 1);
+            // This part used max_tile API previously that's why it's the every second block
+            binary_max_tile(block_idx, block_idx + 1, block_idx);
         }
         tile_regs_commit();
         // push every second block to max_exp_avg_sq_out
