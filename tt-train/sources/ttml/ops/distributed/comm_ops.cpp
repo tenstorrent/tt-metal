@@ -82,7 +82,7 @@ autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor, std::optional<u
     return out;
 }
 
-autograd::TensorPtr ring_shift(const autograd::TensorPtr& tensor, uint32_t cluster_axis, bool forward) {
+autograd::TensorPtr ring_shift(const autograd::TensorPtr& tensor, std::optional<uint32_t> cluster_axis, bool forward) {
     // Forward pass: shift in the specified direction
     auto out = autograd::create_tensor(ttnn_fixed::distributed::ring_shift(tensor->get_value(), cluster_axis, forward));
 

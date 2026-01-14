@@ -19,13 +19,12 @@
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ops/distributed/ring_attention_comm_ops.hpp"
+#include "ops/distributed/comm_ops.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 auto check_32_chips() {
     auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
     auto all_chips = cluster_desc->get_all_chips();
-    // Galaxy has 32 devices (4x8 mesh)
     return all_chips.size() == 32;
 }
 
@@ -38,7 +37,6 @@ protected:
     }
 };
 
-// Helper function to run ring shift test with given parameters
 static void TestRingShift(
     const uint32_t mesh_rows,
     const uint32_t mesh_cols,
@@ -65,29 +63,29 @@ static void TestRingShift(
     // Create input tensor with unique values - full tensor that will be sharded
     std::vector<float> test_data_vec(batch * seq * hidden);
     auto& rng = autograd::ctx().get_generator();
-    uint32_t seed = rng();
+    const auto seed = rng();
     core::parallel_generate(
         std::span{test_data_vec.data(), test_data_vec.size()},
         []() { return std::uniform_real_distribution<float>{0.F, 2.F}; },
         seed);
 
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
-    xt::xarray<float> xtensor = test_data.reshape({batch, 1UL, seq, hidden});
+    const xt::xarray<float> xtensor = test_data.reshape({batch, 1UL, seq, hidden});
 
     // Shard tensor across devices along the appropriate dimension
-    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
-    auto tt_tensor =
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
+    const auto tt_tensor =
         core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = autograd::create_tensor(tt_tensor);
 
     // Get original sharded tensors for comparison
-    auto original_xtensors = core::to_xtensor<float>(tensor->get_value(), core::IdentityComposer{});
+    const auto original_xtensors = core::to_xtensor<float>(tensor->get_value(), core::IdentityComposer{});
 
     // Perform ring shift
-    auto shifted_tensor = ops::distributed::ring_shift(tensor, cluster_axis, forward);
+    const auto shifted_tensor = ops::distributed::ring_shift(tensor, cluster_axis, forward);
 
     // Get output back to xtensor
-    auto shifted_xtensors = core::to_xtensor<float>(shifted_tensor->get_value(), core::IdentityComposer{});
+    const auto shifted_xtensors = core::to_xtensor<float>(shifted_tensor->get_value(), core::IdentityComposer{});
 
     // Verify shape is preserved
     for (size_t i = 0; i < num_devices; ++i) {
@@ -99,7 +97,7 @@ static void TestRingShift(
     // After backward shift, device i should have data from device (i+1) % ring_size
     for (uint32_t row = 0; row < mesh_rows; ++row) {
         for (uint32_t col = 0; col < mesh_cols; ++col) {
-            size_t device_idx = row * mesh_cols + col;
+            const size_t device_idx = row * mesh_cols + col;
 
             uint32_t src_row = row;
             uint32_t src_col = col;
@@ -118,29 +116,26 @@ static void TestRingShift(
     // Optionally test backward gradient flow
     if (test_backward_grad) {
         xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
-        seed = rng();
+        const auto seed = rng();
         core::parallel_generate(
             std::span{grad_data.data(), grad_data.size()},
             []() { return std::uniform_real_distribution<float>{0.F, 1.F}; },
             seed);
 
-        mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
-        auto tt_grad_tensor =
+        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
+        const auto tt_grad_tensor =
             core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
 
-        auto original_grad_xtensors = core::to_xtensor<float>(tt_grad_tensor, core::IdentityComposer{});
+        const auto original_grad_xtensors = core::to_xtensor<float>(tt_grad_tensor, core::IdentityComposer{});
 
         shifted_tensor->set_grad(tt_grad_tensor);
         shifted_tensor->backward();
-
-        EXPECT_TRUE(core::is_tensor_initialized(tensor->get_grad()));
-
-        auto grad_xtensors = core::to_xtensor<float>(tensor->get_grad(), core::IdentityComposer{});
+        const auto grad_xtensors = core::to_xtensor<float>(tensor->get_grad(), core::IdentityComposer{});
 
         // Gradient flows in opposite direction
         for (uint32_t row = 0; row < mesh_rows; ++row) {
             for (uint32_t col = 0; col < mesh_cols; ++col) {
-                size_t device_idx = row * mesh_cols + col;
+                const size_t device_idx = row * mesh_cols + col;
 
                 uint32_t src_row = row;
                 uint32_t src_col = col;
@@ -149,7 +144,7 @@ static void TestRingShift(
                 } else {
                     src_col = forward ? (col + 1) % mesh_cols : (col + mesh_cols - 1) % mesh_cols;
                 }
-                size_t src_device_idx = src_row * mesh_cols + src_col;
+                const size_t src_device_idx = src_row * mesh_cols + src_col;
 
                 EXPECT_EQ(grad_xtensors[device_idx].shape(), original_grad_xtensors[device_idx].shape());
                 EXPECT_TRUE(xt::allclose(original_grad_xtensors[src_device_idx], grad_xtensors[device_idx], rtol, atol))
@@ -161,13 +156,9 @@ static void TestRingShift(
     autograd::ctx().close_device();
 }
 
-// ============================================================================
-// Test Cases - Ring Shift on Galaxy (4x8 mesh)
-// ============================================================================
-
 TEST_F(GalaxyRingShiftTest, ForwardAlongColumns) {
     // hidden=64 sharded across 8 cols -> 8 per device
-    TestRingShift(4, 8, 1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true);
+    TestRingShift(1, 32, 1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true);
 }
 
 TEST_F(GalaxyRingShiftTest, ForwardAlongRows) {
@@ -183,6 +174,11 @@ TEST_F(GalaxyRingShiftTest, ForwardBig) {
 TEST_F(GalaxyRingShiftTest, Llama8bSeqLen8192Tp8Cp8Bs16) {
     TestRingShift(
         4, 8, 16, 1024, 512, /*cluster_axis=*/1, /*shard_dim=*/0, /*forward=*/false, /*test_backward_grad=*/false);
+}
+
+TEST_F(GalaxyRingShiftTest, Llama8bSeqLen8192Tp4Cp4Bs16) {
+    TestRingShift(
+        8, 4, 16, 1024, 512, /*cluster_axis=*/1, /*shard_dim=*/0, /*forward=*/false, /*test_backward_grad=*/false);
 }
 
 TEST_F(GalaxyRingShiftTest, BackwardAlongColumns) {
