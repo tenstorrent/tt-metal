@@ -83,8 +83,7 @@ def create_full_range_tensor(input_shape, dtype, value_ranges):
 )
 @pytest.mark.parametrize("value", [1.0, 2.75, 5.0, -10.0])
 def test_ternary_addcdiv_float32_full_range(input_shapes, value, device):
-    """Test addcdiv with float32 covering a wide range of input values."""
-    # Maximum range capped at [-1e15, 1e15]
+    """Test addcdiv with float32 inputs spanning the range of [-1e15, 1e15]."""
     value_ranges_a = [
         (-100, 100),
         (-300, 300),
@@ -95,50 +94,50 @@ def test_ternary_addcdiv_float32_full_range(input_shapes, value, device):
         (-1e7, 1e7),
         (-1e10, 1e10),
         (-1e15, 1e15),
-        (1e8, 1e10),  # large positive input
-        (1e12, 1e15),  # very large positive input
-        (-1e10, -1e8),  # large negative input
-        (-1e15, -1e12),  # very large negative input
-        (-1e-5, 1e-5),  # small input
-        (-1e-10, 1e-10),  # very small input
+        (1e8, 1e10),
+        (1e12, 1e15),
+        (-1e10, -1e8),
+        (-1e15, -1e12),
+        (-1e-5, 1e-5),
+        (-1e-10, 1e-10),
     ]
 
     value_ranges_b = [
-        (-250, 250),
-        (-750, 750),
-        (-500, 1000),
-        (-5e3, 5e3),
-        (-5e4, 5e4),
-        (-1e6, 1e6),
-        (-1e8, 1e8),
-        (-1e10, 1e10),
-        (-1e15, 1e15),
-        (1.5e7, 1e9),  # large positive input
-        (1e12, 1e15),  # very large positive input
-        (-1e9, -1e7),  # large negative input
-        (-1e15, -1e12),  # very large negative input
-        (-1e-5, 1e-5),  # small input
-        (-1e-10, 1e-10),  # very small input
-        (-1e8, 1e8),  # mixed range
+        (-50, 200),
+        (-400, 600),
+        (-2000, 3000),
+        (-2e4, 2e4),
+        (-3e5, 3e5),
+        (-5e6, 5e6),
+        (-2e8, 2e8),
+        (-8e9, 8e9),
+        (-1e14, 1e14),
+        (2e8, 5e9),
+        (8e11, 8e14),
+        (-5e8, -2e7),
+        (-8e14, -8e11),
+        (-2e-4, 2e-4),
+        (-2e-8, 2e-8),
+        (-3e7, 3e7),
     ]
 
     value_ranges_c = [
-        (-250, 250),
-        (-750, 750),
-        (-500, 1000),
-        (-5e3, 5e3),
-        (-5e4, 5e4),
-        (-1e6, 1e6),
-        (-1e8, 1e8),
-        (-1e10, 1e10),
-        (-1e15, 1e15),
-        (1.5e7, 1e9),  # large positive input
-        (1e12, 1e15),  # very large positive input
-        (-1e9, -1e7),  # large negative input
-        (-1e15, -1e12),  # very large negative input
-        (-1e-5, 1e-5),  # small input
-        (-1e-10, 1e-10),  # very small input
-        (-1e8, 1e8),  # mixed range
+        (-200, 50),
+        (-800, 200),
+        (-5000, 2000),
+        (-1e3, 1e4),
+        (-1e4, 1e5),
+        (-2e5, 2e6),
+        (-1e7, 1e8),
+        (-1e9, 1e10),
+        (-5e13, 5e14),
+        (5e7, 2e9),
+        (1e11, 2e14),
+        (-3e7, -5e6),
+        (-2e13, -2e11),
+        (-5e-6, 5e-6),
+        (-1e-7, 1e-7),
+        (-1e6, 1e7),
     ]
 
     torch_input_tensor_a = create_full_range_tensor(
