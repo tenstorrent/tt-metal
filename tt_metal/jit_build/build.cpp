@@ -90,12 +90,6 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
-void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
-    if (dir_path.compare(git_hash_path) != 0) {
-        std::filesystem::remove_all(dir_path);
-    }
-}
-
 }  // namespace
 
 std::string get_default_root_path() {
