@@ -149,6 +149,30 @@ public:
     void add_required_constraint(TargetNode target_node, GlobalNode global_node);
 
     /**
+     * @brief Add explicit required constraint (one-to-many for target node)
+     *
+     * Constrains a specific target node to map to any of the provided global nodes.
+     * Intersects with existing constraints. Throws TT_THROW if constraint causes conflicts.
+     *
+     * @param target_node The target node to constrain
+     * @param global_nodes The set of global nodes it can map to
+     * @throws std::runtime_error If constraint causes empty valid mappings
+     */
+    void add_required_constraint(TargetNode target_node, const std::set<GlobalNode>& global_nodes);
+
+    /**
+     * @brief Add explicit required constraint (one-to-many for global node)
+     *
+     * Constrains multiple target nodes to map to a specific global node.
+     * Intersects with existing constraints. Throws TT_THROW if constraint causes conflicts.
+     *
+     * @param target_nodes The set of target nodes to constrain
+     * @param global_node The global node they must map to
+     * @throws std::runtime_error If constraint causes empty valid mappings
+     */
+    void add_required_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
+
+    /**
      * @brief Add explicit preferred constraint (one-to-one)
      *
      * Suggests a mapping but doesn't restrict valid mappings.
@@ -158,6 +182,28 @@ public:
      * @param global_node The preferred global node to map to
      */
     void add_preferred_constraint(TargetNode target_node, GlobalNode global_node);
+
+    /**
+     * @brief Add explicit preferred constraint (one-to-many for target node)
+     *
+     * Suggests that a specific target node prefers mapping to any of the provided global nodes.
+     * Intersects with existing preferred constraints. Doesn't restrict valid mappings.
+     *
+     * @param target_node The target node
+     * @param global_nodes The set of preferred global nodes it can map to
+     */
+    void add_preferred_constraint(TargetNode target_node, const std::set<GlobalNode>& global_nodes);
+
+    /**
+     * @brief Add explicit preferred constraint (one-to-many for global node)
+     *
+     * Suggests that multiple target nodes prefer mapping to a specific global node.
+     * Intersects with existing preferred constraints. Doesn't restrict valid mappings.
+     *
+     * @param target_nodes The set of target nodes
+     * @param global_node The preferred global node they should map to
+     */
+    void add_preferred_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
 
     /**
      * @brief Get valid mappings for a specific target node

@@ -181,10 +181,74 @@ void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
 }
 
 template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
+    TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
+    // Intersect valid_mappings_[target] with global_nodes
+    if (valid_mappings_[target_node].empty()) {
+        // First constraint: initialize with the provided set of nodes
+        valid_mappings_[target_node] = global_nodes;
+    } else {
+        // Intersect with existing constraints
+        valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], global_nodes);
+    }
+
+    // Validate automatically and throw if invalid
+    validate_and_throw();
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
+    const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
+    // For each target node, intersect valid_mappings_[target] with {global_node}
+    for (const auto& target_node : target_nodes) {
+        if (valid_mappings_[target_node].empty()) {
+            // First constraint: initialize with this single node
+            valid_mappings_[target_node].insert(global_node);
+        } else {
+            // Intersect with existing constraints
+            std::set<GlobalNode> singleton{global_node};
+            valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], singleton);
+        }
+    }
+
+    // Validate automatically and throw if invalid
+    validate_and_throw();
+}
+
+template <typename TargetNode, typename GlobalNode>
 void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
     TargetNode target_node, GlobalNode global_node) {
     // Add to preferred mappings (doesn't restrict valid mappings)
     preferred_mappings_[target_node].insert(global_node);
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
+    TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
+    // Intersect preferred_mappings_[target] with global_nodes
+    if (preferred_mappings_[target_node].empty()) {
+        // First preferred constraint: initialize with the provided set of nodes
+        preferred_mappings_[target_node] = global_nodes;
+    } else {
+        // Intersect with existing preferred constraints
+        preferred_mappings_[target_node] = intersect_sets(preferred_mappings_[target_node], global_nodes);
+    }
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
+    const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
+    // For each target node, intersect preferred_mappings_[target] with {global_node}
+    for (const auto& target_node : target_nodes) {
+        if (preferred_mappings_[target_node].empty()) {
+            // First preferred constraint: initialize with this single node
+            preferred_mappings_[target_node].insert(global_node);
+        } else {
+            // Intersect with existing preferred constraints
+            std::set<GlobalNode> singleton{global_node};
+            preferred_mappings_[target_node] = intersect_sets(preferred_mappings_[target_node], singleton);
+        }
+    }
 }
 
 template <typename TargetNode, typename GlobalNode>
