@@ -14,8 +14,8 @@ namespace ttnn::operations::reduction::prod_nc {
 struct ProdNcDeviceOperation {
     using operation_attributes_t = prod_nc::operation_attributes_t;
     using tensor_args_t = prod_nc::tensor_args_t;
-    using spec_return_value_t = prod_nc::spec_return_value_t;
-    using tensor_return_value_t = prod_nc::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::ProdNcProgramFactory>;
     using shared_variables_t = program::ProdNcProgramFactory::shared_variables_t;
 

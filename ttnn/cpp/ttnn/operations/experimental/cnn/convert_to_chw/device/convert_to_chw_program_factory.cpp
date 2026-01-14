@@ -37,7 +37,7 @@ void set_runtime_args_for_all_kernels(
 ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto& a = tensor_args.input;
@@ -161,7 +161,7 @@ void ConvertToCHWProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     auto& program = cached_program.program;
     const auto& cb_in = cached_program.shared_variables.cb_in;
     const auto& cb_out = cached_program.shared_variables.cb_out;

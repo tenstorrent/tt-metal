@@ -114,6 +114,6 @@ void post_conv2d_op_memory_checks(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor);
+    Tensor& output_tensor);
 
 }  // namespace ttnn::operations::conv::conv2d

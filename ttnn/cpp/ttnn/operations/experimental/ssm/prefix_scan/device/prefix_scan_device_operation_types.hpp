@@ -21,8 +21,4 @@ struct tensor_args_t {
     Tensor h_prev;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
 }  // namespace ttnn::operations::experimental::ssm::prefix_scan

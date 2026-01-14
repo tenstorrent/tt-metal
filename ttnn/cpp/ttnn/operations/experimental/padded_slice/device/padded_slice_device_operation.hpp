@@ -21,8 +21,8 @@ namespace ttnn::operations::experimental::padded_slice {
 struct PaddedSliceDeviceOperation {
     using operation_attributes_t = padded_slice::operation_attributes_t;
     using tensor_args_t = padded_slice::tensor_args_t;
-    using spec_return_value_t = padded_slice::spec_return_value_t;
-    using tensor_return_value_t = padded_slice::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<program::PaddedSliceRMProgramFactory, program::PaddedSliceTileProgramFactory>;
 

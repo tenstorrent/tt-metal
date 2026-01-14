@@ -22,10 +22,6 @@ struct tensor_args_t {
     Tensor output;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
 using ReaderKernelArgs = std::vector<uint32_t>;
 using WriterKernelArgs = std::vector<uint32_t>;
 using KernelRuntimeArgs = std::pair<ReaderKernelArgs, WriterKernelArgs>;

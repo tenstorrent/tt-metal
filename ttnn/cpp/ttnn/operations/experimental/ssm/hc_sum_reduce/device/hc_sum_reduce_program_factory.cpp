@@ -14,9 +14,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output) {
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
@@ -192,7 +190,7 @@ void HCSumReduceProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 

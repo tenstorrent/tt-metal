@@ -33,7 +33,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMesh
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -54,7 +54,7 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     // Update runtime arguments for each program in the workload
     for (auto& [coordinate_range, shared_vars] : cached_workload.shared_variables) {
         auto& program = cached_workload.workload.get_programs().at(coordinate_range);
@@ -108,7 +108,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     auto* mesh_device = tensor_args.input_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
     std::vector<IDevice*> devices_to_use = {};

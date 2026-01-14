@@ -20,8 +20,8 @@ namespace ttnn::operations::experimental::cnn {
 struct ConvertToHWCDeviceOperation {
     using operation_attributes_t = cnn::operation_attributes_t;
     using tensor_args_t = cnn::tensor_args_t;
-    using spec_return_value_t = cnn::spec_return_value_t;
-    using tensor_return_value_t = cnn::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::ConvertToHWCProgramFactory>;
     using shared_variables_t = program::ConvertToHWCProgramFactory::shared_variables_t;
 

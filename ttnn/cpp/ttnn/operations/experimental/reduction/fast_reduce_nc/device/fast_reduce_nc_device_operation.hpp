@@ -16,8 +16,8 @@ namespace ttnn::operations::experimental::reduction::detail {
 struct FastReduceNCDeviceOperation {
     using operation_attributes_t = detail::operation_attributes_t;
     using tensor_args_t = detail::tensor_args_t;
-    using spec_return_value_t = detail::spec_return_value_t;
-    using tensor_return_value_t = detail::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::FastReduceNCProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

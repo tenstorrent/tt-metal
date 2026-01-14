@@ -21,7 +21,4 @@ struct tensor_args_t {
     std::optional<Tensor> user_ids = std::nullopt;
 };
 
-using spec_return_value_t = ttnn::TensorSpec;
-using tensor_return_value_t = Tensor;
-
 }  // namespace ttnn::operations::reduction::manual_seed

@@ -176,7 +176,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         shard_spec.shape[1]);
 }
 
-spec_return_value_t RMSAllGatherDeviceOperation::compute_output_specs(
+TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     if (args.inplace) {
@@ -211,7 +211,7 @@ spec_return_value_t RMSAllGatherDeviceOperation::compute_output_specs(
             output_padded_shape));
 }
 
-tensor_return_value_t RMSAllGatherDeviceOperation::create_output_tensors(
+Tensor RMSAllGatherDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();

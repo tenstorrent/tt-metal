@@ -19,9 +19,9 @@ struct ManualSeedSingleSeedToAllCoresProgramFactory {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, Tensor&);
     static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, Tensor&);
 };
 
 // Case 2: seed=uint32_t, user_ids=uint32_t - set seed to one core based on user_id
@@ -30,9 +30,9 @@ struct ManualSeedSingleSeedSingleCoreProgramFactory {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, Tensor&);
     static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, Tensor&);
 };
 
 // Case 3: seed=uint32_t, user_ids=Tensor - set seeds to cores in user_ids tensor
@@ -44,9 +44,9 @@ struct ManualSeedSingleSeedSetCoresProgramFactory {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, Tensor&);
     static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, Tensor&);
 };
 
 // Case 4: seed=Tensor, user_ids=Tensor - set mapping seeds to cores based on tensors
@@ -58,9 +58,9 @@ struct ManualSeedSetSeedsSetCoresProgramFactory {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, Tensor&);
     static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, Tensor&);
 };
 
 }  // namespace ttnn::operations::reduction::manual_seed::program

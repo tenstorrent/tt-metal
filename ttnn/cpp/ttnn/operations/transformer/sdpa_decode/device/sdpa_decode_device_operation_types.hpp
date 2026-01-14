@@ -45,7 +45,4 @@ struct tensor_args_t {
     std::optional<Tensor> attention_sink;
 };
 
-using spec_return_value_t = ttnn::TensorSpec;
-using tensor_return_value_t = ttnn::Tensor;
-
 }  // namespace ttnn::operations::transformer::sdpa_decode
