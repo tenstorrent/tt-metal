@@ -86,33 +86,11 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 - Sharded output memory configs are not supported for this operation.
         )doc";
 
-    using OperationType = decltype(ttnn::topk);
     bind_registered_operation(
         mod,
         ttnn::topk,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const uint32_t k,
-               const int8_t dim,
-               const bool largest,
-               const bool sorted,
-               const std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>>& preallocated_output_tensors,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
-               const std::optional<ttnn::Tensor>& indices_tensor) {
-                return self(
-                    input_tensor,
-                    k,
-                    dim,
-                    largest,
-                    sorted,
-                    memory_config,
-                    sub_core_grids,
-                    indices_tensor,
-                    preallocated_output_tensors);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("k") = 32,
             nb::arg("dim") = -1,
