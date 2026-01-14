@@ -20,8 +20,8 @@ namespace ttnn::operations::experimental::transformer {
 struct ConcatenateHeadsDeviceOperation {
     using operation_attributes_t = transformer::operation_attributes_t;
     using tensor_args_t = transformer::tensor_args_t;
-    using spec_return_value_t = transformer::spec_return_value_t;
-    using tensor_return_value_t = transformer::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::ConcatenateHeadsProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

@@ -20,8 +20,8 @@ namespace ttnn::operations::experimental::ssm::prefix_scan {
 struct PrefixScanDeviceOperation {
     using operation_attributes_t = prefix_scan::operation_attributes_t;
     using tensor_args_t = prefix_scan::tensor_args_t;
-    using spec_return_value_t = prefix_scan::spec_return_value_t;
-    using tensor_return_value_t = prefix_scan::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::PrefixScanProgramFactory>;
     using shared_variables_t = program::PrefixScanProgramFactory::shared_variables_t;
 

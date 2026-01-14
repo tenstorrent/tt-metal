@@ -191,7 +191,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
 
 namespace slice::program {
 SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
@@ -267,7 +267,7 @@ void SliceRmProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     const auto& src_tensor = tensor_args.input;
     const auto& slice_start = args.slice_start;
     uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];

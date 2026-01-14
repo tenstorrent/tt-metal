@@ -11,9 +11,7 @@
 namespace ttnn::operations::data_movement::fill_rm::program {
 
 FillRMProgramFactory::cached_program_t FillRMProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
     const Tensor& input = tensor_args.input;
@@ -81,7 +79,7 @@ void FillRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
     Buffer* dst_buffer = tensor_return_value.buffer();

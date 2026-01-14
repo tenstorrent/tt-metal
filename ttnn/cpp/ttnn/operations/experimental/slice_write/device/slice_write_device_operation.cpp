@@ -89,7 +89,7 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape().rank());
 }
 
-spec_return_value_t SliceWriteDeviceOperation::compute_output_specs(
+TensorSpec SliceWriteDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output.tensor_spec();
 }
@@ -120,7 +120,7 @@ tt::stl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
     return hash;
 }
 
-tensor_return_value_t SliceWriteDeviceOperation::create_output_tensors(
+Tensor SliceWriteDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output;
 }

@@ -55,7 +55,4 @@ struct tensor_args_t {
     Tensor input_tensor;
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
-
 }  // namespace ttnn::operations::ccl::broadcast

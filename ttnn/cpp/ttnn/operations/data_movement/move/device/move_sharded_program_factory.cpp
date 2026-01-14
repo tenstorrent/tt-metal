@@ -17,11 +17,11 @@ namespace ttnn::operations::data_movement::move::program {
 MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
     const Tensor& input = tensor_args.input_tensor;
-    tensor_return_value_t& output = tensor_return_value;
+    Tensor& output = tensor_return_value;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -95,12 +95,12 @@ void MoveShardedProgramFactory::override_runtime_arguments(
     MoveShardedProgramFactory::cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
     Program& program = cached_program.program;
     const Tensor& input = tensor_args.input_tensor;
-    tensor_return_value_t& output = tensor_return_value;
+    Tensor& output = tensor_return_value;
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();

@@ -20,8 +20,8 @@ namespace ttnn::operations::experimental::paged_cache::fill {
 struct PagedFillCacheDeviceOperation {
     using operation_attributes_t = fill::operation_attributes_t;
     using tensor_args_t = fill::tensor_args_t;
-    using spec_return_value_t = fill::spec_return_value_t;
-    using tensor_return_value_t = fill::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<program::PagedFillCacheProgramFactory, program::PagedFillCacheMeshWorkloadFactory>;
     using shared_variables_t = program::PagedFillCacheProgramFactory::shared_variables_t;

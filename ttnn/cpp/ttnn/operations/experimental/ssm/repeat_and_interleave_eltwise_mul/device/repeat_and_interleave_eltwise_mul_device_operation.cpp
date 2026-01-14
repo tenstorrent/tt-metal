@@ -105,7 +105,7 @@ void RepeatAndInterleaveEltwiseMulDeviceOperation::validate_on_program_cache_mis
     }
 }
 
-spec_return_value_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_output_specs(
+TensorSpec RepeatAndInterleaveEltwiseMulDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -117,7 +117,7 @@ spec_return_value_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_output
     return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), args.memory_config));
 }
 
-tensor_return_value_t RepeatAndInterleaveEltwiseMulDeviceOperation::create_output_tensors(
+Tensor RepeatAndInterleaveEltwiseMulDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;

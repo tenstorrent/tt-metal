@@ -20,8 +20,8 @@ namespace ttnn::operations::experimental::ssm::hc_sum_reduce {
 struct HCSumReduceDeviceOperation {
     using operation_attributes_t = hc_sum_reduce::operation_attributes_t;
     using tensor_args_t = hc_sum_reduce::tensor_args_t;
-    using spec_return_value_t = hc_sum_reduce::spec_return_value_t;
-    using tensor_return_value_t = hc_sum_reduce::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::HCSumReduceProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

@@ -15,8 +15,8 @@ namespace ttnn::operations::reduction::ema {
 struct EmaDeviceOperation {
     using operation_attributes_t = ema::operation_attributes_t;
     using tensor_args_t = ema::tensor_args_t;
-    using spec_return_value_t = ema::spec_return_value_t;
-    using tensor_return_value_t = ema::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::EmaProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

@@ -34,7 +34,4 @@ struct tensor_args_t {
     Tensor grid;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
 }  // namespace ttnn::operations::pool::grid_sample

@@ -18,8 +18,8 @@ namespace ttnn::operations::data_movement::bcast {
 struct BcastDeviceOperation {
     using operation_attributes_t = bcast::operation_attributes_t;
     using tensor_args_t = bcast::tensor_args_t;
-    using spec_return_value_t = bcast::spec_return_value_t;
-    using tensor_return_value_t = bcast::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         program::BcastMultiCoreHProgramFactory,
         program::BcastShardedHProgramFactory,

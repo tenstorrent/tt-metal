@@ -18,9 +18,7 @@
 namespace ttnn::operations::pool::grid_sample::program {
 
 GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output_tensor) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& grid_tensor = tensor_args.grid;
     const bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
@@ -241,7 +239,7 @@ void GridSampleNearestProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     auto& prog = cached_program.program;
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& grid_tensor = tensor_args.grid;

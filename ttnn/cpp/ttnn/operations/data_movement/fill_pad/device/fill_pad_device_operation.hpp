@@ -17,8 +17,8 @@ namespace ttnn::operations::data_movement::fill_pad {
 struct FillPadDeviceOperation {
     using operation_attributes_t = fill_pad::operation_attributes_t;
     using tensor_args_t = fill_pad::tensor_args_t;
-    using spec_return_value_t = fill_pad::spec_return_value_t;
-    using tensor_return_value_t = fill_pad::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::FillPadProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
