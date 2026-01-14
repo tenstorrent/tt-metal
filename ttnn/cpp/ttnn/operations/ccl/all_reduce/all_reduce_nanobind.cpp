@@ -50,21 +50,11 @@ void bind_all_reduce(nb::module_& mod) {
             [1, 1, 32, 256]
         )doc";
 
-    using OperationType = decltype(ttnn::all_reduce);
     ttnn::bind_registered_operation(
         mod,
         ttnn::all_reduce,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
-                return self(input_tensor, cluster_axis, subdevice_id, memory_config, num_links, topology);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
