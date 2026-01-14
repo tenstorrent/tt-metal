@@ -67,21 +67,11 @@ void bind_reduction_ema_operation(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::ema);
     bind_registered_operation(
         mod,
         ttnn::ema,
         docstring,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const float& alpha,
-               std::optional<Tensor> optional_out,
-               const std::optional<CoreGrid>& core_grid,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) -> Tensor {
-                return self(input_tensor, alpha, optional_out, core_grid, memory_config, compute_kernel_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("alpha"),
             nb::kw_only(),
