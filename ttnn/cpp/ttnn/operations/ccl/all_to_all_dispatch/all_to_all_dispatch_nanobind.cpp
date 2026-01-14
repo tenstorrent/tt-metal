@@ -66,11 +66,35 @@ void bind_all_to_all_dispatch(nb::module_& mod) {
                             output_concat_dim=output_concat_dim)
         )doc";
 
+    using OperationType = decltype(ttnn::all_to_all_dispatch);
     ttnn::bind_registered_operation(
         mod,
         ttnn::all_to_all_dispatch,
         doc,
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& expert_indices_tensor,
+               const ttnn::Tensor& expert_mapping_tensor,
+               const std::optional<uint32_t> output_concat_dim,
+               const std::optional<uint32_t> cluster_axis,
+               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<std::array<ttnn::Tensor, 2>>& output_tensors,
+               const std::optional<uint32_t> num_links,
+               const std::optional<tt::tt_fabric::Topology> topology) /*-> std::array*/ {
+                return self(
+                    input_tensor,
+                    expert_indices_tensor,
+                    expert_mapping_tensor,
+                    cluster_axis,
+                    output_tensors,
+                    num_links,
+                    topology,
+                    memory_config,
+                    subdevice_id,
+                    output_concat_dim);
+            },
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),
