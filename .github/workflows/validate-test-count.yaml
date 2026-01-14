@@ -31,7 +31,7 @@ jobs:
           # Function to count test functions including parametrize expansions
           count_tests() {
             local dir=$1
-            python3 /tmp/count_pytests.py "$dir"
+            python3 .github/scripts/utils/count_pytests.py "$dir"
           }
           
           # Count tests in PR branch
