@@ -31,99 +31,129 @@ void MAIN {
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
 
     // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles = 224;
+    constexpr uint32_t num_w0_w1_tiles_h = 224;
     constexpr uint32_t num_w2_tiles_h = 64;
-    const uint32_t num_w2_tiles_w = core_id < 32 ? 4 : 3;
-    const uint32_t num_mm2_tiles = core_id < 32 ? 4 : 3;
 
-    constexpr uint32_t num_elt_tiles = 1;
+    const uint32_t num_w0_w1_tiles_w = (core_id < 8) ? 5 : 6;
+    const uint32_t num_w2_tiles_w = (core_id < 8) ? 19 : 18;
 
-    constexpr uint32_t w0_w1_stride = 64;
-    constexpr uint32_t w2_stride_w = 1;
-    constexpr uint32_t w2_stride_h = 224;
-    constexpr uint32_t dst0 = 0;
+    const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
+    const uint32_t num_in2_tiles = num_w2_tiles_w;
+    const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
-    // Read W0 and W1 from CB into registers
-    reconfig_data_format(cb_s2c_in, cb_r2c_w0);
+    // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_c2c_mm0);
-    mm_init(cb_s2c_in, cb_r2c_w0, cb_c2c_mm0);
-    tile_regs_acquire();
-    tile_regs_wait();
-    for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
-        cb_wait_front(cb_r2c_w0, 1);
-        matmul_tiles(cb_s2c_in, cb_r2c_w0, i, 0, dst0);
-        cb_pop_front(cb_r2c_w0, 1);
-    }
-    silu_tile_init();
-    silu_tile(dst0);
-    tile_regs_commit();
-    cb_reserve_back(cb_c2c_mm0, 1);
-    pack_tile(dst0, cb_c2c_mm0);
-    cb_push_back(cb_c2c_mm0, 1);
-    tile_regs_release();
 
-    reconfig_data_format(cb_s2c_in, cb_r2c_w1);
-    pack_reconfig_data_format(cb_c2c_mm1);
-    mm_init(cb_s2c_in, cb_r2c_w1, cb_c2c_mm1);
+    // Unpacker B is for input/activation and eltiwse inputs, so Float16_b
+    reconfig_data_format_srcb(cb_s2c_in);
 
-    tile_regs_acquire();
-    tile_regs_wait();
-    for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
-        cb_wait_front(cb_r2c_w1, 1);
-        matmul_tiles(cb_s2c_in, cb_r2c_w1, i, 0, dst0);
-        cb_pop_front(cb_r2c_w1, 1);
-    }
-    tile_regs_commit();
-    cb_reserve_back(cb_c2c_mm1, 1);
-    pack_tile(dst0, cb_c2c_mm1);
-    cb_push_back(cb_c2c_mm1, 1);
-    tile_regs_release();
+    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        // Unpacker A is for W0,W1 and W2, so Bf4_b
+        reconfig_data_format_srca(cb_r2c_w0);
+        mm_init(cb_s2c_in, cb_r2c_w0, cb_c2c_mm0);
 
-    // Write to cb_c2w_elt
-    binary_op_init_common(cb_c2c_mm0, cb_c2c_mm1, cb_c2w_elt);
-    reconfig_data_format(cb_c2c_mm0, cb_c2c_mm1);
-    pack_reconfig_data_format(cb_c2w_elt);
-    mul_tiles_init(cb_c2c_mm0, cb_c2c_mm1);
-    for (uint32_t i = 0; i < num_elt_tiles; ++i) {
+        //---------------------------------------------------------------------
+        // Compute in @ W0
+        //---------------------------------------------------------------------
         tile_regs_acquire();
-        tile_regs_wait();
-        cb_wait_front(cb_c2c_mm0, 1);
-        cb_wait_front(cb_c2c_mm1, 1);
-        mul_tiles(cb_c2c_mm0, cb_c2c_mm1, 0, 0, dst0);
-        cb_pop_front(cb_c2c_mm0, 1);
-        cb_pop_front(cb_c2c_mm1, 1);
-        tile_regs_commit();
-        cb_reserve_back(cb_c2w_elt, 1);
-        pack_tile(dst0, cb_c2w_elt);
-        tile_regs_release();
-        cb_push_back(cb_c2w_elt, 1);
-    }
-    cb_wait_front(cb_c2w_elt, 1);
-    cb_push_back(tt::CBIndex::c_4, 1);
+        for (uint32_t k_idx = 0; k_idx < num_w0_w1_tiles_h; ++k_idx) {
+            for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
+                cb_wait_front(cb_r2c_w0, 1);
+                matmul_tiles(cb_s2c_in, cb_r2c_w0, k_idx, 0, dst_idx);
+                cb_pop_front(cb_r2c_w0, 1);
+            }
+        }
 
-    mm_init_short(cb_r2c_in2, cb_r2c_w2, cb_c2w_mm2);
-    reconfig_data_format(cb_r2c_in2, cb_r2c_w2);
-    pack_reconfig_data_format(cb_c2w_mm2);
-    tile_regs_acquire();
-    tile_regs_wait();
-    for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {
-        cb_wait_front(cb_r2c_in2, 1);
-        for (uint32_t j = 0; j < num_w2_tiles_w; ++j) {
+        //---------------------------------------------------------------------
+        // Apply SILU activation
+        //---------------------------------------------------------------------
+        silu_tile_init();
+        for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
+            silu_tile(dst_idx);
+        }
+        tile_regs_commit();
+
+        // cb_reserve_back(cb_c2c_mm0, num_w0_w1_tiles_w);
+        tile_regs_wait();
+
+        for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
+            pack_tile(dst_idx, cb_c2c_mm0);
+        }
+
+        tile_regs_release();
+        // cb_push_back(cb_c2c_mm0, num_w0_w1_tiles_w);
+
+        //---------------------------------------------------------------------
+        // Compute in @ W1
+        //---------------------------------------------------------------------
+        tile_regs_acquire();
+        for (uint32_t k_idx = 0; k_idx < num_w0_w1_tiles_h; ++k_idx) {
+            for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
+                cb_wait_front(cb_r2c_w1, 1);
+                matmul_tiles(cb_s2c_in, cb_r2c_w1, k_idx, 0, dst_idx);
+                cb_pop_front(cb_r2c_w1, 1);
+            }
+        }
+
+        //---------------------------------------------------------------------
+        // Eltwise multiply each dst with its corresponding tile from mm0
+        //---------------------------------------------------------------------
+        reconfig_data_format_srca(cb_c2c_mm0);
+        binary_op_init_common(cb_c2c_mm0, cb_c2c_mm0, cb_c2w_elt);
+        mul_tiles_init(cb_c2c_mm0, cb_c2c_mm0);
+        // cb_wait_front(cb_c2c_mm0, num_w0_w1_tiles_w);
+
+        for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
+            // TODO: Reuse dst for operand B and write in place
+            mul_tiles(cb_c2c_mm0, cb_c2c_mm0, dst_idx, dst_idx, dst_idx);
+        }
+        tile_regs_commit();
+        // cb_pop_front(cb_c2c_mm0, num_w0_w1_tiles_w);
+
+        tile_regs_wait();
+        cb_reserve_back(cb_c2w_elt, num_w0_w1_tiles_w);
+        for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
+            pack_tile(dst_idx, cb_c2w_elt);
+        }
+        cb_push_back(cb_c2w_elt, num_w0_w1_tiles_w);
+        tile_regs_release();
+
+        //---------------------------------------------------------------------
+        // Compute in @ W2
+        //---------------------------------------------------------------------
+        // TODO: Implement W2 computation
+        //---------------------------------------------------------------------
+        reconfig_data_format_srca(cb_r2c_w2);
+        mm_init(cb_s2c_in, cb_r2c_w2, cb_c2w_mm2);
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {
+            cb_wait_front(cb_r2c_in2, 1);
+            for (uint32_t j = 0; j < num_w2_tiles_w; ++j) {
+                cb_wait_front(cb_r2c_w2, 1);
+                // TODO: Need to pack existing partial sum and put it back
+                // to accumulate here.
+                matmul_tiles(cb_s2c_in, cb_r2c_w2, 0, 0, 0);
+                cb_pop_front(cb_r2c_w2, 1);
+            }
+            cb_pop_front(cb_r2c_in2, 1);
+        }
+        tile_regs_commit();
+
+        // Pop out excess tiles
+        const uint32_t excess_tiles = 14 - ((num_w2_tiles_h * num_w2_tiles_w) % 14);
+        for (uint32_t i = 0; i < excess_tiles; ++i) {
             cb_wait_front(cb_r2c_w2, 1);
-            matmul_tiles(cb_r2c_in2, cb_r2c_w2, 0, 0, j);
             cb_pop_front(cb_r2c_w2, 1);
         }
-        cb_pop_front(cb_r2c_in2, 1);
-    }
 
-    tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t idx = 0; idx < num_mm2_tiles; ++idx) {
+            cb_reserve_back(cb_c2w_mm2, 1);
+            pack_tile(0, cb_c2w_mm2);
+            cb_push_back(cb_c2w_mm2, 1);
+        }
+        tile_regs_release();
 
-    // Write to cb_c2w_mm2
-    for (uint32_t i = 0; i < num_mm2_tiles; ++i) {
-        cb_reserve_back(cb_c2w_mm2, 1);
-        pack_tile(i, cb_c2w_mm2);
-        cb_push_back(cb_c2w_mm2, 1);
-    }
-    tile_regs_release();
+    }  // end for (expert_id)
 }
 }  // namespace NAMESPACE
