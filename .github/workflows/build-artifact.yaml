@@ -302,6 +302,21 @@ jobs:
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           ccache -z
 
+      - name: 🔍 Debug git state
+        run: |
+          echo "=== Debug: Checking git state ==="
+          echo "PWD: $(pwd)"
+          echo "Listing /work:"
+          ls -la /work | head -20
+          echo "Git directory exists: $(test -d /work/.git && echo YES || echo NO)"
+          echo "Git status:"
+          git status 2>&1 || echo "git status failed"
+          echo "Git describe:"
+          git describe --abbrev=10 --first-parent 2>&1 || echo "git describe failed"
+          echo "Git rev-parse HEAD:"
+          git rev-parse --short=10 HEAD 2>&1 || echo "git rev-parse failed"
+          echo "=== End debug ==="
+
       - name: 🔧 CMake configure
         run: |
           set -eu # basic shell hygiene
