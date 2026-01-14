@@ -75,19 +75,37 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         NocType noc_type : 4;
         NocVirtualChannel noc_vc : 4;
         uint8_t payload_chunks;
+        uint8_t posted : 1;
+        uint8_t reserved : 7;
 
-        void setNumBytes(uint32_t num_bytes) {
+        void setAttributes(uint32_t num_bytes, bool p) {
             uint32_t bytes_rounded_up = (num_bytes + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE;
             payload_chunks = std::min(uint32_t(std::numeric_limits<uint8_t>::max()), bytes_rounded_up);
+            posted = p;
         }
         uint32_t getNumBytes() const { return payload_chunks * PAYLOAD_CHUNK_SIZE; }
     };
 
     // Expected to come after a LocalNocEvent when NoC Debug Mode is enabled.
     struct LocalNocEventDstTrailer {
-        uint32_t dst_addr;
-        uint32_t padding;
-    } __attribute__((packed));
+        uint64_t dst_addr_4b : 22;     // Destination address / 4 (4-byte aligned base)
+        uint64_t dst_addr_offset : 4;  // Byte offset within 4-byte chunk (0-15)
+        uint64_t src_addr_4b : 22;     // Source address / 4 (4-byte aligned base)
+        uint64_t src_addr_offset : 4;  // Byte offset within 4-byte chunk (0-15)
+        uint64_t counter_value : 12;   // Counter value
+
+        void setDstAddr(uint32_t addr) {
+            dst_addr_4b = addr >> 2;
+            dst_addr_offset = addr & 0x3;
+        }
+        uint32_t getDstAddr() const { return (dst_addr_4b << 2) | (dst_addr_offset & 0x3); }
+
+        void setSrcAddr(uint32_t addr) {
+            src_addr_4b = addr >> 2;
+            src_addr_offset = addr & 0x3;
+        }
+        uint32_t getSrcAddr() const { return (src_addr_4b << 2) | (src_addr_offset & 0x3); }
+    };
 
     // represents a fabric NOC event
     enum class FabricPacketType : unsigned char { REGULAR, LOW_LATENCY, LOW_LATENCY_MESH, DYNAMIC_MESH };

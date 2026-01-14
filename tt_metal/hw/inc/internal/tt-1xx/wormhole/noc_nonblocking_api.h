@@ -1598,3 +1598,18 @@ inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
         }
     }
 }
+
+template <bool write, bool posted>
+inline __attribute__((always_inline)) uint32_t get_noc_counter_for_debug(uint32_t noc) {
+    if constexpr (write) {
+        if constexpr (posted) {
+            return NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+        } else {
+            return NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
+        }
+    } else {
+        // Read
+        static_assert(posted == false, "There is no such thing as posted reads");
+        return NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
+    }
+}

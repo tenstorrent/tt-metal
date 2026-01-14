@@ -436,6 +436,50 @@ def test_device_api_debugger_non_dropping():
         write_barrier_end_count == expected_barrier_count
     ), f"Expected {expected_barrier_count} WRITE_BARRIER_END events, found {write_barrier_end_count}"
 
+    # There is a read/write barrier after each noc_async_read/write call.
+    # Verify that the noc counters are being tracked properly
+    NOC_COUNTER_BITS = 12
+    prev_counters = {}  # (proc, noc, type) -> previous counter value
+    read_event_count = 0
+    write_event_count = 0
+
+    for event in noc_trace_data:
+        event_type = event.get("type")
+        if event_type in ["READ", "WRITE_"]:
+            assert (
+                "noc_status_counter" in event
+            ), f"noc_status_counter missing in {event_type} event at timestamp {event.get('timestamp')}"
+            assert "proc" in event, f"proc missing in {event_type} event at timestamp {event.get('timestamp')}"
+            assert "noc" in event, f"noc missing in {event_type} event at timestamp {event.get('timestamp')}"
+
+            noc_status_counter = event.get("noc_status_counter")
+            proc = event.get("proc")
+            noc = event.get("noc")
+
+            assert isinstance(
+                noc_status_counter, int
+            ), f"noc_status_counter must be an integer, found {type(noc_status_counter)} in {event_type} event"
+
+            counter_key = (proc, noc, event_type)
+
+            if counter_key in prev_counters:
+                prev_counter = prev_counters[counter_key]
+                expected_counter = (prev_counter + 1) % (2**NOC_COUNTER_BITS)
+                assert noc_status_counter == expected_counter, (
+                    f"noc_status_counter should increment by 1 for consecutive {event_type} events "
+                    f"for {proc} {noc}. Previous counter: {prev_counter}, current counter: {noc_status_counter}, "
+                    f"expected: {expected_counter} at timestamp {event.get('timestamp')}"
+                )
+
+            prev_counters[counter_key] = noc_status_counter
+
+            if event_type == "READ":
+                read_event_count += 1
+            else:
+                write_event_count += 1
+
+    assert read_event_count > 0 or write_event_count > 0, "No READ or WRITE_ events found to verify noc_status_counter"
+
 
 def wildcard_match(pattern, words):
     if not pattern.endswith("*"):
