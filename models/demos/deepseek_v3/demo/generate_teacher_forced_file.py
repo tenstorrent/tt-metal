@@ -8,11 +8,18 @@ This script regenerates the checked-in `.refpt` artifact so the reference can
 be refreshed or reproduced when needed.
 """
 
+import argparse
 import os
 from pathlib import Path
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
+from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
 
 from models.demos.deepseek_v3.utils.config_helpers import dequantize
 from models.demos.deepseek_v3.utils.hf_model_utils import (
@@ -31,12 +38,13 @@ MODEL_PATH = Path(
 
 REFERENCE_FILE = Path(__file__).with_name("deepseek_v3_teacher_forcing.refpt")
 
-TEST_PROMPT = "What is the capital of France? Please provide a brief answer."
+TEST_PROMPT = "What is the correct answer to this question:Racemic 3-methylpent-1-ene is treated with Grubbs catalyst. How many possible products are there (excluding ethene)?\nChoices:\n(A) 8\n(B) 2\n(C) 6\n(D) 4\nPlease reason step by step, and your final answer must be only (A,B,C or D) within \\boxed\nAnswer:"
 
 
 def generate_reference(
-    max_new_tokens: int = 32,
+    max_new_tokens: int = 128,
     reference_file: Path = REFERENCE_FILE,
+    prompt: str = TEST_PROMPT,
 ) -> Path:
     """
     Generate reference tokens using HuggingFace model and save to refpt file.
@@ -45,18 +53,20 @@ def generate_reference(
       1) Pass an explicit attention_mask (prevents pad/bos collisions breaking generate()).
       2) Use a "safe" pad_token_id (typically eos_token_id, not 0).
       3) Save prompt_tokens and generated_tokens explicitly (downstream teacher forcing is simpler).
-      4) Compute top-5 via a teacher-forcing forward pass for clean alignment.
+      4) Compute top-5 directly from generation logits (single pass).
 
     top5_tokens alignment convention:
       - reference_tokens[0, i] is the *actual* token at position i
       - top5_tokens[i] is the model's top-5 prediction for token at position i,
         given context tokens [0..i-1]
       - top5_tokens[0] is zeros (no prediction for the first token)
+      - For single-pass generation, we populate top5_tokens only for generated
+        positions (>= prompt_len) and leave earlier rows as zeros.
     """
 
     print("\n=== Phase 1: Generate reference tokens with HuggingFace model ===")
     print(f"Using model_path={MODEL_PATH}")
-    print(f"Prompt: {TEST_PROMPT!r}")
+    print(f"Prompt: {prompt!r}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -142,7 +152,7 @@ def generate_reference(
 
     # --- Build prompt tokens (must match TT generator) ---
     raw_prompt_tokens = tokenizer.apply_chat_template(
-        [{"role": "user", "content": TEST_PROMPT}],
+        [{"role": "user", "content": prompt}],
         add_generation_prompt=True,
         tokenize=True,
     )
@@ -175,18 +185,43 @@ def generate_reference(
     # --- Generation (greedy, deterministic) ---
     # NOTE: use_cache=False avoids DynamicCache API mismatch with some transformers versions
     print(f"Generating up to {max_new_tokens} new tokens using model.generate()...")
-    with torch.no_grad():
-        outputs = model.generate(
-            input_ids=prompt_tokens_tensor,
-            attention_mask=attention_mask,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            return_dict_in_generate=True,
-            output_scores=False,  # compute top-5 via teacher forcing pass for clean alignment
-            pad_token_id=safe_pad_id,
-            eos_token_id=eos_id,
-            use_cache=False,  # disable KV cache to avoid DynamicCache.get_max_length() error
-        )
+
+    class TokenProgress(StoppingCriteria):
+        def __init__(self, prompt_len: int, pbar) -> None:
+            self.prompt_len = prompt_len
+            self.pbar = pbar
+
+        def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+            generated = input_ids.shape[-1] - self.prompt_len
+            if generated > self.pbar.n:
+                self.pbar.update(generated - self.pbar.n)
+            return False
+
+    pbar = None
+    stopping_criteria = None
+    if tqdm is not None and max_new_tokens > 0:
+        pbar = tqdm(total=max_new_tokens, desc="Generating tokens", unit="tok", mininterval=1)
+        stopping_criteria = StoppingCriteriaList([TokenProgress(prompt_len, pbar)])
+    elif tqdm is None and max_new_tokens > 0:
+        print("tqdm not available; generation progress bar disabled.")
+
+    try:
+        with torch.no_grad():
+            outputs = model.generate(
+                input_ids=prompt_tokens_tensor,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                return_dict_in_generate=True,
+                output_logits=True,  # reuse logits from the generation pass
+                pad_token_id=safe_pad_id,
+                eos_token_id=eos_id,
+                use_cache=True,
+                stopping_criteria=stopping_criteria,
+            )
+    finally:
+        if pbar is not None:
+            pbar.close()
 
     full_sequence_tensor = outputs.sequences[0]  # [prompt_len + gen_len]
     generated_tokens_tensor = full_sequence_tensor[prompt_len:]
@@ -195,18 +230,27 @@ def generate_reference(
     print(f"Phase 1: Generated {len(generated_tokens)} tokens")
     print("Decoded generation (raw):", repr(tokenizer.decode(generated_tokens, skip_special_tokens=False)))
 
-    # --- Teacher-forcing pass to compute top-5 aligned to positions ---
-    # We run the model on full_sequence[:-1], and predict each next token.
-    with torch.no_grad():
-        tf_inp = full_sequence_tensor[:-1].unsqueeze(0)  # [1, L-1]
-        tf_attn = torch.ones_like(tf_inp, dtype=torch.long, device=device)
-        tf_out = model(input_ids=tf_inp, attention_mask=tf_attn, use_cache=False)
-        logits = tf_out.logits[0]  # [L-1, vocab]
-        top5 = torch.topk(logits, k=5, dim=-1).indices.to(torch.long).cpu()  # [L-1, 5]
+    # --- Top-5 aligned to generated positions (from generate() logits) ---
+    logits_steps = outputs.logits if getattr(outputs, "logits", None) is not None else outputs.scores
+    if logits_steps is None:
+        raise RuntimeError("Generation did not return logits; expected output_logits=True.")
+
+    gen_len = int(generated_tokens_tensor.numel())
+    if gen_len != len(logits_steps):
+        raise RuntimeError(
+            f"Mismatch between generated tokens ({gen_len}) and logit steps ({len(logits_steps)})."
+        )
+
+    top5_generated = torch.empty((gen_len, 5), dtype=torch.long)
+    for i, step_logits in enumerate(logits_steps):
+        top5_generated[i] = torch.topk(step_logits[0], k=5, dim=-1).indices.to(torch.long).cpu()
 
     total_length = int(full_sequence_tensor.numel())
     top5_tokens_full = torch.zeros(total_length, 5, dtype=torch.long)  # [L, 5]
-    top5_tokens_full[1:] = top5  # shift so row i predicts token at position i
+    if gen_len:
+        start = prompt_len
+        end = start + gen_len
+        top5_tokens_full[start:end] = top5_generated
 
     # --- Save payload (explicit prompt/generated + full sequence) ---
     reference_file.parent.mkdir(parents=True, exist_ok=True)
@@ -218,7 +262,7 @@ def generate_reference(
         "top5_tokens": top5_tokens_full,  # [L, 5]
         "tf_prompt_len": prompt_len,
         "max_new_tokens": max_new_tokens,
-        "prompt": TEST_PROMPT,
+        "prompt": prompt,
         "decoded_generated_text": tokenizer.decode(generated_tokens, skip_special_tokens=False),
         "token_ids_meta": {
             "bos_id": bos_id,
@@ -240,5 +284,25 @@ def generate_reference(
 
 
 if __name__ == "__main__":
-    path = generate_reference()
+    parser = argparse.ArgumentParser(description="Generate DeepSeek V3 teacher-forcing reference file.")
+    parser.add_argument("--prompt", default=TEST_PROMPT, help="Prompt text to generate from.")
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=128,
+        help="Number of new tokens to generate.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=REFERENCE_FILE,
+        help="Path to output .refpt file.",
+    )
+    args = parser.parse_args()
+
+    path = generate_reference(
+        max_new_tokens=args.max_new_tokens,
+        reference_file=args.output,
+        prompt=args.prompt,
+    )
     print(f"\nDone. Reference saved to: {path}")
