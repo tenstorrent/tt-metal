@@ -127,7 +127,7 @@ runs:
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then
             WHEEL_FILENAME=$(ls -1 *.whl)
-            uv pip3 install "$WHEEL_FILENAME"
+            uv pip install "$WHEEL_FILENAME"
           fi
 
           ${{ inputs.run_args }}

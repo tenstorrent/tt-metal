@@ -6,15 +6,13 @@ target_link_libraries(
         test_common_libs
 )
 
-set(TT_METAL_TESTS_SRCS
-    # test_3x3conv_as_matmul_large_block.cpp    <- not tested in run_tt_metal.py
+# Consolidated legacy gtest executable
+set(UNIT_TESTS_LEGACY_SRC
     test_add_two_ints.cpp
     test_bcast.cpp
     test_bfp8_conversion.cpp
-    # test_bfp4_conversion.cpp        <- not tested in run_tt_metal.py
     test_bmm.cpp
     test_clean_init.cpp
-    # test_compile_args.cpp         <- not tested in run_tt_metal.py
     test_compile_program.cpp
     test_compile_sets_kernel_binaries.cpp
     test_core_range_set.cpp
@@ -25,11 +23,9 @@ set(TT_METAL_TESTS_SRCS
     test_dram_copy_sticks_multi_core.cpp
     test_dram_loopback_single_core.cpp
     test_eltwise_binary.cpp
-    # test_eltwise_unary.cpp        <- not tested in run_tt_metal.py
     test_generic_binary_reader_matmul_large_block.cpp
     test_interleaved_l1_buffer.cpp
     test_interleaved_layouts.cpp
-    # test_l1_to_l1_multi_core.cpp                <- test borked
     test_matmul_single_tile_bfp8b.cpp
     test_matmul_single_tile_output_in_l1.cpp
     test_multi_core_kernel.cpp
@@ -39,30 +35,28 @@ set(TT_METAL_TESTS_SRCS
     test_stress_noc_mcast.cpp
     test_transpose_hc.cpp
     test_untilize_eltwise_binary.cpp
-    #test dma unaligned reads/writes
     test_unaligned_read_write_core.cpp
 )
 
-foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
-    get_filename_component(TEST ${TEST_SRC} NAME_WE)
-    add_executable(${TEST} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST_SRC})
-    target_link_libraries(${TEST} PUBLIC test_metal_common_libs)
-    target_include_directories(
-        ${TEST}
-        PRIVATE
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-            ${PROJECT_SOURCE_DIR}/tests
-            ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
-            ${CMAKE_CURRENT_SOURCE_DIR}
-    )
-    set_target_properties(
-        ${TEST}
-        PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY
-                ${PROJECT_BINARY_DIR}/test/tt_metal
-    )
-    list(APPEND METAL_TEST_TARGETS ${TEST})
-endforeach()
+add_executable(unit_tests_legacy)
+target_sources(unit_tests_legacy PRIVATE ${UNIT_TESTS_LEGACY_SRC})
+target_link_libraries(unit_tests_legacy PUBLIC test_metal_common_libs)
+target_include_directories(
+    unit_tests_legacy
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_target_properties(
+    unit_tests_legacy
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
+list(APPEND METAL_TEST_TARGETS unit_tests_legacy)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/data_movement)

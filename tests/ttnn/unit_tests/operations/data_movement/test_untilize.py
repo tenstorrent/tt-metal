@@ -444,6 +444,7 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, use_pack_
     [
         [2, 256, 512],
         [4128, 512],  # multiple blocks per core and a cliff core
+        [32, 256],  # used in deepseek before MoE Gate (bfloat16, height sharded on 32 cores)
     ],
 )
 @pytest.mark.parametrize(
@@ -479,6 +480,11 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, use_pack_
             ),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
         ],
+        [
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ],
     ],
 )
 def test_untilize_multi_core_interleaved_to_sharded(
@@ -501,10 +507,18 @@ def test_untilize_multi_core_interleaved_to_sharded(
     # Shard shapes
     height_sharded_shard_shape = (tensor_height // num_shard_cores, tensor_width)
     width_sharded_shard_shape = (tensor_height, tensor_width // num_shard_cores)
-    block_sharded_shard_shape = (
-        tensor_height // int(math.sqrt(num_shard_cores)),
-        tensor_width // int(math.sqrt(num_shard_cores)),
-    )
+    # below formula assumes the CoreRangeSet is not disjoint
+    block_grid_size = block_shard_core_grid.bounding_box().grid_size()
+    if output_shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        block_sharded_shard_shape = (
+            tensor_height // block_grid_size.y,
+            tensor_width // block_grid_size.x,
+        )
+    else:
+        block_sharded_shard_shape = (
+            tensor_height // block_grid_size.x,
+            tensor_width // block_grid_size.y,
+        )
 
     # Shard Memory Layout Map
     shard_memory_layout_map = {
