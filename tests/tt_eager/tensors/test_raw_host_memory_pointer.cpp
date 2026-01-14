@@ -112,7 +112,7 @@ void test_raw_host_memory_pointer() {
 
     Tensor c_dev = ttnn::sqrt(a_dev);
 
-    tt::tt_metal::memcpy(tensor_for_printing, c_dev);
+    tt::tt_metal::memcpy6(tensor_for_printing, c_dev);
 
     // Check that cpu tensor has correct data
     bfloat16 output_value = 2.0f;
@@ -157,11 +157,11 @@ void test_raw_host_memory_pointer() {
     }
 
     Tensor d_dev = a_dev;
-    memcpy(d_dev, d_cpu);
+    tt::tt_metal::memcpy6(d_dev, d_cpu);
 
     Tensor e_dev = ttnn::add(c_dev, d_dev);
 
-    tt::tt_metal::memcpy(tensor_for_printing, e_dev);
+    tt::tt_metal::memcpy6(tensor_for_printing, e_dev);
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_FATAL(element == bfloat16(10.0f), "Element does not match expected bfloat16(10.0f)");
