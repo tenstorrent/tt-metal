@@ -23,13 +23,7 @@ void bind_nlp_create_qkv_heads_segformer(nb::module_& mod) {
         R"doc(
             Shuffles [B, 1, S, 2304] fused qkv matrix into 3 heads with shapes [B, 12, S, 64], [B, 12, S, 64], and [B, 12, S, 64].
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::nlp_create_qkv_heads_segformer)& self,
-               const ttnn::Tensor& input_tensor_q,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors) {
-                return self(input_tensor_q, memory_config, optional_output_tensors);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input").noconvert(),
             nb::kw_only(),
             nb::arg("memory_config").noconvert() = nb::none(),
