@@ -172,7 +172,7 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             },
             {
-              "name": "[WH-GLX][v1] Gemma3-27B DP4",
+              "name": "[WH-GLX][v1] Gemma3-27B DP=4",
               "model": "google/gemma-3-27b-it",
               "server-timeout": 20,
               "benchmark-timeout": 5,
@@ -180,7 +180,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "(4, 8)",
               "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 50000000, \"l1_small_size\": 24576}",
-              "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --num_scheduler_steps 1",
+              "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32",
               "tt_mm_throttle_perf": 5,
               "tt-llama-text-ver": "tt_transformers",
               "multimodal": true,
