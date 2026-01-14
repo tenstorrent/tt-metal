@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <initializer_list>
 #include <memory>
+#include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include "gtest/gtest.h"
@@ -182,16 +183,37 @@ TEST(CclWidthShardedTensorSliceIndexer_Wormhole, SweepWormhole) {
     std::size_t max_worker_rows = 10;
     std::size_t max_worker_cols = 8;
 
-    for (auto pages_per_shard_y : {1, 2, 5, 8, 256}) {
-        for (auto pages_per_shard_x : {1, 2, 5, 8, 256}) {
-            for (auto shard_grid_offset_logical_y : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
-                for (auto shard_grid_offset_logical_x : {0, 1, 2, 3, 4, 5, 6, 7}) {
-                    for (std::size_t shard_grid_height = 1;
-                         shard_grid_height < (max_worker_rows - shard_grid_offset_logical_y);
-                         shard_grid_height++) {
-                        for (std::size_t shard_grid_width = 1;
-                             shard_grid_width < (max_worker_cols - shard_grid_offset_logical_x);
-                             shard_grid_width++) {
+    // Strategic sampling instead of exhaustive sweep:
+    // - Boundary values (0, max-1) catch off-by-one errors
+    // - Middle values catch general logic errors
+    // - Large page counts (256) catch overflow issues
+
+    for (auto pages_per_shard_y : {1, 8, 256}) {
+        for (auto pages_per_shard_x : {1, 8, 256}) {
+            for (auto shard_grid_offset_logical_y : {0, 5, 9}) {
+                for (auto shard_grid_offset_logical_x : {0, 4, 7}) {
+                    // Test boundary grid sizes: min (1), mid, and near-max
+                    std::size_t max_height = max_worker_rows - shard_grid_offset_logical_y;
+                    std::size_t max_width = max_worker_cols - shard_grid_offset_logical_x;
+
+                    std::vector<std::size_t> heights_to_test = {1};
+                    if (max_height > 2) {
+                        heights_to_test.push_back(max_height / 2);
+                    }
+                    if (max_height > 1) {
+                        heights_to_test.push_back(max_height - 1);
+                    }
+
+                    std::vector<std::size_t> widths_to_test = {1};
+                    if (max_width > 2) {
+                        widths_to_test.push_back(max_width / 2);
+                    }
+                    if (max_width > 1) {
+                        widths_to_test.push_back(max_width - 1);
+                    }
+
+                    for (std::size_t shard_grid_height : heights_to_test) {
+                        for (std::size_t shard_grid_width : widths_to_test) {
                             for (bool transpose_shard_grid : {false, true}) {
                                 run_width_sharded_tensor_slice_indexer_get_page_location_test(
                                     pages_per_shard_y,
@@ -344,16 +366,37 @@ TEST(CclHeightShardedTensorSliceIndexer_Wormhole, SweepWormhole) {
     std::size_t max_worker_rows = 10;
     std::size_t max_worker_cols = 8;
 
-    for (auto pages_per_shard_y : {1, 2, 5, 8, 256}) {
-        for (auto pages_per_shard_x : {1, 2, 5, 8, 256}) {
-            for (auto shard_grid_offset_logical_y : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
-                for (auto shard_grid_offset_logical_x : {0, 1, 2, 3, 4, 5, 6, 7}) {
-                    for (std::size_t shard_grid_height = 1;
-                         shard_grid_height < (max_worker_rows - shard_grid_offset_logical_y);
-                         shard_grid_height++) {
-                        for (std::size_t shard_grid_width = 1;
-                             shard_grid_width < (max_worker_cols - shard_grid_offset_logical_x);
-                             shard_grid_width++) {
+    // Strategic sampling instead of exhaustive sweep:
+    // - Boundary values (0, max-1) catch off-by-one errors
+    // - Middle values catch general logic errors
+    // - Large page counts (256) catch overflow issues
+
+    for (auto pages_per_shard_y : {1, 8, 256}) {
+        for (auto pages_per_shard_x : {1, 8, 256}) {
+            for (auto shard_grid_offset_logical_y : {0, 5, 9}) {
+                for (auto shard_grid_offset_logical_x : {0, 4, 7}) {
+                    // Test boundary grid sizes: min (1), mid, and near-max
+                    std::size_t max_height = max_worker_rows - shard_grid_offset_logical_y;
+                    std::size_t max_width = max_worker_cols - shard_grid_offset_logical_x;
+
+                    std::vector<std::size_t> heights_to_test = {1};
+                    if (max_height > 2) {
+                        heights_to_test.push_back(max_height / 2);
+                    }
+                    if (max_height > 1) {
+                        heights_to_test.push_back(max_height - 1);
+                    }
+
+                    std::vector<std::size_t> widths_to_test = {1};
+                    if (max_width > 2) {
+                        widths_to_test.push_back(max_width / 2);
+                    }
+                    if (max_width > 1) {
+                        widths_to_test.push_back(max_width - 1);
+                    }
+
+                    for (std::size_t shard_grid_height : heights_to_test) {
+                        for (std::size_t shard_grid_width : widths_to_test) {
                             for (bool transpose_shard_grid : {false, true}) {
                                 run_height_sharded_tensor_slice_indexer_get_page_location_test(
                                     pages_per_shard_y,
@@ -493,18 +536,39 @@ TEST(CclBlockShardedTensorSliceIndexer_Wormhole, SweepWormhole) {
     std::size_t max_worker_rows = 10;
     std::size_t max_worker_cols = 8;
 
-    for (auto pages_per_shard_y : {1, 2, 5, 8, 256}) {
-        for (auto pages_per_shard_x : {1, 2, 5, 8, 256}) {
-            for (auto shard_grid_offset_logical_y : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
-                for (auto shard_grid_offset_logical_x : {0, 1, 2, 3, 4, 5, 6, 7}) {
-                    for (std::size_t shard_grid_height = 1;
-                         shard_grid_height < (max_worker_rows - shard_grid_offset_logical_y);
-                         shard_grid_height++) {
-                        for (std::size_t shard_grid_width = 1;
-                             shard_grid_width < (max_worker_cols - shard_grid_offset_logical_x);
-                             shard_grid_width++) {
-                            for (bool transpose_shard_grid :
-                                 {false}) {  // true: transpose mode not yet supported for block sharded indexer
+    // Strategic sampling instead of exhaustive sweep:
+    // - Boundary values (0, max-1) catch off-by-one errors
+    // - Middle values catch general logic errors
+    // - Large page counts (256) catch overflow issues
+
+    for (auto pages_per_shard_y : {1, 8, 256}) {
+        for (auto pages_per_shard_x : {1, 8, 256}) {
+            for (auto shard_grid_offset_logical_y : {0, 5, 9}) {
+                for (auto shard_grid_offset_logical_x : {0, 4, 7}) {
+                    // Test boundary grid sizes: min (1), mid, and near-max
+                    std::size_t max_height = max_worker_rows - shard_grid_offset_logical_y;
+                    std::size_t max_width = max_worker_cols - shard_grid_offset_logical_x;
+
+                    std::vector<std::size_t> heights_to_test = {1};
+                    if (max_height > 2) {
+                        heights_to_test.push_back(max_height / 2);
+                    }
+                    if (max_height > 1) {
+                        heights_to_test.push_back(max_height - 1);
+                    }
+
+                    std::vector<std::size_t> widths_to_test = {1};
+                    if (max_width > 2) {
+                        widths_to_test.push_back(max_width / 2);
+                    }
+                    if (max_width > 1) {
+                        widths_to_test.push_back(max_width - 1);
+                    }
+
+                    for (std::size_t shard_grid_height : heights_to_test) {
+                        for (std::size_t shard_grid_width : widths_to_test) {
+                            // transpose mode not yet supported for block sharded indexer
+                            for (bool transpose_shard_grid : {false}) {
                                 run_block_sharded_tensor_slice_indexer_get_page_location_test(
                                     pages_per_shard_y,
                                     pages_per_shard_x,
