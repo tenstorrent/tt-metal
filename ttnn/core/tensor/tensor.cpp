@@ -514,13 +514,6 @@ void copy_tensor_to_host_from_device(
     queue.enqueue_read_shards(shard_data_transfers, src.mesh_buffer(), blocking);
 }
 
-void memcpy2(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
-    ZoneScoped;
-    auto* mesh_device = src.device();
-    TT_FATAL(mesh_device, "Tensor must be on device");
-    copy_tensor_to_host_from_device(mesh_device->mesh_command_queue(), dst, src, region, blocking);
-}
-
 void memcpy3(
     distributed::MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
