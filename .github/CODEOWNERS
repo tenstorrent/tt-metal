@@ -191,6 +191,8 @@ ttnn/cpp/ttnn/operations/experimental/reduction/ @tenstorrent/metalium-developer
 ttnn/cpp/ttnn/operations/experimental/reduction/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/eltwise/ @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/eltwise/**/CMakeLists.txt @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/isin/ @tenstorrent/metalium-developers-external-experience @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/experimental/isin/**/CMakeLists.txt @tenstorrent/metalium-developers-external-experience @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/eltwise/quantization/ @wenbinlyuTT @sjameelTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/eltwise/quantization/**/CMakeLists.txt @wenbinlyuTT @sjameelTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/unary* @sjameelTT @ntarafdar @dchenTT @mateusznowakTT @tenstorrent/codeowner-bypass

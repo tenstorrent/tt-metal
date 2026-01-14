@@ -172,7 +172,7 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   timeout: 10
-  model-name: deepseekv3
+  model-name: deepseek
 
 - name: t3k_tttv2_modules_tests
   cmd: run_t3000_tttv2_modules_tests

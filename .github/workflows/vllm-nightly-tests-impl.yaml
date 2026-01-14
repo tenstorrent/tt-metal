@@ -172,6 +172,23 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             },
             {
+              "name": "[WH-GLX][v1] Gemma3-27B DP=4",
+              "model": "google/gemma-3-27b-it",
+              "server-timeout": 20,
+              "benchmark-timeout": 5,
+              "runner-label": "topology-6u",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "(4, 8)",
+              "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 50000000, \"l1_small_size\": 24576}",
+              "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32",
+              "tt_mm_throttle_perf": 5,
+              "tt-llama-text-ver": "tt_transformers",
+              "multimodal": true,
+              "use-vllm-v1": true,
+              "co-owner-1-id": "U08E1JCDVNX",
+              "co-owner-2-id": "U08BH66EXAL"
+            },
+            {
               "name": "[WH-GLX][v1] GPT-OSS-120B",
               "model": "openai/gpt-oss-120b",
               "server-timeout": 35,
@@ -432,6 +449,10 @@ jobs:
           USE_V1="${{ matrix.test-group.use-vllm-v1 }}"
           if [[ "${USE_V1}" == "true" ]]; then
             export VLLM_USE_V1=1
+          fi
+
+          if [ -n "${{ matrix.test-group.tt_mm_throttle_perf }}" ]; then
+            export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
           # Build the VLLM server arguments array
