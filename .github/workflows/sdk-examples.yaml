@@ -37,6 +37,7 @@ jobs:
           path: /work/pkgs/
 
       - name: Install packages
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           apt update

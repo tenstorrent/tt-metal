@@ -5,8 +5,8 @@
 #include <boost/move/utility_core.hpp>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <iostream>
 #include <map>
@@ -37,11 +37,9 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace ttnn::graph::test {
 
@@ -51,7 +49,7 @@ struct BufferTestParam {
 };
 
 class BufferTestFixture
-    : public TTNNFixtureWithDevice,
+    : public TTNNFixtureWithSuiteDevice<BufferTestFixture>,
       public testing::WithParamInterface<std::tuple<BufferTestParam, tt::tt_metal::IGraphProcessor::RunMode>> {};
 
 TEST_P(BufferTestFixture, BufferTest) {
@@ -210,7 +208,6 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
             std::vector<std::string>(
                 {"tt::tt_metal::create_device_tensor",
                  "ttnn::softmax",
-                 "ttnn::prim::softmax",
                  "SoftmaxDeviceOperation",
                  "tt::tt_metal::create_device_tensor"}));
     }
@@ -503,7 +500,7 @@ TEST_F(TestScopedGraphCapture, MatmulDifferentOrdersTest) {
     std::vector<nlohmann::json> matmul_ops;
     for (const auto& node : trace) {
         if (node["node_type"] == "function_start" &&
-            node["params"]["name"].get<std::string>().find("matmul") != std::string::npos) {
+            node["params"]["name"].get<std::string>().find("ttnn::matmul") != std::string::npos) {
             matmul_ops.push_back(node);
         }
     }

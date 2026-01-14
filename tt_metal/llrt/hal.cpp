@@ -12,9 +12,7 @@
 #include "hal_types.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 std::ostream& operator<<(std::ostream& os, const HalProcessorIdentifier& processor) {
     using enchantum::iostream_operators::operator<<;
@@ -63,9 +61,8 @@ uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programma
     // Assumes unused indices go at the end
     if (index >= core_info_.size()) {
         return -1;
-    } else {
-        return index;
     }
+    return index;
 }
 
 uint32_t Hal::get_total_num_risc_processors() const {
@@ -107,9 +104,8 @@ const std::string& HalCoreInfoType::get_processor_class_name(uint32_t processor_
     TT_ASSERT(ttsl::as_underlying_type<HalProcessorClassType>(processor_class) < this->processor_classes_names_.size());
     if (is_abbreviated) {
         return this->processor_classes_names_[processor_class_idx][processor_type_idx].first;
-    } else {
-        return this->processor_classes_names_[processor_class_idx][processor_type_idx].second;
     }
+    return this->processor_classes_names_[processor_class_idx][processor_type_idx].second;
 }
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
@@ -132,11 +128,7 @@ uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
     uint32_t jal_offset_bits_10_to_1 = (firmware_base & 0x7fe) << 20;
     uint32_t jal_offset_bit_11 = (firmware_base & 0x800) << 9;
     uint32_t jal_offset_bits_19_to_12 = (firmware_base & 0xff000) << 0;
-    uint32_t jal_offset =
-        jal_offset_bit_20 |
-        jal_offset_bits_10_to_1 |
-        jal_offset_bit_11 |
-        jal_offset_bits_19_to_12;
+    uint32_t jal_offset = jal_offset_bit_20 | jal_offset_bits_10_to_1 | jal_offset_bit_11 | jal_offset_bits_19_to_12;
 
     return jal_offset | opcode;
 }
@@ -202,8 +194,7 @@ uint32_t Hal::make_go_msg_u32(
     return go_msg_u32_val;
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 std::size_t std::hash<tt::tt_metal::HalProcessorIdentifier>::operator()(
     const tt::tt_metal::HalProcessorIdentifier& processor) const {

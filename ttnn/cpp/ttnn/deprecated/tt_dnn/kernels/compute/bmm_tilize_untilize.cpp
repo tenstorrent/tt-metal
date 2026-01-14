@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "mod_div_lib.h"
+#include "internal/mod_div_lib.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -195,7 +195,7 @@ void MAIN {
                                         in0_index_subblock_offset + in0_index_h_offset + inner_dim,  // in0 tile
                                         in1_index_subblock_offset + in1_index_inner_dim_offset + w,  // in1 tile
                                         dst_index,                                                   // dst
-                                        false);
+                                    );
                                     in1_index_inner_dim_offset += in1_block_w;
                                 }  // for in0_block_w
                                 ++dst_index;

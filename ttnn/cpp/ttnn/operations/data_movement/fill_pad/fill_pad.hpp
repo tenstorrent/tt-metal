@@ -7,8 +7,8 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace data_movement {
+
+namespace operations::data_movement {
 
 struct FillPadOperation {
     static ttnn::Tensor invoke(
@@ -17,8 +17,7 @@ struct FillPadOperation {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace data_movement
-}  // namespace operations
+}  // namespace operations::data_movement
 
 constexpr auto fill_implicit_tile_padding =
     ttnn::register_operation<"ttnn::fill_implicit_tile_padding", ttnn::operations::data_movement::FillPadOperation>();

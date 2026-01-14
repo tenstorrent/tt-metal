@@ -17,31 +17,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
-auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
-    const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
-    return fmt::format_to(ctx.out(), "(M{}, D{})", *node_id.mesh_id, node_id.chip_id);
-}
-
 namespace tt::tt_fabric {
-
-FabricNodeId::FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val) :
-    mesh_id(mesh_id_val), chip_id(chip_id_val) {}
-
-bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs) {
-    return lhs.mesh_id == rhs.mesh_id && lhs.chip_id == rhs.chip_id;
-}
-bool operator!=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(lhs == rhs); }
-bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs) {
-    return lhs.mesh_id < rhs.mesh_id || (lhs.mesh_id == rhs.mesh_id && lhs.chip_id < rhs.chip_id);
-}
-bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs) { return rhs < lhs; }
-bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(rhs > lhs); }
-bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(lhs < rhs); }
-std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
-    using ::operator<<;  // Enable ADL for StrongType operator<<
-    os << "M" << fabric_node_id.mesh_id << "D" << fabric_node_id.chip_id;
-    return os;
-}
 
 RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapper) :
     topology_mapper_(topology_mapper) {
@@ -90,26 +66,25 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             if (intra_mesh_connectivity[mesh_id_val][curr_a].contains(dst_chip_id) and
                 intra_mesh_connectivity[mesh_id_val][curr_a].at(dst_chip_id).port_direction == a) {
                 return a;
-            } else if (
-                intra_mesh_connectivity[mesh_id_val][curr_b].contains(dst_chip_id) and
+            }
+            if (intra_mesh_connectivity[mesh_id_val][curr_b].contains(dst_chip_id) and
                 intra_mesh_connectivity[mesh_id_val][curr_b].at(dst_chip_id).port_direction == b) {
                 return b;
-            } else {
-                a_valid = false;
-                b_valid = false;
-                for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][curr_a]) {
-                    if (edge.port_direction == a) {
-                        curr_a = next_chip_id;
-                        a_valid = true;
-                        break;
-                    }
+            }
+            a_valid = false;
+            b_valid = false;
+            for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][curr_a]) {
+                if (edge.port_direction == a) {
+                    curr_a = next_chip_id;
+                    a_valid = true;
+                    break;
                 }
-                for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][curr_b]) {
-                    if (edge.port_direction == b) {
-                        curr_b = next_chip_id;
-                        b_valid = true;
-                        break;
-                    }
+            }
+            for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][curr_b]) {
+                if (edge.port_direction == b) {
+                    curr_b = next_chip_id;
+                    b_valid = true;
+                    break;
                 }
             }
         }
@@ -229,7 +204,8 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
         MeshShape mesh_shape = mesh_graph.get_mesh_shape(src_mesh_id);
         std::uint32_t ew_size = mesh_shape[1];
         for (ChipId src_chip_id = 0; src_chip_id < this->inter_mesh_table_[src_mesh_id_val].size(); src_chip_id++) {
-            for (std::uint32_t dst_mesh_id_val = 0; dst_mesh_id_val < this->inter_mesh_table_.size(); dst_mesh_id_val++) {
+            for (std::uint32_t dst_mesh_id_val = 0; dst_mesh_id_val < this->inter_mesh_table_.size();
+                 dst_mesh_id_val++) {
                 MeshId dst_mesh_id{dst_mesh_id_val};
                 if (dst_mesh_id == src_mesh_id) {
                     // inter mesh table entry from mesh to itself

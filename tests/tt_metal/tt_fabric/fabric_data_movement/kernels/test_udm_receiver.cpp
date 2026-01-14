@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_utils.hpp"
@@ -35,9 +35,6 @@ inline void poll_for_value(volatile tt_l1_ptr uint32_t* poll_addr, uint32_t expe
  * blocks can be tested without requiring full integration/deployment into fabric
  */
 void kernel_main() {
-    // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::fabric_local_state_init();
-
     uint32_t time_seed = time_seed_init;
 
     int32_t dest_bank_id;
@@ -106,9 +103,6 @@ void kernel_main() {
         poll_addr += packet_payload_size_bytes / 4;
         bytes_received += packet_payload_size_bytes;
     }
-
-    // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::close_fabric_connection();
 
     if (!match) {
         test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;

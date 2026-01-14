@@ -82,7 +82,9 @@ target_sources(
         topology/topology.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
+        telemetry/ethernet/caching_fabric_telemetry_reader.cpp
         telemetry/arc/arc_metrics.cpp
+        telemetry/arc/caching_arc_telemetry_reader.cpp
         telemetry/system/system_metrics.cpp
         telemetry/hal/hal.cpp
 )
@@ -93,6 +95,11 @@ target_include_directories(
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+target_include_directories(
+    tt_telemetry_server
+    SYSTEM
+    PRIVATE
         ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
 )
 target_link_libraries(

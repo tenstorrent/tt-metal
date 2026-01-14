@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -39,7 +40,7 @@ namespace detail {
 float sqrt(float x) { return std::sqrt(x); }
 float exp(float x) { return std::exp(x); }
 float recip(float x) { return 1 / x; }
-float gelu(float x) { return x * (0.5 * (1 + std::erf(x / std::sqrt(2)))); }
+float gelu(float x) { return x * (0.5 * (1 + std::erf(x / std::numbers::sqrt2))); }
 float relu(float x) { return std::max(0.0f, x); }
 float sigmoid(float x) { return 1 / (1 + std::exp(-x)); }
 float log(float x) { return std::log(x); }
@@ -108,7 +109,7 @@ bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float hig
         auto device_output = ttnn::tanh(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     }
-    TT_ASSERT(false, "Unsupported function");
+    TT_FATAL(false, "Unsupported function");
     return false;
 }
 
@@ -161,16 +162,14 @@ void test_shape_padding() {
     TT_FATAL(output_tensor.logical_shape() == input_shape, "Error");
 }
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 template <bool approx_value = false>
 struct exp_with_param {
     static Tensor fn(const tt::tt_metal::Tensor& t) {
         return ttnn::exp(t, approx_value, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
     }
 };
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 void test_numerically() {
     log_info(tt::LogTest, "Running {}", __func__);
@@ -285,7 +284,7 @@ void test_program_cache() {
     TT_FATAL(device->num_program_cache_entries() == 0, "Error");
 }
 
-int main(int argc, char** argv) {
+int main() {
     // test_operation_infrastructure();
     test_shape_padding();
     test_numerically();

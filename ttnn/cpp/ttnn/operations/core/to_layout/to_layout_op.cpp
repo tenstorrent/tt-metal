@@ -15,11 +15,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-
-namespace operations {
-
-namespace core {
+namespace ttnn::operations::core {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 namespace {
@@ -66,7 +62,7 @@ Tensor to_layout_impl(
         ttnn::TILE_LAYOUT,
     };
 
-    if (supported_layouts.find(layout) == supported_layouts.end()) {
+    if (!supported_layouts.contains(layout)) {
         TT_THROW("ttnn::to_layout: Unsupported layout conversion from {} to {}!", tensor_arg.layout(), layout);
     }
 
@@ -100,9 +96,10 @@ Tensor to_layout_impl(
         if (not requires_padding_change(tensor, layout)) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
-                TT_FATAL(!sub_core_grids.has_value(), "Untilize OP does not currently support sub core grid");
-                return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize);
-            } else if (layout == ttnn::TILE_LAYOUT) {
+                return ttnn::untilize(
+                    tensor, output_memory_config, use_multicore_untilize, true /*use_pack_untilize*/, sub_core_grids);
+            }
+            if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
                     const auto tensor_tile = tensor.tensor_spec().tile();
                     uint32_t tile_height = tensor_tile.get_height();
@@ -121,10 +118,10 @@ Tensor to_layout_impl(
                     use_multicore_tilize,
                     false /* low perf mode */,
                     sub_core_grids);
-            } else {
-                throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
             }
-        } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
+            throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
+        }
+        if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             TT_FATAL(
                 !dtype.has_value() || dtype.value() == tensor_arg.dtype(),
                 "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device!");
@@ -138,13 +135,22 @@ Tensor to_layout_impl(
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.logical_shape()[index] - 1;
             }
-            TT_FATAL(
-                !sub_core_grids.has_value(), "Untilize with unpadding OP does not currently support sub core grid");
-            tensor =
-                ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
-            return ttnn::reshape(tensor, ttnn::Shape{output_shape});
-
-        } else if (layout == ttnn::TILE_LAYOUT) {
+            tensor = ttnn::untilize_with_unpadding(
+                tensor,
+                output_tensor_end,
+                output_memory_config,
+                use_multicore_untilize,
+                true /*use_pack_untilize*/,
+                sub_core_grids);
+            return ttnn::reshape(
+                tensor,
+                ttnn::Shape{output_shape},
+                std::nullopt /*Memory Config*/,
+                std::nullopt /*pad value*/,
+                TileReshapeMapMode::CACHE,
+                sub_core_grids);
+        }
+        if (layout == ttnn::TILE_LAYOUT) {
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
@@ -163,15 +169,14 @@ Tensor to_layout_impl(
                 } else {
                     pad_value_variant = (uint32_t)0;
                 }
-                TT_FATAL(
-                    !sub_core_grids.has_value(), "Tilize with Val Padding OP does not currently support sub core grid");
                 tensor = ttnn::tilize_with_val_padding(
                     tensor,
                     Shape(padded_output_shape),
                     pad_value_variant,
                     output_memory_config,
                     dtype,
-                    use_multicore_tilize);
+                    use_multicore_tilize,
+                    sub_core_grids);
             }
             if (original_rank == 1) {
                 return ttnn::reshape(
@@ -191,35 +196,34 @@ Tensor to_layout_impl(
                 std::nullopt, /*Pad Value*/
                 TileReshapeMapMode::CACHE,
                 sub_core_grids);
-        } else {
-            TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
         }
-    } else {
-        TT_ASSERT(!dtype.has_value(), "dtype cannot be specified when converting layout on host!");
-        if (!requires_padding_change(tensor, layout)) {
-            return tensor.to_layout(layout);
-        } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-            tensor = tensor.to_layout(layout);
-            tensor = tensor.unpad_from_tile(tensor.logical_shape());
-            return ttnn::reshape(
-                tensor,
-                ttnn::Shape{output_shape},
-                std::nullopt, /*Memory Config*/
-                std::nullopt, /*Pad Value*/
-                TileReshapeMapMode::CACHE,
-                sub_core_grids);
-        } else if (layout == ttnn::TILE_LAYOUT) {
-            SmallVector<uint32_t> padded_input_start;
-            for (int index = 0; index < padded_output_shape.rank(); ++index) {
-                padded_input_start.push_back(0);
-            }
-            tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), 0);
-            tensor = tensor.to_layout(layout);
-            return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
-        } else {
-            TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
-        }
+        TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
     }
+    TT_ASSERT(!dtype.has_value(), "dtype cannot be specified when converting layout on host!");
+    if (!requires_padding_change(tensor, layout)) {
+        return tensor.to_layout(layout);
+    }
+    if (layout == ttnn::ROW_MAJOR_LAYOUT) {
+        tensor = tensor.to_layout(layout);
+        tensor = tensor.unpad_from_tile(tensor.logical_shape());
+        return ttnn::reshape(
+            tensor,
+            ttnn::Shape{output_shape},
+            std::nullopt, /*Memory Config*/
+            std::nullopt, /*Pad Value*/
+            TileReshapeMapMode::CACHE,
+            sub_core_grids);
+    }
+    if (layout == ttnn::TILE_LAYOUT) {
+        SmallVector<uint32_t> padded_input_start;
+        for (int index = 0; index < padded_output_shape.rank(); ++index) {
+            padded_input_start.push_back(0);
+        }
+        tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), 0);
+        tensor = tensor.to_layout(layout);
+        return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
+    }
+    TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
 }
 }  // namespace
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -233,6 +237,4 @@ Tensor ToLayout::invoke(
     return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config, sub_core_grids);
 }
 
-}  // namespace core
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::core

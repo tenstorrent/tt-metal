@@ -22,8 +22,7 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl {
-namespace all_to_all_async {
+namespace ttnn::operations::experimental::ccl::all_to_all_async {
 
 namespace detail {
 // Configuration constants
@@ -140,7 +139,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& /*tensor_return_value*/) {
     log_debug(tt::LogOp, "DEBUG: create_at is called");
     auto* mesh_device = tensor_args.input_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
@@ -605,8 +604,7 @@ void AllToAllAsyncProgram::override_runtime_arguments(
         }
 
         // Update receiver runtime args
-        for (uint32_t i = 0; i < shared_vars.receiver_worker_cores.size(); i++) {
-            const auto core = shared_vars.receiver_worker_cores[i];
+        for (const auto& core : shared_vars.receiver_worker_cores) {
             auto& receiver_writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
             receiver_writer_runtime_args[0] = tensor_args.persistent_output_buffer.buffer()->address();
 
@@ -618,5 +616,4 @@ void AllToAllAsyncProgram::override_runtime_arguments(
     }
 }
 
-}  // namespace all_to_all_async
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::all_to_all_async

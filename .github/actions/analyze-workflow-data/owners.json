@@ -554,6 +554,25 @@
     { "job-name-component": "[WH-GLX] Llama-3.3-70B-Instruct v0 structured-output", "owner": { "id": "U091SNDA4TS", "name": "Tomasz Cheda" } },
     { "job-name-component": "[BH-LB] Llama-3.1-8B-Instruct v0 structured-output", "owner": { "id": "U091SNDA4TS", "name": "Tomasz Cheda" } },
     { "job-name-component": "[WH-GLX] Llama-3.3-70B-Instruct v0 fallback structured-output", "owner": { "id": "U091SNDA4TS", "name": "Tomasz Cheda" } },
-    { "job-name-component": "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output", "owner": { "id": "U091SNDA4TS", "name": "Tomasz Cheda" } }
+    { "job-name-component": "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output", "owner": { "id": "U091SNDA4TS", "name": "Tomasz Cheda" } },
+    { "job-name-component": "Galaxy Wan2.2 frequent tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "job-name-component": "Galaxy mochi frequent tests", "owner": { "id": "U09ELB03XRU", "name": "Stephen Osborne" } },
+    { "job-name-component": "Galaxy Flux.1 frequent tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
+    { "job-name-component": "Galaxy Motif frequent tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
+    { "job-name-component": "Galaxy DiT Flux.1 model perf tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
+    { "job-name-component": "Galaxy DiT Motif model perf tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
+    { "job-name-component": "Galaxy DiT Wan2.2 model perf tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "job-name-component": "Galaxy Mochi model perf tests", "owner": { "id": "U09ELB03XRU", "name": "Stephen Osborne" } },
+    { "job-name-component": "t3k DiT Motif model perf tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
+    { "job-name-component": "t3k motif tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
+    { "job-name-component": "t3k motif tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
+    { "job-name-component": "t3k_whisper_tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
+    { "job-name-component": "Galaxy Whisper demo tests", "owner": { "id": "U08HL8X1ECD", "name": "Aniruddha Tupe" } },
+    { "job-name-component": "Galaxy Flux.1-dev demo tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
+    { "job-name-component": "Galaxy GPT-OSS demo tests", "owner": { "id": "U06F3ER8X9A", "name": "Stuti Raizada" } },
+    { "job-name-component": "Galaxy Motif-Image-6B-Preview demo tests", "owner": { "id": "U08TED0JM9D", "name": "Samuel Adesoye" } },
+    { "job-name-component": "Galaxy Wan2.2 demo tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "job-name-component": "Galaxy Mochi demo tests", "owner": { "id": "U09ELB03XRU", "name": "Stephen Osborne" } },
+    { "job-name-component": "Galaxy DeepSeek v3 demo tests", "owner": { "id": "U08H32XUS9W", "name": "Yousef Al Rawwash" } }
   ]
 }

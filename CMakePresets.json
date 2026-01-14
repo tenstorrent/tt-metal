@@ -27,7 +27,22 @@
           "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--warnings-as-errors=*"},
           "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
           "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
-          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"}
+          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        }
+      },
+      {
+        "name": "clang-static-analyzer",
+        "inherits": "default",
+        "description": "Run Clang Static Analyzer",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/.build/clang-static-analyzer",
+        "cacheVariables": {
+          "CMAKE_BUILD_TYPE": {"value": "Debug"},
+          "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
+          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
+          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
+          "TT_UMD_BUILD_SIMULATION": {"value": "FALSE"}
         }
       },
       {
@@ -37,6 +52,15 @@
         "binaryDir": "${sourceDir}/.build/clang-tidy-fix",
         "cacheVariables": {
           "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--fix"}
+        }
+      },
+      {
+        "name": "clang-tidy-fix-parallel",
+        "inherits": "clang-tidy",
+        "description": "Run Clang Tidy in parallel and export fixes to YAML files (apply with clang-apply-replacements)",
+        "binaryDir": "${sourceDir}/.build/clang-tidy-fix-parallel",
+        "cacheVariables": {
+          "CMAKE_CXX_CLANG_TIDY": {"value": "${sourceDir}/cmake/clang-tidy-export-fixes-wrapper.sh;${sourceDir}/.build/clang-tidy-fix-parallel/fixes"}
         }
       },
       {
@@ -88,13 +112,20 @@
       {
         "name": "clang-tidy",
         "configurePreset": "clang-tidy",
-        "configuration": "RelWithDebInfo",
+        "configuration": "Debug",
         "targets": ["all", "all_verify_interface_header_sets"],
         "nativeToolOptions": ["-k0"]
       },
       {
         "name": "clang-tidy-fix",
         "configurePreset": "clang-tidy-fix",
+        "configuration": "RelWithDebInfo",
+        "targets": ["all", "all_verify_interface_header_sets"],
+        "nativeToolOptions": ["-k0"]
+      },
+      {
+        "name": "clang-tidy-fix-parallel",
+        "configurePreset": "clang-tidy-fix-parallel",
         "configuration": "RelWithDebInfo",
         "targets": ["all", "all_verify_interface_header_sets"],
         "nativeToolOptions": ["-k0"]

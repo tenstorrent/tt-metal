@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -16,8 +16,9 @@ void kernel_main() {
     // Compile time args
     constexpr uint32_t user_ids_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t seeds_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t number_of_ids = get_compile_time_arg_val(2);
-    constexpr auto user_ids_tensor_accessor_args = TensorAccessorArgs<3>();
+    constexpr uint32_t kernel_communication_cb_index = get_compile_time_arg_val(2);
+    constexpr uint32_t number_of_ids = get_compile_time_arg_val(3);
+    constexpr auto user_ids_tensor_accessor_args = TensorAccessorArgs<4>();
     constexpr auto seeds_tensor_accessor_args =
         TensorAccessorArgs<user_ids_tensor_accessor_args.next_compile_time_args_offset()>();
 
@@ -60,15 +61,14 @@ void kernel_main() {
         }
     }
 
-    // Send result to compute kernel via mailbox
-    ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_user_id);
-    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_user_id);
-    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_user_id);
+    // Prepare message for compute kernel
+    cb_reserve_back(kernel_communication_cb_index, one_tile);
+    const uint32_t kernel_communication_l1_write_addr_index = get_write_ptr(kernel_communication_cb_index);
+    volatile tt_l1_ptr uint32_t* communication_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_communication_l1_write_addr_index);
+    communication_ptr[0] = is_user_id ? 1 : 0;
+    communication_ptr[1] = is_user_id ? seed : 0;
 
-    // Send seed to compute kernel via mailbox
-    if (is_user_id) {
-        ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, seed);
-        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, seed);
-        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, seed);
-    }
+    // Send to compute kernel
+    cb_push_back(kernel_communication_cb_index, one_tile);
 }

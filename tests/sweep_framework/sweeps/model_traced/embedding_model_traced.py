@@ -9,7 +9,6 @@ from functools import partial
 import random
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -28,16 +27,18 @@ model_traced_params = loader.get_suite_parameters("embedding", all_cases=False)
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
-    "nightly": {
-        "embedding_args": gen_shapes([1, 32, 32, 128], [4, 2080, 4128, 550], [1, 32, 32, 32], 32),
+    # Quick sample test with basic configurations for fast validation
+    "model_traced_sample": {
+        "embedding_args": [(1, 32, 32, 128)],  # batch_size, seq_length, embeddings_dim, num_embeddings
         "input_dtype": [ttnn.uint32],
-        "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
-        "weight_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
-        "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "weight_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "weight_dtype": [ttnn.bfloat16],
+        "output_dtype": [ttnn.bfloat16],
+        "input_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "weight_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "weight_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
 }
 
@@ -73,9 +74,9 @@ def run(
     input_memory_config,
     weight_memory_config,
     output_memory_config,
-    storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, etc.
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
@@ -91,7 +92,7 @@ def run(
     )(weight_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze(dim=0)
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
     # torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weight_tensor)
 
     input_tensor = ttnn.from_torch(

@@ -28,23 +28,19 @@ struct ArgMaxDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        tt::tt_metal::DataType output_dtype,
-        std::optional<int> dim,
-        bool keepdim,
-        const std::optional<CoreRangeSet>& sub_core_grids,
-        bool use_multicore,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        std::optional<Tensor> optional_output_tensor);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::reduction::argmax
 
 namespace ttnn::prim {
-constexpr auto argmax =
-    ttnn::register_operation<"ttnn::prim::argmax", ttnn::operations::reduction::argmax::ArgMaxDeviceOperation>();
+ttnn::Tensor argmax(
+    const Tensor& input,
+    tt::tt_metal::DataType output_dtype,
+    std::optional<int> dim,
+    bool keepdim,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool use_multicore,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::optional<Tensor> optional_output_tensor = std::nullopt);
 }  // namespace ttnn::prim

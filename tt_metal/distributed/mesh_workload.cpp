@@ -5,7 +5,7 @@
 #include <mesh_buffer.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -42,13 +42,11 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class Kernel;
 enum class HalProgrammableCoreType;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace {
 uint64_t get_next_counter() {
@@ -128,7 +126,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
     auto* mesh_device = mesh_cq.device();
     if (!program_binary_status_.empty()) {
         TT_FATAL(
-            program_binary_status_.find(mesh_device->id()) != program_binary_status_.end(),
+            program_binary_status_.contains(mesh_device->id()),
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
         TT_FATAL(
             program_binary_status_.at(mesh_device->id()) == ProgramBinaryStatus::Committed,
@@ -189,7 +187,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
 }
 
 ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh_id) const {
-    if (program_binary_status_.find(mesh_id) != program_binary_status_.end()) {
+    if (program_binary_status_.contains(mesh_id)) {
         return program_binary_status_.at(mesh_id);
     }
     return ProgramBinaryStatus::NotSent;

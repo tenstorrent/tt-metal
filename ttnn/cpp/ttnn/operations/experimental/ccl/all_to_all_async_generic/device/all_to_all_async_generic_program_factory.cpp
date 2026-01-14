@@ -11,8 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <unordered_map>
 
-namespace ttnn::operations::experimental::ccl {
-namespace all_to_all_async_generic {
+namespace ttnn::operations::experimental::ccl::all_to_all_async_generic {
 
 namespace {
 ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
@@ -255,7 +254,7 @@ AllToAllAsyncGenericProgram::create_at(
 
 void AllToAllAsyncGenericProgram::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
@@ -280,5 +279,4 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
     }
 }
 
-}  // namespace all_to_all_async_generic
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::all_to_all_async_generic

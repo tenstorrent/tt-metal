@@ -6,11 +6,11 @@
 #include <utility>
 
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "permute_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
-
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& dims = operation_attributes.dims;
@@ -21,20 +21,18 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
         }
         // Otherwise, we need to use the blocked generic, row moving kernel
         return MultiCoreBlockedGeneric{};
-    } else {
-        // If the input tensor is not row-major, we need to use the tiled kernels
-        uint32_t rank = tensor_args.input_tensor.logical_shape().rank();
-        // When the tiled dimensions are not moved, we use this kernel
-        if ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
-            (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
-            return MultiCoreTileInvariant{};
-        } else if (dims[rank - 1] == rank - 1 || dims[rank - 1] == rank - 2) {  // When only one of the tiled dimensions
-                                                                                // is moved
-            return MultiCoreTileRowInvariant{};
-        } else {
-            return MultiCoreTiledGeneric{};  // When both the tiled dimensions are moved
-        }
+    }  // If the input tensor is not row-major, we need to use the tiled kernels
+    uint32_t rank = tensor_args.input_tensor.logical_shape().rank();
+    // When the tiled dimensions are not moved, we use this kernel
+    if ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
+        (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
+        return MultiCoreTileInvariant{};
     }
+    if (dims[rank - 1] == rank - 1 || dims[rank - 1] == rank - 2) {  // When only one of the tiled dimensions
+                                                                     // is moved
+        return MultiCoreTileRowInvariant{};
+    }
+    return MultiCoreTiledGeneric{};  // When both the tiled dimensions are moved
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_miss(
@@ -45,7 +43,7 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
@@ -69,7 +67,7 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<PermuteDeviceOperation::tensor_return_value_t>
 PermuteDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+    const operation_attributes_t& /*op_attr*/, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input_tensor = inputs.input_tensor;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output, false, 0, true);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
@@ -85,20 +83,22 @@ PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_out
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
+}  // namespace ttnn::operations::data_movement
 
-std::tuple<PermuteDeviceOperation::operation_attributes_t, PermuteDeviceOperation::tensor_args_t>
-PermuteDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t permute(
     const Tensor& input_tensor,
     const SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
     const std::optional<float>& pad_value) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .dims = dims,
             .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
             .pad_value = pad_value},
-        tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)}};
+        OperationType::tensor_args_t{
+            .input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)});
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

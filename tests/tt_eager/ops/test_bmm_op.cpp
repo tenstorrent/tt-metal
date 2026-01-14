@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <cstring>
@@ -17,19 +17,15 @@
 #include <tt-metalium/tile.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using namespace tt;
 using namespace tt_metal;
@@ -38,7 +34,7 @@ using namespace constants;
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {
@@ -66,22 +62,27 @@ int main(int argc, char** argv) {
         Tensor b = ttnn::zeros(shapeb, DataType::BFLOAT16, Layout::TILE, *device);
         Tensor b1 = ttnn::zeros(shapeb1, DataType::BFLOAT16, Layout::TILE, *device);
 
-        Tensor mm = ttnn::operations::matmul::matmul(
-                        a,
-                        b,
-                        /*bias=*/std::nullopt,
-                        ttnn::operations::matmul::Matmul{
-                            /*program_config=*/std::nullopt,
-                            /*bcast_batch=*/std::nullopt,
-                            tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-                            /*output_dtype=*/std::nullopt,
-                            /*compute_kernel_config=*/std::nullopt,
-                            /*untilize_out=*/false,
-                            /*user_core_coord=*/std::nullopt,
-                            /*user_fused_activation=*/std::nullopt,
-                            /*user_run_batched=*/true})
-                        .cpu();
-        Tensor mm1 = ttnn::operations::matmul::matmul(a, b1).cpu();
+        ttnn::operations::matmul::operation_attributes_t attributes;
+        attributes.user_run_batched = true;
+        attributes = ttnn::operations::matmul::create_matmul_attributes(a, b, attributes, {});
+        auto mm = ttnn::prim::matmul(
+                      a,
+                      b,
+                      /*bias=*/std::nullopt,
+                      /*output_tensor*/ std::nullopt,
+                      attributes)
+                      .at(0)
+                      .cpu();
+
+        Tensor mm1 = ttnn::prim::matmul(
+                         a,
+                         b1,
+                         /*bias=*/std::nullopt,
+                         /*output_tensor*/ std::nullopt,
+                         ttnn::operations::matmul::create_matmul_attributes(
+                             a, b1, ttnn::operations::matmul::operation_attributes_t{}, {}))
+                         .at(0)
+                         .cpu();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

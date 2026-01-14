@@ -17,8 +17,7 @@
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "tt_metal/common/env_lib.hpp"
 
-namespace tt::tt_metal {
-namespace kernel_size_tests {
+namespace tt::tt_metal::kernel_size_tests {
 
 // Fixture for testing with DEFAULT kernel config buffer size (69KB)
 // Sets worker_l1_size = max_worker_l1_size_ - 69KB, resulting in a 69KB kernel config buffer.
@@ -58,7 +57,7 @@ protected:
     // determines where unreserved_base_ is positioned and thus the kernel config buffer size.
     // Larger worker_l1_size -> higher unreserved_base_ -> smaller kernel config buffer and vice versa
     void compute_memory_layout() {
-        TT_ASSERT(!devices_.empty() && !devices_[0]->get_devices().empty(), "No devices available for testing");
+        TT_FATAL(!devices_.empty() && !devices_[0]->get_devices().empty(), "No devices available for testing");
 
         auto* single_device = devices_[0]->get_devices()[0];
         unreserved_base_ = single_device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -279,5 +278,4 @@ TEST_F(KernelSizeTestBigBuffer, BigKernelExecutionCorrectness) {
     EXPECT_EQ(result[0], NUM_ADDS) << "Kernel should have performed " << NUM_ADDS << " additions";
 }
 
-}  // namespace kernel_size_tests
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::kernel_size_tests

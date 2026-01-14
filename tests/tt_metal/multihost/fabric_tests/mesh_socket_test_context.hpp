@@ -41,6 +41,7 @@ private:
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config);
 
     void initialize_mesh_device();
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void setup_fabric_configuration();
     void share_seed();
     std::unordered_map<Rank, tt::tt_fabric::MeshId> create_rank_to_mesh_mapping();
@@ -65,7 +66,7 @@ private:
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context_;
 
     // Control plane and mesh configuration
-    ControlPlane* control_plane_ptr_;
+    ControlPlane* control_plane_ptr_{nullptr};
     MeshId local_mesh_id_;
     std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_mapping_;
 

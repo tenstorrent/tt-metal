@@ -66,7 +66,10 @@ ttnn::Tensor composite_reduce_scatter(
     tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel) {
     bool is_row_major = input_tensor.layout() == ttnn::Layout::ROW_MAJOR;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -137,9 +140,13 @@ ttnn::Tensor composite_reduce_scatter(
                                                       cluster_axis,
                                                       subdevice_id,
                                                       native_rs_output_memory_config,
+                                                      std::nullopt,  // optional intermediate memory config
                                                       std::nullopt,  // optional output tensor
                                                       num_links,
-                                                      topology_)
+                                                      topology_,
+                                                      chunks_per_sync,
+                                                      num_workers_per_link,
+                                                      num_buffers_per_channel)
                                                       .at(1);  // first is the intermediate tensor
     // remove the padding we previously inserted
     ttnn::Tensor rs_output_tensor;
@@ -248,6 +255,11 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
 
 bool use_composite_all_gather(
     const ttnn::Tensor& input_tensor, const int32_t dim, const std::optional<ttnn::MemoryConfig>& memory_config) {
+    auto is_true_2d_mesh = [](const ttnn::Tensor& t) {
+        const auto mesh_shape = t.device()->shape();
+        return mesh_shape.dims() >= 2 && mesh_shape[0] > 1 && mesh_shape[1] > 1;
+    };
+
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -260,8 +272,8 @@ bool use_composite_all_gather(
     auto input_memory_config = input_tensor.memory_config();
     auto output_memory_config = memory_config.value_or(input_memory_config);
 
-    if (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
-        return true;  // 2D dynamic and 1D both work, but 2D standard does not
+    if (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D && is_true_2d_mesh(input_tensor)) {
+        return true;
     }
     // Use composite for row-major tensors
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {
@@ -358,7 +370,7 @@ ttnn::Tensor composite_all_gather(
         input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
     }
 
-    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::ccl::all_broadcast(
+    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::prim::all_broadcast(
         input_tensor, cluster_axis, subdevice_id, input_tensor.memory_config(), num_links, ttnn::ccl::Topology::Linear);
 
     // Do the gather itself
@@ -385,9 +397,9 @@ std::vector<ttnn::Tensor> composite_all_gather(
     std::optional<uint32_t> cluster_axis) {
     std::vector<ttnn::Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
-    for (size_t i = 0; i < input_tensors.size(); i++) {
+    for (const auto& input_tensor : input_tensors) {
         output_tensors.push_back(
-            composite_all_gather(input_tensors[i], dim, num_links, memory_config, subdevice_id, cluster_axis));
+            composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis));
     }
     return output_tensors;
 }
@@ -447,7 +459,7 @@ ttnn::Tensor composite_all_to_all(
     }
 
     // Step 1: make every device have a copy of every tensor
-    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::ccl::all_broadcast(
+    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::prim::all_broadcast(
         input_tensor,
         /* cluster_axis */ std::nullopt,
         subdevice_id,
@@ -457,11 +469,11 @@ ttnn::Tensor composite_all_to_all(
     input_tensor.deallocate();
 
     // Step 2: Slice out the index range each device cares about, along out_dim
-    for (size_t i = 0; i < broadcasted_tensors.size(); i++) {
-        temp_tensor = ttnn::mesh_partition(
-            broadcasted_tensors[i], out_dim, /* cluster_axis */ std::nullopt, interim_memory_config);
-        broadcasted_tensors[i].deallocate();
-        broadcasted_tensors[i] = temp_tensor;
+    for (auto& broadcasted_tensor : broadcasted_tensors) {
+        temp_tensor =
+            ttnn::mesh_partition(broadcasted_tensor, out_dim, /* cluster_axis */ std::nullopt, interim_memory_config);
+        broadcasted_tensor.deallocate();
+        broadcasted_tensor = temp_tensor;
     }
 
     // Step 3: Concatenate along in_dim

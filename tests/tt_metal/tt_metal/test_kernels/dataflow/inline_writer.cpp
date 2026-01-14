@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
+#include "experimental/endpoints.h"
 
 void kernel_main() {
     uint32_t dst_noc_x = get_arg_val<uint32_t>(0);

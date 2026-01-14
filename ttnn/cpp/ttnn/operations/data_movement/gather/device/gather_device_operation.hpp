@@ -30,22 +30,19 @@ struct GatherDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        int8_t dim,
-        const Tensor& input_index_tensor,
-        bool sparse_grad,
-        const MemoryConfig& output_memory_config,
-        const std::optional<Tensor>& output_tensors,
-        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::data_movement::gather
 
 namespace ttnn::prim {
 
-constexpr auto gather =
-    ttnn::register_operation<"ttnn::prim::gather", ttnn::operations::data_movement::gather::GatherDeviceOperation>();
+ttnn::operations::data_movement::gather::tensor_return_value_t gather(
+    const Tensor& input_tensor,
+    int8_t dim,
+    const Tensor& input_index_tensor,
+    bool sparse_grad,
+    const MemoryConfig& output_memory_config,
+    const std::optional<Tensor>& output_tensors,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::prim

@@ -172,7 +172,9 @@ class Transformer(LightweightModule):
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
+    def prepare_inputs_prefill(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device if trace is disabled or on host if trace is enabled.
@@ -200,23 +202,55 @@ class Transformer(LightweightModule):
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
-        assert (
-            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
+        mat_len = self.rope_setup.cos_matrix.shape[2]
+        # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
+        seq_len = last_token_idx + 1 if last_token_idx is not None else S
+        assert mat_len >= seq_len, f"Seqence length {seq_len} exceeds max seq len {mat_len}"
 
-        # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
-        start_pos = 0 if trace_enabled else start_pos
-        end_pos = self.args.max_seq_len if trace_enabled else start_pos + S
+        # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.
+        required_end = start_pos + S
+        if required_end > mat_len:
+            pad_len = required_end - mat_len
+        else:
+            pad_len = 0
 
+        # We set slice_end to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
+        slice_start = 0 if trace_enabled else start_pos
+        slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
+        cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]
+        sin_slice = self.rope_setup.sin_matrix[:, :, slice_start:slice_end, :]
+        if pad_len > 0:
+            # padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
+            padding = [(0, 0)] * 4
+            padding[2] = (0, pad_len)
+            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
+            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :],
-            self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :],
+            cos_slice,
+            sin_slice,
         ]
 
         if hasattr(self, "rope_local_setup"):
+            local_mat_len = self.rope_local_setup.cos_matrix.shape[2]
+            local_required_end = start_pos + S
+            if local_required_end > local_mat_len:
+                local_pad_len = local_required_end - local_mat_len
+            else:
+                local_pad_len = 0
+
+            local_slice_end = self.args.max_seq_len if trace_enabled else min(local_mat_len, local_required_end)
+            local_cos_slice = self.rope_local_setup.cos_matrix[:, :, slice_start:local_slice_end, :]
+            local_sin_slice = self.rope_local_setup.sin_matrix[:, :, slice_start:local_slice_end, :]
+            if local_pad_len > 0:
+                # pad at end of 3rd dim (dim=2) by local_pad_len
+                local_padding = [(0, 0)] * 4
+                local_padding[2] = (0, local_pad_len)
+                local_cos_slice = ttnn.pad(local_cos_slice, padding=local_padding, value=0.0)
+                local_sin_slice = ttnn.pad(local_sin_slice, padding=local_padding, value=0.0)
+
             tt_rot_mats_prefill_local = [
-                self.rope_local_setup.cos_matrix[:, :, start_pos:end_pos, :],
-                self.rope_local_setup.sin_matrix[:, :, start_pos:end_pos, :],
+                local_cos_slice,
+                local_sin_slice,
             ]
         else:
             tt_rot_mats_prefill_local = None
@@ -329,7 +363,7 @@ class Transformer(LightweightModule):
         )
         return tt_tokens
 
-    def concat_host_output(self, tt_out):
+    def concat_host_output(self, tt_out, is_log_probs=False):
         """
         Concatenate the output of the devices into a single host tensor.
         """
@@ -341,25 +375,34 @@ class Transformer(LightweightModule):
 
         rows, cols = self.args.cluster_shape
         mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
-        row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
+        if is_log_probs:
+            row_concatenated = []
+            for row in mesh_shape:
+                row_reshaped = [tensor.reshape(1, 1, -1, 1) for tensor in row]
+                row_concatenated.append(torch.cat(row_reshaped, dim=col_dim))
+        else:
+            row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
+
         return torch.cat(row_concatenated, dim=row_dim)
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """
-        Input is ttnn device tensor of logits. Output is torch logits tensor.
+        Input is ttnn host tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        return self.concat_host_output(tt_out.cpu())[0, 0, last_token_idx, : self.vocab_size]
+        assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
+        return self.concat_host_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
 
-    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """
         Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        if is_tokens:
+        if is_tokens or is_log_probs:
             # Pad to 32 to match the expected batch size for decode operations (tiles are 32x32)
             padded_batch_size = 32
-            tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
-            return self.concat_host_output(tt_out)[0, 0, :B, 0]
+            if not is_log_probs:
+                tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
+            return self.concat_host_output(tt_out, is_log_probs)[0, 0, :B, 0]
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
@@ -432,12 +475,13 @@ class Transformer(LightweightModule):
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             if capture_sampling_trace:
                 return tt_logits
-            tt_toks = self.sampling.sample(
+            tt_toks, tt_log_probs = self.sampling.sample(
                 tt_logits,
                 tt_out_tok=x,
                 enable_trace=False,
             )
-            return tt_toks
+
+            return tt_toks, tt_log_probs
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
@@ -464,7 +508,7 @@ class Transformer(LightweightModule):
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
-        return tt_logits
+        return tt_logits, None
 
     def forward(
         self,
@@ -521,4 +565,5 @@ class Transformer(LightweightModule):
         if mode == "prefill":
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         return x

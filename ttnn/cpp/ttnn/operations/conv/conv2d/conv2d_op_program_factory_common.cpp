@@ -17,8 +17,8 @@
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-namespace ttnn::operations::conv {
-namespace conv2d {
+
+namespace ttnn::operations::conv::conv2d {
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 
@@ -52,7 +52,7 @@ std::vector<CBInfo> get_cb_info(
     const Conv2dParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> input_shape,
+    std::array<uint32_t, 2> /*input_shape*/,
     std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
@@ -168,13 +168,13 @@ std::vector<CBInfo> get_cb_info(
     const tt::DataFormat partial_df = datatype_to_dataformat_converter(partial_dtype);
     const uint32_t partial_tile_size = tt::tile_size(partial_df);
 
-    const bool is_1d_conv = input_shape[0] != 1 && input_shape[1] == 1;
-
     {
         // Weights CB
-        uint32_t weight_block_num_tiles =
-            per_core_out_matrix_width_ntiles *
-            (is_1d_depthwise_conv ? block_config.act_block_h_ntiles : block_config.act_block_w_ntiles);
+        // For 1D depthwise conv, the weight matrix inner dimension is act_block_h_ntiles * kernel_w,
+        // not act_block_w_ntiles (which is just padded_in_channels for depthwise).
+        uint32_t weight_inner_dim_ntiles =
+            is_1d_depthwise_conv ? block_config.act_block_h_ntiles * kernel_size[1] : block_config.act_block_w_ntiles;
+        uint32_t weight_block_num_tiles = per_core_out_matrix_width_ntiles * weight_inner_dim_ntiles;
         if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             // If activation reuse is enabled, we already have full inner dim
             if (!conv_config.enable_activation_reuse) {
@@ -292,10 +292,7 @@ std::vector<CBInfo> get_cb_info(
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::READER_INDICES,
         .num_pages = 1,
-        .page_size = is_1d_conv && conv_config.config_tensors_in_dram
-                         ? pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT *
-                               6  // 3 indices per output, 2B per index
-                         : pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per index
+        .page_size = pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per index
         .is_globally_allocated = !conv_config.config_tensors_in_dram,
         .data_format = tt::DataFormat::UInt16});
 
@@ -471,12 +468,14 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
         float peak_rate_gbps;  // Maximum achievable transfer rate
     };
 
+    // NOLINTBEGIN(modernize-use-std-numbers)
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
         default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
     }
+    // NOLINTEND(modernize-use-std-numbers)
 
     // Clamp transfer size to the linear growth region
     const uint32_t effective_transfer_size =
@@ -598,7 +597,7 @@ bool is_split_reader_viable(
     uint32_t weights_block_ntiles,
     uint32_t weights_tile_size,
     uint32_t dilation_w,
-    uint32_t num_blocks_act_h,
+    uint32_t /*num_blocks_act_h*/,
     uint32_t act_block_w_ntiles,
     bool fp32_dest_acc,
     DataType output_datatype,
@@ -656,7 +655,7 @@ bool is_split_reader_viable(
     const bool is_viable = activation_cycles / 2 + std::max(weight_cycles, tilize_cycles) <
                            std::max(activation_cycles + tilize_cycles, weight_cycles);
 
-    log_debug(
+    log_trace(
         tt::LogOp,
         "Split reader viability: activation_cycles={:.3f}, weight_cycles={:.3f}, tilize_cycles={:.3f}, is_viable={}",
         activation_cycles,
@@ -671,7 +670,7 @@ void post_conv2d_op_memory_checks(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& /*output_tensor*/) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;
     const auto& input_tensor_bias = tensor_args.bias;
@@ -728,8 +727,14 @@ void post_conv2d_op_memory_checks(
         dtype,
         output_image_width,
         has_bias,
-        is_1d_deptwise_conv(
-            groups, input_tensor_shape[3], output_channels, kernel_dims[1], output_image_width, has_bias),
+        is_1d_depthwise_conv(
+            groups,
+            input_tensor_shape[3],
+            output_channels,
+            kernel_dims[0],
+            kernel_dims[1],
+            input_tensor_shape[1],
+            has_bias),
         input_channels_padded,
         skip_mcast.skip_activation_mcast);
 
@@ -752,5 +757,4 @@ void post_conv2d_op_memory_checks(
         l1_usage.tensor_allocation_size);
 }
 
-}  // namespace conv2d
-}  // namespace ttnn::operations::conv
+}  // namespace ttnn::operations::conv::conv2d

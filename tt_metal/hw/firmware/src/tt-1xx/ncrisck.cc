@@ -14,16 +14,19 @@
 #ifdef PERF_DUMP
 #include "risc_perf.h"
 #endif
-#include "firmware_common.h"
-#include "dataflow_api.h"
+#include "internal/firmware_common.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "tensix_functions.h"
+#include "internal/tensix_functions.h"
 #include "c_tensix_core.h"
 #include "kernel_includes.hpp"
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-#include "remote_circular_buffer_api.h"
+#include "api/remote_circular_buffer.h"
 #endif
-#include "debug/stack_usage.h"
+#include "internal/debug/stack_usage.h"
+#ifdef UDM_MODE
+#include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
+#endif
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -56,6 +59,9 @@ uint32_t _start() {
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(NOC_INDEX);
     }
+#ifdef UDM_MODE
+    tt::tt_fabric::udm::fabric_local_state_init();
+#endif
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif

@@ -262,6 +262,19 @@ public:
 
     InterMeshConnectivity get_inter_mesh_connectivity(MeshId mesh_id) const;
 
+    /**
+     * @brief Generate a mesh graph from a physical system descriptor
+     *
+     * This static function creates a mesh graph by trying different mesh shapes and finding
+     * one that matches the physical topology described by the physical system descriptor.
+     *
+     * @param physical_system_descriptor The physical system descriptor containing ASIC topology
+     * @param fabric_config The fabric configuration
+     * @return MeshGraph A mesh graph that matches the physical topology
+     */
+    static MeshGraph generate_mesh_graph_from_physical_system_descriptor(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor, FabricConfig fabric_config);
+
 private:
     /**
      * @brief Build the mapping between fabric node IDs and physical ASIC IDs
@@ -311,32 +324,6 @@ private:
      * fabric node ID to mesh host rank (ordered for deterministic iteration)
      */
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> build_fabric_node_id_to_mesh_rank_mapping() const;
-
-    /**
-     * @brief Build logical adjacency maps from mesh graph connectivity
-     *
-     * Creates adjacency maps for each mesh based on the logical connectivity defined in the mesh graph.
-     * For each fabric node in a mesh, this function identifies its logical neighbors by examining
-     * the intra-mesh connectivity from the mesh graph and creates a mapping of FabricNodeId to
-     * its vector of adjacent FabricNodeIds.
-     *
-     * @return std::map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
-     */
-    std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical() const;
-
-    /**
-     * @brief Build physical adjacency maps from system descriptor connectivity
-     *
-     * Creates adjacency maps for each mesh based on the physical connectivity defined in the physical system
-     * descriptor. For each ASIC in a mesh, this function identifies its physical neighbors by examining the ASIC
-     * neighbors from the physical system descriptor and filters them to only include neighbors that are also part of
-     * the same mesh. The resulting map contains ASIC IDs mapped to their vectors of adjacent ASIC IDs within the mesh.
-     *
-     * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
-     * @return std::map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
-     */
-    std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
-        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) const;
 
     /**
      * @brief Create bidirectional mappings between logical fabric nodes and physical ASIC IDs

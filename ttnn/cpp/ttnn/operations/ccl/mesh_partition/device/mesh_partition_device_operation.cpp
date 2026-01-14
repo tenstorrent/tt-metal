@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "mesh_partition_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -22,7 +23,7 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
 }  // namespace detail
 
 MeshPartitionDeviceOperation::program_factory_t MeshPartitionDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return MeshPartition{};
 }
 
@@ -67,7 +68,7 @@ void MeshPartitionDeviceOperation::validate_on_program_cache_miss(
 }
 
 void MeshPartitionDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 MeshPartitionDeviceOperation::spec_return_value_t MeshPartitionDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -97,20 +98,22 @@ MeshPartitionDeviceOperation::tensor_return_value_t MeshPartitionDeviceOperation
     return tensor;
 }
 
-std::tuple<MeshPartitionDeviceOperation::operation_attributes_t, MeshPartitionDeviceOperation::tensor_args_t>
-MeshPartitionDeviceOperation::invoke(
+}  // namespace ttnn::operations::ccl
+
+namespace ttnn::prim {
+ttnn::Tensor mesh_partition(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::ccl::MeshPartitionDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
             .cluster_axis = cluster_axis,
             .output_mem_config = memory_config,
         },
-        tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }
-
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::prim

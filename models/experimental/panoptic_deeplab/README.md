@@ -1,7 +1,7 @@
 # Panoptic DeepLab
 
 ## Platforms:
-    Made for BOS chips, mostly tested on Blackhole with a core grid of 20 cores.
+    Made for BOS chips, tested on Blackhole with both 20-core (5x4 grid) and P150 all-core (11x10 grid - 110 cores) configurations.
 
 ## Introduction
 Panoptic DeepLab is a unified model for panoptic segmentation that combines semantic segmentation and instance segmentation into a single framework. The model uses a shared ResNet backbone with separate heads for semantic segmentation and instance embedding prediction, enabling comprehensive scene understanding by simultaneously identifying both "stuff" (background regions like road, sky) and "things" (countable objects like cars, people).
@@ -21,15 +21,26 @@ Place the downloaded `model_final_bd324a.pkl` file in `models/experimental/panop
 
 ## How to Run
 
+The model supports both optimized 20-core (5x4 grid) and all-core (11x10 grid) configurations:
+- **20 cores (optimized)**: Set `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3"`
+- **110 cores P150**: Set `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9"`
+
+**Note**: December 2025 - P150 currently has core grid 13x10 but the plan is to have 2 rows harvested (11x10) so in order to prepare for that change, we are setting this env var.
+
+
 ### Run the Full Model Test
 ```bash
-# From tt-metal root directory
+# 20-core optimized configuration
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
+
+# 110-core grid configuration (11x10 on Blackhole P150)
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
 ```
+**Note**: All following tests can be run with TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE being "4,3" or "10,9"
 
 ### Run Component Tests
 ```bash
-# Test ASPP component
+# Test ASPP component (works on any core configuration)
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_aspp.py
 
 # Test ResNet backbone
@@ -44,8 +55,10 @@ TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panopti
 
 ### Run Device Performance Tests
 ```bash
-# Test full model performance
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py
+# Test full model performance on 20 cores
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_20_cores
+# Test full model performance on all 110 cores
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_110_cores
 ```
 
 ### Run the Demo

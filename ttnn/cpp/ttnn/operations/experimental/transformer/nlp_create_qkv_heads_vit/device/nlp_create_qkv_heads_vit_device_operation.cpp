@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_create_qkv_heads_vit_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit {
 
 NlpCreateHeadsVitDeviceOperation::program_factory_t NlpCreateHeadsVitDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::NlpCreateQkvHeadsVitProgramFactory{};
 }
 
@@ -93,16 +94,24 @@ tensor_return_value_t NlpCreateHeadsVitDeviceOperation::create_output_tensors(
     return outputs;
 }
 
-std::tuple<NlpCreateHeadsVitDeviceOperation::operation_attributes_t, NlpCreateHeadsVitDeviceOperation::tensor_args_t>
-NlpCreateHeadsVitDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit
+
+namespace ttnn::prim {
+
+std::vector<Tensor> nlp_create_qkv_heads_vit(
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config,
     const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
-    return {
-        operation_attributes_t{
-            .output_mem_config = output_mem_config,
-        },
-        tensor_args_t{.input_tensor = input_tensor, .optional_output_tensors = optional_output_tensors}};
+    using OperationType =
+        ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit::NlpCreateHeadsVitDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_mem_config = output_mem_config,
+    };
+    auto tensor_args =
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensors = optional_output_tensors};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit
+}  // namespace ttnn::prim

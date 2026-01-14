@@ -12,13 +12,13 @@ namespace operations::data_movement {
 struct ReshapeOperation {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::Shape& logical_shape,
-        const ttnn::Shape& padded_shape,
+        const ttnn::Shape& logical_output_shape,
+        const ttnn::Shape& padded_output_shape,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::Shape& logical_shape,
+        const ttnn::Shape& logical_output_shape,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
 
     static ttnn::Tensor invoke(

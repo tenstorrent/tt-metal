@@ -10,18 +10,22 @@ Usage:
 Options:
 
 Description:
-    Read important variables from fast dispatch kernels.
+    Read important variables from fast dispatch kernels. These can help identify the state the dispatcher is in, to help
+    determine the cause of any hangs.
+
+Owner:
+    jbaumanTT
 """
 
 from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, run_script, log_check
+from ttexalens.memory_access import MemoryAccess, RiscDebugMemoryAccess
 from run_checks import run as get_run_checks
 from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
-from ttexalens.elf import MemoryAccess
 from inspector_data import run as get_inspector_data, InspectorData
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from typing import Optional, Any
@@ -169,14 +173,18 @@ def read_wait_globals(
     Returns a populated DumpWaitGlobalsData if any relevant values were found; otherwise None.
     """
 
+    # Skipping because we cannot read NCRISC private memory on wormhole
+    if risc_name == "ncrisc" and location.device.is_wormhole():
+        return None
+
     # If no kernel loaded, nothing to read
-    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
     if dispatcher_core_data.kernel_path is None:
         return None
     assert dispatcher_core_data.kernel_name is not None
 
     kernel_elf = elf_cache[dispatcher_core_data.kernel_path]
-    loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    loc_mem_access = RiscDebugMemoryAccess(location.noc_block.get_risc_debug(risc_name), ensure_halted_access=False)
     is_dispatcher_kernel = (
         dispatcher_core_data.kernel_name == "cq_dispatch"
         or dispatcher_core_data.kernel_name == "cq_dispatch_subordinate"
@@ -224,7 +232,7 @@ def read_wait_globals(
         if is_dispatcher_kernel:
             log_check(
                 wait_stream_value is not None,
-                f"Failed to read wait_stream_value for kernel {dispatcher_core_data.kernel_name}",
+                f"Failed to read wait_stream_value for kernel {dispatcher_core_data.kernel_name}. There may be a problem with the dispatcher kernel.",
             )
 
     if last_wait_count is not None and stream_width is not None:
@@ -247,7 +255,10 @@ def read_wait_globals(
             delta = (int(sem_value) - int(local_count)) & 0xFFFFFFFF
             sem_minus_local = delta - 0x100000000 if (delta & 0x80000000) else delta
     except Exception:
-        log_check(False, f"Failed to read sem_minus_local for kernel {dispatcher_core_data.kernel_name}")
+        log_check(
+            False,
+            f"Failed to read sem_minus_local for kernel {dispatcher_core_data.kernel_name}. There may be a problem with the dispatcher kernel.",
+        )
         # Leave as None if any lookups fail
         sem_minus_local = None
 
@@ -319,7 +330,7 @@ def run(args, context: Context):
         # Check all RISC cores at this location for dispatcher kernels
         noc_block = location._device.get_block(location)
         for risc_name in noc_block.risc_names:
-            dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+            dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
             if (
                 dispatcher_core_data.kernel_name is not None
                 and dispatcher_core_data.kernel_name in dispatcher_kernel_names

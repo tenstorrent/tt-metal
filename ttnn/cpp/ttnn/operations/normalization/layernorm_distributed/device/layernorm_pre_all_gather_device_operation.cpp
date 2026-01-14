@@ -3,30 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_pre_all_gather_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/math.hpp"
 
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-logger/tt-logger.hpp>
 
-#include <optional>
-
-using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::constants;
 
-namespace ttnn::operations::normalization::layernorm {
+namespace ttnn::operations::normalization {
 
 LayerNormPreAllGatherDeviceOperation::program_factory_t LayerNormPreAllGatherDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // Use 2D factory if use_2d_core_grid is set to true
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
+    // Check if 2D core grid is requested
     if (args.use_2d_core_grid.has_value() && args.use_2d_core_grid.value()) {
-        log_debug(tt::LogOp, "LayerNormPreAllGather: Using 2D program factory");
         return program::LayerNormPreAllGather2DProgramFactory{};
-    } else {
-        log_debug(tt::LogOp, "LayerNormPreAllGather: Using 1D program factory");
-        return program::LayerNormPreAllGatherProgramFactory{};
     }
+
+    // Check if Welford algorithm is requested (only for layernorm)
+    if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
+        const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
+        if (program_config.use_welford) {
+            return program::LayerNormPreAllGatherWelfordProgramFactory{};
+        }
+    }
+
+    // Default to normal program factory
+    return program::LayerNormPreAllGatherProgramFactory{};
 }
 
 void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_hit(
@@ -48,6 +51,24 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
         "Input data format not supported.");
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+
+    // Additional validation for Welford - it doesn't support rmsnorm
+    if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
+        const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
+        if (program_config.use_welford && args.norm_type == LayerNormDistributedType::RMSNORM) {
+            TT_FATAL(false, "RMS norm is not compatible with Welford algorithm. Please disable use_welford flag.");
+        }
+    }
+
+    // Additional validation for 2D core grid - it doesn't support Welford
+    if (args.use_2d_core_grid.has_value() && args.use_2d_core_grid.value()) {
+        if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
+            const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
+            if (program_config.use_welford) {
+                TT_FATAL(false, "Welford layernorm variation does not support 2D core grid.");
+            }
+        }
+    }
 }
 
 LayerNormPreAllGatherDeviceOperation::spec_return_value_t LayerNormPreAllGatherDeviceOperation::compute_output_specs(
@@ -55,39 +76,42 @@ LayerNormPreAllGatherDeviceOperation::spec_return_value_t LayerNormPreAllGatherD
     const auto& input_tensor = tensor_args.input;
 
     auto output_shape = input_tensor.logical_shape();
-    const uint32_t num_tiles_w = (args.norm_type == LayerNormDistributedType::LAYERNORM) ? 2 : 1;
+    uint32_t num_tiles_w = 1;
+    if (args.norm_type == LayerNormDistributedType::LAYERNORM) {
+        num_tiles_w = 2;
+    }
     output_shape[3] = num_tiles_w * TILE_WIDTH;
 
-    return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
+    auto output_dtype = args.dtype.value_or(input_tensor.dtype());
+    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
 }
 
 LayerNormPreAllGatherDeviceOperation::tensor_return_value_t LayerNormPreAllGatherDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<
-    LayerNormPreAllGatherDeviceOperation::operation_attributes_t,
-    LayerNormPreAllGatherDeviceOperation::tensor_args_t>
-LayerNormPreAllGatherDeviceOperation::invoke(
+}  // namespace ttnn::operations::normalization
+
+namespace ttnn::prim {
+
+Tensor layer_norm_pre_all_gather(
     const Tensor& input,
-    LayerNormDistributedType norm_type,
-    DataType dtype,
+    ttnn::operations::normalization::LayerNormDistributedType norm_type,
+    const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<bool> use_2d_core_grid,
-    const LayerNormDistributedDefaultProgramConfig& program_config,
-    const std::optional<Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const std::optional<bool>& use_2d_core_grid) {
+    using OperationType = ttnn::operations::normalization::LayerNormPreAllGatherDeviceOperation;
+    return ttnn::device_operation::detail::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .norm_type = norm_type,
             .dtype = dtype,
             .compute_kernel_config = compute_kernel_config,
+            .program_config = program_config,
             .use_2d_core_grid = use_2d_core_grid,
-            .program_config = program_config},
-        tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
+        },
+        OperationType::tensor_args_t{.input = input});
 }
 
-}  // namespace ttnn::operations::normalization::layernorm
+}  // namespace ttnn::prim

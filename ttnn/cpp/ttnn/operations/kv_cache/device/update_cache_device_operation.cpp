@@ -3,18 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "update_cache_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::kv_cache {
 
 using namespace tt::constants;
 
 UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.op_type == UpdateCacheOpType::FILL) {
         return program::FillCacheMultiCoreProgramFactory{};
-    } else {
-        return program::UpdateCacheMultiCoreProgramFactory{};
     }
+    return program::UpdateCacheMultiCoreProgramFactory{};
 }
 
 void UpdateKVCacheOperation::validate_on_program_cache_miss(
@@ -160,13 +160,13 @@ void UpdateKVCacheOperation::validate_on_program_cache_hit(
 }
 
 spec_return_value_t UpdateKVCacheOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache.tensor_spec();
 }
 
 tensor_return_value_t UpdateKVCacheOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache;
 }
@@ -177,24 +177,25 @@ tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
         args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> UpdateKVCacheOperation::invoke(
+}  // namespace ttnn::operations::kv_cache
+
+namespace ttnn::prim {
+ttnn::operations::kv_cache::UpdateKVCacheOperation::tensor_return_value_t update_cache(
     const Tensor& cache,
     const Tensor& input,
     const uint32_t batch_idx,
     const uint32_t update_index,
     const uint32_t batch_offset,
-    const UpdateCacheOpType op_type,
+    const ttnn::operations::kv_cache::UpdateCacheOpType op_type,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::kv_cache::UpdateKVCacheOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .batch_idx = batch_idx,
             .update_idx = update_index,
             .batch_offset = batch_offset,
             .op_type = op_type,
             .compute_kernel_config = compute_kernel_config},
-        tensor_args_t{
-            .cache = cache,
-            .input = input,
-        }};
+        OperationType::tensor_args_t{.cache = cache, .input = input});
 }
-}  // namespace ttnn::operations::kv_cache
+}  // namespace ttnn::prim

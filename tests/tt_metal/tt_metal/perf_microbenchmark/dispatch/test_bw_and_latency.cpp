@@ -5,13 +5,13 @@
 #include <chrono>
 #include <emmintrin.h>
 #include <fmt/base.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <cstdint>
 #include <exception>
@@ -45,11 +45,9 @@
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
@@ -247,7 +245,7 @@ int main(int argc, char** argv) {
             default: {
                 src_mem = "FROM_PCIE";
                 vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
-                TT_ASSERT(!pcie_cores.empty());
+                TT_FATAL(!pcie_cores.empty(), "No PCIe cores found");
                 noc_addr_x = pcie_cores[0].x;
                 noc_addr_y = pcie_cores[0].y;
                 noc_mem_addr = dev_pcie_base + pcie_offset;
@@ -255,7 +253,11 @@ int main(int argc, char** argv) {
             case 1: {
                 src_mem = "FROM_DRAM";
                 vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
-                TT_ASSERT(dram_cores.size() > dram_channel_g);
+                TT_FATAL(
+                    dram_cores.size() > dram_channel_g,
+                    "DRAM channel {} not available, only {} channels found",
+                    dram_channel_g,
+                    dram_cores.size());
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;
             } break;
@@ -426,7 +428,7 @@ int main(int argc, char** argv) {
                             }
                         } else {
                             uint32_t* pcie_addr = ((uint32_t*)pcie_base) + offset;
-                            nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)&blank[0], page_size_g);
+                            nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)blank.data(), page_size_g);
                         }
                         page++;
                     }
@@ -505,8 +507,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
-    } else {
-        log_fatal(LogTest, "Test Failed\n");
-        return 1;
     }
+    log_fatal(LogTest, "Test Failed\n");
+    return 1;
 }

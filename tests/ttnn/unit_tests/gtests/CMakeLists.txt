@@ -63,7 +63,6 @@ target_sources(
         test_graph_query_op_constraints.cpp
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
-        test_matmul_benchmark.cpp
         test_relational_int.cpp
         test_rsub_int.cpp
         test_sub_int.cpp
@@ -208,3 +207,4 @@ target_sources(unit_tests_ttnn_emitc PRIVATE emitc/test_sanity.cpp)
 setup_ttnn_test_target(unit_tests_ttnn_emitc)
 
 add_subdirectory(multiprocess)
+add_subdirectory(udm)

@@ -22,9 +22,7 @@
 
 #include "ttnn/tensor/shape/shape.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 static constexpr std::uint8_t VERSION_ID = 5;
 
@@ -100,6 +98,6 @@ struct NdShardSpec {
 };
 
 using PadValue = std::variant<uint32_t, float>;
+std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -11,7 +11,7 @@
 #include "ttnn/decorators.hpp"
 #include "create_qkv_heads_device_operation_types.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::experimental::create_qkv_heads {
@@ -31,25 +31,20 @@ struct CreateQKVHeadsDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        uint32_t num_q_heads,
-        uint32_t num_kv_heads,
-        uint32_t head_dim,
-        bool transpose_k_heads,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<std::tuple<Tensor, Tensor, Tensor>>& preallocated_outputs);
 };
 
 }  // namespace ttnn::operations::experimental::create_qkv_heads
 
 namespace ttnn::prim {
-constexpr auto create_qkv_heads = ttnn::register_operation<
-    "ttnn::prim::create_qkv_heads",
-    ttnn::operations::experimental::create_qkv_heads::CreateQKVHeadsDeviceOperation>();
+ttnn::operations::experimental::create_qkv_heads::tensor_return_value_t create_qkv_heads(
+    const Tensor& input_tensor,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool transpose_k_heads,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::tuple<Tensor, Tensor, Tensor>>& preallocated_outputs);
 }  // namespace ttnn::prim

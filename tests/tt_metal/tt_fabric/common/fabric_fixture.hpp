@@ -19,8 +19,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 class ControlPlaneFixture : public ::testing::Test {
    protected:
@@ -121,6 +120,7 @@ public:
 
     static void TearDownTestSuite() { TT_THROW("TearDownTestSuite not implemented in BaseFabricFixture"); }
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void RunProgramNonblocking(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
@@ -138,6 +138,7 @@ public:
         }
     }
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void WaitForSingleProgramDone(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
@@ -250,7 +251,15 @@ protected:
     }
 };
 
-class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {};
+class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {
+protected:
+    void SetUp() override {
+        if (devices_.size() < 8) {
+            GTEST_SKIP() << "Test requires at least 8 devices (2x4 mesh), found " << devices_.size();
+        }
+        Fabric2DUDMModeFixture::SetUp();
+    }
+};
 
 class NightlyFabric2DFixture : public BaseFabricFixture {
 protected:
@@ -379,7 +388,7 @@ enum NocSendType : uint8_t {
 void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& pair_ordered_dirs,
     FabricApiType api_type = FabricApiType::Linear,
     bool with_state = false);
 
@@ -390,7 +399,10 @@ void UDMFabricUnicastCommon(
         std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
         std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
     std::optional<RoutingDirection> override_initial_direction = std::nullopt,
-    std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list = std::nullopt);
+    std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list = std::nullopt,
+    bool dual_risc = false);
+
+void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, bool dual_risc = false);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
@@ -416,5 +428,4 @@ void RunEDMConnectionStressTest(
 
 void RunTestUnicastSmoke(BaseFabricFixture* fixture);
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests
