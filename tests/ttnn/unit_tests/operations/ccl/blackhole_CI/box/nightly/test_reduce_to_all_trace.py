@@ -332,7 +332,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     out_flat = out_l_root.flatten().float()
     ref_flat = ref_l.flatten().float()
     max_diff = torch.max(torch.abs(out_flat - ref_flat)).item()
-    match = max_diff < 0.1  # Allow tolerance for bfloat16
+    match = max_diff < 0.07  # Allow tolerance for bfloat16
 
     print(f"L tensor match: {match}, max_diff: {max_diff:.4f}")
 
