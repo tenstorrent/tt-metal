@@ -35,13 +35,8 @@ void bind_move(nb::module_& mod) {
         mod,
         ttnn::move,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::move)& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
-            nb::arg("input_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        ttnn::nanobind_arguments_t{
+            nb::arg("input_tensor").noconvert(), nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::data_movement::detail
