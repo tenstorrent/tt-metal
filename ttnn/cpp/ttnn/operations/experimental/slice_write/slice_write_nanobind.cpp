@@ -48,22 +48,11 @@ void bind_slice_write(nb::module_& mod) {
 
     // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
     // than a vector with a fixed size default value
-    using OperationType = decltype(ttnn::experimental::slice_write);
     ttnn::bind_registered_operation(
         mod,
         ttnn::experimental::slice_write,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& output_tensor,
-               const ttnn::SmallVector<uint32_t>& start,
-               const ttnn::SmallVector<uint32_t>& end,
-               const ttnn::SmallVector<uint32_t>& step) { return self(input_tensor, output_tensor, start, end, step); },
-            nb::arg("input_tensor"),
-            nb::arg("output_tensor"),
-            nb::arg("start"),
-            nb::arg("end"),
-            nb::arg("step")});
+        ttnn::nanobind_arguments_t{
+            nb::arg("input_tensor"), nb::arg("output_tensor"), nb::arg("start"), nb::arg("end"), nb::arg("step")});
 }
 }  // namespace ttnn::operations::experimental::slice_write
