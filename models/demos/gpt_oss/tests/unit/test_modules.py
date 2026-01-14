@@ -632,24 +632,6 @@ def test_decoder(
         else:
             logger.info("Router test only runs in decode mode (seq_len=1). Skipping...")
 
-    # NOTE: Attention must run before experts due to memory corruption issue
-    # See investigation: experts operations corrupt memory that SDPA reads from
-    if should_test("attention"):
-        logger.info("Testing Attention...")
-        run_attention_component(
-            setup["mesh_device"],
-            hidden_states.shape,
-            mask,
-            position_embeddings_ref,
-            rope_mats,
-            tt_position_idx,
-            reference_layer,
-            decoder_layer,
-            is_decode=is_decode,
-            is_row_sharded=is_row_sharded,
-            pcc_threshold=pcc_thresholds["attention"],
-        )
-
     if should_test("experts"):
         if decoder_layer.mlp.use_throughput_experts:
             logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {mesh_shape}...")
@@ -674,6 +656,22 @@ def test_decoder(
                 is_decode=is_decode,
                 pcc_threshold=pcc_thresholds["experts"],
             )
+
+    if should_test("attention"):
+        logger.info("Testing Attention...")
+        run_attention_component(
+            setup["mesh_device"],
+            hidden_states.shape,
+            mask,
+            position_embeddings_ref,
+            rope_mats,
+            tt_position_idx,
+            reference_layer,
+            decoder_layer,
+            is_decode=is_decode,
+            is_row_sharded=is_row_sharded,
+            pcc_threshold=pcc_thresholds["attention"],
+        )
 
     if should_test("rms_norm"):
         logger.info("Testing RMS Norm...")
