@@ -754,6 +754,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     auto get_fwd_mux_term_master = [&](uint32_t link_idx) { return termination_masters[link_idx + 2]; };
 
     std::vector<uint32_t> shared_term_sync_sems;
+    shared_term_sync_sems.reserve(termination_masters.size());
     for (auto& termination_master : termination_masters) {
         shared_term_sync_sems.push_back(CreateSemaphore(program, {termination_master}, 0));
     }
