@@ -1918,7 +1918,8 @@ class Generator:
         if trace_enabled:
             if page_table.shape[1] < num_blocks:
                 # If page table is too short, pad it with -1
-                padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+                # Use page_table.shape[0] to handle both single user and batched prefill cases
+                padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                 page_table = torch.cat([page_table, padding], dim=1)
         # Pad page table to 32 users
         padded_page_table = torch.ones(32, page_table.shape[1], dtype=torch.int32) * -1
