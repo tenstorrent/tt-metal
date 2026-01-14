@@ -47,7 +47,7 @@ void ConvertToCHWDeviceOperation::validate_on_program_cache_miss(
         "Output tensor must be width sharded");
 }
 
-spec_return_value_t ConvertToCHWDeviceOperation::compute_output_specs(
+TensorSpec ConvertToCHWDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& shape = tensor_args.input.logical_shape();
     const auto B = shape[0];
@@ -59,7 +59,7 @@ spec_return_value_t ConvertToCHWDeviceOperation::compute_output_specs(
             args.dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.memory_config));
 }
 
-tensor_return_value_t ConvertToCHWDeviceOperation::create_output_tensors(
+Tensor ConvertToCHWDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
