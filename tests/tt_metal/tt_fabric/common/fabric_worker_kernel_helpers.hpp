@@ -15,7 +15,14 @@ namespace tt::tt_fabric::fabric_router_tests {
 class BaseFabricFixture;
 }
 
+namespace tt::tt_fabric {
+struct FabricNodeId;
+}
+
 namespace tt::tt_fabric::test_utils {
+
+// Import FabricNodeId into this namespace for convenience
+using FabricNodeId = tt::tt_fabric::FabricNodeId;
 
 // Helper to allocate L1 addresses for worker kernel
 struct WorkerMemoryLayout {
