@@ -40,7 +40,7 @@ void BM_pad_rm_2d_last_dim_right(benchmark::State& state) {
     ttnn::SmallVector<uint32_t> padded_shape = {8192, 8192};
     ttnn::SmallVector<uint32_t> tensor_start = {0, 0};
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto out = input_tensor.pad(
             ttnn::Shape(padded_shape),
             ttnn::Shape(tensor_start),
@@ -55,7 +55,7 @@ void BM_pad_rm_2d_last_dim_left_right(benchmark::State& state) {
     ttnn::SmallVector<uint32_t> padded_shape = {8192, 8192};
     ttnn::SmallVector<uint32_t> tensor_start = {0, 92};
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto out = input_tensor.pad(
             ttnn::Shape(padded_shape),
             ttnn::Shape(tensor_start),
@@ -70,7 +70,7 @@ void BM_pad_rm_4d_last_dim_left_right(benchmark::State& state) {
     ttnn::SmallVector<uint32_t> padded_shape = {16, 20 + 12, 512 + 30, 500 + 30};
     ttnn::SmallVector<uint32_t> tensor_start = {0, 1, 3, 4};
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto out = input_tensor.pad(
             ttnn::Shape(padded_shape),
             ttnn::Shape(tensor_start),
@@ -88,7 +88,7 @@ void BM_pad_rm_2d_scaling(benchmark::State& state) {
     ttnn::SmallVector<uint32_t> padded_shape = {8192, N_padded};
     ttnn::SmallVector<uint32_t> tensor_start = {0, 100};
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto out = input_tensor.pad(
             ttnn::Shape(padded_shape),
             ttnn::Shape(tensor_start),
