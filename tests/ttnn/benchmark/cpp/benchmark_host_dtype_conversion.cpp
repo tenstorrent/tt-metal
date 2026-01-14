@@ -37,7 +37,7 @@ void BM_host_bfloat8_conversion(benchmark::State& state) {
     }
     auto tensor = ttnn::distributed::from_host_shards(tensors, device->shape());
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto converted_tensor = ttnn::to_dtype(tensor, ttnn::DataType::BFLOAT8_B);
         benchmark::DoNotOptimize(converted_tensor);
     }

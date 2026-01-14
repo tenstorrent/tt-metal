@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation_types.hpp"

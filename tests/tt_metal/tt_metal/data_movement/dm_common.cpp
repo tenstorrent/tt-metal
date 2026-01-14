@@ -35,7 +35,7 @@ L1AddressInfo get_l1_address_and_size(
     // return {HARDCODED_L1_MEMORY_BASE_ADDRESS, HARDCODED_L1_MEMORY_SIZE_BYTES};
 }
 
-DramAddressInfo get_dram_address_and_size(const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/) {
+DramAddressInfo get_dram_address_and_size() {
     // Obtaining DRAM address and size //
 
     auto dram_base_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);

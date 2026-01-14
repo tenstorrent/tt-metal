@@ -94,13 +94,16 @@ ttmetal_artifact=""
 eagerdist_artifact=""
 
 if [ "$tracy_enabled" -eq 1 ]; then
-  # Look for artifacts with profiler in the name
+  echo "DEBUG: Tracy enabled, looking for profiler builds..."
+  # Look for artifacts with profiler in the name (TTMetal only)
   ttmetal_artifact="$(echo "$artifacts" | grep "TTMetal_build_any.*_profiler_" | head -1)"
-  eagerdist_artifact="$(echo "$artifacts" | grep "eager-dist.*profiler" | head -1)"
+  # Wheel artifacts (ttnn-dist) don't have profiler in the name
+  eagerdist_artifact="$(echo "$artifacts" | grep -E "(eager-dist|ttnn-dist)" | head -1)"
 else
+  echo "DEBUG: Tracy disabled, looking for non-profiler builds..."
   # Look for artifacts without profiler in the name
   ttmetal_artifact="$(echo "$artifacts" | grep "TTMetal_build_any" | grep -v "_profiler_" | head -1)"
-  eagerdist_artifact="$(echo "$artifacts" | grep "eager-dist" | grep -v "profiler" | head -1)"
+  eagerdist_artifact="$(echo "$artifacts" | grep -E "(eager-dist|ttnn-dist)" | head -1)"
 fi
 
 # Download available artifacts

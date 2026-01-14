@@ -169,7 +169,10 @@ private:
 inline ProgramHashToOpName program_hash_to_opname_{};
 
 inline void start_tracy_zone(
-    const std::string& source, const std::string& functName, uint32_t lineNum, uint32_t color = 0) {
+    [[maybe_unused]] const std::string& source,
+    [[maybe_unused]] const std::string& functName,
+    [[maybe_unused]] uint32_t lineNum,
+    [[maybe_unused]] uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
     auto tracySrcLoc =
         ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length());
@@ -182,7 +185,7 @@ inline void start_tracy_zone(
 #endif
 }
 
-inline bool stop_tracy_zone(const std::string& name = "", uint32_t color = 0) {
+inline bool stop_tracy_zone([[maybe_unused]] const std::string& name = "", [[maybe_unused]] uint32_t color = 0) {
     bool callStackWasEmpty = true;
 #if defined(TRACY_ENABLE)
     if (!call_stack.empty()) {
@@ -204,7 +207,7 @@ inline bool stop_tracy_zone(const std::string& name = "", uint32_t color = 0) {
 constexpr auto tracy_max_message_length =
     static_cast<size_t>(std::numeric_limits<uint16_t>::max());  // Tracy hard limit is 64KiB including null terminator
 
-inline void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) {
+inline void tracy_message([[maybe_unused]] const std::string& source, [[maybe_unused]] uint32_t color = 0xf0f8ff) {
 #if defined(TRACY_ENABLE)
     const auto truncated_size = std::min(source.size(), tracy_max_message_length - 1);
     if (source.size() > truncated_size) {
@@ -409,11 +412,6 @@ inline json get_base_json(
 
     auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
     std::string opName = as_string(tt::stl::get_type_name<device_operation_t>());
-    if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
-        // TODO: remove this if-statement when OldInfraDeviceOperation is removed
-        opName = device_operation_t::get_type_name(operation_attributes);
-    }
-
     std::replace(opName.begin(), opName.end(), ',', ';');
     j["op_code"] = opName;
 
