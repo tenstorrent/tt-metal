@@ -591,7 +591,38 @@ void py_module(nb::module_& mod) {
 
             When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](decltype(::ttnn::matmul)& self,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const bool transpose_a,
+               const bool transpose_b,
+               const std::optional<const ttnn::MemoryConfig>& memory_config,
+               const std::optional<const DataType> dtype,
+               const std::optional<const MatmulProgramConfig>& program_config,
+               const std::optional<const ::ttnn::Activation>& activation,
+               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
+                return self(
+                    input_tensor_a,
+                    input_tensor_b,
+                    transpose_a,
+                    transpose_b,
+                    memory_config,
+                    dtype,
+                    program_config,
+                    activation,
+                    compute_kernel_config,
+                    core_grid,
+                    output_tile,
+                    optional_output_tensor,
+                    global_cb,
+                    sub_device_id);
+            },
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
@@ -664,7 +695,40 @@ void py_module(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the output tensor.
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](decltype(::ttnn::linear)& self,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<const ttnn::Tensor>& bias,
+               const bool transpose_a,
+               const bool transpose_b,
+               const std::optional<const ttnn::MemoryConfig>& memory_config,
+               const std::optional<const DataType> dtype,
+               const std::optional<const MatmulProgramConfig>& program_config,
+               const std::optional<const ::ttnn::Activation>& activation,
+               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
+                return self(
+                    input_tensor_a,
+                    input_tensor_b,
+                    bias,
+                    transpose_a,
+                    transpose_b,
+                    memory_config,
+                    dtype,
+                    program_config,
+                    activation,
+                    compute_kernel_config,
+                    core_grid,
+                    output_tile,
+                    optional_output_tensor,
+                    global_cb,
+                    sub_device_id);
+            },
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
@@ -732,7 +796,38 @@ void py_module(nb::module_& mod) {
         Returns:
             List of ttnn.Tensor: the output tensors.
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](decltype(::ttnn::matmul_batched_weights)& self,
+               const ttnn::Tensor& input_tensor_a,
+               const std::vector<ttnn::Tensor>& input_tensors_b,
+               const bool transpose_a,
+               const bool transpose_b,
+               const std::optional<const ttnn::MemoryConfig>& memory_config,
+               const std::optional<const DataType> dtype,
+               const std::optional<const MatmulProgramConfig>& program_config,
+               const std::optional<const ::ttnn::Activation>& activation,
+               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> std::vector<ttnn::Tensor> {
+                return self(
+                    input_tensor_a,
+                    input_tensors_b,
+                    transpose_a,
+                    transpose_b,
+                    memory_config,
+                    dtype,
+                    program_config,
+                    activation,
+                    compute_kernel_config,
+                    core_grid,
+                    output_tile,
+                    optional_output_tensor,
+                    global_cb,
+                    sub_device_id);
+            },
             nb::arg("input_tensor_a"),
             nb::arg("input_tensors_b"),
             nb::kw_only(),
@@ -819,7 +914,34 @@ void py_module(nb::module_& mod) {
             ttnn.Tensor: output tensor of shape (n, p)
 
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](decltype(::ttnn::addmm)& self,
+               const Tensor& input_tensor,
+               const Tensor& mat1_tensor,
+               const Tensor& mat2_tensor,
+               const float alpha,
+               const float beta,
+               const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const DataType> dtype,
+               const std::optional<const MatmulProgramConfig>& program_config,
+               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<const CoreGrid> core_grid,
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
+               const std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    mat1_tensor,
+                    mat2_tensor,
+                    alpha,
+                    beta,
+                    memory_config,
+                    dtype,
+                    program_config,
+                    compute_kernel_config,
+                    core_grid,
+                    output_tile,
+                    optional_output_tensor);
+            },
             nb::arg("input_tensor"),
             nb::arg("mat1_tensor"),
             nb::arg("mat2_tensor"),
@@ -944,7 +1066,40 @@ void py_module(nb::module_& mod) {
                   - Interleaved (L1/DRAM)
                   - Interleaved (L1/DRAM)
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](decltype(::ttnn::sparse_matmul)& self,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const ttnn::Tensor& sparsity,
+               const MatmulProgramConfig& program_config,
+               const std::optional<uint32_t> nnz,
+               const bool is_input_a_sparse,
+               const bool is_input_b_sparse,
+               const std::optional<const ttnn::MemoryConfig>& memory_config,
+               const std::optional<const DataType> dtype,
+               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
+                return self(
+                    input_tensor_a,
+                    input_tensor_b,
+                    sparsity,
+                    nnz,
+                    is_input_a_sparse,
+                    is_input_b_sparse,
+                    memory_config,
+                    dtype,
+                    program_config,
+                    compute_kernel_config,
+                    core_grid,
+                    output_tile,
+                    optional_output_tensor,
+                    global_cb,
+                    sub_device_id);
+            },
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
