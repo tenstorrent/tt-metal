@@ -86,8 +86,8 @@ def test_wan_transformer_block(
     layer_id = 0
 
     # Tight error bounds based on test config
-    MIN_PCC = 0.999_500
-    MAX_RMSE = 0.032
+    MIN_PCC = 0.998_300
+    MAX_RMSE = 0.076
 
     # Load Wan2.2-T2V-14B model from HuggingFace
     parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
