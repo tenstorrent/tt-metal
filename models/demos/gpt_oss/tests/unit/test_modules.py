@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 
 import pytest
 import torch
@@ -490,8 +489,6 @@ def test_decoder(
         pytest test_modules.py --test-modules=attention
         pytest test_modules.py --test-modules=attention,mlp
     """
-    if mesh_shape[0] == 1 and seq_len > 128 and os.environ.get("CI") == "true":
-        pytest.skip("Skip test for mesh_shape[0] == 1 and seq_len > 128 in CI due to known issue (see #35313).")
     if mesh_shape[0] == 1 and batch_size > 1:
         pytest.skip(
             f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported for mesh shape (1, 8)."
