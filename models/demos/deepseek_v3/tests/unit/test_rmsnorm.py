@@ -501,12 +501,15 @@ def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_param
 
     def check_outputs(tt_output):
         # tt_output is sharded across devices, each device has its chunk
+        coords = list(tt_output.tensor_topology().mesh_coords())
+        view = mesh_device.get_view()
         device_tensors = ttnn.get_device_tensors(tt_output)
 
-        # Compare each device's output with its corresponding chunk of reference
-        # Devices are ordered by (row, col) in the mesh, we care about col (cluster_axis=1)
-        for device_idx, tt_device_out in enumerate(device_tensors):
-            col_idx = device_idx % n_devices_row  # Column index in mesh
+        # Compare each local device's output with its corresponding chunk of reference.
+        for coord, tt_device_out in zip(coords, device_tensors):
+            if not view.is_local(coord):
+                continue
+            col_idx = coord[1]  # Column index in mesh (cluster_axis=1)
             tt_output_torch = ttnn.to_torch(tt_device_out)
             ref_chunk = ref_out[..., col_idx * per_device_width : (col_idx + 1) * per_device_width]
             assert_with_pcc(ref_chunk, tt_output_torch, pcc=0.99)

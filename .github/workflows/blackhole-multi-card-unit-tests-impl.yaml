@@ -35,6 +35,9 @@ jobs:
           - name: fabric 2D fixture unit tests
             cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
             timeout: 15
+          - name: fabric UDM unit tests
+            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DUDMModeFixture.*"
+            timeout: 10
           - name: fabric system health tests
             cmd: ./build/test/tt_metal/tt_fabric/test_system_health
             timeout: 15
@@ -60,6 +63,9 @@ jobs:
           - name: ccl nightly tests
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
             timeout: 60
+          - name: ttnn udm unit tests
+            cmd: ./build/test/ttnn/unit_tests_ttnn_udm
+            timeout: 5
           - name: fabric infra unit tests
             cmd: |
               TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
