@@ -319,6 +319,7 @@ def test_full_buffer():
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+@pytest.mark.skip_post_commit
 def test_device_api_debugger_non_dropping():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
@@ -345,36 +346,95 @@ def test_device_api_debugger_non_dropping():
     assert isinstance(noc_trace_data, list), f"noc trace file '{expected_trace_file}' format is incorrect"
     assert len(noc_trace_data) > 0, f"noc trace file '{expected_trace_file}' is empty"
 
-    brisc_dst_addrs_found = set()
-    ncrisc_dst_addrs_found = set()
+    # Track READ and WRITE events separately for each RISC
+    brisc_read_dst_addrs_found = set()
+    brisc_write_dst_addrs_found = set()
+    ncrisc_read_dst_addrs_found = set()
+    ncrisc_write_dst_addrs_found = set()
+
+    # Track barrier events
+    read_barrier_start_count = 0
+    read_barrier_end_count = 0
+    write_barrier_start_count = 0
+    write_barrier_end_count = 0
 
     for event in noc_trace_data:
         assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
-        if event.get("type") == "READ" and "dst_addr" in event and "proc" in event:
+        event_type = event.get("type")
+
+        # Count barrier events
+        if event_type == "READ_BARRIER_START":
+            read_barrier_start_count += 1
+        elif event_type == "READ_BARRIER_END":
+            read_barrier_end_count += 1
+        elif event_type == "WRITE_BARRIER_START":
+            write_barrier_start_count += 1
+        elif event_type == "WRITE_BARRIER_END":
+            write_barrier_end_count += 1
+
+        if "dst_addr" in event and "proc" in event:
             proc = event["proc"]
             dst_addr = event["dst_addr"]
+
             if proc == "BRISC":
-                brisc_dst_addrs_found.add(dst_addr)
+                if event_type == "READ":
+                    brisc_read_dst_addrs_found.add(dst_addr)
+                elif event_type == "WRITE_":
+                    brisc_write_dst_addrs_found.add(dst_addr)
             elif proc == "NCRISC":
-                ncrisc_dst_addrs_found.add(dst_addr)
+                if event_type == "READ":
+                    ncrisc_read_dst_addrs_found.add(dst_addr)
+                elif event_type == "WRITE_":
+                    ncrisc_write_dst_addrs_found.add(dst_addr)
 
     expected_dst_addrs = set(range(10000))  # 0 to 9999
 
-    # Verify BRISC has all expected dst_addr values
-    missing_brisc_dst_addrs = expected_dst_addrs - brisc_dst_addrs_found
-    assert len(missing_brisc_dst_addrs) == 0, (
-        f"Missing dst_addr values in BRISC JSON events: {sorted(missing_brisc_dst_addrs)[:20]}"
-        f"{'...' if len(missing_brisc_dst_addrs) > 20 else ''} "
-        f"(found {len(brisc_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    # Verify BRISC READ has all expected dst_addr values
+    missing_brisc_read_dst_addrs = expected_dst_addrs - brisc_read_dst_addrs_found
+    assert len(missing_brisc_read_dst_addrs) == 0, (
+        f"Missing dst_addr values in BRISC READ JSON events: {sorted(missing_brisc_read_dst_addrs)[:20]}"
+        f"{'...' if len(missing_brisc_read_dst_addrs) > 20 else ''} "
+        f"(found {len(brisc_read_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
     )
 
-    # Verify NCRISC has all expected dst_addr values
-    missing_ncrisc_dst_addrs = expected_dst_addrs - ncrisc_dst_addrs_found
-    assert len(missing_ncrisc_dst_addrs) == 0, (
-        f"Missing dst_addr values in NCRISC JSON events: {sorted(missing_ncrisc_dst_addrs)[:20]}"
-        f"{'...' if len(missing_ncrisc_dst_addrs) > 20 else ''} "
-        f"(found {len(ncrisc_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    # Verify BRISC WRITE has all expected dst_addr values
+    missing_brisc_write_dst_addrs = expected_dst_addrs - brisc_write_dst_addrs_found
+    assert len(missing_brisc_write_dst_addrs) == 0, (
+        f"Missing dst_addr values in BRISC WRITE JSON events: {sorted(missing_brisc_write_dst_addrs)[:20]}"
+        f"{'...' if len(missing_brisc_write_dst_addrs) > 20 else ''} "
+        f"(found {len(brisc_write_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
     )
+
+    # Verify NCRISC READ has all expected dst_addr values
+    missing_ncrisc_read_dst_addrs = expected_dst_addrs - ncrisc_read_dst_addrs_found
+    assert len(missing_ncrisc_read_dst_addrs) == 0, (
+        f"Missing dst_addr values in NCRISC READ JSON events: {sorted(missing_ncrisc_read_dst_addrs)[:20]}"
+        f"{'...' if len(missing_ncrisc_read_dst_addrs) > 20 else ''} "
+        f"(found {len(ncrisc_read_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    )
+
+    # Verify NCRISC WRITE has all expected dst_addr values
+    missing_ncrisc_write_dst_addrs = expected_dst_addrs - ncrisc_write_dst_addrs_found
+    assert len(missing_ncrisc_write_dst_addrs) == 0, (
+        f"Missing dst_addr values in NCRISC WRITE JSON events: {sorted(missing_ncrisc_write_dst_addrs)[:20]}"
+        f"{'...' if len(missing_ncrisc_write_dst_addrs) > 20 else ''} "
+        f"(found {len(ncrisc_write_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    )
+
+    # Verify barrier event counts
+    expected_barrier_count = 20000
+    assert (
+        read_barrier_start_count == expected_barrier_count
+    ), f"Expected {expected_barrier_count} READ_BARRIER_START events, found {read_barrier_start_count}"
+    assert (
+        read_barrier_end_count == expected_barrier_count
+    ), f"Expected {expected_barrier_count} READ_BARRIER_END events, found {read_barrier_end_count}"
+    assert (
+        write_barrier_start_count == expected_barrier_count
+    ), f"Expected {expected_barrier_count} WRITE_BARRIER_START events, found {write_barrier_start_count}"
+    assert (
+        write_barrier_end_count == expected_barrier_count
+    ), f"Expected {expected_barrier_count} WRITE_BARRIER_END events, found {write_barrier_end_count}"
 
 
 def wildcard_match(pattern, words):
@@ -707,7 +767,7 @@ def test_device_trace_run():
     )
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core[100-5]",
             setupAutoExtract=False,
             doDeviceTrace=True,
         ),
@@ -720,16 +780,136 @@ def test_device_trace_run():
     )
 
 
+def verify_trace_ids_in_device_csv(csv_path=None, riscs=("BRISC", "NCRISC")):
+    """
+    Verify that trace IDs are properly propagated from BRISC to NCRISC in the raw device CSV log.
+
+    This function checks that when BRISC marks an op with a trace_id (not -1), NCRISC entries
+    for the same op on the same core also have the correct trace_id set.
+    """
+    if csv_path is None:
+        csv_path = PROFILER_LOGS_DIR / "profile_log_device.csv"
+
+    if not os.path.isfile(csv_path):
+        logger.warning(f"Device log CSV not found at {csv_path} - skipping CSV trace validation")
+        return
+
+    # Read CSV, skipping the architecture line
+    df = pd.read_csv(csv_path, skiprows=1, header=0, na_filter=False)
+
+    # Convert trace_id and trace_id_count columns to integers (0-indexed columns)
+    # Based on process_device_log.py: row[8]=run_host_id, row[9]=trace_id, row[10]=trace_id_count
+    # where row is 1-indexed from itertuples, so DataFrame columns are 7, 8, 9
+    df.iloc[:, 7] = pd.to_numeric(df.iloc[:, 7], errors="coerce").fillna(-1).astype(int)  # run_host_id
+    df.iloc[:, 8] = pd.to_numeric(df.iloc[:, 8], errors="coerce").fillna(-1).astype(int)  # trace_id
+    df.iloc[:, 9] = pd.to_numeric(df.iloc[:, 9], errors="coerce").fillna(-1).astype(int)  # trace_id_count
+
+    # Get column names for easier access
+    # Column structure: chip_id, core_x, core_y, risc, timer_id, time_data, attached_data,
+    # run_host_id, trace_id, trace_id_count, zone_name, type, src_line, src_file, meta_data
+    chip_col = df.columns[0]
+    core_x_col = df.columns[1]
+    core_y_col = df.columns[2]
+    risc_col = df.columns[3]
+    run_host_id_col = df.columns[7]
+    trace_id_col = df.columns[8]
+    trace_id_count_col = df.columns[9]
+
+    # First, find operations where BRISC has trace replay markers (trace_id != -1 AND trace_id_count >= 1)
+    # We need BRISC to establish which ops should have trace_ids
+    brisc_df = df[df[risc_col] == "BRISC"]
+    brisc_replay_mask = (brisc_df[trace_id_col] != -1) & (brisc_df[trace_id_count_col] >= 1)
+    brisc_replay_ops = brisc_df[brisc_replay_mask]
+
+    if len(brisc_replay_ops) == 0:
+        logger.info(
+            "No trace replay markers found in BRISC CSV data - test may not be running traced operations or they haven't been replayed yet"
+        )
+        return
+
+    # Get the set of (chip, core_x, core_y, run_host_id) that BRISC marked with trace replays
+    brisc_traced_ops = set(
+        brisc_replay_ops[[chip_col, core_x_col, core_y_col, run_host_id_col]].apply(tuple, axis=1).unique()
+    )
+
+    logger.info(f"Found {len(brisc_traced_ops)} unique ops with BRISC trace replay markers")
+
+    # Now validate that NCRISC entries for these same ops also have the correct trace_id
+    errors = []
+    ops_with_brisc_trace_ids = 0
+    ops_validated = 0
+
+    for chip, core_x, core_y, op_id in brisc_traced_ops:
+        # Get all entries for this specific op from the full dataframe (not filtered)
+        op_mask = (
+            (df[chip_col] == chip)
+            & (df[core_x_col] == core_x)
+            & (df[core_y_col] == core_y)
+            & (df[run_host_id_col] == op_id)
+        )
+        op_entries = df[op_mask]
+
+        # Get BRISC trace_ids for this op (from replay entries)
+        brisc_entries = op_entries[
+            (op_entries[risc_col] == "BRISC") & (op_entries[trace_id_col] != -1) & (op_entries[trace_id_count_col] >= 1)
+        ]
+
+        if len(brisc_entries) == 0:
+            continue
+
+        brisc_trace_ids = set(brisc_entries[trace_id_col].unique())
+        ops_with_brisc_trace_ids += 1
+
+        # Get ALL NCRISC entries for this op (including those with trace_id=-1)
+        ncrisc_entries = op_entries[op_entries[risc_col] == "NCRISC"]
+
+        if len(ncrisc_entries) > 0:
+            ops_validated += 1
+            ncrisc_trace_ids = set(ncrisc_entries[trace_id_col].unique())
+
+            # Check for NCRISC entries with trace_id=-1 (not set)
+            ncrisc_missing_trace = ncrisc_entries[ncrisc_entries[trace_id_col] == -1]
+            if len(ncrisc_missing_trace) > 0:
+                errors.append(
+                    f"Chip {chip}, Core ({core_x}, {core_y}), Op ID {op_id}: "
+                    f"BRISC has trace_id(s) {sorted(brisc_trace_ids)}, but NCRISC has {len(ncrisc_missing_trace)} "
+                    f"entries with trace_id=-1 (not set). NCRISC should have trace_id set to match BRISC."
+                )
+
+            # Also check if the valid trace IDs don't match
+            ncrisc_valid_trace_ids = set(ncrisc_entries[ncrisc_entries[trace_id_col] != -1][trace_id_col].unique())
+            if len(ncrisc_valid_trace_ids) > 0 and ncrisc_valid_trace_ids != brisc_trace_ids:
+                errors.append(
+                    f"Chip {chip}, Core ({core_x}, {core_y}), Op ID {op_id}: "
+                    f"BRISC has trace_id(s) {sorted(brisc_trace_ids)}, but NCRISC has different trace_id(s) {sorted(ncrisc_valid_trace_ids)}. "
+                    f"They should match."
+                )
+
+    # Report findings
+    logger.info(
+        f"CSV validation: Found {ops_with_brisc_trace_ids} trace replay ops with BRISC entries, validated {ops_validated} ops with both BRISC and NCRISC entries"
+    )
+
+    if errors:
+        error_msg = f"Found {len(errors)} trace_id mismatches between BRISC and NCRISC:\n" + "\n".join(errors[:10])
+        if len(errors) > 10:
+            error_msg += f"\n... and {len(errors) - 10} more errors"
+        assert False, error_msg
+
+
 @pytest.mark.skip_post_commit
 def test_quick_push_on_noc_profiler():
     devicesData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops",
+        testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core[5-600]",
         enable_noc_tracing=True,
     )
 
     # BRISC can run out of buffer/DRAM space earlier than other riscs, so only validate ops that are
     # present in *both* BRISC and NCRISC logs. Those must have valid trace ids and replay session ids.
     verify_trace_replay_ids_match_between_riscs(devicesData, riscs=("BRISC", "NCRISC"))
+
+    # Also verify the raw CSV to ensure NCRISC has trace_ids properly set when BRISC has them
+    verify_trace_ids_in_device_csv(riscs=("BRISC", "NCRISC"))
 
 
 @skip_for_blackhole()
@@ -753,8 +933,8 @@ def test_dispatch_cores_extended_worker():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [9325],
         "Tensix CQ Prefetch": [9325],
-        "dispatch_total_cq_cmd_op_time": [223],
-        "dispatch_go_send_wait_time": [223],
+        "dispatch_total_cq_cmd_op_time": [87],
+        "dispatch_go_send_wait_time": [87],
     }
 
     verify_stats(
@@ -783,7 +963,7 @@ def test_dispatch_cores_extended_worker():
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.WORKER",
             setupAutoExtract=False,
             doDispatchCores=True,
         ),

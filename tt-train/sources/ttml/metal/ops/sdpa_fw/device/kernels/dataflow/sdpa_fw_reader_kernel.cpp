@@ -80,21 +80,22 @@ void kernel_main() {
 
     // while we process one q_chunk (head of Q), we stream all K and V chunks (heads of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        uint32_t global_row_idx = start_row + i;
-        uint32_t q_start_idx = global_row_idx * qWt;
+        const uint32_t global_row_idx = start_row + i;
+        const uint32_t q_start_idx = global_row_idx * qWt;
         read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
 
-        uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;  // which head of Q we are processing right now
+        const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;  // which head of Q we are processing right now
 
         // which batch we are processing right now
-        uint32_t batch_idx = global_row_idx / (Ht * q_heads);
+        const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
         // calculate which group of K and V we need to read for this head of Q
-        uint32_t kv_group_idx = q_head_idx / heads_per_group;
+        const uint32_t kv_group_idx = q_head_idx / heads_per_group;
 
-        uint32_t kv_offset =
+        const uint32_t kv_offset =
             (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;  // jump to start of relevant batch/group of K and V
 
-        uint32_t mask_offset = (batch_idx * q_heads + q_head_idx) * Ht * Ht + (global_row_idx % Ht) * Ht;
+        // Mask is (1, 1, S, S) - same mask for all batches/heads, indexed by sequence position only
+        const uint32_t mask_offset = (global_row_idx % Ht) * Ht;
 
         for (uint32_t h = 0; h < Ht; ++h) {
             uint32_t kv_start_idx = kv_offset + h * qWt;  // jump to the next row
@@ -103,7 +104,7 @@ void kernel_main() {
 #ifdef USE_ATTN_MASK
             // read one tile of attn_mask for current row of K and V
             // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
-            read_tiles_by_row(cb_attn_mask, mask_address_generator, mask_offset + h, onetile, tile_bytes, onetile);
+            read_one_tile(cb_attn_mask, mask_address_generator, mask_offset + h);
 #endif
             read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
         }

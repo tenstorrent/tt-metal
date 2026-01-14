@@ -23,8 +23,4 @@ struct tensor_args_t {
     std::optional<Tensor> batch_idx_tensor_opt;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
 }  // namespace ttnn::operations::experimental::paged_cache::fill

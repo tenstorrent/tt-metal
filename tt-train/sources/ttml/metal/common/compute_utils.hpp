@@ -7,7 +7,9 @@
 
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api/pack.h"
+#include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/reg_api.h"
+#include "compute_kernel_api/tile_move_copy.h"
 
 inline void pack_and_push(uint32_t reg, uint32_t cb) {
     // NOTE:
@@ -61,4 +63,27 @@ inline void pack_and_push_two_blocks(uint32_t cb_output_1, uint32_t cb_output_2,
     tile_regs_release();
     cb_push_back(cb_output_1, block_size);
     cb_push_back(cb_output_2, block_size);
+}
+
+// Packs tiles from source circular buffer to output circular buffer.
+// Handles data format reconfiguration for both reading and packing.
+// Useful for transferring intermediate results to output buffers or between compute stages.
+inline void pack_tiles_to_output(const uint32_t cb_source, const uint32_t cb_output, const uint32_t num_tiles) {
+    cb_wait_front(cb_source, num_tiles);
+    cb_reserve_back(cb_output, num_tiles);
+
+    pack_reconfig_data_format(cb_output);
+    reconfig_data_format(cb_source, cb_source);
+
+    copy_tile_init(cb_source);
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+        tile_regs_acquire();
+        copy_tile(cb_source, tile_idx, /* register idx */ 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(/* register idx */ 0, cb_output);
+        tile_regs_release();
+    }
+    cb_push_back(cb_output, num_tiles);
+    cb_pop_front(cb_source, num_tiles);
 }

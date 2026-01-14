@@ -9,7 +9,7 @@
 #include <utility>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -233,9 +233,6 @@ struct tensor_args_t {
     Tensor b;
     std::optional<Tensor> bias;
 };
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
 
 // Both CB and tensor allocation sizes are per per tensix core and in bytes.
 struct conv_op_l1_usage {

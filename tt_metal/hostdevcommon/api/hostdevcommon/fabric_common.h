@@ -142,8 +142,8 @@ struct FabricHeaderConfig {
 #ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
     static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE;
 #else
-    // Default: 32 bytes (96B header)
-    static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = 32;
+    // Default: 35 bytes (96B header)
+    static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = 35;
 #endif
 
     // Validation (Fail fast)
@@ -280,8 +280,19 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
         buffer[i] = 0;
     }
 
-    // Last hop in the multicast range (inclusive)
-    const uint32_t last_hop = start_hop - 1 + range_hops - 1;
+    // Last hop in the multicast range (inclusive, may be negative if range_hops == 0)
+    //
+    // Multicast pattern (start_hop=3, range_hops=2 example):
+    //   Hop index:  0    1    2    3    4   ...
+    //   Action:     FWD  FWD  W+F  WR   -
+    //                          X----X           <- multicast range (writes to 2 chips)
+    //                          ^    ^
+    //                       start   last_hop
+    //
+    // Calculation: start_hop is 1-indexed -> convert to 0-indexed (hop 2)
+    //              Add range_hops to get end position, then -1 for inclusive last index
+    //              (3-1) + 2 - 1 = 3, simplified: (start_hop + range_hops) - 2
+    const int last_hop = static_cast<int>(start_hop + range_hops) - 2;
 
     auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
         const uint32_t word_idx = hop_index / LowLatencyFields::BASE_HOPS;
@@ -299,12 +310,14 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
     }
 
     // 2. Range: Write & Forward (for range_hops - 1 hops)
-    for (uint32_t hop = start_hop - 1; hop < last_hop; hop++) {
+    for (int hop = static_cast<int>(start_hop) - 1; hop < last_hop; hop++) {
         set_hop_field(hop, LowLatencyFields::WRITE_AND_FORWARD);
     }
 
-    // 3. Tail: Write Only (stop at last hop)
-    set_hop_field(last_hop, LowLatencyFields::WRITE_ONLY);
+    // 3. Tail: Write Only (only if we have a valid last hop)
+    if (last_hop >= 0) [[likely]] {
+        set_hop_field(last_hop, LowLatencyFields::WRITE_ONLY);
+    }
 }
 
 //=============================================================================
@@ -490,6 +503,22 @@ struct worker_routing_l1_info_t {
 struct fabric_routing_l1_info_t {
     routing_l1_info_t routing_info;
 };
+
+// Fabric connection synchronization region in L1
+// Used for multi-RISC synchronization when opening fabric connections
+// Memory layout: [lock(4) | initialized(4) | connection_object(128) | padding(8)] = 144 bytes
+struct fabric_connection_sync_t {
+    uint32_t lock;         // Spinlock for mutual exclusion (0 = unlocked, 1 = locked)
+    uint32_t initialized;  // Flag indicating if fabric connection has been initialized (0 = not initialized, 1 =
+                           // initialized)
+    // Connection object storage follows at offset 8 (accessed via address calculation)
+};
+static_assert(sizeof(fabric_connection_sync_t) == 8, "fabric_connection_sync_t must be 8 bytes");
+
+// Offset to connection object storage within the sync region
+static constexpr uint32_t FABRIC_CONNECTION_OBJECT_OFFSET = 8;
+// Size reserved for WorkerToFabricEdmSender object (verified by static_assert in tt_fabric_udm_impl.hpp)
+static constexpr uint32_t FABRIC_CONNECTION_OBJECT_SIZE = 128;
 
 }  // namespace tt::tt_fabric
 
