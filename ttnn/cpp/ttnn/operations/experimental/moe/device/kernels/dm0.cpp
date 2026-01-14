@@ -59,15 +59,10 @@ void kernel_main() {
 
     const uint32_t num_w0_w1_tiles_w = (core_id < 8) ? 5 : 6;
     const uint32_t num_w2_tiles_w = (core_id < 8) ? 19 : 18;
+
+    const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
+    const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
-
-    constexpr uint32_t num_in2_tiles = 64;
-    constexpr uint32_t num_elt_tiles = 1;
-
-    constexpr uint32_t w0_w1_stride_w = 1;
-    constexpr uint32_t w0_w1_stride_h = 64;
-    constexpr uint32_t w2_stride_w = 1;
-    constexpr uint32_t w2_stride_h = 224;
 
     // DRAM Reading constants
     const uint32_t dram_bank_id = core_id;
