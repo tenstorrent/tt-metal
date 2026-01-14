@@ -196,10 +196,10 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
     }
 }
 
-template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType>
+template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType, class SenderType>
 inline void fabric_send_noc_unicast(
     AddrGenType addrgen,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    SenderType & fabric_connection,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t payload_l1_address,
     uint64_t noc_page,
@@ -211,7 +211,7 @@ inline void fabric_send_noc_unicast(
 
         tt::tt_fabric::linear::to_noc_unicast_write(
             align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
-        perform_payload_send<true>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        perform_payload_send<true, SenderType>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
 
         payload_l1_address += curr_packet_size;
         offset += curr_packet_size;

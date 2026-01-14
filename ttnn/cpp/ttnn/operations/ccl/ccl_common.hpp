@@ -750,4 +750,24 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
     Topology topology, const distributed::MeshCoordinate& src_device_coord, const std::optional<distributed::MeshCoordinate>& forward_device_coord, const std::optional<distributed::MeshCoordinate>& backward_device_coord, uint32_t num_targets_forward, uint32_t num_targets_backward, distributed::MeshDevice* mesh_device);
 
+
+void fabric_mux_connection_ct_args(
+    const uint32_t num_workers_per_direction,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    std::vector<uint32_t>& worker_ct_args);
+
+void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::Program& program,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args);
+
+
 }  // namespace ttnn::ccl
