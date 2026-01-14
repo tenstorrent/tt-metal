@@ -25,17 +25,7 @@ void bind_deepseek_minimal_broadcast_op(nb::module_ mod, const ccl_operation_t& 
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const MeshCoordinate& sender_coord,
-               std::optional<uint32_t> cluster_axis,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const uint32_t num_links,
-               const tt::tt_fabric::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, sender_coord, num_links, memory_config, topology, cluster_axis, subdevice_id);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("sender_coord"),
             nb::kw_only(),
