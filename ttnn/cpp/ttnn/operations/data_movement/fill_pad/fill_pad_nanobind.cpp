@@ -43,22 +43,12 @@ void bind_fill_pad_op(nb::module_& mod) {
         )doc",
         ttnn::fill_implicit_tile_padding.base_name());
 
-    using OperationType = decltype(ttnn::fill_implicit_tile_padding);
     ttnn::bind_registered_operation(
         mod,
         ttnn::fill_implicit_tile_padding,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& input_tensor,
-               const float fill_value,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, fill_value, memory_config);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("fill_value"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        ttnn::nanobind_arguments_t{
+            nb::arg("input_tensor"), nb::arg("fill_value"), nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace
