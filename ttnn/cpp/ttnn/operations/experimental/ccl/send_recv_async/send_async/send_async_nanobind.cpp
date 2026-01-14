@@ -17,17 +17,7 @@ namespace {
 template <typename ccl_operation_t>
 void bind_send_async(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
     bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::distributed::MeshSocket& mesh_socket) -> std::vector<ttnn::Tensor> {
-                return self(input_tensor, mesh_socket);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("mesh_socket")});
+        mod, operation, doc, ttnn::nanobind_arguments_t{nb::arg("input_tensor"), nb::arg("mesh_socket")});
 }
 
 }  // namespace
