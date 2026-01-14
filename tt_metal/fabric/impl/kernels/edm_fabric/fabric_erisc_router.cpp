@@ -1800,7 +1800,7 @@ FORCE_INLINE void configure_outbound_to_receiver_channel_pointers(
 
     [&]<size_t... Is>(std::index_sequence<Is...>) {
         ((outbound_to_receiver_channel_pointers.template get<Is>().init(
-            reinterpret_cast<uint32_t>(remote_receiver_channels.template get<Is>().channel_base_address),
+            reinterpret_cast<uint32_t>(remote_receiver_channels.template get<Is>().channel_base_address()),
             remote_receiver_channels.template get<Is>().get_max_eth_payload_size())), ...);
     }(std::make_index_sequence<OutboundReceiverChannelPointers::N>{});
 }

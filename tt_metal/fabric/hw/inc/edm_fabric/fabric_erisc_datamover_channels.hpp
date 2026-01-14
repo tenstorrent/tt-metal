@@ -140,6 +140,10 @@ public:
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr() const {
         return static_cast<const DERIVED_T*>(this)->get_cached_next_buffer_slot_addr_impl();
     }
+
+    FORCE_INLINE void set_cached_next_buffer_slot_addr(size_t next_buffer_slot_addr) {
+        static_cast<DERIVED_T*>(this)->set_cached_next_buffer_slot_addr_impl(next_buffer_slot_addr);
+    }
 };
 
 // Elastic sender channel implementation (stub for now)
@@ -162,6 +166,10 @@ public:
     FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_impl() {
         // TODO: Issue #26311
     }
+
+    FORCE_INLINE void set_cached_next_buffer_slot_addr_impl(size_t addr) {
+        // TODO: Issue #26311
+    }    
 };
 
 // Elastic channel buffer implementation (stub for now)
@@ -213,15 +221,20 @@ public:
     explicit StaticSizedEthChannelBuffer() = default;
 
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
-        this->channel_base_address = reinterpret_cast<volatile uint32_t*>(channel_base_address);
-        this->max_eth_payload_size_in_bytes = buffer_size_bytes;
+        buffer_size_in_bytes = buffer_size_bytes;
+        max_eth_payload_size_in_bytes = buffer_size_in_bytes;
+        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+            this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
+            // need to avoid unrolling to keep code size within limits
+            #pragma GCC unroll 1
+            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+            }
+        }
 
-        size_t const stride_in_words = this->max_eth_payload_size_in_bytes >> 2U; // remove divide by sizeof(uint32_t)
-        volatile uint32_t* header_ptr = this->channel_base_address;
-
-         if constexpr (NUM_BUFFERS) {
-            this->cached_next_buffer_slot_addr = reinterpret_cast<size_t>(this->channel_base_address);
-         }
+        if constexpr (NUM_BUFFERS) {
+            set_cached_next_buffer_slot_addr_impl(this->buffer_addresses[0]);
+        }
     }
 
     StaticSizedEthChannelBuffer(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
@@ -229,12 +242,12 @@ public:
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl(const BufferIndex& buffer_index) const {
-        return reinterpret_cast<size_t>(this->channel_base_address) + buffer_index * this->max_eth_payload_size_in_bytes;
+        return this->buffer_addresses[buffer_index];
     }
 
     template <typename T>
     [[nodiscard]] FORCE_INLINE volatile T* get_packet_header_impl(const BufferIndex& buffer_index) const {
-        return reinterpret_cast<volatile T*>(reinterpret_cast<size_t>(this->channel_base_address) + buffer_index * this->max_eth_payload_size_in_bytes);
+        return reinterpret_cast<volatile T*>(this->buffer_addresses[buffer_index]);
     }
 
     template <typename T>
@@ -256,11 +269,19 @@ public:
 
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const { return this->cached_next_buffer_slot_addr; }
 
-    volatile uint32_t* channel_base_address;
+    FORCE_INLINE void set_cached_next_buffer_slot_addr_impl(size_t next_buffer_slot_addr) {
+        this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
+    }
 
-    // header + payload regions only
-    std::size_t max_eth_payload_size_in_bytes;
+    FORCE_INLINE uint32_t channel_base_address() const {
+        return static_cast<uint32_t>(this->buffer_addresses[0]);
+    }
+
+private:
+    std::array<size_t, NUM_BUFFERS> buffer_addresses;
+    std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
+    std::size_t max_eth_payload_size_in_bytes;
     std::size_t cached_next_buffer_slot_addr;
 };
 
