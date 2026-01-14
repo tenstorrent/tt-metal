@@ -243,11 +243,26 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
-    CoreCoord grid_size, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+    CoreCoord grid_size,
+    uint32_t nblocks,
+    uint32_t width_tiles,
+    uint32_t height_tiles,
+    std::optional<uint32_t> single_block_size_limit = std::nullopt) {
     // Compute grid area and initial blocks-per-core using integer math.
     const uint32_t grid_area = grid_size.x * grid_size.y;
     auto [ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size] =
         compute_ncores_wh(grid_area, nblocks, width_tiles, height_tiles);
+    uint32_t single_sblock_size = single_block_size;
+    if (single_block_size_limit.has_value() && single_block_size > single_block_size_limit.value()) {
+        auto result =
+            compute_ncores_wh_sb(grid_area, nblocks, width_tiles, height_tiles, single_block_size_limit.value());
+        ncores = result.ncores;
+        nblocks_per_core = result.nblocks_per_core;
+        total_blocks_width = result.total_blocks_width;
+        total_blocks_height = result.total_blocks_height;
+        single_block_size = result.single_block_size;
+        single_sblock_size = result.single_sblock_size;
+    }
     // Sets to hold different core ranges.
     std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
     std::set<CoreRange> all_cores;
@@ -305,7 +320,7 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         has_cliff_col,
         full_cores_per_row,
         full_cores_per_col,
-        0};
+        single_sblock_size};
 }
 
 inline std::tuple<uint32_t, uint32_t> compute_ncores(size_t grid_area, uint32_t nblocks) {
