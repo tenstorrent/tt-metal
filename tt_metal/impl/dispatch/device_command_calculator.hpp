@@ -67,6 +67,23 @@ public:
         }
     }
 
+    // Calculator sizing for CQ_DISPATCH_CMD_WRITE_LINEAR_H (dispatch_h linear write)
+    // Mirrors add_dispatch_write_linear for sizing/alignment purposes.
+    template <bool flush_prefetch = true, bool inline_data = false>
+    void add_dispatch_write_linear_h(uint32_t data_sizeB) {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmdLarge);
+
+        if constexpr (flush_prefetch) {
+            if constexpr (inline_data) {
+                this->add_data(data_sizeB);
+                this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+            }
+        } else {
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+        }
+    }
+
     void add_dispatch_write_linear_host_event(uint32_t data_sizeB) {
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd) + data_sizeB;

@@ -148,16 +148,14 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
     for (size_t region = 0; region < buffer->size() / region_size; region++) {
         size_t region_offset = region * region_size;
         auto buffer_region = BufferRegion{region_offset, region_size};
-        auto write_shard_data_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = distributed::MeshCoordinate(0, 0),
-            .host_data = reinterpret_cast<std::byte*>(tensor_data.data()) + region_offset,
-            .region = buffer_region,
-        };
-        auto read_shard_data_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = distributed::MeshCoordinate(0, 0),
-            .host_data = reinterpret_cast<std::byte*>(partial_readback_data.data()) + region_offset,
-            .region = buffer_region,
-        };
+        auto write_shard_data_transfer =
+            distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}
+                .host_data(reinterpret_cast<std::byte*>(tensor_data.data()) + region_offset)
+                .region(buffer_region);
+        auto read_shard_data_transfer =
+            distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}
+                .host_data(reinterpret_cast<std::byte*>(partial_readback_data.data()) + region_offset)
+                .region(buffer_region);
         device_->mesh_command_queue().enqueue_write_shards(buffer, {write_shard_data_transfer}, true);
         device_->mesh_command_queue().enqueue_read_shards({read_shard_data_transfer}, buffer, true);
     }
