@@ -47,11 +47,21 @@ void bind_point_to_point(nb::module_& mod) {
                         topology=ttnn.Topology.Linear)
             )doc";
 
+    using OperationType = decltype(ttnn::point_to_point);
     ttnn::bind_registered_operation(
         mod,
         ttnn::point_to_point,
         doc,
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const MeshCoordinate& sender_coord,
+               const MeshCoordinate& receiver_coord,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const std::optional<ttnn::Tensor>& intermediate_tensor,
+               const ccl::Topology topology) {
+                return self(input_tensor, receiver_coord, sender_coord, topology, output_tensor, intermediate_tensor);
+            },
             nb::arg("input_tensor").noconvert(),
             nb::arg("sender_coord"),
             nb::arg("receiver_coord"),
