@@ -30,7 +30,11 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         auto core = dram_adjacent_cores[idx];
         log_warning(tt::LogOp, "DRAM {} mapped to core {}", idx, core.str());
     }
-    auto cores = tt::tt_metal::CoreRangeSet(dram_adjacent_cores);
+    auto all_cores = tt::tt_metal::CoreRangeSet(dram_adjacent_cores);
+
+    // Pick first 8 and next 4 cores
+    auto cores_8 = tt::tt_metal::CoreRangeSet({dram_adjacent_cores.data(), 8});
+    auto cores_4 = tt::tt_metal::CoreRangeSet({dram_adjacent_cores.data() + 8, 4});
 
     // Create CBs for the program
     // CBs used in the MOE operation
@@ -38,34 +42,52 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         ----------------------------------------------------------------------------
         |     Name       |   CB Index    |   Dtype    | Tiles/CB |  Total size (B) |
         ----------------------------------------------------------------------------
-        | cb_r2c_w0      | CBIndex::c_0  | bfp4_b     |    14*2  |      16128      |
-        | cb_s2c_in(sh)  | CBIndex::c_1  | bf16       |    224*2 |      917504     |
-        | cb_c2c_mm0     | CBIndex::c_2  | bfp8_b     |    1     |      576        |
-        | cb_c2c_mm1     | CBIndex::c_3  | bfp8_b     |    1     |      576        |
-        | cb_c2w_elt     | CBIndex::c_4  | bfp8_b     |    1     |      576        |
-        | cb_r2c_in2     | CBIndex::c_5  | bfp8_b     |    1     |      576        |
-        | cb_c2w_out(sh) | CBIndex::c_6  | bf16       |    1*2  |       4096       |
+        | cb_r2c_w0      | CBIndex::c_0  | Bfp4_b     |    14*2  |      16128      |
+        | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  |    224*2 |      917504     |
+        | cb_c2c_mm0     | CBIndex::c_2  | Float16_b  |    5|6   |      3456       |
+        | cb_c2c_mm1     | CBIndex::c_3  | Float16_b  |    5|6   |      3456       |
+        | cb_c2w_elt     | CBIndex::c_4  | Float16_b  |    5|6   |      3456       |
+        | cb_r2c_in2     | CBIndex::c_5  | Float16_b  |    5|6   |      3456       |
+        | cb_c2w_out(sh) | CBIndex::c_6  | Float16_b  |    1*2   |      4096       |
         ---------------------------------------------------------------------------
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2w_out are handled separately as they are sharded CBs
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t>> cb_specs = {
+    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t>> cb_specs0 = {
         {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 14 * 2},
-        {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Bfp8_b, 1},
-        {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Bfp8_b, 1},
-        {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Bfp8_b, 1},
-        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Bfp8_b, 1}};
+        {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Float16_b, 5},
+        {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Float16_b, 5},
+        {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Float16_b, 5},
+        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, 6}};  // Can get 6 from other cores
 
-    [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles;
+    [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles8, cb_handles4, cb_handles_all;
 
     // Create CBs
-    for (const auto& [name, index, data_format, tiles_per_cb] : cb_specs) {
+    for (const auto& [name, index, data_format, tiles_per_cb] : cb_specs0) {
         const uint32_t bytes_per_tile = tt::tile_size(data_format);
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile);
 
-        cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
+        cb_handles8[name] = tt::tt_metal::CreateCircularBuffer(program, cores_8, cb_config);
+    }
+
+    // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
+    // Note: cb_s2c_in and cb_c2w_out are handled separately as they are sharded CBs
+    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t>> cb_specs1 = {
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 14 * 2},
+        {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Float16_b, 6},
+        {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Float16_b, 6},
+        {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Float16_b, 6},
+        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, 6}};
+
+    // Create CBs
+    for (const auto& [name, index, data_format, tiles_per_cb] : cb_specs1) {
+        const uint32_t bytes_per_tile = tt::tile_size(data_format);
+        const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
+                                   .set_page_size(index, bytes_per_tile);
+
+        cb_handles4[name] = tt::tt_metal::CreateCircularBuffer(program, cores_4, cb_config);
     }
 
     // Create sharded CBs
@@ -81,7 +103,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile)
                                    .set_globally_allocated_address(*p_buffer);
-        cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
+        cb_handles_all[name] = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
     }
 
     // Create compile args for the program
@@ -106,7 +128,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm0.cpp",
-        cores,
+        all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
@@ -116,7 +138,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm1.cpp",
-        cores,
+        all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
@@ -125,8 +147,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
 
     auto compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute_dummy.cpp",
-        cores,
+        "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute.cpp",
+        all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = false,

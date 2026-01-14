@@ -34,20 +34,15 @@ void MAIN {
 
     const uint32_t num_w0_w1_tiles_w = (core_id < 8) ? 5 : 6;
     const uint32_t num_w2_tiles_w = (core_id < 8) ? 19 : 18;
+
+    const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
+    const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
-
-    constexpr uint32_t num_elt_tiles = 1;
-    constexpr uint32_t num_in2_tiles = 64;
-
-    constexpr uint32_t w0_w1_stride_w = 1;
-    constexpr uint32_t w0_w1_stride_h = 64;
-    constexpr uint32_t w2_stride_w = 1;
-    constexpr uint32_t w2_stride_h = 224;
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         // Read W0 and W1 from CB into registers
-        for (uint32_t i = 0; i < num_w0_w1_tiles_w; ++i) {
-            for (uint32_t j = 0; j < num_w0_w1_tiles_h; ++j) {
+        for (uint32_t i = 0; i < num_w0_w1_tiles_h; ++i) {
+            for (uint32_t j = 0; j < num_w0_w1_tiles_w; ++j) {
                 cb_wait_front(cb_r2c_w0, 1);
                 cb_pop_front(cb_r2c_w0, 1);
 
