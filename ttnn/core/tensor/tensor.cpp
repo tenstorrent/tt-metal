@@ -514,7 +514,7 @@ void copy_tensor_to_host_from_device(
     queue.enqueue_read_shards(shard_data_transfers, src.mesh_buffer(), blocking);
 }
 
-void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
+void memcpy2(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
     ZoneScoped;
     auto* mesh_device = src.device();
     TT_FATAL(mesh_device, "Tensor must be on device");
