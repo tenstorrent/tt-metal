@@ -50,7 +50,7 @@ std::vector<int8_t> generate_uniform_int8(size_t num_elements, int8_t min, int8_
     std::mt19937 gen(seed);
     std::uniform_int_distribution<int16_t> distrib(min, max);
 
-    for (int i = 0; i < num_elements; i++) {
+    for (size_t i = 0; i < num_elements; i++) {
         random_array[i] = static_cast<int8_t>(distrib(gen));
     }
 
