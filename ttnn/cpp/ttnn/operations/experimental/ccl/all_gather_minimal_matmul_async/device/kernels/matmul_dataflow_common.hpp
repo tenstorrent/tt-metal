@@ -6,6 +6,13 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 
+#ifdef USE_MUX
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+
+using namespace tt::tt_fabric::linear::experimental;
+#endif
+
+#ifdef USE_MUX
 uint32_t compute_actual_k_block(
     uint32_t k_block_iter,
     uint32_t total_k_block_count,
@@ -16,7 +23,16 @@ uint32_t compute_actual_k_block(
     bool is_first_n_block,
     volatile tt_l1_ptr uint32_t* out_ready_semaphore,
     uint32_t& sem_target,
-    uint32_t* slices_received) {
+    uint32_t& slices_received) {
+#else
+uint32_t compute_actual_k_block(
+				uint32_t k_block_iter,
+				uint32_t total_k_block_count,
+				uint32_t my_rank,
+				uint32_t k_blocks_per_device,
+				uint32_t num_devices,
+				bool is_forward) {
+#endif
     // Start with self, then go backward, then forward.
     // Each time, read all k_blocks on device before moving on
     // If is_forward is false, iterate in the backwards order
@@ -40,6 +56,7 @@ uint32_t compute_actual_k_block(
     }
     uint32_t k_block_start = k_blocks_per_device * actual_device_rank;
     uint32_t k_block_index = k_block_start + device_k_block_iter;
+#ifdef USE_MUX
     if (device_iter > 0 && is_first_n_block) {
         // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         noc_semaphore_wait_min(out_ready_semaphore, sem_target + 1);
@@ -48,26 +65,18 @@ uint32_t compute_actual_k_block(
             slices_received++;
         }
     }
+#endif
     return k_block_index;
 }
 
-bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_device) {
-    // Start with self, then go backward, then forward
-    uint32_t device_iter = k_block_iter / k_blocks_per_device;
-    return (device_iter % 2);
-}
-
-bool is_injector(uint32_t use_backward, bool is_injector_core_backward, bool is_injector_core_forward) {
-    return (is_injector_core_backward && use_backward) || (is_injector_core_forward && !use_backward);
-}
-
+#ifdef USE_MUX
 template <
     typename TensorAccessorType,
     typename ConnectionHandleType,
     typename ScatterPacketHdrType,
     typename UnicastPacketHdrType,
     typename SemIncPacketHdrType>
-bool forward_tile_to_fabric_neighbor(
+void forward_tile_to_fabric_neighbor(
     uint32_t m_tile_start,
     uint32_t k_tile_start,
     uint32_t m_block_tiles,
@@ -80,7 +89,7 @@ bool forward_tile_to_fabric_neighbor(
     ScatterPacketHdrType pkt_scatter_hdr,
     UnicastPacketHdrType pkt_unicast_hdr,
     SemIncPacketHdrType pkt_hdr_sem_inc,
-    uint32_t page_size,
+    uint16_t page_size,
     uint64_t out_ready_sem_noc_addr_in_pkt) {
     uint32_t tiles_to_read = m_block_tiles * k_block_tiles;
     uint32_t tiles_read = 0;
@@ -125,6 +134,17 @@ bool forward_tile_to_fabric_neighbor(
         mux_connection_handle,
         pkt_hdr_sem_inc,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+}
+#endif
+
+bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_device) {
+    // Start with self, then go backward, then forward
+    uint32_t device_iter = k_block_iter / k_blocks_per_device;
+    return (device_iter % 2);
+}
+
+bool is_injector(uint32_t use_backward, bool is_injector_core_backward, bool is_injector_core_forward) {
+    return (is_injector_core_backward && use_backward) || (is_injector_core_forward && !use_backward);
 }
 
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
