@@ -37,7 +37,7 @@ void set_or_update_runtime_arguments(
     KernelHandle writer_kernel_id,
     KernelHandle compute_kernel_id,
     CoreCoord compute_with_storage_grid_size,
-    const BcastToOperation::operation_attributes_t& operation_attributes,
+    const BcastToOperation::operation_attributes_t& /*operation_attributes*/,
     const BcastToOperation::tensor_args_t& tensor_args,
     BcastToOperation::tensor_return_value_t& output,
     F handle_args) {
@@ -54,7 +54,6 @@ void set_or_update_runtime_arguments(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
-    auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 

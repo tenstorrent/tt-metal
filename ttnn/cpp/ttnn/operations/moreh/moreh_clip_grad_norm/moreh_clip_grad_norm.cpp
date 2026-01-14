@@ -7,7 +7,6 @@
 #include <optional>
 
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/constants.hpp>
 #include "moreh_clip_grad_norm_step1/device/moreh_clip_grad_norm_step1_device_operation.hpp"
 #include "moreh_clip_grad_norm_step2/device/moreh_clip_grad_norm_step2_device_operation.hpp"
 #include "moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.hpp"
@@ -33,7 +32,16 @@ Tensor MorehClipGradNorm::invoke(
     const std::optional<const Tensor>& total_norm,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    auto device = inputs.at(0).device();
+    // Early validation: if error_if_nonfinite is true, check if norm_type itself is NaN
+    if (error_if_nonfinite && std::isnan(norm_type)) {
+        TT_FATAL(
+            false,
+            "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "
+            "clipped. To disable this error and scale the gradients by the non-finite norm anyway, set "
+            "`error_if_nonfinite=False`",
+            norm_type);
+    }
+    auto* device = inputs.at(0).device();
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
@@ -43,11 +51,13 @@ Tensor MorehClipGradNorm::invoke(
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
     // Store intermediate reduction of Sum[|e|^p]
     auto tmp_pow_sum = create_device_tensor(
-        Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
-        inputs.at(0).dtype(),
-        Layout::TILE,
-        device,
-        memory_config.value_or(inputs.at(0).memory_config()));
+        ttnn::TensorSpec(
+            Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
+            tt::tt_metal::TensorLayout(
+                inputs.at(0).dtype(),
+                tt::tt_metal::PageConfig(Layout::TILE),
+                memory_config.value_or(inputs.at(0).memory_config()))),
+        device);
 
     // Run Step 1
     // Sum[|e|^p]

@@ -569,7 +569,6 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
     if nkv > 1 and q_dtype != ttnn.bfloat16:
         pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
 
-    ttnn.device.DisablePersistentKernelCache()
     if single_iter:
         run_test_sdpa_decode_single_iter(
             device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor, sharded_in=False, sharded_out=False
@@ -597,6 +596,7 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
         [32, 32, 8, 4224, 128, (8, 8)],  # llama3.2 vision encoder on n150
         [8, 16, 4, 4224, 128, (8, 8)],  # llama3.2 vision encoder on n300
         [32, 4, 1, 4224, 128, (8, 8)],  # llama3.2 vision encoder on n300
+        [1, 64, 8, 2048, 128, (8, 8)],  # num q heads greater than 32
     ),
 )
 @pytest.mark.timeout(120)
@@ -604,7 +604,6 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     if nkv > 1 and q_dtype != ttnn.bfloat16:
         pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
 
-    ttnn.device.DisablePersistentKernelCache()
     for _ in range(2):
         run_test_sdpa_decode_single_iter(
             device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=False, sharded_out=False, causal=False
@@ -626,8 +625,6 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     ([32, 8, 1, 32768, 128, (8, 6), True, True],),  # Llama2-70B
 )
 def test_sdpa_decode_ignore_users(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor):
-    ttnn.device.DisablePersistentKernelCache()
-
     # Set odd users to -1 to test skipping users
     start_indices = [100 if bb % 2 == 0 else -1 for bb in range(b)]
 
@@ -1141,7 +1138,6 @@ def test_sdpa_decode_paged_attention(
     if s == 128 * 1024 and block_size != 64:
         # 128k sequence, block_size 64 tests the sizing of the page table CB
         pytest.skip("Skipping test for seq_len=128k with block_size!=64")
-    ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_paged_attention(
         device,
         b,
@@ -1181,7 +1177,6 @@ def test_sdpa_decode_paged_attention(
     ),  # Llama2-70B
 )
 def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
-    ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_single_iter(
         device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=True, sharded_out=False
     )
@@ -1323,8 +1318,6 @@ def test_sdpa_decode_perf(device):
     ([16, 8, 1, 8192, 128],),  # Llama2-70B
 )
 def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
-    ttnn.device.DisablePersistentKernelCache()
-
     dummy_tensors = []
     for i in range(2):
         # generate random start indices from 0 to s-1
@@ -1554,7 +1547,6 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     ),
 )
 def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
-    ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype)
 
 
@@ -1596,17 +1588,23 @@ def test_sdpa_decode_sliding_window(
     if sliding_window_size >= s:
         pytest.skip(f"Sliding window {sliding_window_size} must be smaller than sequence length {s}")
 
-    ttnn.device.DisablePersistentKernelCache()
+    # Test different window start positions to ensure all fill tile code paths are hit
+    # when generating the sliding window
+    k_values = [5, 10, 20, 30]
 
-    # Test different positions to ensure sliding window works correctly
     test_positions = [
-        sliding_window_size * 2,  # Window fully slides
-        sliding_window_size // 2,  # Window partially filled
-        sliding_window_size - 1,  # Window almost full
-        s // 2,  # Middle of sequence
-        s - 10,  # Near end of sequence
+        *[
+            (sliding_window_size + offset - 1) + 32 * k
+            for k in k_values
+            for offset in (15, 16, 17)
+            # in first face, in second face (1st face completely filled), in second face (1st face completely filled + 2nd face partially filled)
+        ],
+        sliding_window_size * 2,
+        sliding_window_size // 2,
+        sliding_window_size - 1,
+        s // 2,
+        s - 10,
     ]
-
     for cur_pos in test_positions:
         if cur_pos >= s:
             continue

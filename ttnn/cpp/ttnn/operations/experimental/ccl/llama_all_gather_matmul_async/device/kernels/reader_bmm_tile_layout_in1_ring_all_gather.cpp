@@ -4,11 +4,11 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "remote_circular_buffer_api.h"
-#include "debug/dprint.h"
-#include "debug/dprint_tile.h"
+#include "api/remote_circular_buffer.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_tile.h"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -82,6 +82,7 @@ void kernel_main() {
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
             do_signaling(rt_args_idx);
+            noc_async_write_barrier();
         }
         return;
     }
@@ -193,4 +194,5 @@ void kernel_main() {
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     noc_async_atomic_barrier();
 #endif
+    noc_async_write_barrier();
 }

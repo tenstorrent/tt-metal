@@ -35,6 +35,9 @@ class StemBlock(nn.Module):
         self.conv3 = nn.Conv2d(64, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
         self.conv3.norm = nn.SyncBatchNorm(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
 
+        # Max pooling layer
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Conv1 + BatchNorm + ReLU
         x = self.conv1(x)
@@ -52,6 +55,6 @@ class StemBlock(nn.Module):
         x = F.relu(x)
 
         # Max pooling with kernel_size=3, stride=2, padding=1
-        x = F.max_pool2d(x, kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
+        x = self.maxpool(x)
 
         return x

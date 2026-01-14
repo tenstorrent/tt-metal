@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -33,11 +33,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -45,10 +43,10 @@ class IDevice;
 using std::vector;
 using namespace tt;
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {

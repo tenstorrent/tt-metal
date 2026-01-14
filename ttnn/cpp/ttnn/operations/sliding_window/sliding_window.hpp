@@ -18,11 +18,11 @@ struct ParallelConfig {
     tt::tt_metal::TensorMemoryLayout shard_scheme{0};
     tt::tt_metal::ShardOrientation shard_orientation{0};
 
-    bool operator==(const ParallelConfig& other) {
+    bool operator==(const ParallelConfig& other) const {
         return (
             grid == other.grid && shard_scheme == other.shard_scheme && shard_orientation == other.shard_orientation);
     }
-    bool operator!=(const ParallelConfig& other) { return !(*this == other); }
+    bool operator!=(const ParallelConfig& other) const { return !(*this == other); }
 
     std::size_t get_hash() const {
         return std::hash<std::string>{}(
@@ -46,6 +46,11 @@ struct SlidingWindowConfig {
     std::array<uint32_t, 4> padding = {0, 0, 0, 0};
     uint32_pair_t output_pad_hw = {0, 0};
     uint32_pair_t dilation_hw = {1, 1};
+    std::optional<uint32_pair_t> ceil_pad_hw = std::nullopt;
+
+    // bilinear scaling parameters
+    uint32_t scale_h = 1;
+    uint32_t scale_w = 1;
 
     // parallel configuration
     uint32_t num_cores_nhw = 1;                                             // num cores along collapsed height nhw
@@ -56,7 +61,6 @@ struct SlidingWindowConfig {
     bool is_bilinear = false;
     bool is_transpose = false;
     bool ceil_mode = false;
-    bool is_avg_pool = false;
 
     std::string to_string() const;
     bool has_parallel_config() const;
@@ -84,6 +88,7 @@ struct SlidingWindowConfig {
     uint32_t get_pad_w() const;
     uint32_t get_ceil_pad_h() const;
     uint32_t get_ceil_pad_w() const;
+    uint32_pair_t get_ceil_pad_hw() const;
 
     ttnn::Shape get_transposed_full_input_shape() const;
 
@@ -114,6 +119,11 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config);
 
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config);
 
+std::vector<uint32_t> generate_op_trace_metadata_bilinear(const SlidingWindowConfig& config);
+
+std::pair<uint32_t, uint32_t> find_minmax_trace_indices(
+    const std::vector<uint32_t>& op_trace_metadata, uint32_t start_idx, uint32_t end_idx);
+
 std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& config);
 
 std::vector<PixelMetadata> generate_tensor_metadata(
@@ -123,20 +133,6 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
 
 uint32_t calculate_precise_halo_output_elems(
     const SlidingWindowConfig& config, const std::array<uint32_t, 2>& shard_shape);
-
-std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplace_halo_kernel_config_tensors(
-    const std::vector<PixelMetadata>& tensor_metadata,
-    const std::vector<ShardBoundary>& shard_boundaries,
-    bool is_block_sharded,
-    bool transpose_mcast,
-    bool remote_read,
-    bool is_in_tiled,
-    tt::tt_metal::IDevice* device,
-    uint32_t num_cores_x,
-    uint32_t max_out_nsticks_per_core = INT_MAX,
-    uint32_t in_nsticks_per_core = 0,
-    bool in_place = false,
-    uint32_t in_out_shard_size_delta = 0);
 
 struct HaloGatherKernelConfig {
     std::vector<std::vector<uint16_t>> pad_config0;
@@ -156,6 +152,8 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size);
+
+void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config);
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,

@@ -7,10 +7,11 @@
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 
+#include <fstream>
 #include <string_view>
 
 // Helper function to open a file as an fstream, and check that it was opened properly.
-inline bool OpenFile(const std::string &file_name, std::fstream &file_stream, std::ios_base::openmode mode) {
+inline bool OpenFile(const std::string& file_name, std::fstream& file_stream, std::ios_base::openmode mode) {
     file_stream.open(file_name, mode);
     if (file_stream.is_open()) {
         return true;
@@ -37,13 +38,13 @@ inline void DumpFile(const std::string& file_name) {
 std::string_view::size_type FloatingGlobEndsAt(std::string_view haystack, std::string_view needle, unsigned globs);
 
 // Check of pattern matches at the beginning of str.
-inline std::string_view::size_type AnchoredGlobEndsAt(const std::string_view str,
-                                                      const std::string_view pattern,
-                                                      unsigned globs) {
+inline std::string_view::size_type AnchoredGlobEndsAt(
+    const std::string_view str, const std::string_view pattern, unsigned globs) {
     if (str.size() + globs < pattern.size()) {
         return str.npos;
     }
 
+    // NOLINTBEGIN(bugprone-branch-clone)
     for (std::string_view::size_type idx = 0; idx != pattern.size(); idx++) {
         if (pattern[idx] == '*') {
             auto result = FloatingGlobEndsAt(str.substr(idx), pattern.substr(idx + 1), globs - 1);
@@ -52,22 +53,26 @@ inline std::string_view::size_type AnchoredGlobEndsAt(const std::string_view str
                 result = result ? result + idx : str.size();
             }
             return result;
-        } else if (idx >= str.size()) {
+        }
+        if (idx >= str.size()) {
             return str.npos;
-        } else if (pattern[idx] == '?') {
+        }
+        if (pattern[idx] == '?') {
             continue;
-        } else if (str[idx] != pattern[idx]) {
+        }
+        if (str[idx] != pattern[idx]) {
             return str.npos;
         }
     }
+    // NOLINTEND(bugprone-branch-clone)
+
     return pattern.size();
 }
 
 // Look for needle in haystack. We look backwards through haystack, so
 // that glob use will find the longest match.
-inline std::string_view::size_type FloatingGlobEndsAt(const std::string_view haystack,
-                                                      const std::string_view needle,
-                                                      unsigned globs) {
+inline std::string_view::size_type FloatingGlobEndsAt(
+    const std::string_view haystack, const std::string_view needle, unsigned globs) {
     if (needle.empty()) {
         // Empty needle matches at end.
         return haystack.size();
@@ -94,8 +99,9 @@ inline std::string_view::size_type FloatingGlobEndsAt(const std::string_view hay
         if (result != haystack.npos) {
             return result + idx;
         }
-        if (!idx)
+        if (!idx) {
             break;
+        }
     }
 
     return haystack.npos;
@@ -104,8 +110,9 @@ inline std::string_view::size_type FloatingGlobEndsAt(const std::string_view hay
 // Count the number of '*' characters.
 inline unsigned GlobCount(const std::string_view glob) {
     unsigned count = 0;
-    for (std::string_view::size_type idx = 0; (idx = glob.find('*', idx)) != glob.npos; idx++)
+    for (std::string_view::size_type idx = 0; (idx = glob.find('*', idx)) != glob.npos; idx++) {
         count++;
+    }
     return count;
 }
 // str matches pattern, allowing '?' and '*' globbing.
@@ -120,14 +127,15 @@ inline bool StringContainsGlob(const std::string_view haystack, const std::strin
 
 // Check whether the given file contains a list of strings in any order. Doesn't check for
 // strings between lines in the file.
-inline bool FileContainsAllStrings(const std::string& file_name, const std::vector<std::string> &must_contain) {
+inline bool FileContainsAllStrings(const std::string& file_name, const std::vector<std::string>& must_contain) {
     std::fstream log_file;
-    if (!OpenFile(file_name, log_file, std::fstream::in))
+    if (!OpenFile(file_name, log_file, std::fstream::in)) {
         return false;
+    }
 
     // Construct a set of required strings, we'll remove each one when it's found.
     std::set<std::string_view> must_contain_set;
-    for (auto const &str : must_contain) {
+    for (const auto& str : must_contain) {
         must_contain_set.insert(str);
     }
 
@@ -144,41 +152,40 @@ inline bool FileContainsAllStrings(const std::string& file_name, const std::vect
 
         // Check for all target strings in the current line
         std::vector<std::string_view> found_on_current_line;
-        for (const auto &s : must_contain_set) {
+        for (const auto& s : must_contain_set) {
             if (StringContainsGlob(line, s)) {
                 found_on_current_line.push_back(s);
             }
         }
 
         // Remove all strings found on this line from the set to continue searching for
-        for (const auto &s : found_on_current_line)
+        for (const auto& s : found_on_current_line) {
             must_contain_set.erase(s);
+        }
     }
 
     // Reached EOF with strings yet to find.
     std::string missing_strings;
-    for (const auto &s : must_contain_set) {
+    for (const auto& s : must_contain_set) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }
     log_info(
-        tt::LogTest,
-        "Test Error: Expected file {} to contain the following strings: {}",
-        file_name,
-        missing_strings);
+        tt::LogTest, "Test Error: Expected file {} to contain the following strings: {}", file_name, missing_strings);
     DumpFile(file_name);
     return false;
 }
 
 // Check whether the given file contains a list of strings (in order). Doesn't check for strings
 // between lines in a file.
-inline bool FileContainsAllStringsInOrder(const std::string& file_name, const std::vector<std::string> &must_contain) {
+inline bool FileContainsAllStringsInOrder(const std::string& file_name, const std::vector<std::string>& must_contain) {
     std::fstream log_file;
-    if (!OpenFile(file_name, log_file, std::fstream::in))
+    if (!OpenFile(file_name, log_file, std::fstream::in)) {
         return false;
+    }
 
     // Construct a deque of required strings, we'll remove each one when it's found.
     std::deque<std::string_view> must_contain_queue;
-    for (auto const &str : must_contain) {
+    for (const auto& str : must_contain) {
         must_contain_queue.push_back(str);
     }
 
@@ -203,20 +210,17 @@ inline bool FileContainsAllStringsInOrder(const std::string& file_name, const st
 
     // Reached EOF with strings yet to find.
     std::string missing_strings;
-    for (const auto &s : must_contain_queue) {
+    for (const auto& s : must_contain_queue) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }
     log_info(
-        tt::LogTest,
-        "Test Error: Expected file {} to contain the following strings: {}",
-        file_name,
-        missing_strings);
+        tt::LogTest, "Test Error: Expected file {} to contain the following strings: {}", file_name, missing_strings);
     DumpFile(file_name);
     return false;
 }
 
 // Delete all lines from file that start with a given prefix
-inline bool DeleteLinesStartingWith(const std::string& file_name, const std::string &prefix) {
+inline bool DeleteLinesStartingWith(const std::string& file_name, const std::string& prefix) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in)) {
         log_info(tt::LogTest, "File '{}' does not exist!", file_name);
@@ -225,7 +229,7 @@ inline bool DeleteLinesStartingWith(const std::string& file_name, const std::str
     std::string content;
     std::string line;
     while (getline(log_file, line)) {
-        if (line.rfind(prefix, 0) == 0) {
+        if (line.starts_with(prefix)) {
             // Skip lines that begin with prefix
             continue;
         }
@@ -245,11 +249,7 @@ inline bool FilesMatchesString(const std::string& file_name, const std::string& 
     // Open the input file.
     std::fstream file;
     if (!OpenFile(file_name, file, std::fstream::in)) {
-        log_info(
-            tt::LogTest,
-            "Test Error: file {} could not be opened.",
-            file_name
-        );
+        log_info(tt::LogTest, "Test Error: file {} could not be opened.", file_name);
         return false;
     }
 
@@ -268,29 +268,18 @@ inline bool FilesMatchesString(const std::string& file_name, const std::string& 
                 line_num,
                 file_name,
                 line_a,
-                line_b
-            );
+                line_b);
             return false;
         }
     }
 
     // Make sure that there's no lines left over in either stream
     if (getline(file, line_a)) {
-        log_info(
-            tt::LogTest,
-            "Test Error: file {} has more lines than expected (>{}).",
-            file_name,
-            line_num
-        );
+        log_info(tt::LogTest, "Test Error: file {} has more lines than expected (>{}).", file_name, line_num);
         return false;
     }
     if (getline(expect_stream, line_b)) {
-        log_info(
-            tt::LogTest,
-            "Test Error: file {} has less lines than expected ({}).",
-            file_name,
-            line_num
-        );
+        log_info(tt::LogTest, "Test Error: file {} has less lines than expected ({}).", file_name, line_num);
         return false;
     }
 

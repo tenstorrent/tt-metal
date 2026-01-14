@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -13,6 +15,18 @@
 #include <tt_stl/strong_type.hpp>
 #include <board/board.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+
+namespace tt::scaleout_tools::fsd::proto {
+    class FactorySystemDescriptor;
+}
+
+namespace tt::scaleout_tools::cabling_generator::proto {
+class ClusterDescriptor;
+}
+
+namespace tt::scaleout_tools::deployment::proto {
+class DeploymentDescriptor;
+}
 
 namespace tt::scaleout_tools {
 
@@ -95,8 +109,18 @@ CableLength calc_cable_length(
 
 class CablingGenerator {
 public:
-    // Constructor
+    // Constructor with full deployment descriptor (includes physical location info)
     CablingGenerator(const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path);
+
+    // Constructor with just hostnames (no physical location info)
+    CablingGenerator(const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames);
+
+    // Constructor with ClusterDescriptor protobuf and hostnames (no file I/O required)
+    CablingGenerator(
+        const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+        const std::vector<std::string>& hostnames);
+
+    CablingGenerator() = default;
 
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
@@ -105,10 +129,19 @@ public:
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
 
+    // Method to generate factory system descriptor as protobuf object
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generate_factory_system_descriptor() const;
+
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
 private:
+    // Common initialization logic for all constructors
+    void initialize_cluster(
+        const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+        std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor =
+            std::nullopt);
+
     // Validate that each host_id is assigned to exactly one node
     void validate_host_id_uniqueness();
 
@@ -134,7 +167,6 @@ private:
         const;
 
     // Caches for optimization
-    std::unordered_map<BoardType, Board> board_templates_;
     std::unordered_map<std::string, Node> node_templates_;  // Templates with host_id=0
 
     std::unique_ptr<ResolvedGraphInstance> root_instance_;

@@ -10,6 +10,7 @@ from models.experimental.panoptic_deeplab.tt.tt_upsample import BilinearUpsample
 from models.tt_cnn.tt.builder import TtConv2d
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 
 
 class TtDeepLabV3PlusHead(LightweightModule):
@@ -184,6 +185,9 @@ class TtDeepLabV3PlusHead(LightweightModule):
         )
         logger.info(f"🔷 Executing conv: decoder.{aspp_feature_key}.project_conv (ASPP)")
         y = stage["project_conv"](x)
+        # Reshape logic for decoder.res5.project_conv (ASPP) - ASPP already handles its own reshape internally
+        # But add safety check in case it's flattened
+        y = reshape_flattened_conv_output(y, batch_size=1, layer_name=f"decoder.{aspp_feature_key}.project_conv")
         y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"TtDeepLabV3PlusHead ASPP stage complete, output shape: {y.shape}")
 
@@ -195,6 +199,8 @@ class TtDeepLabV3PlusHead(LightweightModule):
             stage = self.decoder[f_key]
             logger.info(f"🔷 Executing conv: decoder.{f_key}.project_conv")
             proj_x = stage["project_conv"](x)
+            # Reshape logic for decoder.{res2,res3,res4}.project_conv that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
+            proj_x = reshape_flattened_conv_output(proj_x, batch_size=1, layer_name=f"decoder.{f_key}.project_conv")
             proj_x = ttnn.to_memory_config(proj_x, ttnn.DRAM_MEMORY_CONFIG)
             logger.debug(f"TtDeepLabV3PlusHead fusion stage {i+1} projection complete, shape: {proj_x.shape}")
 
@@ -269,6 +275,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
             ttnn.deallocate(y_upsampled)
             # Use single conv versions - slicing handled by config, ReLU is fused
             logger.info(f"🔷 Executing conv: decoder.{f_key}.fuse_conv.0")
+            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
             y_conv0 = stage["fuse_conv_0"](y)
             ttnn.deallocate(y)
 
@@ -380,40 +387,11 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         # we dont need to permute to channel last because this is final output that goes to the host
         # todo: remove hardcoded values; they should come from infer_ttnn_params in the preprocessing step
 
-        # First config
-        final_upsample_mm_config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(5, 4),
-            in0_block_w=2,
-            out_subblock_h=4,
-            out_subblock_w=2,
-            out_block_h=4,
-            out_block_w=2,
-            per_core_M=4,
-            per_core_N=2,
-            fuse_batch=False,
-            fused_activation=None,
-            mcast_in0=True,
-            gather_in0=False,
-            num_global_cb_receivers=0,
-            untilize_out=False,
+        final_upsample_mm_config1 = (
+            self.model_configs.get_matmul_config("final_upsample_mm_config1") if self.model_configs else None
         )
-
-        # Second config
-        final_upsample_mm_config2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(5, 4),
-            in0_block_w=2,
-            out_subblock_h=4,
-            out_subblock_w=2,
-            out_block_h=16,
-            out_block_w=2,
-            per_core_M=16,
-            per_core_N=2,
-            fuse_batch=False,
-            fused_activation=None,
-            mcast_in0=True,
-            gather_in0=False,
-            num_global_cb_receivers=0,
-            untilize_out=False,
+        final_upsample_mm_config2 = (
+            self.model_configs.get_matmul_config("final_upsample_mm_config2") if self.model_configs else None
         )
 
         self.final_upsample = TtBilinearUpsample(
@@ -477,6 +455,8 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             logger.debug(f"Final upsample: input y is allocated (shape={y.shape}, dtype={y.dtype}, layout={y.layout})")
 
         # Matmul based upsample
+        logger.debug(f"y shape: {y.shape}")
+        y = ttnn.reshape(y, (y.shape[0], 128, 256, y.shape[3]))
         y = self.final_upsample(y)
 
         # Check allocation after final upsample

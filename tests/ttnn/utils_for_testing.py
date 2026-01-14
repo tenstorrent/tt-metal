@@ -241,6 +241,74 @@ def assert_equal(expected_pytorch_result, actual_pytorch_result):
     return equal_passed, equal_message
 
 
+def comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result):
+    """
+    Compute the relative Frobenius norm of the difference between two tensors.
+    Uses relative Frobenius norm: ||error||_F / ||expected||_F.
+    If ||expected||_F == 0, returns the absolute Frobenius error.
+
+    Args:
+        expected_pytorch_result (torch.Tensor or ttnn.Tensor): The expected reference tensor.
+        actual_pytorch_result (torch.Tensor or ttnn.Tensor): The actual tensor to compare against the reference.
+
+    Returns:
+        float: The (relative or absolute) Frobenius norm of the error.
+        bool: True if the expected norm is zero, False otherwise.
+    """
+    if isinstance(expected_pytorch_result, ttnn.Tensor):
+        expected_pytorch_result = ttnn.to_torch(expected_pytorch_result)
+    if isinstance(actual_pytorch_result, ttnn.Tensor):
+        actual_pytorch_result = ttnn.to_torch(actual_pytorch_result)
+
+    assert list(expected_pytorch_result.shape) == list(
+        actual_pytorch_result.shape
+    ), f"Shape mismatch: expected {list(expected_pytorch_result.shape)} vs actual {list(actual_pytorch_result.shape)}"
+
+    error = expected_pytorch_result - actual_pytorch_result
+    frob_error = torch.norm(error, p="fro")
+    frob_expected = torch.norm(expected_pytorch_result, p="fro")
+
+    expected_norm_is_zero = frob_expected == 0
+    rel_norm_value = float(frob_error / frob_expected) if not expected_norm_is_zero else float(frob_error)
+
+    return rel_norm_value, expected_norm_is_zero
+
+
+def assert_relative_frobenius(expected_pytorch_result, actual_pytorch_result, threshold=0.01):
+    """
+    Assert that the relative Frobenius norm of the difference between two tensors is below a specified threshold.
+    Uses relative Frobenius norm: ||error||_F / ||expected||_F. If ||expected||_F == 0, uses absolute Frobenius error.
+
+    Args:
+        expected_pytorch_result (torch.Tensor or ttnn.Tensor): The expected reference tensor.
+        actual_pytorch_result (torch.Tensor or ttnn.Tensor): The actual tensor to compare against the reference.
+        threshold (float): The maximum allowed relative Frobenius norm of the error.
+
+    Returns:
+        tuple: A tuple containing:
+            - relative_frobenius_passed (bool): True if the relative Frobenius norm is below the threshold, False otherwise
+            - relative_frobenius_message (str): A message describing the relative Frobenius norm comparison result
+
+    Raises:
+        AssertionError: If the tensor shapes don't match or if the relative Frobenius norm is above the threshold.
+    """
+    rel_norm_value, expected_norm_is_zero = comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result)
+
+    relative_frobenius_passed = rel_norm_value <= threshold
+    relative_frobenius_message = f"Relative Frobenius norm {rel_norm_value} is below threshold {threshold}."
+    if not relative_frobenius_passed:
+        if expected_norm_is_zero:
+            relative_frobenius_message = (
+                f"Frobenius norm of expected is 0. Absolute error {rel_norm_value} exceeds threshold {threshold}."
+            )
+        else:
+            relative_frobenius_message = (
+                f"Relative Frobenius norm of error {rel_norm_value} exceeds threshold {threshold}."
+            )
+    assert relative_frobenius_passed, relative_frobenius_message
+    return relative_frobenius_passed, relative_frobenius_message
+
+
 def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     if expected_pytorch_result.shape != actual_pytorch_result.shape:
         return (
@@ -309,3 +377,95 @@ def start_measuring_time() -> int:
 
 def stop_measuring_time(start_time) -> int:
     return time.time_ns() - start_time
+
+
+def maybe_trace(op_func, enable_trace, device):
+    if enable_trace:
+        # Compile the op
+        output = op_func()
+        ttnn.synchronize_device(device)
+
+        # Capture the trace
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        output = op_func()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+
+        # Execute trace
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.release_trace(device, trace_id)
+        ttnn.synchronize_device(device)
+    else:
+        output = op_func()
+    return output
+
+
+def generate_all_bfloat16_bitpatterns(dtype=torch.bfloat16):
+    """
+    Generate all possible bfloat16 bit patterns as a test tensor.
+
+    This function creates an exhaustive test dataset by generating all 65,536 (2^16) possible
+    bfloat16 bit patterns. This is useful for comprehensive testing of operations across the
+    entire bfloat16 value space, including edge cases like infinities, NaNs, and subnormals.
+
+    Args:
+        dtype (torch.dtype, optional): The target dtype to cast the bit patterns to.
+                                       Defaults to torch.bfloat16.
+
+    Returns:
+        torch.Tensor: A tensor of shape (256, 256) containing all possible bfloat16 values,
+                     cast to the specified dtype. The tensor is shaped as a square grid for
+                     convenient TILE_LAYOUT compatibility (32x32 tile divisibility).
+
+    Notes:
+        - The function generates values by iterating through all 16-bit integer patterns
+          and reinterpreting them as bfloat16 values.
+        - The resulting tensor includes all special values: +/-0, +/-infinity, NaNs,
+          subnormals, and all normal values in the bfloat16 range.
+        - When dtype is set to a higher precision format (e.g., torch.float32), the bfloat16
+          values are promoted without loss of information.
+
+    Example:
+        >>> all_bf16 = generate_all_bfloat16_bitpatterns(torch.float32)
+        >>> all_bf16.shape
+        torch.Size([256, 256])
+    """
+    # Generate all possible bfloat16 bit patterns (2^16 = 65536 values)
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    bf16_bitpatterns = all_bitpatterns.view(torch.bfloat16)  # Reinterpret as bfloat16
+
+    # Cast to target dtype
+    bitpatterns = bf16_bitpatterns.to(dtype)
+
+    # Reshape tensor to 256 x 256 for tile layout compatibility
+    bitpatterns = bitpatterns.reshape(256, 256)
+
+    return bitpatterns
+
+
+def flush_subnormal_values_to_zero(tensor):
+    """
+    Flush subnormal (denormalized) floating-point values to zero.
+
+    Subnormal numbers are floating-point values smaller than the smallest normalized number.
+    Tenstorrent hardware flushes subnormals to zero for performance reasons.
+    This function replicates that behavior for testing purposes.
+
+    Args:
+        tensor (torch.Tensor): Input tensor with floating-point values.
+
+    Returns:
+        torch.Tensor: The input tensor with all subnormal values replaced by zero.
+                     The tensor is modified in-place.
+
+    Notes:
+        - This function only works for float32 and bfloat16 as they share the same exponent range.
+        - For float32 and bfloat16, subnormal values are those where the exponent bits are all zero,
+          which corresponds to absolute values less than 2^(-126).
+    """
+    # Float32 and bfloat16 numbers are subnormal if exponent == 0
+    # This corresponds to absolute values < 2^(-126)
+    SUBNORMAL_THRESHOLD = 2.0 ** (-126)
+    mask = torch.abs(tensor) < SUBNORMAL_THRESHOLD
+    tensor[mask] = 0.0
+    return tensor

@@ -13,7 +13,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 LlamaReduceScatterDeviceOperation::program_factory_t LlamaReduceScatterDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return LlamaReduceScatterAdd{};
 }
 
@@ -59,7 +59,7 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
 }
 
 void LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
@@ -96,7 +96,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
 
     input_shard_spec = input_tensor.shard_spec().value();
     uint32_t num_cores = final_width / input_spec.tile().get_tile_shape()[1];
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     bool row_wise = input_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
@@ -118,32 +118,39 @@ LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDevic
     return tensor;
 }
 
-std::tuple<LlamaReduceScatterDeviceOperation::operation_attributes_t, LlamaReduceScatterDeviceOperation::tensor_args_t>
-LlamaReduceScatterDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ccl
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::LlamaReduceScatterDeviceOperation::tensor_return_value_t llama_reduce_scatter(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& intermediate_packet_buffer,
-    const int32_t dim,
+    int32_t dim,
     const GlobalSemaphore& semaphore,
-    const tt::tt_metal::SubDeviceId subdevice_id,
-    const uint32_t cluster_axis,
-    const uint32_t ring_devices,
-    const uint32_t num_links,
+    tt::tt_metal::SubDeviceId subdevice_id,
+    uint32_t cluster_axis,
+    uint32_t ring_devices,
+    uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     tt::tt_fabric::Topology topology,
     bool use_noc1_only) {
-    return {
-        operation_attributes_t{
-            .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
-            .cross_device_semaphore = semaphore,
-            .subdevice_id = subdevice_id,
-            .cluster_axis = cluster_axis,
-            .output_mem_config = memory_config,
-            .ring_devices = ring_devices,
-            .num_links = num_links,
-            .topology = topology,
-            .use_noc1_only = use_noc1_only,
-        },
-        tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
+    using OperationType = ttnn::operations::experimental::ccl::LlamaReduceScatterDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
+        .cross_device_semaphore = semaphore,
+        .subdevice_id = subdevice_id,
+        .cluster_axis = cluster_axis,
+        .output_mem_config = memory_config,
+        .ring_devices = ring_devices,
+        .num_links = num_links,
+        .topology = topology,
+        .use_noc1_only = use_noc1_only,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::prim

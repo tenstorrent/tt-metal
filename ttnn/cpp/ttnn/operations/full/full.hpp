@@ -11,10 +11,10 @@ struct Full {
     static ttnn::Tensor invoke(
         const ttnn::SmallVector<uint32_t>& shape,
         std::variant<float, int> fill_value,
-        const ttnn::Tensor& any,
-        const std::optional<DataType>& dtype,
-        const std::optional<Layout>& layout,
-        const std::optional<MemoryConfig>& memory_config);
+        ttnn::MeshDevice* mesh_device,
+        const DataType& dtype,
+        const Layout& layout,
+        const MemoryConfig& memory_config);
 };
 }  // namespace ttnn::operations::full
 

@@ -68,8 +68,10 @@ EventSynchronize
 FW
 FileCopyrightText
 GGGG
+GetAllProgramsPerfData
 GetCircularBufferConfig
 GetCommandQueue
+GetLatestProgramsPerfData
 GetNumAvailableDevices
 GetNumPCIeDevices
 GetRuntimeArgs
@@ -358,6 +360,7 @@ multicast
 multigammaln
 multihead
 namespace
+nanobindings
 nans
 ncrisc
 nd

@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
+pytestmark = pytest.mark.use_module_device
+
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -89,6 +92,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 1, 32, 8192, 3, 6),  # passed
         (1, 2048, 1, 64, 1, 8),  # passed
         (1, 1, 32, 32768, 3, 3000),  # passed
+        (1, 1, 32, 18992, 3, 3000),  # passed
     ),
 )
 @pytest.mark.parametrize(

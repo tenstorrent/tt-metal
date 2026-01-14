@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -37,12 +37,12 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "common/tt_backend_api_types.hpp"
+#include "impl/data_format/bfloat16_utils.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -50,7 +50,7 @@ class IDevice;
 using std::vector;
 using namespace tt;
 
-bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::ARCH& arch) {
+bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::ARCH& /*arch*/) {
     /*
         This test just writes sticks in a interleaved fashion to DRAM and then reads back to ensure
         they were written correctly
@@ -98,7 +98,7 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
     return pass;
 }
 
-bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt::ARCH& arch) {
+bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt::ARCH& /*arch*/) {
     bool pass = true;
 
     try {
@@ -269,7 +269,7 @@ bool interleaved_tilized_reader_single_bank_stick_writer_datacopy_test() {
     return pass;
 }
 
-bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt::ARCH& arch) {
+bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt::ARCH& /*arch*/) {
     bool pass = true;
 
     try {
@@ -415,7 +415,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 }
 
 template <bool src_is_in_l1, bool dst_is_in_l1>
-bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
+bool test_interleaved_l1_datacopy(const tt::ARCH& /*arch*/) {
     uint num_pages = 256;
     uint num_bytes_per_page = 2048;
     uint buffer_size = num_pages * num_bytes_per_page;
@@ -535,7 +535,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 }
 
 int main(int argc, char** argv) {
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     bool pass = true;

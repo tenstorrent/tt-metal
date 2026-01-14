@@ -12,6 +12,7 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.operations.activations import get_golden_function_for_activation
 
 
 # for setting up multi-device stress tests
@@ -67,7 +68,6 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("m", [1024])
@@ -247,7 +247,6 @@ def test_matmul_reuse_config_sharded_fd_column(
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("b", [2])
 @pytest.mark.parametrize("h", [3])
 @pytest.mark.parametrize("m", [256])
@@ -355,7 +354,7 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
@@ -793,7 +792,6 @@ def run_matmul_2d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [768])
@@ -951,7 +949,6 @@ def run_matmul_1d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("m", [128])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])
@@ -1738,7 +1735,6 @@ def test_sharded_matmul(
         input_tensor_b = ttnn.to_memory_config(input_tensor_b, input_b_sharded_memory_config)
 
     output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 
@@ -1866,6 +1862,141 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.matmul(input_tensor_a, input_tensor_b, transpose_a=transpose_a, transpose_b=transpose_b)
+    output = ttnn.to_torch(output)
+
+    assert len(output.shape) == len(torch_output_tensor.shape)
+    assert output.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output, 0.999)
+
+
+@pytest.mark.parametrize("transpose_a", [True, False])
+@pytest.mark.parametrize("transpose_b", [True, False])
+@pytest.mark.parametrize(
+    "b, s, m, k, n, program_config",
+    [
+        (1, 1, 1024, 64, 512, None),
+        (2, 1, 1024, 64, 512, None),
+        (
+            2,
+            1,
+            1024,
+            64,
+            512,
+            ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(1, 2),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1024 // 32,
+                per_core_N=512 // 32,
+            ),
+        ),
+        (
+            1,
+            1,
+            1024,
+            64,
+            512,
+            ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(2, 1),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1024 // 32 // 2,
+                per_core_N=512 // 32,
+            ),
+        ),
+        (
+            1,
+            2,
+            4096,
+            32,
+            256,
+            ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(4, 8),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                per_core_M=8,
+                per_core_N=8,
+            ),
+        ),
+        (
+            1,
+            1,
+            1024,
+            64,
+            512,
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(1, 8),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1024 // 32,
+                per_core_N=512 // 32 // 8,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            ),
+        ),
+        (
+            1,
+            1,
+            1024,
+            64,
+            512,
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(1, 8),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1024 // 32 // 8,
+                per_core_N=512 // 32,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=False,
+            ),
+        ),
+        (
+            1,
+            1,
+            1024,
+            64,
+            512,
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=1,
+                per_core_M=1024 // 32 // 8,
+                per_core_N=512 // 32 // 8,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=True,
+            ),
+        ),
+    ],
+)
+def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, transpose_b, program_config):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((b, s, m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((b, s, k, n), dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    if transpose_a:
+        torch_input_tensor_a = torch_input_tensor_a.transpose(-1, -2)
+    if transpose_b:
+        torch_input_tensor_b = torch_input_tensor_b.transpose(-1, -2)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.matmul(
+        input_tensor_a, input_tensor_b, transpose_a=transpose_a, transpose_b=transpose_b, program_config=program_config
+    )
     output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
@@ -2319,6 +2450,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         ((32, 96), (96, 32), (1, 90), (90, 16)),  # Padding introduced in M,K and N dimensions, 1 face padded
         ((32, 96), (96, 32), (1, 65), (65, 16)),  # Padding introduced in M,K and N dimensions, 2 faces padded
     ],
+    ids=["no_padding", "1_face_padded", "2_faces_padded"],
 )
 @pytest.mark.parametrize(
     "program_config,input_a_memory_config,input_b_memory_config,output_memory_config",
@@ -2411,6 +2543,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
             ),
         ),
     ],
+    ids=["reuse", "multicast1d", "multicast1d_sharded", "dram_sharded"],
 )
 def test_matmul_padding(
     device,
@@ -2462,3 +2595,135 @@ def test_matmul_padding(
 
     # Verify values match with high precision
     assert torch.allclose(golden_output, output, atol=1e-6)
+
+
+@pytest.mark.parametrize("input_shape", [(1576, 768)])
+@pytest.mark.parametrize("weight_shape", [(768, 768)])
+def test_linear_with_non_tile_aligned_bias(device, input_shape, weight_shape):
+    """
+    Regression test for issue #32441.
+    Tests ttnn.linear with bias that has non-tile-aligned padded dimensions.
+    The bias shape [1576, 768] pads to [1600, 768] where 1600 != tile_height (32),
+    which previously caused a validation error during bias fusion.
+    """
+    torch.manual_seed(0)
+
+    # Create tensors matching the issue repro
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_weight = torch.randn(weight_shape, dtype=torch.bfloat16)
+    torch_bias = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # Compute expected output using PyTorch
+    # linear(input, weight, bias) with transpose_b=True means: input @ weight.T + bias
+    torch_output = torch.nn.functional.linear(torch_input, torch_weight, bias=None) + torch_bias
+
+    # Convert to ttnn tensors with DRAM memory config as in the original issue
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    weight_tensor = ttnn.from_torch(
+        torch_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bias_tensor = ttnn.from_torch(
+        torch_bias, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # This should not crash with "Unsupported bias shape" error
+    output_tensor = ttnn.linear(input_tensor, weight_tensor, bias=bias_tensor, transpose_b=True)
+    output = ttnn.to_torch(output_tensor)
+
+    # Verify correctness
+    assert_with_pcc(torch_output, output, pcc=0.99)
+
+
+def test_matmul_block_sharded_input_with_padding(device):
+    """
+    Test matmul with block-sharded input where logical shape differs from physical shard shape due to padding.
+
+    This test verifies that matmul correctly handles block-sharded inputs with padding:
+    - Input 0: (4096, 16) block_sharded on 8x1 cores, logical shape (4096, 16) but physical padded to (512, 32) per shard
+    - Input 1: (16, 128) interleaved, DRAM
+    """
+    torch.manual_seed(0)
+
+    input_a_shape = (4096, 16)
+    input_b_shape = (16, 128)
+
+    torch_input_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    torch_output = torch.matmul(torch_input_a, torch_input_b)
+
+    # Input 0: Create with TILE layout, pad width from 16 to 32, then block shard
+    ttnn_input_a = ttnn.from_torch(
+        torch_input_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_input_a = ttnn.reshape(ttnn_input_a, input_a_shape, padded_shape=(4096, 32))
+
+    # Input 1: Interleaved, DRAM
+    ttnn_input_b = ttnn.from_torch(
+        torch_input_b,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Block shard input 0: 8x1 cores, shard shape [512, 32]
+    input_a_sharded_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))]),
+            [512, 32],
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+    )
+    ttnn_input_a = ttnn.to_memory_config(ttnn_input_a, input_a_sharded_memory_config)
+
+    ttnn_output = ttnn.matmul(ttnn_input_a, ttnn_input_b, transpose_a=False, transpose_b=False)
+
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, output, pcc=0.99)
+
+
+def test_matmul_activation_with_sharded_input(device):
+    # Create input tensors
+    torch.manual_seed(0)
+    torch_input_a = torch.randn(32, 1024, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(1024, 1024, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_a @ torch_input_b
+    activation = "silu"
+    torch_output_tensor = get_golden_function_for_activation(activation)(torch_output_tensor)
+
+    # Convert to TTNN tensors with DRAM interleaved layout
+    input_a = ttnn.from_torch(
+        torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    input_b = ttnn.from_torch(
+        torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # Width sharded output config
+    # When we specify only the sharding type without full shard spec,
+    # and pass it to matmul with activation, unary op needs to have full shard spec
+    output_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1
+    )
+
+    # This should not crash with "validate_shard_spec" error because:
+    # 1. matmul gets called with activation="silu" and partial memory config
+    # 2. matmul internally calls unary (silu) with the output tensor's memory config
+    # 3. unary's compute_output_specs creates TensorLayout with the output tensor's full config
+    try:
+        output_tensor = ttnn.matmul(input_a, input_b, memory_config=output_mem_config, activation=activation)
+        output_tensor = ttnn.to_torch(output_tensor)
+        assert_with_pcc(torch_output_tensor, output_tensor)
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception {e}")

@@ -8,7 +8,7 @@ Tests:
   - name: InterMeshCrossTraffic
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
     defaults:
       ftype: unicast
       ntype: unicast_write
@@ -34,7 +34,7 @@ Tests:
   - name: UnicastAlltoAll
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
     parametrization_params:
       size: [512, 1024, 2048, 4096]
       num_packets: [50, 100]
@@ -51,7 +51,7 @@ Tests:
   - name: UnicastRandomPairingExtended
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
     parametrization_params:
       size: [1024, 2048]
       num_packets: [100, 250]

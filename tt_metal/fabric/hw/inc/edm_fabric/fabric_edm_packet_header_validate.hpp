@@ -5,7 +5,7 @@
 #pragma once
 
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 namespace tt::tt_fabric {
 
@@ -21,16 +21,10 @@ FORCE_INLINE bool is_valid(const LowLatencyPacketHeader& packet_header) {
     return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
 }
 
-FORCE_INLINE void validate(const HybridMeshPacketHeader& packet_header) {}
-FORCE_INLINE bool is_valid(const HybridMeshPacketHeader& packet_header) {
-    return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
-}
-
-FORCE_INLINE void validate(const MeshPacketHeader& packet_header) {
+FORCE_INLINE void validate(const HybridMeshPacketHeader& packet_header) {
     ASSERT(packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
 }
-
-FORCE_INLINE bool is_valid(const MeshPacketHeader& packet_header) {
+FORCE_INLINE bool is_valid(const HybridMeshPacketHeader& packet_header) {
     return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
 }
 

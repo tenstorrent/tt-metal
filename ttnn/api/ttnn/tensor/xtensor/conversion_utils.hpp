@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>
 
-namespace ttnn::experimental::xtensor {
+namespace tt::tt_metal::experimental::xtensor {
 
 // Returns the shape of the xtensor as `tt::tt_metal::Shape`.
 template <typename E>
@@ -122,4 +122,4 @@ xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     return xt::xarray<T>(span_to_xtensor_view(tt::stl::Span<T>(vec.data(), vec.size()), shape));
 }
 
-}  // namespace ttnn::experimental::xtensor
+}  // namespace tt::tt_metal::experimental::xtensor

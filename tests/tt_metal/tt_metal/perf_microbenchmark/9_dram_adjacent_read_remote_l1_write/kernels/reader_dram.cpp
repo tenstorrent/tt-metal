@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t input_addr = get_compile_time_arg_val(0);
@@ -54,10 +54,10 @@ void kernel_main() {
     uint32_t l1_write_addr_start = get_write_ptr(cb_id);
     uint32_t l1_write_addr = l1_write_addr_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
-        noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
+        noc_async_read_set_trid(curr_block_trid);
 
         for (uint32_t h = 0; h < num_pages; ++h) {
-            noc_async_read_tile_dram_sharded_with_state_with_trid(
+            noc_async_read_one_packet_with_state_with_trid(
                 src_base_addr, src_read_addr, l1_write_addr, curr_block_trid);
             src_read_addr += page_size;
             l1_write_addr += page_size;

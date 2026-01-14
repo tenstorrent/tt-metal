@@ -11,6 +11,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
@@ -32,7 +33,7 @@ PCC_REQUIRED = 0.99
 PCC_REQUIRED_KVPE = 0.999
 
 
-def get_cache_on_host(tt_cache: ttnn.Tensor) -> torch.Tensor:
+def get_cache_on_host(tt_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
     """
     Get the KVPE cache on the host from the TTNN cache.
 
@@ -43,7 +44,10 @@ def get_cache_on_host(tt_cache: ttnn.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor: The cache tensor on the host.
     """
-    return torch.concat([t.cpu().to_torch() for t in ttnn.get_device_tensors(tt_cache)], dim=0)
+    return ttnn.to_torch(
+        tt_cache,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
 
 
 def generate_reference_io(
@@ -159,7 +163,6 @@ def run_test_forward_pass_mla1d(
     seq_len,
     batch_size,
     hf_config_short,
-    tmp_path,
     cache_path,
     mesh_device,
     ccl,
@@ -248,7 +251,7 @@ def run_test_forward_pass_mla1d(
 
     # Check PCC
     tt_cache = torch_cache_from_paged(
-        get_cache_on_host(run_config["kvpe_cache"]), torch_page_table, mesh_device.get_num_devices()
+        get_cache_on_host(run_config["kvpe_cache"], mesh_device), torch_page_table, mesh_device.get_num_devices()
     )
     if mode == "prefill":
         batch_id = user_id + cur_row_idx * USERS_PER_ROW
@@ -291,7 +294,6 @@ def run_test_forward_pass_mla2d(
     seq_len,
     batch_size_per_row,
     hf_config_short,
-    tmp_path,
     cache_path,
     mesh_device,
     ccl,
@@ -378,7 +380,9 @@ def run_test_forward_pass_mla2d(
 
     # Check PCC
     tt_cache = torch_cache_from_paged(
-        get_cache_on_host(run_config["mla1d"]["kvpe_cache"]), torch_page_table, mesh_device.get_num_devices()
+        get_cache_on_host(run_config["mla1d"]["kvpe_cache"], mesh_device),
+        torch_page_table,
+        mesh_device.get_num_devices(),
     )
     if mode == "prefill":
         assert (
@@ -408,9 +412,8 @@ def run_test_forward_pass_mla2d(
     "mode, seq_len, batch_size_per_row",
     [
         ("decode", 1, USERS_PER_ROW),
-        ("prefill", 128, 1),
-        ("prefill", 2048, 1),
-    ],
+    ]
+    + [("prefill", seq_len, 1) for seq_len in PREFILL_SEQ_LENS],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -434,7 +437,6 @@ def test_forward_pass(
     seq_len,
     batch_size_per_row,
     hf_config_short,
-    tmp_path,
     cache_path,
     mesh_device,
     ccl,
@@ -445,12 +447,14 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
+    if mode == "prefill" and seq_len != 128:
+        pytest.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        )
+
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0
-
-    if module_path is None:  # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
 
     test_closure(
         layer_idx,
@@ -458,7 +462,6 @@ def test_forward_pass(
         seq_len,
         batch_size_per_row,
         hf_config_short,
-        tmp_path,
         cache_path,
         mesh_device,
         ccl,

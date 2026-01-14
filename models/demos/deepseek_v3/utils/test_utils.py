@@ -3,46 +3,35 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
-import json
 import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
-import safetensors.torch
 import torch
 from loguru import logger
 from transformers import DynamicCache
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, dequantize, even_int_div, get_weight_config
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, dequantize, even_int_div
+from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def load_state_dict(model_path: Path, module_path: str):
+    # Lazily load HF weights: only access tensors when keys are used.
+    from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+
+    lazy = LazyStateDict(model_path)
     if module_path:
-        module_path += "."  # So that the later matches include the separating dot
-
-    weight_paths = json.load(open(model_path / "model.safetensors.index.json", "r"))["weight_map"]
-    per_safetensor_weights = {}
-
-    for weight_name in weight_paths.keys():
-        if not weight_name.startswith(module_path):
-            continue
-        per_safetensor_weights.setdefault(weight_paths[weight_name], []).append(weight_name)
-
-    return {
-        weight_name[len(module_path) :]: safetensor_state_dict[weight_name]
-        for safetensor_file_path, weight_names in per_safetensor_weights.items()
-        for safetensor_state_dict in [safetensors.torch.load_file(model_path / safetensor_file_path)]
-        for weight_name in weight_names
-    }
+        # Ensure dot suffix so that keys are trimmed properly in the view
+        return lazy.view_with_prefix(module_path + ".")
+    return lazy
 
 
 def get_quant_scale(tensor: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
@@ -76,22 +65,21 @@ def get_quant_scale(tensor: torch.Tensor, block_shape: Sequence[int]) -> torch.T
 def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
     dequantized_state_dict = {}
 
-    for name, tensor in state_dict.items():
-        if name.endswith("_scale_inv"):
-            continue
+    # Avoid materializing any unneeded tensors by iterating over keys and filtering
+    for name in {k for k in state_dict.keys() if not k.endswith("_scale_inv")}:
+        tensor = state_dict[name]
+        if tensor is None:
+            raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
 
-        if tensor is not None:
-            # Look for corresponding scale tensor
-            scale_name = name + "_scale_inv"
-            if scale_name in state_dict:
-                scale_tensor = state_dict[scale_name]
-                # Dequantize using the scale
-                dequantized_tensor = dequantize(
-                    tensor, scale_tensor, hf_config.quantization_config["weight_block_size"]
-                )
-                dequantized_state_dict[name] = dequantized_tensor.to(dtype)
-            else:
-                dequantized_state_dict[name] = tensor.to(dtype)
+        # Look for corresponding scale tensor
+        scale_name = name + "_scale_inv"
+        if scale_name in state_dict:
+            scale_tensor = state_dict[scale_name]
+            # Dequantize using the scale
+            dequantized_tensor = dequantize(tensor, scale_tensor, hf_config.quantization_config["weight_block_size"])
+            dequantized_state_dict[name] = dequantized_tensor.to(dtype)
+        else:
+            dequantized_state_dict[name] = tensor.to(dtype)
 
     return dequantized_state_dict
 
@@ -296,22 +284,49 @@ def run_reference_with_attention(
     mode: str,
     zeroed_cache: bool,
 ) -> tuple[torch.Tensor, DynamicCache, DynamicCache]:
+    """
+    Run reference model with attention, using memory optimizations for large sequences.
+
+    For long sequences, the code splits processing into chunks to limit peak memory usage.
+    All model calls are wrapped with torch.no_grad() to avoid building computation graphs and storing gradients.
+    Intermediate tensors are explicitly freed between chunks using del.
+    Attention weights are not stored by setting output_attentions=False, since they scale quadratically with sequence length.
+    """
     (batch_size,) = position_ids_or_seq_lens.shape
     dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
     num_layers = hf_config.num_hidden_layers
     max_position_id_or_seq_len = position_ids_or_seq_lens.max().item()
+    mask = None
+
+    # For sequences longer than 8192 tokens, use chunked processing
+    CHUNK_SIZE = 8192
+    use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > CHUNK_SIZE
 
     if mode == "prefill":
         max_seq_len = position_ids_or_seq_lens.max().item()
         position_ids = torch.arange(max_seq_len).unsqueeze(0).repeat(batch_size, 1)
-        mask = torch.triu(
-            torch.full(
-                (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
-                float("-inf"),
-                dtype=torch.bfloat16,
-            ),
-            diagonal=1,
-        )
+
+        if not use_chunked_processing:
+            if max_position_id_or_seq_len > 16384:
+                mask = torch.triu(
+                    torch.full(
+                        (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
+                        float("-inf"),
+                        dtype=torch.bfloat16,
+                        device="cpu",
+                    ),
+                    diagonal=1,
+                )
+            else:
+                mask = torch.triu(
+                    torch.full(
+                        (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
+                        float("-inf"),
+                        dtype=torch.bfloat16,
+                    ),
+                    diagonal=1,
+                )
+
         if layer_idx is not None:
             input_cache = transformers_cache_single_layer_from_torch(
                 torch.empty((batch_size, 1, 0, dim), dtype=torch.bfloat16), layer_idx
@@ -344,20 +359,109 @@ def run_reference_with_attention(
             )
 
     kv_arg_name = "past_key_value" if layer_idx is not None else "past_key_values"
-    model_output = reference_model(
-        activation,
-        attention_mask=mask,
-        position_ids=position_ids,
-        output_attentions=True,
-        use_cache=True,
-        **{kv_arg_name: deepcopy(input_cache)},
-    )
-    if isinstance(model_output, BaseModelOutputWithPast):
-        return model_output.last_hidden_state, input_cache, model_output.past_key_values
-    elif isinstance(model_output, CausalLMOutputWithPast):
-        return model_output.logits, input_cache, model_output.past_key_values
+    deepcopied_cache = deepcopy(input_cache)
 
-    out, _, output_cache = model_output
+    def extract_output_and_cache(model_output) -> tuple[torch.Tensor, DynamicCache]:
+        if isinstance(model_output, tuple):
+            cache_idx = 2 if len(model_output) == 3 else 1
+            return model_output[0], model_output[cache_idx]
+        if hasattr(model_output, "logits"):
+            return model_output.logits, model_output.past_key_values
+        if hasattr(model_output, "last_hidden_state"):
+            return model_output.last_hidden_state, model_output.past_key_values
+        raise AttributeError(f"Model output has neither 'last_hidden_state' nor 'logits': {type(model_output)}")
+
+    if use_chunked_processing:
+        device = activation.device
+        num_chunks = (max_position_id_or_seq_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+
+        output_chunks = []
+        current_cache = deepcopy(deepcopied_cache)
+
+        with torch.no_grad():
+            for chunk_idx in range(num_chunks):
+                start_idx = chunk_idx * CHUNK_SIZE
+                end_idx = min(start_idx + CHUNK_SIZE, max_position_id_or_seq_len)
+                chunk_size_actual = end_idx - start_idx
+
+                # Extract chunk from activation and position_ids
+                if activation.ndim == 2:
+                    activation_chunk = activation[:, start_idx:end_idx].contiguous()
+                else:
+                    activation_chunk = activation[:, start_idx:end_idx, :].contiguous()
+                position_ids_chunk = position_ids[:, start_idx:end_idx].contiguous()
+
+                # Determine current cache length to properly construct mask
+                if layer_idx is not None:
+                    cache_tensor = current_cache.key_cache[layer_idx]
+                    current_cache_length = cache_tensor.shape[2]
+                else:
+                    legacy_cache = current_cache.to_legacy_cache()
+                    first_layer_cache = legacy_cache[0][0]
+                    current_cache_length = first_layer_cache.shape[2] if first_layer_cache.numel() > 0 else 0
+
+                kv_seq_len = current_cache_length + chunk_size_actual
+
+                # Create causal mask for this chunk
+                # Tokens can attend to: (1) all cached tokens, (2) previous tokens in current chunk
+                mask_chunk = torch.full(
+                    (batch_size, 1, chunk_size_actual, kv_seq_len),
+                    float("-inf"),
+                    dtype=torch.bfloat16,
+                    device=device,
+                )
+                for i in range(chunk_size_actual):
+                    mask_chunk[:, :, i, :current_cache_length] = 0.0  # Attend to cached tokens
+                    mask_chunk[
+                        :, :, i, current_cache_length : current_cache_length + i + 1
+                    ] = 0.0  # Causal mask within chunk
+
+                chunk_cache = deepcopy(current_cache)
+
+                # Set output_attentions=False to avoid storing attention weights that scale quadratically with sequence length
+                chunk_output = reference_model(
+                    activation_chunk,
+                    attention_mask=mask_chunk,
+                    position_ids=position_ids_chunk,
+                    output_attentions=False,
+                    use_cache=True,
+                    **{kv_arg_name: chunk_cache},
+                )
+
+                chunk_out, current_cache = extract_output_and_cache(chunk_output)
+
+                output_chunks.append(chunk_out)
+
+                # Free intermediate tensors to reduce memory usage
+                del activation_chunk, position_ids_chunk, mask_chunk, chunk_cache, chunk_output
+
+            # Concatenate all chunk outputs
+            model_output_tensor = torch.cat(output_chunks, dim=1)
+
+            # Clean up chunk list
+            del output_chunks
+
+            out = model_output_tensor
+            output_cache = current_cache
+    else:
+        # Standard processing for shorter sequences or decode mode
+        if mask is not None and mask.device.type == "cpu":
+            mask = mask.to(activation.device)
+
+        # Use torch.no_grad() to prevent gradient accumulation
+        with torch.no_grad():
+            # Set output_attentions=False to save memory
+            model_output_raw = reference_model(
+                activation,
+                attention_mask=mask,
+                position_ids=position_ids,
+                output_attentions=False,
+                use_cache=True,
+                **{kv_arg_name: deepcopied_cache},
+            )
+
+            out, output_cache = extract_output_and_cache(model_output_raw)
+
     return out, input_cache, output_cache
 
 
@@ -452,17 +556,62 @@ def assert_hidden_dim_pcc(
     tt_output_torch: torch.Tensor, reference_output: torch.Tensor, pcc_required: float = 0.98
 ) -> float:
     tt_output_torch = tt_output_torch.cpu().float()
+
     assert (
         all(
             d1 == d2
             for d1, d2 in itertools.zip_longest(tt_output_torch.shape[:-2], reference_output.shape[:-2], fillvalue=1)
         )
         and tt_output_torch.shape[-1] == reference_output.shape[-1]
-    ), f"Model and reference output shape must match on all dimensions except for the second to last one (module leading singleton dimensions); got {tt_output_torch.shape=} and {reference_output.shape=} "
+    ), (
+        "Model and reference output shape must match on all dimensions except for the second to last one "
+        f"(module leading singleton dimensions); got {tt_output_torch.shape=} and {reference_output.shape=} "
+    )
 
     seq_len_or_batch_size = min(tt_output_torch.shape[-2], reference_output.shape[-2])
     tt_output_torch = tt_output_torch[..., :seq_len_or_batch_size, :]
     reference_output = reference_output[..., :seq_len_or_batch_size, :]
+
+    # For very large sequences, `comp_pcc` can OOM due to its internal clones + numpy conversion.
+    # If the full PCC is estimated to exceed a memory threshold, process the sequence dimension in chunks.
+    hidden_dim = tt_output_torch.shape[-1]
+    estimated_memory_gb = (seq_len_or_batch_size * hidden_dim * 4 * 2 * 2) / (1024**3)
+
+    MAX_MEMORY_GB = 50  # Switch to chunking if the estimated full-tensor PCC exceeds this
+    CHUNK_SIZE = 8192  # Compare up to 8K sequence positions per chunk
+
+    if estimated_memory_gb > MAX_MEMORY_GB and seq_len_or_batch_size > CHUNK_SIZE:
+        num_chunks = (seq_len_or_batch_size + CHUNK_SIZE - 1) // CHUNK_SIZE
+        chunk_pccs: list[float] = []
+        failed_chunks: list[int] = []
+
+        for chunk_idx in range(num_chunks):
+            start_idx = chunk_idx * CHUNK_SIZE
+            end_idx = min(start_idx + CHUNK_SIZE, seq_len_or_batch_size)
+
+            tt_chunk = tt_output_torch[..., start_idx:end_idx, :]
+            ref_chunk = reference_output[..., start_idx:end_idx, :]
+
+            passing, pcc = comp_pcc(tt_chunk, ref_chunk, pcc_required)
+            chunk_pccs.append(pcc)
+
+            if not passing:
+                failed_chunks.append(chunk_idx + 1)
+                logger.error(
+                    f"PCC chunk {chunk_idx + 1}/{num_chunks} failed: pcc={pcc} < required={pcc_required} "
+                    f"(seq_range=[{start_idx}:{end_idx}])"
+                )
+
+        min_pcc = min(chunk_pccs)
+        avg_pcc = sum(chunk_pccs) / len(chunk_pccs)
+        logger.info(f"PCC (chunked): min={min_pcc:.6f}, avg={avg_pcc:.6f}")
+
+        assert not failed_chunks, (
+            "Not all chunks passed PCC check. "
+            f"Min PCC: {min_pcc:.6f} (required: {pcc_required}), "
+            f"Failed chunks: {failed_chunks}"
+        )
+        return min_pcc
 
     passing, pcc = comp_pcc(tt_output_torch, reference_output, pcc_required)
     logger.info(f"PCC: {pcc}")
@@ -500,3 +649,29 @@ def get_rope_tensors(
     if position_ids is None:
         return rope_setup.get_rot_mats_table(seq_len)
     return rope_setup.get_rot_mats(position_ids)
+
+
+# Mapping of system names to their corresponding mesh shapes
+SYSTEM_NAME_TO_MESH_SHAPE: dict[str, tuple[int, int]] = {
+    "TG": (4, 8),
+    "DUAL": (8, 8),
+    "QUAD": (16, 8),
+    "T3K": (1, 8),
+    "N300": (1, 2),
+    "N150": (1, 1),
+}
+
+
+def get_valid_system_names() -> tuple[str, ...]:
+    return tuple(SYSTEM_NAME_TO_MESH_SHAPE.keys())
+
+
+def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:
+    if system_name not in SYSTEM_NAME_TO_MESH_SHAPE:
+        valid_system_names = get_valid_system_names()
+        raise ValueError(
+            f"Unsupported system name: {system_name}. Supported values are {', '.join(valid_system_names)}."
+        )
+
+    rows, cols = SYSTEM_NAME_TO_MESH_SHAPE[system_name]
+    return ttnn.MeshShape(rows, cols)

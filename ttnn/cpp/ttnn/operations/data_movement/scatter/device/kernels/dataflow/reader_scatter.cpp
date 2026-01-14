@@ -2,85 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "../scatter_common.hpp"
-#include "dprint.h"
 
 #include <array>
 
 namespace {
-
-template <int32_t N>
-FORCE_INLINE std::array<uint32_t, N> make_strides(const std::array<uint32_t, N>& dims) {
-    std::array<uint32_t, N> s{};
-    uint32_t acc = 1;
-    for (int32_t i = N - 1; i >= 0; --i) {
-        s[i] = acc;
-        acc *= dims[i];
-    }
-    return s;
-}
-
-template <int32_t N>
-FORCE_INLINE bool in_bounds(const std::array<uint32_t, N>& idx, const std::array<uint32_t, N>& dims) {
-    for (int32_t i = 0; i < N; ++i) {
-        if (idx[i] >= dims[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-template <int32_t N>
-FORCE_INLINE bool next_inplace(std::array<uint32_t, N>& idx, const std::array<uint32_t, N>& dims) {
-    // last axis fastest
-    for (int32_t i = N - 1; i >= 0; --i) {
-        if (++idx[i] < dims[i]) {
-            return true;  // normal increment without carry
-        }
-        idx[i] = 0;  // carry and continue
-    }
-    return false;  // overflow past most significant digit
-}
-
-template <int32_t N>
-FORCE_INLINE uint32_t to_id(const std::array<uint32_t, N>& idx, const std::array<uint32_t, N>& strides) {
-    uint32_t id = 0;
-    for (int32_t i = 0; i < static_cast<int32_t>(N); ++i) {
-        id += idx[i] * strides[i];
-    }
-    return id;
-}
-
-// Convert linear id -> coordinates (row-major, last axis fastest).
-template <int32_t N>
-std::array<uint32_t, N> from_id(int32_t id, const std::array<uint32_t, N>& dims) {
-    std::array<uint32_t, N> coord{};
-    // Go left to right: for [d0, d1, ..., dN-1], last axis fastest
-    for (int32_t i = N - 1; i >= 0; --i) {
-        coord[i] = id % dims[i];
-        id /= dims[i];
-    }
-    return coord;
-}
-
-// this function is supposed to load either a whole stick or part of it (76800 elements)
-template <typename AddrGen>
-FORCE_INLINE void load_to_cb(
-    const uint32_t& cb,
-    const AddrGen& addr_gtor,
-    const uint32_t& offset_bytes,
-    const uint32_t& chunk_size_bytes,
-    const uint32_t& stick_id) {
-    cb_reserve_back(cb, ONE_PAGE);
-    const uint64_t source_noc_address = get_noc_addr(stick_id, addr_gtor);
-    const uint32_t l1_write_address = get_write_ptr(cb);
-
-    noc_async_read(source_noc_address + offset_bytes, l1_write_address, chunk_size_bytes);
-    noc_async_read_barrier();
-
-    cb_push_back(cb, ONE_PAGE);
-}
 
 // copies source stick to destination stick (first phase of scatter)
 template <typename number_type>
@@ -94,6 +21,31 @@ FORCE_INLINE void copy_input_to_output(
         reinterpret_cast<volatile tt_l1_ptr number_type*>(output_l1_write_addr);
     for (uint32_t index_in_input_chunk = 0; index_in_input_chunk < input_chunk_size; ++index_in_input_chunk) {
         output_l1_write_ptr[index_in_input_chunk] = input_l1_read_ptr[index_in_input_chunk];
+    }
+}
+
+template <typename number_type>
+FORCE_INLINE number_type perform_reduction(
+    number_type input, number_type source_value, ScatterReductionType scatter_reduction_type, DataFormat data_format) {
+    switch (scatter_reduction_type) {
+        case ScatterReductionType::ADD: {
+            return input + source_value;
+        }
+        case ScatterReductionType::MULTIPLY: {
+            return input * source_value;
+        }
+        case ScatterReductionType::AMAX: {
+            return std::max(input, source_value);
+        }
+        case ScatterReductionType::AMIN: {
+            return std::min(input, source_value);
+        }
+        case ScatterReductionType::INVALID: {
+            return source_value;
+        }
+        default: {
+            return source_value;
+        }
     }
 }
 
@@ -130,47 +82,13 @@ FORCE_INLINE void scatter_along_chunk(
         if (index_value < input_offset || index_value >= input_offset + input_chunk_size) {
             continue;
         }
-        ASSERT(
-            index_value < input_stick_size,
-            "Index value {} is bigger than input's dimension size {}.",
-            index_value,
-            input_stick_size);
         if (index_value >= input_stick_size) {
             continue;
         }
         volatile number_type& source_value = source_l1_read_ptr[index_in_index_chunk];
         const uint32_t& output_index = index_value - input_offset;
-        switch (scatter_reduction_type) {
-            case ScatterReductionType::INVALID: {
-                output_l1_write_ptr[output_index] = source_value;
-                break;
-            }
-
-            case ScatterReductionType::ADD: {
-                output_l1_write_ptr[output_index] += source_value;
-                break;
-            }
-
-            case ScatterReductionType::MULTIPLY: {
-                output_l1_write_ptr[output_index] *= source_value;
-                break;
-            }
-
-            case ScatterReductionType::AMIN: {
-                output_l1_write_ptr[output_index] = std::min(output_l1_write_ptr[output_index], source_value);
-                break;
-            }
-
-            case ScatterReductionType::AMAX: {
-                output_l1_write_ptr[output_index] = std::max(output_l1_write_ptr[output_index], source_value);
-                break;
-            }
-
-            default: {
-                output_l1_write_ptr[output_index] = source_value;
-                break;
-            }
-        }
+        output_l1_write_ptr[output_index] = perform_reduction<number_type>(
+            output_l1_write_ptr[output_index], source_value, scatter_reduction_type, get_dataformat(input_cb));
     }
 }
 
@@ -190,6 +108,7 @@ void kernel_main() {
     // 76800)
     const uint32_t index_chunk_size = get_arg_val<uint32_t>(6);
     const uint32_t source_chunk_size = get_arg_val<uint32_t>(7);
+    const auto scatter_reduction_type = static_cast<ScatterReductionType>(get_arg_val<uint32_t>(8));
 
     const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address, ctas.input_stick_size_bytes);
     const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address, ctas.index_stick_size_bytes);
@@ -200,8 +119,8 @@ void kernel_main() {
 
     constexpr uint32_t N = ctas.input_rank - 1;
     // generate 2 stick shape counters
-    const auto input_dims{make_shape_array_from_runtime_args<N>(8)};
-    const auto index_dims{make_shape_array_from_runtime_args<N>(8 + N)};
+    const auto input_dims{make_shape_array_from_runtime_args<N>(9)};
+    const auto index_dims{make_shape_array_from_runtime_args<N>(9 + N)};
 
     const auto index_strides = make_strides<N>(index_dims);
 
@@ -229,7 +148,6 @@ void kernel_main() {
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
-                // DPRINT << "INSIDE " << index_stick_id << ENDL();
                 // second phase: load index and source data chunk-by-chunk and scatter
                 for (uint32_t index_offset = 0, source_offset = 0; index_offset < ctas.index_stick_size;
                      index_offset += index_chunk_size, source_offset += source_chunk_size) {
@@ -263,7 +181,8 @@ void kernel_main() {
                         ctas.input_stick_size,
                         input_offset,
                         input_chunk_length,
-                        index_chunk_length);
+                        index_chunk_length,
+                        scatter_reduction_type);
                     cb_pop_front(ctas.source_cb, ONE_PAGE);
                     cb_pop_front(ctas.index_cb, ONE_PAGE);
                 }

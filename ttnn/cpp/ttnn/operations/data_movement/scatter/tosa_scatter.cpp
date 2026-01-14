@@ -6,6 +6,7 @@
 
 #include "device/scatter_device_operation.hpp"
 
+#include "scatter/scatter_enums.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/expand/expand.hpp"
@@ -30,7 +31,6 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 Tensor pre_tosa_scatter_transform_tensor(
     const Tensor& tensor,
     const uint32_t& N,
-    const uint32_t& K,
     const uint32_t& W,
     const uint32_t& C,
     const InputTensorType& input_tensor_type) {
@@ -39,7 +39,7 @@ Tensor pre_tosa_scatter_transform_tensor(
         processed_tensor =
             ttnn::expand(ttnn::unsqueeze(tensor, -1), SmallVector<int32_t>{N, W, C}, tensor.memory_config());
         // WARNING: the rest of this if statement is to be removed after fixing the int32 transpose issue (PR: #23415)
-        auto device = processed_tensor.device();
+        auto* device = processed_tensor.device();
         processed_tensor = processed_tensor.cpu();
         processed_tensor = ttnn::to_dtype(processed_tensor, DataType::UINT16);
         processed_tensor = processed_tensor.to_device(device);
@@ -54,13 +54,7 @@ Tensor pre_tosa_scatter_transform_tensor(
     return ttnn::unsqueeze_to_4D(processed_tensor);
 }
 
-Tensor post_tosa_scatter_transform_tensor(
-    Tensor& output_tensor,
-    const uint32_t& N,
-    const uint32_t& K,
-    const uint32_t& W,
-    const uint32_t& C,
-    const Layout& original_layout) {
+Tensor post_tosa_scatter_transform_tensor(Tensor& output_tensor, const Layout& original_layout) {
     Tensor processed_tensor = ttnn::transpose(output_tensor, W_DIMENSION, LAST_DIMENSION);
     processed_tensor = ttnn::squeeze_from_4D(processed_tensor, INPUT_RANK_CONSTRAINT);
     if (original_layout != Layout::ROW_MAJOR) {
@@ -118,6 +112,9 @@ void validate_tensors(const Shape& input_shape, const Shape& index_shape, const 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+using namespace CMAKE_UNIQUE_NAMESPACE;
+using namespace scatter;
+
 Tensor TOSAScatterOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
@@ -130,18 +127,14 @@ Tensor TOSAScatterOperation::invoke(
     CMAKE_UNIQUE_NAMESPACE::validate_tensors(input_shape, index_shape, source_shape);
 
     const uint32_t N = input_shape[0];
-    const uint32_t K = input_shape[1];
     const uint32_t W = index_shape[1];
     const uint32_t C = input_shape[2];
 
-    Tensor processed_input_tensor =
-        CMAKE_UNIQUE_NAMESPACE::pre_tosa_scatter_transform_tensor(input_tensor, N, K, W, C, InputTensorType::INPUT);
+    Tensor processed_input_tensor = pre_tosa_scatter_transform_tensor(input_tensor, N, W, C, InputTensorType::INPUT);
 
-    Tensor processed_index_tensor =
-        CMAKE_UNIQUE_NAMESPACE::pre_tosa_scatter_transform_tensor(index_tensor, N, K, W, C, InputTensorType::INDEX);
+    Tensor processed_index_tensor = pre_tosa_scatter_transform_tensor(index_tensor, N, W, C, InputTensorType::INDEX);
 
-    Tensor processed_source_tensor =
-        CMAKE_UNIQUE_NAMESPACE::pre_tosa_scatter_transform_tensor(source_tensor, N, K, W, C, InputTensorType::SOURCE);
+    Tensor processed_source_tensor = pre_tosa_scatter_transform_tensor(source_tensor, N, W, C, InputTensorType::SOURCE);
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
@@ -152,8 +145,9 @@ Tensor TOSAScatterOperation::invoke(
         processed_index_tensor,
         processed_source_tensor,
         final_memory_config,
+        ScatterReductionType::INVALID,
         std::nullopt);
-    return CMAKE_UNIQUE_NAMESPACE::post_tosa_scatter_transform_tensor(output, N, K, W, C, input_tensor.layout());
+    return post_tosa_scatter_transform_tensor(output, input_tensor.layout());
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -354,8 +354,8 @@ inline CoreCoord TestDeviceResources::reserve_receiver_core(
     return core;
 }
 
-inline CoreResources& TestDeviceResources::get_or_create_core_resources(const CoreCoord& core, CoreType core_type) {
-    if (core_resources_.find(core) == core_resources_.end()) {
+inline CoreResources& TestDeviceResources::get_or_create_core_resources(const CoreCoord& core, CoreType /*core_type*/) {
+    if (!core_resources_.contains(core)) {
         core_resources_.emplace(
             core,
             CoreResources(
@@ -720,9 +720,8 @@ public:
             last_topology_key_ = topology_key;
 
             return cached_policy_;  // Return new policy
-        } else {
-            return std::nullopt;  // Signal to reuse existing policy
         }
+        return std::nullopt;  // Signal to reuse existing policy
     }
 
     const AllocatorPolicies& get_cached_policy() const { return cached_policy_; }
@@ -786,8 +785,6 @@ private:
         // 4. Per-device analysis - find worst case
         uint32_t max_configs_per_core_needed = DEFAULT_MIN_CONFIGS_PER_CORE;
         std::optional<FabricNodeId> worst_case_device;
-        uint32_t worst_case_reserved = 0;
-        uint32_t worst_case_receivers = 0;
 
         for (const auto& [device_id, num_receivers] : receiver_load_per_device) {
             // Count reserved cores on this device
@@ -799,8 +796,9 @@ private:
             }
 
             bool has_sync = false;
-            for (const auto& sync : config.global_sync_configs) {
-                if (sync.device == device_id) {
+            for (const auto& sync : config.sync_configs) {
+                const auto& sender_config = sync.sender_config;
+                if (sender_config.device == device_id) {
                     has_sync = true;
                     break;
                 }
@@ -877,8 +875,6 @@ private:
             if (required > max_configs_per_core_needed) {
                 max_configs_per_core_needed = required;
                 worst_case_device = device_id;
-                worst_case_reserved = reserved_cores;
-                worst_case_receivers = num_receivers;
             }
         }
 
@@ -923,7 +919,8 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
     enable_flow_control_ = test_config.enable_flow_control;
 
     // PASS 0: Reserve sync cores for synchronization
-    for (auto& sync_sender : test_config.global_sync_configs) {
+    for (auto& sync_config : test_config.sync_configs) {
+        auto& sync_sender = sync_config.sender_config;
         auto& device_resources = get_or_create_device_resources(sync_sender.device);
         sync_sender.core = device_resources.reserve_sync_core();
     }

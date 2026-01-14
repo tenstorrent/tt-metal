@@ -52,33 +52,21 @@ BinaryNgKernelConfig::BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcas
             break;
 
         case SubtileBroadcastType::ROW_A:
-            compute_kernel = KernelName::ComputeNoBcast;
-            bcast_input = std::nullopt;
-            break;
-
         case SubtileBroadcastType::ROW_B:
             compute_kernel = KernelName::ComputeNoBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::ROW_B_COL_A:
             compute_kernel = KernelName::ComputeBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::COL_B:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 1;
-            break;
-
         case SubtileBroadcastType::ROW_A_COL_B:
             compute_kernel = KernelName::ComputeBcast;
             bcast_input = 1;
-            break;
-
-        case SubtileBroadcastType::ROW_B_COL_A:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 0;
             break;
     }
 }
@@ -90,7 +78,7 @@ std::string BinaryNgKernelConfig::bcast_input_str() const {
     return "";
 }
 
-std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
+std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op) {
     constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels";
     constexpr std::string_view root_ng = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
@@ -109,19 +97,33 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
         case KernelName::WriterScalar: return fmt::format(dataflow, root, "writer_interleaved_scalar.cpp");
         case KernelName::ComputeNoBcast:
             return fmt::format(
-                compute, root, is_sfpu ? "eltwise_binary_sfpu_no_bcast.cpp" : "eltwise_binary_no_bcast.cpp");
+                compute,
+                root,
+                is_where_op ? "eltwise_where_no_bcast.cpp"
+                            : (is_sfpu ? "eltwise_binary_sfpu_no_bcast.cpp" : "eltwise_binary_no_bcast.cpp"));
         case KernelName::ComputeBcast:
-            return fmt::format(compute, root, is_sfpu ? "eltwise_binary_sfpu.cpp" : "eltwise_binary.cpp");
+            return fmt::format(
+                compute,
+                root,
+                is_where_op ? "eltwise_where_sfpu.cpp" : (is_sfpu ? "eltwise_binary_sfpu.cpp" : "eltwise_binary.cpp"));
         case KernelName::ComputeScalar:
-            return fmt::format(compute, root, is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp");
+            return fmt::format(
+                compute,
+                root,
+                is_where_op ? "eltwise_where_sfpu_scalar"
+                            : (is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp"));
         case KernelName::ComputeRowBcastNg:
             return fmt::format(
-                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp");
+                compute,
+                root_ng,
+                is_where_op ? "eltwise_where_sfpu_row_bcast.cpp"
+                            : (is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp"));
         case KernelName::ComputeRowColBcastNg:
             return fmt::format(
                 compute,
                 root_ng,
-                is_sfpu ? "eltwise_binary_sfpu_row_col_bcast.cpp" : "eltwise_binary_row_col_bcast.cpp");
+                is_where_op ? "eltwise_where_sfpu_row_col_bcast.cpp"
+                            : (is_sfpu ? "eltwise_binary_sfpu_row_col_bcast.cpp" : "eltwise_binary_row_col_bcast.cpp"));
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
@@ -142,6 +144,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
                 binary_op = FpuBinaryOp::MUL;
             }
             break;
+        case BinaryOpType::DIV_FLOOR: binary_op = SfpuBinaryOp::DIV_FLOOR; break;
+        case BinaryOpType::DIV_TRUNC: binary_op = SfpuBinaryOp::DIV_TRUNC; break;
         // b - a
         case BinaryOpType::RSUB:
             if (is_sfpu_op()) {
@@ -329,6 +333,20 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::WHERE_TTS:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::WHERE;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::WHERE_TST:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::WHERE;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         // sqrt(a^2 + b^2)
         case BinaryOpType::HYPOT:
             process_lhs = unary::UnaryOpType::SQUARE;
@@ -368,14 +386,27 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {"mul_int_tile_init();", "mul_uint16_tile"};
             } else if (dtype == DataType::INT32) {
                 return {"mul_int32_tile_init();", "mul_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"mul_int32_tile_init();", "mul_uint32_tile"};
             } else {
                 return {"mul_binary_tile_init();", "mul_binary_tile"};
             }
-        case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
+        case DIV:
+            if (dtype == DataType::INT32) {
+                return {"div_int32_tile_init();", "div_int32_tile"};
+            } else {
+                return {"div_binary_tile_init();", "div_binary_tile"};
+            }
+        case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
+        case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB:
             if (dtype == DataType::INT32) {
-                return {"rsub_int32_tile_init();", "rsub_int32_tile"};
+                return {"rsub_int_tile_init();", "rsub_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"rsub_int_tile_init();", "rsub_uint32_tile"};
+            } else if (dtype == DataType::UINT16) {
+                return {"rsub_int_tile_init();", "rsub_uint16_tile"};
             } else {
                 return {"rsub_binary_tile_init();", "rsub_binary_tile"};
             }
@@ -451,6 +482,16 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
         case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
         case LE: return {"le_int32_tile_init();", "le_int32_tile"};
+        case WHERE:
+            if (dtype == DataType::INT32) {
+                return {"where_tile_init();", "where_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"where_tile_init();", "where_uint32_tile"};
+            } else if (dtype == DataType::FLOAT32) {
+                return {"where_tile_init();", "where_fp32_tile"};
+            } else {
+                return {"where_tile_init();", "where_tile"};
+            }
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -464,12 +505,11 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
         defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
         defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
         return defines;
-    } else {
-        auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
-        defines["BINARY_SFPU_INIT"] = std::move(tile_init);
-        defines["BINARY_SFPU_OP"] = std::move(tile_fn);
-        return defines;
     }
+    auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
+    defines["BINARY_SFPU_INIT"] = std::move(tile_init);
+    defines["BINARY_SFPU_OP"] = std::move(tile_fn);
+    return defines;
 }
 
 void add_activation_defines(
@@ -545,20 +585,27 @@ std::map<std::string, std::string> make_dataflow_defines(
 
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
-uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op) {
-    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
-    if ((dtype == DataType::FLOAT32) || is_quant_op) {
-        return std::bit_cast<uint32_t>(scalar);
-    }
-    if (dtype == DataType::INT32) {
-        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
-    }
-    if (dtype == DataType::UINT32) {
-        return std::bit_cast<uint32_t>(scalar);
-    }
-    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    auto scalar_bf16 = bfloat16::truncate(scalar);
-    return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
+uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataType dtype, const bool is_quant_op) {
+    // std::visit([&](auto v) {
+    //     std::cout << "pack_scalar_runtime_arg: " << v << std::endl;
+    // }, scalar);
+    return std::visit(
+        [&](auto v) -> uint32_t {
+            // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
+            if ((dtype == DataType::FLOAT32) || is_quant_op) {
+                return std::bit_cast<uint32_t>(static_cast<float>(v));
+            }
+            if (dtype == DataType::INT32) {
+                return std::bit_cast<uint32_t>(static_cast<int32_t>(v));
+            }
+            if (dtype == DataType::UINT32) {
+                return static_cast<uint32_t>(v);
+            }
+            // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+            auto scalar_bf16 = bfloat16::truncate(static_cast<float>(v));
+            return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
+        },
+        scalar);
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);
@@ -593,5 +640,127 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
     ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
     return ret;
+}
+
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+    return tensor_spec.memory_config().shard_spec();
+}
+
+inline auto is_uneven(const TensorSpec& t) {
+    if (not t.memory_config().is_sharded()) {
+        return false;
+    }
+
+    const auto& shape = t.padded_shape();
+    const auto& shard = get_shard_spec(t)->shape;
+    const auto rank = shape.rank();
+
+    // Compute product of all dimensions except the last
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+
+    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
+}
+
+bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c) {
+    // scalar value treated as interleaved
+    if (!b.has_value()) {
+        return false;
+    }
+
+    // does not work for width and block sharding, pcc error,
+    // maybe support later to improve performance
+    // if (!b.has_value() && a.memory_config().is_sharded()) {
+    //     return !is_uneven(a);
+    // }
+
+    if (!c.is_sharded()) {
+        return false;
+    }
+
+    // a and b identical shape, no broadcast on any dimension
+    if (b.has_value() && (a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
+        if (is_uneven(a) || is_uneven(*b)) {
+            return false;
+        }
+        if (a.memory_config().buffer_type() == BufferType::DRAM ||
+            b->memory_config().buffer_type() == BufferType::DRAM || c.buffer_type() == BufferType::DRAM) {
+            return false;
+        }
+
+        // Check if output grid differs from input grids - if so, cannot use native sharding
+        // This will force resharding through interleaved path
+        if (c.is_sharded() && c.shard_spec().has_value()) {
+            const auto& c_grid = c.shard_spec()->grid;
+            if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
+                const auto& a_grid = a.memory_config().shard_spec()->grid;
+                if (a_grid != c_grid) {
+                    // Different grids require resharding - treat as interleaved
+                    return false;
+                }
+            }
+            if (b->memory_config().is_sharded() && b->memory_config().shard_spec().has_value()) {
+                const auto& b_grid = b->memory_config().shard_spec()->grid;
+                if (b_grid != c_grid) {
+                    // Different grids require resharding - treat as interleaved
+                    return false;
+                }
+            }
+        }
+
+        if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
+        if (c.is_sharded() && c.buffer_type() == BufferType::L1) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b) {
+    // Broadcasting Rules Overview:
+    // - If the two tensors have different ranks, we virtually pad the smaller-rank tensor's shape
+    //   with ones on the left (i.e., higher-order dimensions) until both shapes have the same length.
+    // - For each dimension (starting from the rightmost), the sizes are compatible if:
+    //     - They are equal, or
+    //     - One of them is 1 (the dimension can be broadcast to match the other size).
+
+    const int rank_a = shape_a.rank();
+    const int rank_b = shape_b.rank();
+    const int larger_rank = std::max(rank_a, rank_b);
+    SmallVector<uint32_t> output_shape(larger_rank, 1);
+    for (int i = -1; i >= -larger_rank; --i) {
+        auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
+        auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;
+        if (dim_a != 1 && dim_b != 1) {
+            output_shape[i + larger_rank] = dim_a;
+        } else {
+            output_shape[i + larger_rank] = dim_a + dim_b - 1;
+        }
+    }
+    return ttnn::Shape(output_shape);
+}
+
+MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b) {
+    // Compute adjusted shard spec for output shape
+    const auto& padded_a_shape = input_tensor_a.padded_shape();
+    const auto& logical_out_shape =
+        operations::binary_ng::compute_broadcasted_output(input_tensor_a.logical_shape(), shape_b);
+    const auto& padded_out_shape = input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(logical_out_shape);
+
+    auto adjusted_shard_spec = ttnn::operations::binary_ng::adjust_to_shape(
+        *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
+
+    return MemoryConfig(
+        input_tensor_a.memory_config().memory_layout(),
+        input_tensor_a.memory_config().buffer_type(),
+        adjusted_shard_spec);
 }
 }  // namespace ttnn::operations::binary_ng

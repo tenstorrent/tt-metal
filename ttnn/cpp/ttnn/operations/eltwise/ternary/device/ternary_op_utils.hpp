@@ -30,11 +30,16 @@ enum class KernelName {
     ReaderRowBcastTTT,
     ReaderRowBcastTST,
     ReaderRowBcastTTS,
+    WriterNoBcastTernary,
     WriterColBcastTTT,
-    ComputeNoBcastTTT,      // TTT: no bcast, outer dim and row bcast cases
-    ComputeBcastTTT,        // TTT : column and scalar bcast cases
-    ComputeBcastTTS_TST,    // TTS, TST: column and scalar bcast cases
-    ComputeNoBcastTTS_TST,  // TTS, TST: no bcast, outer dim and row bcast cases
+    ComputeNoBcastTTT,       // TTT: no bcast, outer dim and row bcast cases
+    ComputeBcastTTT,         // TTT : column and scalar bcast cases
+    ComputeRowBcastTTT,      // TTT : row bcast cases : bfloat16 only
+    ComputeBcastTTS_TST,     // TTS, TST: column and scalar bcast cases
+    ComputeNoBcastTTS_TST,   // TTS, TST: no bcast, outer dim and row bcast cases
+    ComputeNoBcastAddcmul,   // ADDCMUL: no bcast, uses existing add/mul operations
+    ComputeBcastAddcmul,     // ADDCMUL: column and scalar bcast cases
+    ComputeRowBcastAddcmul,  // ADDCMUL: row bcast cases : bfloat16 only
 };
 
 struct TernaryKernelConfig {
@@ -45,7 +50,7 @@ struct TernaryKernelConfig {
     KernelName writer_kernel;
 };
 
-std::string get_kernel_file_path(KernelName kernel_name);
+std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu = false);
 
 uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
 
@@ -62,4 +67,28 @@ TernaryBroadcastType get_broadcast_type(
 // 2-tensor broadcast compatibility (used by both TTS and TST)
 TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape);
 
+// AllShardSpecs structure for TensorSpecs
+struct AllShardSpecs {
+    tt::tt_metal::ShardSpec predicate_shard_spec;
+    tt::tt_metal::ShardSpec true_shard_spec;
+    tt::tt_metal::ShardSpec false_shard_spec;
+    tt::tt_metal::ShardSpec output_shard_spec;
+};
+
+// AllShardVolumes structure for TensorSpecs
+struct AllShardVolumes {
+    std::optional<std::uint32_t> predicate_shard_volume;
+    std::optional<std::uint32_t> true_shard_volume;
+    std::optional<std::uint32_t> false_shard_volume;
+    std::optional<std::uint32_t> output_shard_volume;
+};
+
+tt::tt_metal::ShardSpec adjust_to_shape(
+    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
+
+std::optional<AllShardVolumes> get_shard_volumes(
+    const TensorSpec& predicate_spec,
+    const std::optional<TensorSpec>& true_spec,
+    const std::optional<TensorSpec>& false_spec,
+    const TensorSpec& output);
 }  // namespace ttnn::operations::ternary

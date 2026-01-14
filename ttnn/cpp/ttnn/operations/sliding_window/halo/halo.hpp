@@ -19,7 +19,6 @@ struct HaloOperation {
         bool transpose_mcast = true,
         const tt::tt_metal::MemoryConfig& output_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         bool is_out_tiled = true,
-        bool in_place = false,
         bool config_tensors_in_dram = false);
 
     // invoke can be overloaded as many times as needed to provide all desired APIs

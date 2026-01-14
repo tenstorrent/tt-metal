@@ -15,6 +15,8 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_weights_path,
     load_images,
 )
+from models.common.utility_functions import is_blackhole
+import pytest
 
 # Cityscapes dataset configuration
 CITYSCAPES_CATEGORIES = [
@@ -51,16 +53,13 @@ def preprocess_input_params(output_dir, model_category, current_dir, model_locat
     return images_paths, weights_path, output_dir
 
 
-def preprocess_image(
-    image_path: str, target_size: Tuple[int, int] = (512, 1024), use_imagenet_norm: bool = True
-) -> torch.Tensor:
+def preprocess_image(image_path: str, target_size: Tuple[int, int] = (512, 1024)) -> torch.Tensor:
     """
     Preprocess image for Panoptic DeepLab inference.
 
     Args:
         image_path: Path to input image
         target_size: Target size as (height, width)
-        use_imagenet_norm: Whether to apply ImageNet normalization (will be done on device if True)
 
     Returns:
         Preprocessed tensor in NCHW format (normalized to [0,1], ImageNet norm applied on device)
@@ -460,3 +459,16 @@ def create_panoptic_visualization(
     blended = cv2.addWeighted(original_image, 1 - alpha, vis_image, alpha, 0)
 
     return blended, {"segments": segments_info, "panoptic_seg": panoptic_seg, "pure_vis": vis_image}
+
+
+def skip_if_not_blackhole_20_or_110_cores(device):
+    """
+    This function is meant to be run only inside pytest tests.
+    """
+    if not is_blackhole():
+        pytest.skip("This test is intended to run only on Blackhole devices with 20 or 110 cores.")
+    compute_grid = device.compute_with_storage_grid_size()
+    if not ((compute_grid.x == 5 and compute_grid.y == 4) or (compute_grid.x == 11 and compute_grid.y == 10)):
+        pytest.skip(
+            f"This test is intended to run only on Blackhole devices with 20 or 110 cores. Core grid [{compute_grid.x},{compute_grid.y}] must be [5, 4] or [11, 10]."
+        )

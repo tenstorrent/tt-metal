@@ -15,8 +15,8 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -44,9 +44,16 @@ struct MeshPartitionDeviceOperation {
             const std::vector<tt::tt_metal::Tensor>&)>;
 
         // -- shared variables --------------------------------------------
+        using SliceSharedVariables = std::variant<
+            data_movement::slice::program::SliceRmProgramFactory::shared_variables_t,
+            data_movement::slice::program::SliceRmShardedProgramFactory::shared_variables_t,
+            data_movement::slice::program::SliceRmStrideProgramFactory::shared_variables_t,
+            data_movement::slice::program::SliceTileProgramFactory::shared_variables_t,
+            data_movement::slice::program::SliceTileTensorArgsProgramFactory::shared_variables_t>;
+
         struct shared_variables_t {
-            OverrideRuntimeArgsCallback override_runtime_arguments_callback;
-            ttnn::operations::data_movement::SliceDeviceOperation slice_op;
+            data_movement::slice::SliceDeviceOperation::program_factory_t slice_program_factory;
+            SliceSharedVariables slice_shared_variables;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -57,7 +64,7 @@ struct MeshPartitionDeviceOperation {
             tensor_return_value_t& tensor_return_value);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -81,13 +88,6 @@ struct MeshPartitionDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        int32_t dim,
-        std::optional<uint32_t> cluster_axis,
-        const ttnn::MemoryConfig& memory_config,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
 };
 
 namespace detail {
@@ -97,7 +97,10 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {
-// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto mesh_partition =
-    ttnn::register_operation<"ttnn::prim::mesh_partition", ttnn::operations::ccl::MeshPartitionDeviceOperation>();
+ttnn::Tensor mesh_partition(
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const ttnn::MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
 }  // namespace ttnn::prim

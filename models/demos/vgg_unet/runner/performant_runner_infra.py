@@ -6,7 +6,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import divup, is_wormhole_b0
+from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
 from models.demos.vgg_unet.common import load_torch_model
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
 from models.demos.vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters, get_mesh_mappers
@@ -53,8 +53,10 @@ class VGG_UnetTestInfra:
     def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
+        elif is_blackhole():
+            core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
-            raise RuntimeError("Unsupported device: Only Wormhole B0 is currently supported.")
+            raise RuntimeError("Unsupported device: Only Wormhole or Blackhole are currently supported.")
 
         torch_input_tensor = self.torch_input if torch_input_tensor is None else torch_input_tensor
 
@@ -66,7 +68,7 @@ class VGG_UnetTestInfra:
         n = n // self.num_devices if n // self.num_devices != 0 else n
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
-            ttnn.CoreGrid(x=8, y=8),
+            core_grid,
             ttnn.ShardStrategy.HEIGHT,
         )
         input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]

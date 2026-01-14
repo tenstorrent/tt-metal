@@ -3,6 +3,26 @@ allocation_policies:
       max_configs_per_core: 4
 
 Tests:
+  ### NEIGHBOR EXCHANGE BANDWIDTH TESTS ###
+  - name: "NeighborExchangeUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 100000
+
+    patterns:
+      - type: neighbor_exchange
+
+  ### LINEAR BANDWIDTH TESTS ###
   - name: "LinearMulticast"
     benchmark_mode: true
     sync: true
@@ -60,6 +80,44 @@ Tests:
       - type: one_to_all
         iterations: 3
 
+  - name: "NeighborExchangeLinear"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: neighbor_exchange
+        iterations: 3
+
+  ### LINEAR LATENCY TESTS ###
+  - name: "LatencyLinearUnicast"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      size: [16, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 256  # number of independent latency samples to collect
+            destination:
+              device: [0, 1]
+
+  ### RING BANDWIDTH TESTS ###
   # Full Ring Multicast and Unicast tests have more variation in bandwidth, so we run them for extra iterations
   - name: "FullRingMulticast"
     benchmark_mode: true
@@ -118,6 +176,25 @@ Tests:
       - type: half_ring
         iterations: 3
 
+  ### RING LATENCY TESTS ###
+  - name: "LatencyRingUnicast"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      size: [16, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 256  # number of independent latency samples to collect
+            destination:
+              device: [0, 1]
+
+  ### MESH BANDWIDTH TESTS ###
   - name: "MeshMulticast"
     benchmark_mode: true
     sync: true
@@ -156,23 +233,20 @@ Tests:
       - type: one_to_all
         iterations: 3
 
-  - name: "MeshMulticastDynamic"
-    benchmark_mode: true
-    sync: true
+  ### MESH LATENCY TESTS ###
+  - name: "LatencyMeshUnicast"
+    latency_test_mode: true
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
 
     parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+      size: [16, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      num_packets: 20000
-
-    patterns:
-      - type: all_to_all
-        iterations: 3
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 256  # number of independent latency samples to collect
+            destination:
+              device: [0, 1]

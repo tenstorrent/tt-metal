@@ -8,9 +8,19 @@ from ....layers.normalization import DistributedRMSNorm
 from ....layers.linear import ColParallelLinear
 from ....utils.substate import substate
 from ....utils.tensor import bf16_tensor
+from models.common.utility_functions import is_blackhole
 
 
 class WanAttention:
+    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
+    sdpa_chunk_size_map = {
+        (False, 2, 4): (256, 256),
+        (False, 8, 4): (256, 256),
+        (True, 2, 2): (128, 512),
+        (True, 8, 4): (128, 512),
+    }
+    default_sdpa_chunk_size = (256, 256)
+
     def __init__(
         self,
         dim,
@@ -92,13 +102,30 @@ class WanAttention:
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            compute_with_storage_grid_size=full_grid,
             q_chunk_size=256,
             k_chunk_size=256,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
+
+        self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
+        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
+            (
+                is_blackhole(),
+                self.parallel_config.sequence_parallel.factor,
+                self.parallel_config.tensor_parallel.factor,
+            ),
+            self.default_sdpa_chunk_size,
+        )
+
+        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            q_chunk_size=ring_sdpa_chunk_size[0],
+            k_chunk_size=ring_sdpa_chunk_size[1],
+            exp_approx_mode=False,  # NOTE: False is more correct
+        )
+
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -122,14 +149,6 @@ class WanAttention:
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
-        self.rmsnorm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Should be fp32
             packer_l1_acc=True,
         )
 
@@ -198,6 +217,12 @@ class WanAttention:
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
+        if rope_cos is not None:
+            # If ROPE is given, this is self-attention
+            assert rope_sin is not None
+            assert trans_mat is not None
+            assert prompt_1BLP is None
+
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -211,8 +236,12 @@ class WanAttention:
         v_1BNF = self.to_v(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Norm spatial before splitting heads
-        q_1BNF = self.norm_q(q_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
-        k_1BNF = self.norm_k(k_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
+        q_BHNE = self.norm_q(
+            q_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+        )
+        k_BHNE = self.norm_k(
+            k_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+        )
 
         def create_heads(inp):
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -223,22 +252,9 @@ class WanAttention:
             )
             return out
 
-        q_BHNE = create_heads(q_1BNF)
-        k_BHNE = create_heads(k_1BNF)
         v_BHNE = create_heads(v_1BNF)
 
         # Rope
-        if rope_cos is not None:
-            assert rope_sin is not None
-            assert trans_mat is not None
-            assert prompt_1BLP is None
-
-            q_BHNE = ttnn.experimental.rotary_embedding_llama(
-                q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-            )
-            k_BHNE = ttnn.experimental.rotary_embedding_llama(
-                k_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-            )
 
         if prompt_1BLP is None:
             # Self attention
@@ -259,7 +275,7 @@ class WanAttention:
                     ),
                     joint_strategy="rear",
                     logical_n=N,
-                    program_config=self.sdpa_program_config,
+                    program_config=self.ring_sdpa_program_config,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     dim=2,
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(

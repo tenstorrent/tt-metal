@@ -4,8 +4,8 @@
 
 #pragma once
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::ccl::common {

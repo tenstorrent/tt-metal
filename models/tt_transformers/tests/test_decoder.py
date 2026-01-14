@@ -11,9 +11,9 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
+from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.decoder import TransformerBlock
-from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
 
 
@@ -50,15 +50,13 @@ from models.tt_transformers.tt.rope import RotarySetup
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize(
+    "generation_length",
+    (10,),  # For decode-only unit test, there's no need to run with large sequence lengths
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
-    max_seq_len,
-    batch_size,
-    paged_attention,
-    page_params,
-    mesh_device,
-    reset_seeds,
-    ensure_gc,
+    max_seq_len, batch_size, paged_attention, page_params, mesh_device, reset_seeds, ensure_gc, generation_length
 ):
     dtype = ttnn.bfloat8_b
 
@@ -76,7 +74,6 @@ def test_decoder_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0
-    generation_length = 10
     all_tests_pass = True
 
     # Setup RoPE transformation matrices
@@ -147,17 +144,7 @@ def test_decoder_inference(
 
     seqlen = 1
 
-    if model_args.checkpoint_type == CheckpointType.Meta:
-        cos, sin = precompute_freqs(
-            model_args.head_dim,
-            model_args.max_seq_len * 2,
-            model_args.rope_theta,
-            model_args.rope_scaling.factor if model_args.rope_scaling else None,
-            model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
-        )
-        freqs_cis = torch.complex(cos, sin)
-    else:
-        freqs_cis = None
+    freqs_cis = None
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])

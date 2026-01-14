@@ -16,6 +16,8 @@ jobs:
   test-wheels:
     needs: build-artifact
     uses: ./.github/workflows/_test-wheels-impl.yaml
+    with:
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   publish-wheels:
     name: "Publish wheels to internal PyPI"
     needs: [build-artifact, test-wheels]

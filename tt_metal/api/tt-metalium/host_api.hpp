@@ -9,6 +9,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -16,9 +17,10 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/lightmetal_binary.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 
 /** @file */
 
@@ -32,22 +34,18 @@
  * https://www.tablesgenerator.com/markdown_tables
  * */
 
-class CoreRange;
-class CoreRangeSet;
-
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct TraceDescriptor;
 
 class Program;
 class IDevice;
 class Trace;
-class CircularBuffer;
 struct Event;
 class Buffer;
 class GlobalSemaphore;
+class CoreRange;
+class CoreRangeSet;
 
 // ==================================================
 //                  HOST API: Device management
@@ -602,27 +600,6 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
 
 // clang-format off
 /**
- * Begin Light Metal Binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
- * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
- * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
- *
- * Return value: void
- */
-// clang-format on
-void LightMetalBeginCapture();
-
-// clang-format off
-/**
- * Ends Light Metal Binary capturing on host and all devices returns the binary blob to the user.
- * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
- *
- * Return value: LightMetalBinary
- */
-// clang-format on
-LightMetalBinary LightMetalEndCapture();
-
-// clang-format off
-/**
  * Read device side profiler data for all devices in the mesh device
  *
  * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
@@ -679,6 +656,4 @@ uint8_t PopCurrentCommandQueueIdForThread();
 // clang-format on
 uint8_t GetCurrentCommandQueueIdForThread();
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

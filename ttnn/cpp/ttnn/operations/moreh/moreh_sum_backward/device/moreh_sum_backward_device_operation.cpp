@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_sum_backward_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -12,7 +13,7 @@ void MorehSumBackwardOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;
-    auto& input_grad = tensor_args.input_grad;
+    const auto& input_grad = tensor_args.input_grad;
 
     const auto keepdim = operation_attributes.keepdim;
     const auto dims = operation_attributes.dims;
@@ -94,7 +95,7 @@ void MorehSumBackwardOperation::validate_inputs(
 }
 
 MorehSumBackwardOperation::program_factory_t MorehSumBackwardOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 
@@ -128,8 +129,10 @@ MorehSumBackwardOperation::tensor_return_value_t MorehSumBackwardOperation::crea
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input->device());
 }
 
-std::tuple<MorehSumBackwardOperation::operation_attributes_t, MorehSumBackwardOperation::tensor_args_t>
-MorehSumBackwardOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_sum_backward
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation::tensor_return_value_t moreh_sum_backward(
     const Tensor& output_grad,
     const std::optional<Tensor>& input,
     tt::stl::Span<const int64_t> dims,
@@ -137,13 +140,13 @@ MorehSumBackwardOperation::invoke(
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            ttnn::SmallVector<int64_t>(dims.begin(), dims.end()),
-            keepdim,
-            memory_config.value_or(output_grad.memory_config()),
-            init_device_compute_kernel_config(
-                output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{output_grad, input, input_grad}};
+    using OperationType = ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        ttnn::SmallVector<int64_t>(dims.begin(), dims.end()),
+        keepdim,
+        memory_config.value_or(output_grad.memory_config()),
+        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{output_grad, input, input_grad};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_sum_backward
+}  // namespace ttnn::prim

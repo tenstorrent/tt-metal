@@ -504,8 +504,8 @@ class Attention(LightweightModule):
                 q_heads_1BQD,
                 keys,
                 values,
-                cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
+                cur_pos_tensor=current_pos,
                 scale=self.scale,
                 sliding_window_size=self.sliding_window,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
@@ -823,7 +823,7 @@ class Attention(LightweightModule):
                 page_table_tensor=page_table,
                 chunk_start_idx=chunk_start_idx,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx),
             )
         else:
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(

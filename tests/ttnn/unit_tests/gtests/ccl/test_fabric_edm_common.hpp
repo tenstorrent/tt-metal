@@ -10,7 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "tt-metalium/kernel_types.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
@@ -18,7 +18,6 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "tt_metal/fabric/ccl/ccl_common.hpp"
-#include "tt_metal/fabric/erisc_datamover_builder_helper.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
@@ -37,6 +36,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "gtest/gtest.h"
+#include "common/tt_backend_api_types.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -76,16 +76,16 @@ protected:
     MeshShape GetDeterminedMeshShape() const {
         if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
             return MeshShape{8, 4};
-        } else if (num_devices_ == 4) {
-            return MeshShape{1, 4};
-        } else {
-            return MeshShape{2, 4};
         }
+        if (num_devices_ == 4) {
+            return MeshShape{1, 4};
+        }
+        return MeshShape{2, 4};
     }
 
     // Validates environment and hardware for tests
     void ValidateEnvironment() {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }
@@ -112,13 +112,12 @@ protected:
     }
 
 public:
-    BaseFabricFixture() : device_open(false) {}
+    BaseFabricFixture() = default;
 
     BaseFabricFixture(
         tt::tt_fabric::FabricConfig fabric_config,
         tt::tt_fabric::FabricReliabilityMode reliability_mode =
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
-        device_open(false) {
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
         tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
     }
 
@@ -145,7 +144,7 @@ public:
 
     // Validates environment and hardware for tests
     void ValidateEnvironment() {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }
@@ -175,13 +174,12 @@ public:
         }
     }
 
-    Fabric1DDeviceInitFixture() : device_open(false) { this->SetupDevices(); }
+    Fabric1DDeviceInitFixture() { this->SetupDevices(); }
 
     Fabric1DDeviceInitFixture(
         tt::tt_fabric::FabricConfig fabric_config,
         tt::tt_fabric::FabricReliabilityMode reliability_mode =
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
-        device_open(false) {
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
         tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
         this->SetupDevices();
     }
@@ -371,7 +369,7 @@ bool RunPipelinedWorkersTest(
     const tt::DataFormat data_format,
     const size_t page_size_bytes,
     const size_t cb_packet_size_in_pages,
-    const size_t num_packets_per_cb,
+    const size_t /*num_packets_per_cb*/,
     auto layout,
 
     std::vector<std::vector<size_t>> worker_chunk_read_order,
@@ -438,8 +436,16 @@ bool RunPipelinedWorkersTest(
         device_tensors.push_back(host_tensors[i].to_device(mesh_device.get(), mem_configs[i]));
         log_info(tt::LogTest, "Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
-    TT_ASSERT(device_tensors.size() == num_tensors);
-    TT_ASSERT(device_tensors.size() == host_tensors.size());
+    TT_FATAL(
+        device_tensors.size() == num_tensors,
+        "device_tensors size {} does not match expected {}",
+        device_tensors.size(),
+        num_tensors);
+    TT_FATAL(
+        device_tensors.size() == host_tensors.size(),
+        "device_tensors size {} does not match host_tensors size {}",
+        device_tensors.size(),
+        host_tensors.size());
 
     // MAIN STUFF
 

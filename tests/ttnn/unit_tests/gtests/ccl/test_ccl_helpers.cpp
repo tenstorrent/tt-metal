@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <algorithm>
 #include <cstddef>
 #include <vector>
@@ -15,6 +15,7 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/arch.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingMode) {
     std::size_t num_channels = 4;

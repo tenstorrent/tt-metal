@@ -5,7 +5,6 @@
 #include "gelu_backward_device_operation.hpp"
 #include "gelu_backward_program_factory.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include "tt-metalium/host_api.hpp"
 
 using namespace tt::tt_metal;
@@ -13,7 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::gelu_backward {
 
 GeluBackwardDeviceOperation::program_factory_t GeluBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::GeluBackwardProgramFactory{};
 }
 
@@ -132,18 +131,25 @@ tt::stl::hash::hash_t GeluBackwardDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<GeluBackwardDeviceOperation::operation_attributes_t, GeluBackwardDeviceOperation::tensor_args_t>
-GeluBackwardDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::gelu_backward
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::gelu_backward::GeluBackwardDeviceOperation::tensor_return_value_t gelu_bw(
     const Tensor& grad_output,
     const Tensor& input,
     const std::string& approximate,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
-            .output_dtype = output_dtype, .output_memory_config = output_memory_config, .approximate = approximate},
-        tensor_args_t{.grad_output = grad_output, .input = input, .preallocated_input_grad = preallocated_output}};
+    using OperationType = ttnn::operations::experimental::gelu_backward::GeluBackwardDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_dtype = output_dtype, .output_memory_config = output_memory_config, .approximate = approximate};
+    auto tensor_args = OperationType::tensor_args_t{
+        .grad_output = grad_output, .input = input, .preallocated_input_grad = preallocated_output};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::gelu_backward
+}  // namespace ttnn::prim

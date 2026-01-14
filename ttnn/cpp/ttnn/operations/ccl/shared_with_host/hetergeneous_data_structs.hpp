@@ -24,8 +24,7 @@
  * invocations and program creation.
  */
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 enum EriscDataMoverBufferSharingMode : uint32_t {
     NOT_SHARED = 0,
@@ -304,5 +303,4 @@ inline void advance_worker_global_page_interleaved (
 static constexpr uint32_t UNINITIALIZED_VALUE_U32 = std::numeric_limits<uint32_t>::max();
 static constexpr uint16_t UNINITIALIZED_VALUE_U16 = std::numeric_limits<uint16_t>::max();
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

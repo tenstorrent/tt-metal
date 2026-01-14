@@ -4,7 +4,6 @@
 
 #include "dropout_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -12,12 +11,11 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::dropout {
 
 DropoutDeviceOperation::program_factory_t DropoutDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.use_per_device_seed) {
         return program::DropoutMeshWorkloadFactory{};
-    } else {
-        return program::DropoutProgramFactory{};
     }
+    return program::DropoutProgramFactory{};
 }
 
 void DropoutDeviceOperation::validate_on_program_cache_hit(
@@ -129,26 +127,36 @@ tt::stl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<DropoutDeviceOperation::operation_attributes_t, DropoutDeviceOperation::tensor_args_t>
-DropoutDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::dropout
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::dropout::DropoutDeviceOperation::tensor_return_value_t dropout(
     const Tensor& input,
     float prob,
     float scale,
     uint32_t seed,
     bool use_per_device_seed,
     DataType output_dtype,
-    const MemoryConfig& output_memory_config,
+    const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
-            .output_dtype = output_dtype,
-            .output_memory_config = output_memory_config,
-            .seed = seed,
-            .use_per_device_seed = use_per_device_seed,
-            .prob = prob,
-            .scale = scale,
-        },
-        tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
+    using OperationType = ttnn::operations::experimental::dropout::DropoutDeviceOperation;
+
+    auto resolved_memory_config = preallocated_output.has_value()
+                                      ? preallocated_output.value().memory_config()
+                                      : output_memory_config.value_or(input.memory_config());
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_dtype = output_dtype,
+        .output_memory_config = resolved_memory_config,
+        .seed = seed,
+        .use_per_device_seed = use_per_device_seed,
+        .prob = prob,
+        .scale = scale,
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::dropout
+}  // namespace ttnn::prim

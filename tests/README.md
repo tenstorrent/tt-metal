@@ -13,38 +13,26 @@ The sweep test framework runs parameterized tests across large parameter spaces 
 
 #### 1. First Generate Test Vectors
 
+**NOTE: Elasticsearch support has been removed. Vectors are now always exported to disk in JSON format.**
+
 ```bash
-# Generate vectors for all sweep modules and export to Elasticsearch
+# Generate vectors for all sweep modules and export to drive -> tests/sweep_framework/vectors_export
 python tests/sweep_framework/sweeps_parameter_generator.py
 
-# Generate vectors for all sweep modules and export to drive -> tests/sweep_framework/vectors_export
-python tests/sweep_framework/sweeps_parameter_generator.py --dump-file
-
-# Generate vectors for a specific module and export to Elasticsearch
-python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise.unary.relu.relu
-
 # Generate vectors for a specific module and export to drive -> tests/sweep_framework/vectors_export
-python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise.unary.relu.relu --dump-file
+python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise.unary.relu.relu
 ```
 
-- **If exporting to Elasticsearch:** (requires credentials):
-  ```bash
-  export ELASTIC_USERNAME="your-elastic-username"
-  export ELASTIC_PASSWORD="your-elastic-password"
-  ```
+**Note:** The `--dump-file` flag is deprecated and no longer needed. Vectors are always dumped to disk by default.
 
 #### 2. Run Tests
 
-- **Vector sources**: `elastic`, `file`, or `vectors_export`
-- **Result destinations**: `postgres`, `elastic`, or `results_export`
+- **Vector sources**: `file` or `vectors_export`
+- **Result destinations**: `results_export` or `superset`
 
-- **If vector source OR result destination is elastic** (requires credentials):
-  ```bash
-  export ELASTIC_USERNAME="your-elastic-username"
-  export ELASTIC_PASSWORD="your-elastic-password"
-  ```
+**NOTE: Elasticsearch support has been removed (December 2025). Use `vectors_export` for vectors and `results_export` or `superset` for results.**
 
-- **If result destination is postgres** (requires credentials):
+- **If result destination is postgres** (optional, requires credentials):
   ```bash
   export POSTGRES_HOST="your-postgres-host"
   export POSTGRES_DATABASE="your-database-name"
@@ -58,28 +46,30 @@ python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise
 **To run sweeps you must specify the source of the vectors source and destination of the results**
 ```bash
 # Run all available sweep tests
-python tests/sweep_framework/sweeps_runner.py --vector-source {elastic,file,vectors_export} --result-dest {elastic,postgres,results_export}
+python tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export
 
 # Run specific module
-python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --vector-source {elastic,file,vectors_export} --result-dest {elastic,postgres,results_export}
+python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --vector-source vectors_export --result-dest results_export
 
 # Run specific suite within a module
-python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --suite-name suite_1 --vector-source {elastic,file,vectors_export} --result-dest {elastic,postgres,results_export}
+python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --suite-name suite_1 --vector-source vectors_export --result-dest results_export
 
 # Run multiple modules (comma-separated)
-python tests/sweep_framework/sweeps_runner.py --module-name "eltwise.unary.relu.relu,matmul.short.matmul" --vector-source {elastic,file,vectors_export} --result-dest {elastic,postgres,results_export}
+python tests/sweep_framework/sweeps_runner.py --module-name "eltwise.unary.relu.relu,matmul.short.matmul" --vector-source vectors_export --result-dest results_export
+
+# Upload results to data pipeline (CI/production)
+python tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.relu.relu --vector-source vectors_export --result-dest superset
 ```
 
 ### Sweep Runner CLI Reference (key options)
-- **Tag filter**: Vectors fetched from Elasticsearch are filtered by `--tag` (defaults to your `$USER`). Ensure your tag matches the one used during vector generation.
 ```bash
-- `--module-name`: Module name or comma-separated list (comma-separated supported for `elastic` and `vectors_export` sources)
+- `--module-name`: Module name or comma-separated list (comma-separated supported for `vectors_export` source)
 - `--suite-name`: Suite to run within a module
-- `--vector-source`: One of `elastic` (default), `file`, `vectors_export`
+- `--vector-source`: One of `file`, `vectors_export` (default: `vectors_export`)
 - `--file-path`: Path to vectors JSON (required when `--vector-source file`)
 - `--vector-id`: Run a single vector by id (requires `--module-name`)
-- `--result-dest`: One of `postgres` (default), `elastic`, `results_export`
-- `--tag`: Tag to filter vectors in Elasticsearch (defaults to `$USER`)
+- `--result-dest`: One of `results_export`, `superset` (default: `results_export`)
+- `--tag`: Tag for organizing test runs (defaults to `$USER`)
 - `--skip-modules`: Comma-separated modules to skip when running all modules
 - `--skip-on-timeout`: Skip remaining tests in a suite if a test times out
 - `--keep-invalid`: Include invalid vectors in results with NOT_RUN status (default: exclude invalid vectors from results entirely)

@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);

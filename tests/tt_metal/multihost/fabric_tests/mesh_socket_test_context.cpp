@@ -9,14 +9,14 @@
 #include <map>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_fabric::mesh_socket_tests {
 
 MeshSocketTestContext::MeshSocketTestContext(const MeshSocketTestConfiguration& config) :
-    config_(config), mesh_device_(nullptr), control_plane_ptr_(nullptr) {
+    config_(config), mesh_device_(nullptr) {
     log_info(tt::LogTest, "MeshSocketTestContext created with {} tests", config_.tests.size());
 }
 
@@ -147,18 +147,16 @@ void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
     distributed_context_->barrier();
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshSocketTestContext::setup_fabric_configuration() {
     log_info(tt::LogTest, "Setting up fabric configuration...");
 
     tt::tt_fabric::FabricConfig fabric_config;
     // TODO: Add support for other Fabric Configs as well
     switch (config_.fabric_config.topology) {
-        case tt::tt_fabric::Topology::Mesh:
-            switch (config_.fabric_config.routing_type) {
-                case RoutingType::Dynamic: fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC; break;
-                default: TT_THROW("Unsupported fabric routing type, must be Dynamic");
-            }
-            break;
+        case tt::tt_fabric::Topology::Mesh: {
+            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D;
+        } break;
         default: TT_THROW("Unsupported fabric topology, must be Mesh");
     }
 
@@ -199,26 +197,26 @@ tt::tt_metal::distributed::SocketConfig MeshSocketTestContext::convert_to_socket
         connections.push_back(convert_to_socket_connection(conn_config));
     }
 
-    tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config{
-        .socket_storage_type = tt::tt_metal::BufferType::L1,
-        .fifo_size = memory_config.fifo_size,
-    };
+    tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config(
+        tt::tt_metal::BufferType::L1, memory_config.fifo_size);
 
-    tt::tt_metal::distributed::SocketConfig config{
-        .socket_connection_config = connections,
-        .socket_mem_config = socket_mem_config,
-        .sender_rank = test_socket_config.sender_rank,
-        .receiver_rank = test_socket_config.receiver_rank,
-        .distributed_context = distributed_context_};
+    tt::tt_metal::distributed::SocketConfig config(
+        connections,
+        socket_mem_config,
+        test_socket_config.sender_rank,
+        test_socket_config.receiver_rank,
+        distributed_context_);
 
     return config;
 }
 
 tt::tt_metal::distributed::SocketConnection MeshSocketTestContext::convert_to_socket_connection(
     const SocketConnectionConfig& connection_config) {
-    return tt::tt_metal::distributed::SocketConnection{
-        .sender_core = {connection_config.sender.mesh_coord, connection_config.sender.core_coord},
-        .receiver_core = {connection_config.receiver.mesh_coord, connection_config.receiver.core_coord}};
+    return tt::tt_metal::distributed::SocketConnection(
+        tt::tt_metal::distributed::MeshCoreCoord(
+            connection_config.sender.mesh_coord, connection_config.sender.core_coord),
+        tt::tt_metal::distributed::MeshCoreCoord(
+            connection_config.receiver.mesh_coord, connection_config.receiver.core_coord));
 }
 
 void MeshSocketTestContext::execute_socket_test(

@@ -63,10 +63,7 @@ public:
      * @param num_used_receiver_channels Number of receiver channels in use
      */
     void emit_ct_args(
-        std::vector<uint32_t>& ct_args,
-        size_t num_fwd_paths,
-        size_t num_used_sender_channels,
-        size_t num_used_receiver_channels) const;
+        std::vector<uint32_t>& ct_args, size_t num_used_sender_channels, size_t num_used_receiver_channels) const;
 
     /**
      * Get the number of pools managed by this allocator.

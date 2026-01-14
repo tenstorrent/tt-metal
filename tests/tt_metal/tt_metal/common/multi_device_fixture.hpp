@@ -7,8 +7,7 @@
 #include <gtest/gtest.h>
 #include <boost/algorithm/string.hpp>
 
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
@@ -25,7 +24,7 @@ namespace tt::tt_metal {
 class TwoMeshDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
@@ -107,12 +106,14 @@ protected:
         uint32_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
         uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
         tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED;
+        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED;
     };
 
     explicit MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
 
     void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
         }
@@ -144,7 +145,12 @@ protected:
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
 
         if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
-            tt_fabric::SetFabricConfig(config_.fabric_config);
+            tt_fabric::SetFabricConfig(
+                config_.fabric_config,
+                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+                std::nullopt,
+                config_.fabric_tensix_config,
+                config_.fabric_udm_mode);
         }
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
@@ -213,15 +219,56 @@ protected:
 class GenericMeshDeviceFabric2DFixture : public MeshDeviceFixtureBase {
 protected:
     GenericMeshDeviceFabric2DFixture() :
-        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC}) {}
+        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
 };
 
 class MeshDevice2x4Fabric2DFixture : public MeshDeviceFixtureBase {
 protected:
     MeshDevice2x4Fabric2DFixture() :
+        MeshDeviceFixtureBase(
+            Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
+};
+
+class MeshDevice1x4Fabric2DUDMFixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice1x4Fabric2DUDMFixture() :
         MeshDeviceFixtureBase(Config{
-            .mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC}) {
+            .mesh_shape = MeshShape{1, 4},
+            .num_cqs = 1,
+            .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+            .fabric_tensix_config = tt_fabric::FabricTensixConfig::UDM,
+            .fabric_udm_mode = tt_fabric::FabricUDMMode::ENABLED}) {}
+
+    void SetUp() override {
+        // When Fabric is enabled, it requires all devices in the system to be active.
+        // For Blackhole P150_X8 systems (8 independent chips), opening 4 devices leaves 4 inactive, causing a fatal error.
+        // For T3K (4 N300 boards = 8 chips), opening 4 MMIO devices automatically activates all 8 chips, so it works.
+        // Skip the test only on Blackhole systems with more than 4 devices.
+        const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+        const size_t num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
+        const size_t requested_devices = 4;  // 1x4 mesh
+
+        if (cluster_type == tt::tt_metal::ClusterType::P150_X8 && num_devices > requested_devices) {
+            GTEST_SKIP() << fmt::format(
+                "Skipping MeshDevice1x4Fabric2DUDMFixture test on P150_X8: "
+                "System has {} independent Blackhole devices but test only requests {}. "
+                "Fabric requires all devices to be active.",
+                num_devices,
+                requested_devices);
+        }
+        MeshDeviceFixtureBase::SetUp();
     }
+};
+
+class MeshDevice2x4Fabric2DUDMFixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice2x4Fabric2DUDMFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_shape = MeshShape{2, 4},
+            .num_cqs = 1,
+            .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+            .fabric_tensix_config = tt_fabric::FabricTensixConfig::UDM,
+            .fabric_udm_mode = tt_fabric::FabricUDMMode::ENABLED}) {}
 };
 
 }  // namespace tt::tt_metal

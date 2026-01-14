@@ -4,33 +4,38 @@
 
 #include <unordered_map>
 #include <vector>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <map>
+#include <algorithm>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
+#include <tt_stl/reflection.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "fabric/hw/inc/fabric_routing_mode.h"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_fabric::Topology& topology) {
+    tt::stl::reflection::operator<<(os, topology);
+    return os;
+}
+
 std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
     std::unordered_map<MeshId, bool> wrap_around_mesh;
 
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_ids = control_plane.get_user_physical_mesh_ids();
     for (const auto& mesh_id : mesh_ids) {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
-            // skip wrapping around mesh for TG since the corner chips connected to the gateway will be
-            // using that link to route dispatch or any other traffic
-            wrap_around_mesh[mesh_id] = false;
-            continue;
-        }
-        // we can wrap around mesh if the corner chip (logical chip 0) has exactly 2 connections
+        // We can wrap around mesh if the corner chip (logical chip 0) has exactly 2 connections
         const uint32_t corner_chip_id = 0;
         uint32_t corner_chip_connections = 0;
         for (const auto& direction : FabricContext::routing_directions) {
@@ -44,18 +49,127 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
     return wrap_around_mesh;
 }
 
+uint32_t FabricContext::get_max_1d_hops_from_topology() const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
+    // Extract mesh shapes from topology
+    std::vector<MeshShape> mesh_shapes;
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    mesh_shapes.reserve(mesh_ids.size());
+    for (const auto& mesh_id : mesh_ids) {
+        mesh_shapes.push_back(mesh_graph.get_mesh_shape(mesh_id));
+    }
+
+    // Use helper function for hop calculation
+    return compute_max_1d_hops(mesh_shapes);
+}
+
+uint32_t FabricContext::get_max_2d_hops_from_topology() const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
+    // Extract mesh shapes from topology
+    std::vector<MeshShape> mesh_shapes;
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    mesh_shapes.reserve(mesh_ids.size());
+    for (const auto& mesh_id : mesh_ids) {
+        mesh_shapes.push_back(mesh_graph.get_mesh_shape(mesh_id));
+    }
+
+    // Use helper function for hop calculation
+    return compute_max_2d_hops(mesh_shapes);
+}
+
+uint32_t FabricContext::compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const {
+    // Precondition: max_hops validated by compute_packet_specifications()
+
+    // Base routing word supports 16 hops; extension words add 16 hops each
+    // ExtensionWords=0: 1-16 hops (48B header)
+    // ExtensionWords=1: 17-32 hops (64B header)
+
+    return (max_hops - 1) / ROUTING_1D_HOPS_PER_WORD;
+}
+
+uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) const {
+    // Precondition: max_hops validated by compute_packet_specifications()
+
+    // Route buffer tiers aligned to packet header size boundaries
+    for (const auto& tier : ROUTING_2D_BUFFER_TIERS) {
+        if (max_hops <= tier.max_hops) {
+            return tier.buffer_size;
+        }
+    }
+
+    return Limits::MAX_2D_ROUTE_BUFFER_SIZE;
+}
+
+void FabricContext::compute_packet_specifications() {
+    // Query topology to determine optimal header sizes
+    if (is_2D_routing_enabled_) {
+        // 2D mode: query topology and validate against limits
+        max_2d_hops_ = get_max_2d_hops_from_topology();
+
+        if (max_2d_hops_ == 0) {
+            log_warning(
+                tt::LogFabric,
+                "Max 2D routing hops were determined as 0, check mesh topology before running fabric workloads, "
+                "defaulting to: {}",
+                Limits::MAX_2D_HOPS);
+            // NOTE: Default to a non-zero value as we might be running tests in a simulated/mock environment
+            max_2d_hops_ = Limits::MAX_2D_HOPS;
+        }
+
+        // Validate 2D topology against route buffer limits
+        // Each byte in route buffer encodes 1 hop, so max_hops cannot exceed buffer size
+        TT_FATAL(
+            max_2d_hops_ <= Limits::MAX_2D_HOPS,
+            "2D routing with {} hops exceeds maximum {} hops supported by {}B route buffer.",
+            max_2d_hops_,
+            Limits::MAX_2D_HOPS,
+            Limits::MAX_2D_ROUTE_BUFFER_SIZE);
+
+        routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(max_2d_hops_);
+    } else {
+        // 1D mode: query topology and validate against limits
+        max_1d_hops_ = get_max_1d_hops_from_topology();
+
+        if (max_1d_hops_ == 0) {
+            log_warning(
+                tt::LogFabric,
+                "Max 1D routing hops were determined as 0, check mesh topology before running fabric workloads, "
+                "defaulting to: {}",
+                Limits::MAX_1D_HOPS);
+            // NOTE: Default to a non-zero value as we might be running tests in a simulated/mock environment
+            max_1d_hops_ = Limits::MAX_1D_HOPS;
+        }
+
+        // Validate 1D topology against memory map limits
+        // ROUTING_PATH_SIZE_1D = 256 bytes / 8 bytes per entry = 32 chips max
+        TT_FATAL(
+            max_1d_hops_ <= Limits::MAX_1D_HOPS,
+            "1D routing with {} hops exceeds maximum {} hops (ROUTING_PATH_SIZE_1D = 256 bytes limit).",
+            max_1d_hops_,
+            Limits::MAX_1D_HOPS);
+
+        routing_1d_extension_words_ = compute_1d_pkt_hdr_extension_words(max_1d_hops_);
+    }
+
+    // Compute actual packet sizes based on topology
+    packet_header_size_bytes_ = compute_packet_header_size_bytes();
+    max_payload_size_bytes_ = compute_max_payload_size_bytes();
+    channel_buffer_size_bytes_ = packet_header_size_bytes_ + max_payload_size_bytes_;
+}
+
 tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config) {
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE: return tt::tt_fabric::Topology::NeighborExchange;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return tt::tt_fabric::Topology::Torus;
         case tt::tt_fabric::FabricConfig::DISABLED:
         case tt::tt_fabric::FabricConfig::CUSTOM:
             TT_THROW("Unsupported fabric config: {}", enchantum::to_string(fabric_config));
@@ -63,144 +177,154 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     return tt::tt_fabric::Topology::Linear;
 }
 
-bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
-    return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
-}
-
-bool FabricContext::is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric_config) {
-    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
-}
-
-size_t FabricContext::get_packet_header_size_bytes() const {
-    if (this->is_2D_routing_enabled()) {
-        return (this->is_dynamic_routing_enabled()) ? sizeof(tt::tt_fabric::MeshPacketHeader)
-                                                    : sizeof(tt::tt_fabric::HybridMeshPacketHeader);
-    } else {
-        return sizeof(tt::tt_fabric::PacketHeader);
+size_t FabricContext::get_1d_header_size(uint32_t extension_words) const {
+    // Use explicit template instantiation for compile-time type safety
+    switch (extension_words) {
+        case 0: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<0>);
+        case 1: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<1>);
+        default: TT_THROW("Unsupported extension words: {}", extension_words);
     }
 }
 
-size_t FabricContext::get_max_payload_size_bytes() const {
-    if (this->is_2D_routing_enabled()) {
+size_t FabricContext::get_2d_header_size(uint32_t route_buffer_size) const {
+    // Use explicit template instantiation for compile-time type safety
+    // Only max-capacity tiers per header size (19, 35) to avoid switch bloat
+    switch (route_buffer_size) {
+        case 19: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<19>);  // 80B header max
+        case 35: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<35>);  // 96B header max
+        default: TT_THROW("Unsupported 2D route buffer size: {}", route_buffer_size);
+    }
+}
+
+size_t FabricContext::get_udm_header_size(uint32_t route_buffer_size) const {
+    // UDM header = base 2D header + UDM control fields
+    return get_2d_header_size(route_buffer_size) + sizeof(tt::tt_fabric::UDMControlFields);
+}
+
+size_t FabricContext::compute_packet_header_size_bytes() const {
+    bool udm_enabled =
+        tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+
+    if (udm_enabled) {
+        TT_FATAL(is_2D_routing_enabled_, "UDM mode only supports 2D routing");
+        return get_udm_header_size(routing_2d_buffer_size_);
+    }
+
+    if (is_2D_routing_enabled_) {
+        return get_2d_header_size(routing_2d_buffer_size_);
+    }
+
+    return get_1d_header_size(routing_1d_extension_words_);
+}
+
+size_t FabricContext::compute_max_payload_size_bytes() const {
+    if (is_2D_routing_enabled_) {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes;
-    } else {
-        return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
     }
-}
-
-std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_edm_config_options(
-    tt::tt_fabric::FabricEriscDatamoverType edm_type,
-    tt::tt_fabric::FabricEriscDatamoverAxis edm_axis,
-    tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
-    eth_chan_directions direction) {
-    auto edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{
-        .enable_dateline_sender_extra_buffer_slots = true,
-        .enable_dateline_receiver_extra_buffer_slots = true,
-        .enable_dateline_upstream_sender_extra_buffer_slots = true,
-        .enable_dateline_upstream_receiver_extra_buffer_slots = true,
-        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-            edm_axis != tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-    };
-    auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
-        .edm_type = edm_type,
-        .edm_axis = edm_axis,
-        .edm_buffer_config = edm_buffer_config,
-        .fabric_tensix_config = fabric_tensix_config,
-        .direction = direction,
-    };
-
-    return std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
-        this->channel_buffer_size_bytes_, this->topology_, edm_options);
+    return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
 }
 
 FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
+    // === Initialization order critical - dependencies flow downward ===
+    // fabric_config_ → topology_ → routing flags → packet specs
+
+    // Step 1: Validate and store base configuration
     TT_FATAL(
         fabric_config != tt::tt_fabric::FabricConfig::DISABLED,
         "Trying to initialize fabric context for disabled fabric config");
-
     this->fabric_config_ = fabric_config;
 
+    // Step 2: Derive topology (depends on: fabric_config_)
+    this->topology_ = FabricContext::get_topology_from_config(fabric_config);
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
-    this->topology_ = this->get_topology_from_config(fabric_config);
 
-    this->is_2D_routing_enabled_ = this->is_2D_topology(this->topology_);
-    this->is_dynamic_routing_enabled_ = this->is_dynamic_routing_config(fabric_config);
+    // Step 3: Compute routing flags (depends on: topology_)
+    this->is_2D_routing_enabled_ = is_2D_topology(this->topology_);
+    this->bubble_flow_control_enabled_ = is_ring_or_torus(this->topology_);
 
-    this->packet_header_size_bytes_ = this->get_packet_header_size_bytes();
-    this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
-    this->channel_buffer_size_bytes_ = this->packet_header_size_bytes_ + this->max_payload_size_bytes_;
+    // Step 4: Compute and validate routing mode (depends on: topology_)
+    this->compute_routing_mode();
 
-    auto short_axis = static_cast<std::size_t>(tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    auto long_axis = static_cast<std::size_t>(tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+    // Step 5: Compute packet specifications (depends on: routing flags)
+    this->compute_packet_specifications();
 
-    // default router config don't care about the axis, since there's no optimization to it.
-    this->router_config_ = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::Default, tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+    // Step 6: Additional independent configs
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    this->tensix_enabled_ = (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED);
 
-    // dateline edm router
-    this->dateline_router_config_[short_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::Dateline, tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_router_config_[long_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::Dateline, tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+    // Compute intermesh VC configuration (requires ControlPlane to be initialized)
+    // this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
 
-    // dateline upstream edm router
-    this->dateline_upstream_router_config_[short_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream, tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_upstream_router_config_[long_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream, tt::tt_fabric::FabricEriscDatamoverAxis::Long);
-
-    // dateline upstream adjacent edm router
-    this->dateline_upstream_adjcent_router_config_[short_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_upstream_adjcent_router_config_[long_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Long);
-
-    // default router config with mux extension, for now no need to differentiate dateline, dateline-upstream, etc.
-    // Initialize for all directions: EAST, WEST, NORTH, SOUTH
-    for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
-        this->router_with_mux_config_[direction] = get_edm_config_options(
-            tt::tt_fabric::FabricEriscDatamoverType::Default,
-            tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-            tt::tt_fabric::FabricTensixConfig::MUX,
-            static_cast<eth_chan_directions>(direction));
-    }
-
-    // Tensix config will be initialized later after routing tables are configured
-    tensix_config_ = nullptr;
-
-    this->num_devices = tt::tt_metal::GetNumAvailableDevices();
-    auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
-    if (this->num_devices != 4 && num_pcie_devices == 4) {
-        // adding TG's 4 dispatch devices
-        this->num_devices += num_pcie_devices;
-    }
-    this->master_router_chans_.resize(num_devices, UNINITIALIZED_MASTER_ROUTER_CHAN);
-    this->num_initialized_routers_.resize(num_devices, UNINITIALIZED_ROUTERS);
-
-    set_routing_mode(this->topology_, this->fabric_config_);
+    builder_context_ = nullptr;
 }
 
+// Destructor needed because of unique_ptr with forward-declared FabricBuilderContext
+FabricContext::~FabricContext() = default;
+
+// Used to check whether a physical mesh has external torus connections, to enable Ring topology.
+// Note: is_wrap_around_mesh is true if the mesh does NOT have external torus connections.
+// Returning true tells the fabric code that it must fold the internal connections on the corner chips in order to form
+// a "torus mesh"
 bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
     auto it = this->wrap_around_mesh_.find(mesh_id);
     TT_FATAL(it != this->wrap_around_mesh_.end(), "Querying wrap around mesh for an unknown mesh id");
     return it->second;
 }
 
-tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this->topology_; }
+bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
+    // Stub: returns false for now (all meshes are compute meshes)
+    // TODO: Implement when switch mesh support lands - delegate to ControlPlane
+    (void)mesh_id;  // Unused for now
+    return false;
+}
 
-bool FabricContext::is_2D_routing_enabled() const { return this->is_2D_routing_enabled_; }
+bool FabricContext::has_z_router_on_device(ChipId device_id) const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
 
-bool FabricContext::is_dynamic_routing_enabled() const { return this->is_dynamic_routing_enabled_; }
+    // Iterate through all meshes to find which one contains this device
+    const auto& mesh_ids = mesh_graph.get_mesh_ids();
+    for (const auto& mesh_id : mesh_ids) {
+        const auto& mesh_connections = inter_mesh_connectivity[*mesh_id];
+
+        // Check if this device ID is within this mesh's connectivity map
+        if (device_id < mesh_connections.size()) {
+            const auto& chip_connections = mesh_connections[device_id];
+
+            // Check if any connection from this chip uses Z direction
+            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
+                if (router_edge.port_direction == RoutingDirection::Z) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+// ============ Builder Context Access ============
+
+FabricBuilderContext& FabricContext::get_builder_context() {
+    if (!builder_context_) {
+        builder_context_ = std::make_unique<FabricBuilderContext>(*this);
+    }
+    return *builder_context_;
+}
+
+const FabricBuilderContext& FabricContext::get_builder_context() const {
+    if (!builder_context_) {
+        builder_context_ = std::make_unique<FabricBuilderContext>(*this);
+    }
+    return *builder_context_;
+}
 
 bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
     if (topology_ == Topology::Ring) {
         return true;
-    } else if (topology_ == Topology::Torus) {
+    }
+    if (topology_ == Topology::Torus) {
         const auto fabric_type = get_fabric_type(fabric_config_);
         // if we are not torused along a dimension, we dont need deadlock avoidance for that direction
         const bool is_north_south =
@@ -216,125 +340,83 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
     return false;
 }
 
-size_t FabricContext::get_fabric_packet_header_size_bytes() const { return this->packet_header_size_bytes_; }
+std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines() const {
+    std::map<std::string, std::string> defines;
 
-size_t FabricContext::get_fabric_max_payload_size_bytes() const { return this->max_payload_size_bytes_; }
-
-size_t FabricContext::get_fabric_channel_buffer_size_bytes() const { return this->channel_buffer_size_bytes_; }
-
-tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config(
-    tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
-    tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis,
-    tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
-    eth_chan_directions direction) const {
-    auto axis_index = static_cast<std::size_t>(fabric_edm_axis);
-    switch (fabric_tensix_config) {
-        case tt::tt_fabric::FabricTensixConfig::DISABLED:
-            switch (fabric_edm_type) {
-                case tt::tt_fabric::FabricEriscDatamoverType::Default:
-                    TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
-                    return *this->router_config_;
-                    break;
-                case tt::tt_fabric::FabricEriscDatamoverType::Dateline:
-                    TT_FATAL(
-                        this->dateline_router_config_[axis_index] != nullptr,
-                        "Error, fabric dateline router config is uninitialized");
-                    return *this->dateline_router_config_[axis_index].get();
-                    break;
-                case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream:
-                    TT_FATAL(
-                        this->dateline_upstream_router_config_[axis_index] != nullptr,
-                        "Error, fabric dateline upstream router config is uninitialized");
-                    return *this->dateline_upstream_router_config_[axis_index].get();
-                    break;
-                case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
-                    TT_FATAL(
-                        this->dateline_upstream_adjcent_router_config_[axis_index] != nullptr,
-                        "Error, fabric dateline upstream adjacent device router config is uninitialized");
-                    return *this->dateline_upstream_adjcent_router_config_[axis_index].get();
-                    break;
-                default: TT_FATAL(false, "Error, invalid fabric edm type");
-            }
-            break;
-        case tt::tt_fabric::FabricTensixConfig::MUX:
-            TT_FATAL(
-                this->router_with_mux_config_[direction] != nullptr,
-                "Error, fabric router config with mux extension is uninitialized for direction {}",
-                direction);
-            return *this->router_with_mux_config_[direction].get();
-            break;
-        default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", fabric_tensix_config);
+    // Only emit defines if routing mode has been computed
+    if (routing_mode_ == ROUTING_MODE_UNDEFINED) {
+        return defines;  // Return empty map
     }
-};
 
-void FabricContext::set_num_fabric_initialized_routers(ChipId chip_id, size_t num_routers) {
-    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
-    TT_FATAL(
-        this->num_initialized_routers_[chip_id] == UNINITIALIZED_ROUTERS,
-        "Error, tried to set num initialized routers again for device {}",
-        chip_id);
-    this->num_initialized_routers_[chip_id] = num_routers;
-}
+    // Add routing mode define
+    defines["ROUTING_MODE"] = std::to_string(routing_mode_);
 
-uint32_t FabricContext::get_num_fabric_initialized_routers(ChipId chip_id) const {
-    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
-    TT_FATAL(
-        this->num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
-        "Error, querying num initialized routers for an unknown device {}",
-        chip_id);
-    return this->num_initialized_routers_[chip_id];
-}
-
-void FabricContext::set_fabric_master_router_chan(ChipId chip_id, chan_id_t chan_id) {
-    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
-    TT_FATAL(
-        this->master_router_chans_[chip_id] == UNINITIALIZED_MASTER_ROUTER_CHAN,
-        "Error, tried to set master router channel again for the same device {}",
-        chip_id);
-    this->master_router_chans_[chip_id] = chan_id;
-}
-
-chan_id_t FabricContext::get_fabric_master_router_chan(ChipId chip_id) const {
-    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
-    TT_FATAL(
-        this->master_router_chans_[chip_id] != UNINITIALIZED_MASTER_ROUTER_CHAN,
-        "Error, querying master router channel for an unknown device {}",
-        chip_id);
-    return this->master_router_chans_[chip_id];
-}
-
-std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {
-    return {this->router_config_->edm_local_sync_address, this->router_config_->edm_local_tensix_sync_address};
-}
-
-std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_sync_address_and_status() const {
-    return std::make_pair(this->router_config_->edm_status_address, tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE);
-}
-
-std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> FabricContext::get_fabric_router_ready_address_and_signal()
-    const {
-    return std::make_pair(this->router_config_->edm_status_address, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
-}
-
-std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_address_and_signal() const {
-    return std::make_pair(
-        this->router_config_->termination_signal_address, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-}
-
-tt::tt_fabric::FabricTensixDatamoverConfig& FabricContext::get_tensix_config() const {
-    TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
-    return *tensix_config_;
-}
-
-void FabricContext::initialize_tensix_config() {
-    TT_FATAL(tensix_config_ == nullptr, "Trying to re-initialize fabric tensix config");
-
-    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
-        // Now it's safe to call get_active_fabric_eth_channels() because
-        // configure_routing_tables_for_fabric_ethernet_channels() has already run
-        tensix_config_ = std::make_unique<tt::tt_fabric::FabricTensixDatamoverConfig>();
+    // Add UDM mode define - only define it when enabled (not "0"), since header checks with #ifdef
+    bool udm_enabled =
+        tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+    if (udm_enabled) {
+        defines["UDM_MODE"] = "1";
     }
+
+    // Add dynamic packet header sizing defines based on topology
+    if (is_2D_routing_enabled_) {
+        // 2D routing: inject route buffer size
+        defines["FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE"] = std::to_string(routing_2d_buffer_size_);
+    } else {
+        // 1D routing: inject extension words
+        defines["FABRIC_1D_PKT_HDR_EXTENSION_WORDS"] = std::to_string(routing_1d_extension_words_);
+    }
+
+    return defines;
+}
+
+void FabricContext::compute_routing_mode() {
+    // Compute routing mode from topology configuration
+    // This consolidates the logic from fabric_host_utils.cpp's set_routing_mode functions
+
+    // Determine dimension based on topology
+    uint32_t dimension = is_2D_routing_enabled_ ? 2 : 1;
+    TT_FATAL(dimension == 1 || dimension == 2, "Invalid dimension {}. Supported dimensions are 1 or 2", dimension);
+
+    // Build routing mode from topology flags
+    uint16_t mode = 0;
+    if (topology_ == Topology::Ring) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_RING);
+    } else if (topology_ == Topology::Linear) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
+    } else if (topology_ == Topology::NeighborExchange) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE);
+    } else if (topology_ == Topology::Mesh) {
+        mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
+    } else if (topology_ == Topology::Torus) {
+        mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
+    }
+
+    mode |= ROUTING_MODE_LOW_LATENCY;
+
+    // Validate dimension flags are orthogonal (only one can be set)
+    TT_FATAL(
+        __builtin_popcount(mode & (ROUTING_MODE_1D | ROUTING_MODE_2D | ROUTING_MODE_3D)) == 1,
+        "Only one dimension mode (1D, 2D, 3D) can be active at once");
+
+    // Validate topology flags are orthogonal
+    TT_FATAL(
+        __builtin_popcount(
+            mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_NEIGHBOR_EXCHANGE | ROUTING_MODE_MESH |
+                    ROUTING_MODE_TORUS)) == 1,
+        "Only one topology mode (RING, LINE, NEIGHBOR_EXCHANGE, MESH, TORUS) can be active at once");
+
+    // Validate 1D can't be used with MESH or TORUS
+    TT_FATAL(
+        !(mode & ROUTING_MODE_1D) || !(mode & (ROUTING_MODE_MESH | ROUTING_MODE_TORUS)),
+        "1D routing mode cannot be combined with MESH or TORUS topology");
+
+    // Validate 2D can't be used with LINE or RING
+    TT_FATAL(
+        !(mode & ROUTING_MODE_2D) || !(mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING | ROUTING_MODE_NEIGHBOR_EXCHANGE)),
+        "2D routing mode cannot be combined with LINE or RING or NEIGHBOR_EXCHANGE topology");
+
+    routing_mode_ = mode;
 }
 
 }  // namespace tt::tt_fabric

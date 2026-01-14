@@ -158,13 +158,14 @@ class Generator:
                     chunk_page_table_tt,
                 ) = self.model.prepare_inputs_prefill(
                     chunk_tokens,
+                    rot_mats=rot_mats,
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
                 )
                 tt_logits = self.model.ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats_global=chunk_rot_mats_prefill,
+                    rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in chunk_rot_mats_prefill],
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
@@ -174,7 +175,9 @@ class Generator:
                 )
 
                 if chunk_start == last_chunk_start:
-                    logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
+                    logits = self.model.process_output_prefill(
+                        tt_logits.cpu(), last_token_idx=(last_token_idx_in_chunk % 32)
+                    )
                     return logits
                 else:
                     del tt_logits
@@ -194,7 +197,7 @@ class Generator:
                 kv_cache=kv_cache,
             )
 
-            logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
+            logits = self.model.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_token_idx % 32))
 
             # deallocate device tensors that are not needed by decode
             # [INFO] logits is a torch tensor
@@ -212,6 +215,10 @@ class Generator:
     # [INFO] this is called by vLLM
     def process_decode_output_host(self, tt_out, is_tokens=False):
         return self._ttt_generator.process_decode_output_host(tt_out, is_tokens=is_tokens)
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
+        logger.warning("Warmup model prefill not implemented for Qwen2_5_VL Generator")
+        logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")
 
     ## Destructor (used to delete ttnn trace if exists)
 

@@ -23,7 +23,7 @@ from ...layers.embeddings import (
     WanPatchEmbed,
     CombinedTimestepGuidanceTextProjEmbeddings,
 )
-from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
 
 

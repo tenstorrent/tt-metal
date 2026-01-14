@@ -149,18 +149,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
         device, test_config.master_core_coord, l1_base_address, transaction_size_bytes, packed_output);
 
     // Results comparison
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal = (packed_output == packed_golden);
 
-    if (!pcc) {
-        log_error(LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(LogTest, "Equality Check failed");
         log_info(LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
         log_info(LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(
@@ -332,7 +331,7 @@ void custom_test(
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     uint32_t test_id = 15;
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -346,7 +345,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
     uint32_t test_id = 30;
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -362,7 +361,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllVirtualChannels) {
     // Test ID (Arbitrary)
     uint32_t test_id = 156;
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
@@ -378,7 +377,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllCustom) {
 
     uint32_t test_id = 157;
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};

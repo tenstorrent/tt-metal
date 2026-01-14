@@ -12,8 +12,8 @@
 #include <yaml-cpp/yaml.h>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
@@ -22,11 +22,6 @@ namespace tt::tt_fabric::mesh_socket_tests {
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
 using Rank = tt::tt_metal::distributed::multihost::Rank;
-
-enum class RoutingType : uint32_t {
-    LowLatency = 0,
-    Dynamic = 1,
-};
 
 /*  TODO: Add support for other patterns.
     Patterns need to split into three layers:
@@ -49,7 +44,6 @@ struct PhysicalMeshConfig {
 
 struct FabricConfig {
     tt::tt_fabric::Topology topology;
-    RoutingType routing_type;
 };
 
 struct MemoryConfig {

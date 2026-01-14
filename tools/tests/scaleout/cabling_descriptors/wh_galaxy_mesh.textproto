@@ -1,0 +1,20 @@
+graph_templates {
+  key: "wh_galaxy"
+  value {
+    children {
+      name: "wh"
+      node_ref {
+        node_descriptor: "WH_GALAXY"
+      }
+    }
+  }
+}
+root_instance {
+  template_name: "wh_galaxy"
+  child_mappings {
+    key: "wh"
+    value {
+      host_id: 0
+    }
+  }
+}

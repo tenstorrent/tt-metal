@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <fstream>
+
 #include "impl/debug/inspector/types.hpp"
 #include "mesh_coord.hpp"
 
@@ -29,7 +31,7 @@ private:
     std::ofstream kernels_ostream;
     std::ofstream mesh_devices_ostream;
     std::ofstream mesh_workloads_ostream;
-    bool initialized;
+    bool initialized{false};
     std::filesystem::path logging_path;
 
     int64_t convert_timestamp(const time_point& tp) const {
@@ -57,7 +59,8 @@ public:
     void log_mesh_workload_created(const MeshWorkloadData& mesh_workload_data) noexcept;
     void log_mesh_workload_destroyed(const MeshWorkloadData& mesh_workload_data) noexcept;
     void log_mesh_workload_add_program(const MeshWorkloadData& mesh_workload_data, const distributed::MeshCoordinateRange& device_range, std::size_t program_id) noexcept;
-    void log_mesh_workload_set_program_binary_status(const MeshWorkloadData& mesh_workload_data, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
+    void log_mesh_workload_set_program_binary_status(
+        const MeshWorkloadData& mesh_workload_data, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
 };
 
 }  // namespace tt::tt_metal::inspector

@@ -5,11 +5,9 @@
 
 #include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operation_concepts.hpp"
 
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -24,10 +22,6 @@ static_assert(
     ttnn::device_operation::DeviceOperationConcept<WhereDeviceOperation>,
     "WhereDeviceOperation must satisfy DeviceOperationConcept");
 
-static_assert(
-    ttnn::decorators::PrimitiveOperationConcept<WhereDeviceOperation>,
-    "WhereDeviceOperation must satisfy PrimitiveOperationConcept");
-
 template <typename... Tensors>
 static void fail_on_shape_mismatch(const Tensor& tensor_a, const Tensors&... other_tensors) {
     const auto& shape_a = tensor_a.logical_shape();
@@ -38,7 +32,7 @@ static void fail_on_shape_mismatch(const Tensor& tensor_a, const Tensors&... oth
 }
 
 WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     ZoneScopedN("WhereDeviceOperation::select_program_factory");
     return ElementWiseMultiCoreWhereProgram{};
 }
@@ -63,7 +57,6 @@ static void validate_memory_config(
 
 void WhereDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
-    using namespace tt::constants;
 
     validate_memory_config(attributes, args);
     WhereDeviceOperation::validate_on_program_cache_hit(attributes, args);
@@ -74,7 +67,7 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
 }
 
 void WhereDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& args) {
     fail_on_shape_mismatch(args.condition_tensor, args.true_value_tensor, args.false_value_tensor);
 }
 
@@ -126,8 +119,8 @@ tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
 }
 
 bool WhereDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }
@@ -141,7 +134,7 @@ WhereDeviceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output_tensor) {
     CoreRangeSet worker_grid;
-    auto device = condition_tensor.device();
+    auto* device = condition_tensor.device();
     for (const auto& sub_device_id : device->get_sub_device_ids()) {
         const auto& sub_device_workers =
             device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);

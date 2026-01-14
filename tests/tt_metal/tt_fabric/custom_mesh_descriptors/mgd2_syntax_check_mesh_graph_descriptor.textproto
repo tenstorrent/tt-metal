@@ -10,7 +10,7 @@ mesh_descriptors {
   host_topology   { dims: [1, 1] }
   channels {
     count: 4
-    policy: STRICT
+    policy: RELAXED
   }
   express_connections { src: 0 dst: 4 }
   express_connections { src: 1 dst: 5 }
@@ -27,7 +27,7 @@ mesh_descriptors {
   host_topology   { dims: [1, 2] }
   channels {
     count: 4
-    policy: STRICT
+    policy: RELAXED
   }
 }
 
@@ -40,7 +40,7 @@ mesh_descriptors {
   host_topology   { dims: [1, 1] }
   channels {
     count: 4
-    policy: STRICT
+    policy: RELAXED
   }
 }
 
@@ -53,7 +53,7 @@ mesh_descriptors {
   host_topology   { dims: [1, 1] }
   channels {
     count: 4
-    policy: STRICT
+    policy: RELAXED
   }
 }
 
@@ -66,7 +66,7 @@ mesh_descriptors {
   host_topology   { dims: [1, 1] }
   channels {
     count: 4
-    policy: STRICT
+    policy: RELAXED
   }
 }
 

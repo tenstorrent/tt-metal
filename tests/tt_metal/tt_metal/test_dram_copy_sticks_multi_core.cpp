@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.h>
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -31,11 +30,9 @@
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -50,10 +47,10 @@ struct hlk_args_t {
 };
 }  // namespace unary_datacopy
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
@@ -87,7 +84,9 @@ int main(int argc, char** argv) {
         auto src_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
-        assert(src_dram_buffer->size() % (num_cores_r * num_cores_c) == 0);
+        TT_FATAL(
+            src_dram_buffer->size() % (num_cores_r * num_cores_c) == 0,
+            "DRAM buffer size must be divisible by number of cores");
         uint32_t per_core_l1_size = src_dram_buffer->size() / (num_cores_r * num_cores_c);
         std::unordered_map<CoreCoord, uint32_t> core_to_l1_addr;
         for (int i = start_core.y; i < start_core.y + num_cores_r; i++) {

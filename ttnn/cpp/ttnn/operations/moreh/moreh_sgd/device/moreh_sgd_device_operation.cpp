@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_sgd_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -10,9 +11,9 @@
 
 namespace ttnn::operations::moreh::moreh_sgd {
 void MorehSgdOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& params_in = tensor_args.param_in;
-    auto& grad = tensor_args.grad;
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const auto& params_in = tensor_args.param_in;
+    const auto& grad = tensor_args.grad;
 
     check_tensor(params_in, "moreh_sgd", "params_in", {DataType::BFLOAT16});
     check_tensor(grad, "moreh_sgd", "grad", {DataType::BFLOAT16});
@@ -31,7 +32,7 @@ void MorehSgdOperation::validate_inputs(
 }
 
 MorehSgdOperation::program_factory_t MorehSgdOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 };
 
@@ -76,7 +77,7 @@ MorehSgdOperation::spec_return_value_t MorehSgdOperation::compute_output_specs(
 MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_specs = compute_output_specs(operation_attributes, tensor_args);
-    auto device = tensor_args.param_in.device();
+    auto* device = tensor_args.param_in.device();
 
     std::vector<std::optional<Tensor>> ret;
 
@@ -96,8 +97,10 @@ MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensor
 
     return ret;
 }
+}  // namespace ttnn::operations::moreh::moreh_sgd
 
-std::tuple<MorehSgdOperation::operation_attributes_t, MorehSgdOperation::tensor_args_t> MorehSgdOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t moreh_sgd(
     const Tensor& param_in,
     const Tensor& grad,
     const std::optional<Tensor>& momentum_buffer_in,
@@ -112,18 +115,18 @@ std::tuple<MorehSgdOperation::operation_attributes_t, MorehSgdOperation::tensor_
     const std::optional<MemoryConfig>& param_out_memory_config,
     const std::optional<MemoryConfig>& momentum_buffer_out_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            lr,
-            momentum,
-            dampening,
-            weight_decay,
-            nesterov,
-            momentum_initialized,
-            param_out_memory_config.value_or(param_in.memory_config()),
-            momentum_buffer_out_memory_config.value_or(param_in.memory_config()),
-            init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-
-        tensor_args_t{param_in, grad, momentum_buffer_in, param_out, momentum_buffer_out}};
+    using OperationType = ttnn::operations::moreh::moreh_sgd::MorehSgdOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        lr,
+        momentum,
+        dampening,
+        weight_decay,
+        nesterov,
+        momentum_initialized,
+        param_out_memory_config.value_or(param_in.memory_config()),
+        momentum_buffer_out_memory_config.value_or(param_in.memory_config()),
+        init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{param_in, grad, momentum_buffer_in, param_out, momentum_buffer_out};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_sgd
+}  // namespace ttnn::prim
