@@ -15,7 +15,6 @@
 #include <set>
 #include <string_view>
 #include <type_traits>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
