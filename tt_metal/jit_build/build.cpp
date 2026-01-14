@@ -22,7 +22,7 @@
 //     - CCACHE_REMOTE_ONLY: Use only remote cache
 //     - CCACHE_BASEDIR: Automatically set to Metal root for stable cache keys
 //
-//   Cache keys include: git hash, architecture, compiler flags, defines, source files,
+//   Cache keys include: architecture, compiler flags, defines, source files,
 //   firmware ELF, and linker scripts. Changing any of these invalidates the cache.
 //
 //   See tt_metal/jit_build/README.md for detailed documentation.
@@ -121,29 +121,20 @@ void JitBuildEnv::init(
 
     this->arch_ = arch;
 
-#ifndef GIT_COMMIT_HASH
-    log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
-#else
-    std::string git_hash(GIT_COMMIT_HASH);
-    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: git_hash = '{}'", git_hash);
-    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: out_root before = '{}'", this->out_root_);
-
-    std::filesystem::path git_hash_path(this->out_root_ + git_hash);
-    std::filesystem::path root_path(this->out_root_);
-    if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
-            check_built_dir(dir_entry.path(), git_hash_path);
-        });
-    } else {
-        log_info(tt::LogBuildKernels, "Skipping deleting built cache");
-    }
-
-    this->out_root_ = this->out_root_ + git_hash + "/";
-#endif
-
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
+        // Detect if running in CI environment
+        const bool is_ci = std::getenv("CI") != nullptr || std::getenv("GITHUB_ACTIONS") != nullptr;
+
+        // In CI, prioritize remote cache if configured
+        if (is_ci && std::getenv("CCACHE_REMOTE_STORAGE") != nullptr) {
+            if (std::getenv("CCACHE_REMOTE_ONLY") == nullptr) {
+                setenv("CCACHE_REMOTE_ONLY", "1", 0);
+                log_info(tt::LogBuildKernels, "CCACHE: CI detected, enabling remote-only mode");
+            }
+        }
+
         // Set CCACHE_BASEDIR to ensure stable cache keys across different working directories
         // This allows ccache to normalize absolute paths in the build, making cache entries
         // portable across different checkout locations or CI runners
