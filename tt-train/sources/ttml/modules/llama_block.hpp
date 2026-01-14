@@ -14,28 +14,24 @@
 namespace ttml::modules {
 
 class LlamaMLP : public modules::ModuleBase {
-private:
+public:
     // Use ModuleBasePtr to allow replacement with LoRA layers
     ModuleBasePtr m_w1;
     ModuleBasePtr m_w3;
     ModuleBasePtr m_w2;
     ModuleBasePtr m_dropout;
-
-public:
     LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob = 0.0F);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input);
 };
 
 class LlamaBlock : public modules::ModuleBase {
-private:
+public:
     // Use ModuleBasePtr to allow replacement with LoRA layers
     ModuleBasePtr m_mlp;
     ModuleBasePtr m_attention_norm;
     ModuleBasePtr m_mlp_norm;
     ModuleBasePtr m_attention;
-
-public:
     explicit LlamaBlock(
         uint32_t embedding_size,
         uint32_t num_heads,

@@ -30,14 +30,14 @@ private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};
     uint32_t m_num_groups{};
+
+public:
     // Use ModuleBasePtr to allow replacement with LoRA layers
     ModuleBasePtr m_q_linear;
     ModuleBasePtr m_kv_linear;
     ModuleBasePtr m_out_linear;
     ModuleBasePtr m_dropout;
     ModuleBasePtr m_embedding;
-
-public:
     explicit GroupedQueryAttention(const GQAConfig& config);
 
     [[nodiscard]] autograd::TensorPtr operator()(

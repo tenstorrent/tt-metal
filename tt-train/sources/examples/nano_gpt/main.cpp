@@ -24,7 +24,7 @@
 #include "models/distributed/pipeline_parallel_llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
-#include "models/lora_model.hpp"
+#include "models/lora/lora_model.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"

@@ -10,8 +10,12 @@
 #include <vector>
 
 #include "autograd/tensor.hpp"
-#include "base_transformer.hpp"
+#include "models/base_transformer.hpp"
 #include "modules/module_base.hpp"
+
+namespace ttml::modules {
+class LinearLayer;
+}  // namespace ttml::modules
 
 namespace ttml::models {
 
@@ -28,11 +32,18 @@ private:
     ttml::modules::ModuleBasePtr m_base_model;
     LoRAConfig m_config;
 
-    void replace_linear_modules_recursive(ttml::modules::ModuleBase* module, const std::string& prefix);
+    // Determine if a module at the given path should be replaced
+    [[nodiscard]] bool should_replace_module(const std::string& module_name) const;
 
-    bool should_replace_module(const std::string& module_name) const;
-
+    // Freeze all parameters in the base model
     void freeze_base_model_weights();
+
+    // Create a LoRA layer from an existing linear layer
+    [[nodiscard]] ttml::modules::ModuleBasePtr create_lora_from_linear(
+        ttml::modules::LinearLayer* linear_layer, const std::string& full_name);
+
+    // Recursive traversal to find and process attention modules using registered replacers
+    void replace_attention_modules_recursive(ttml::modules::ModuleBase* module, const std::string& prefix);
 
 public:
     LoraModel(

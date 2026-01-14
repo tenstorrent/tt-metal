@@ -69,7 +69,14 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/lora_model.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lora/lora_model.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lora/lora_model.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lora/attention_lora_replacer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lora/attention_lora_replacer.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lora/replacers/grouped_query_attention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lora/replacers/grouped_query_attention.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lora/replacers/multi_head_attention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lora/replacers/multi_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/grouped_query_attention.cpp
@@ -94,8 +101,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora/lora_linear_module.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora/lora_linear_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp

@@ -17,11 +17,11 @@ class MultiHeadAttention : public ttml::modules::ModuleBase {
 private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};
+
+public:
     ModuleBasePtr m_qkv_linear;
     ModuleBasePtr m_out_linear;
     ModuleBasePtr m_dropout;
-
-public:
     explicit MultiHeadAttention(uint32_t embedding_dim, uint32_t num_heads, float dropout_prob);
 
     [[nodiscard]] autograd::TensorPtr operator()(
