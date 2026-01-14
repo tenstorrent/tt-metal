@@ -17,20 +17,26 @@ CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS = 1
 
 
 @pytest.mark.parametrize(
-    "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
+    "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, pcc",
     [
-        ((1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.996),
+        # 512x512 image resolution
+        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.996),
     ],
+    ids=["1024x1024", "512x512"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
 def test_unet(
     device,
+    image_resolution,
     input_shape,
     timestep_shape,
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    pcc,
     iterations,
     is_ci_env,
     is_ci_v2_env,
@@ -39,11 +45,13 @@ def test_unet(
 ):
     run_unet_model(
         device,
+        image_resolution,
         input_shape,
         timestep_shape,
         encoder_shape,
         temb_shape,
         time_ids_shape,
+        pcc,
         debug_mode=False,
         is_ci_env=is_ci_env,
         is_ci_v2_env=is_ci_v2_env,
@@ -53,15 +61,17 @@ def test_unet(
 
 
 @pytest.mark.parametrize(
-    "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
+    "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
     [
-        ((1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5)),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5)),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
 def test_refiner_unet(
     device,
+    image_resolution,
     input_shape,
     timestep_shape,
     encoder_shape,
@@ -75,6 +85,7 @@ def test_refiner_unet(
 ):
     run_refiner_unet_model(
         device,
+        image_resolution,
         input_shape,
         timestep_shape,
         encoder_shape,
@@ -92,13 +103,23 @@ def test_refiner_unet(
     "command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments",
     [
         (
-            "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet",
+            'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet -k "1024x1024"',
             191_651_771 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-            "sdxl_unet",
-            "sdxl_unet",
+            "sdxl_unet_1024x1024",
+            "sdxl_unet_1024x1024",
             1,
             1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             0.015,
+            f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
+        ),
+        (
+            'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet -k "512x512"',
+            100_000_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            "sdxl_unet_512x512",
+            "sdxl_unet_512x512",
+            1,
+            1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            0.2,
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
         ),
         (
@@ -153,7 +174,8 @@ def test_refiner_unet(
         ),
     ],
     ids=[
-        "test_sdxl_unet",
+        "test_sdxl_unet_1024x1024",
+        "test_sdxl_unet_512x512",
         "test_sdxl_refiner_unet",
         "test_sdxl_vae_decode",
         "test_sdxl_vae_encode",

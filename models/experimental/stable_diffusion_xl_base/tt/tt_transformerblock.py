@@ -20,6 +20,8 @@ class TtBasicTransformerBlock(LightweightModule):
         out_dim,
     ):
         super().__init__()
+        self.device = device
+        self.module_path = module_path
 
         self.attn1 = TtAttention(
             device,

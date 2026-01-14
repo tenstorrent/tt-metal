@@ -7,7 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_downblock2d import TtDownBlock2D
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -15,14 +15,17 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape, block_id, pcc",
+    "image_resolution, input_shape, temb_shape, block_id, pcc",
     [
-        ((1, 384, 128, 128), (1, 1536), 0, 0.998),
-        ((1, 1536, 16, 16), (1, 1536), 3, 0.998),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 384, 128, 128), (1, 1536), 0, 0.998),
+        ((1024, 1024), (1, 1536, 16, 16), (1, 1536), 3, 0.998),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_downblock2d(device, temb_shape, input_shape, block_id, pcc, debug_mode, is_ci_env, reset_seeds):
+def test_downblock2d(
+    device, image_resolution, temb_shape, input_shape, block_id, pcc, debug_mode, is_ci_env, reset_seeds
+):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
@@ -35,7 +38,7 @@ def test_downblock2d(device, temb_shape, input_shape, block_id, pcc, debug_mode,
 
     torch_downblock = unet.down_blocks[block_id]
 
-    model_config = RefinerModelOptimisations()
+    model_config = load_refiner_model_optimisations(image_resolution)
     tt_downblock = TtDownBlock2D(
         device,
         state_dict,

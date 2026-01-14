@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
@@ -31,7 +31,7 @@ UNET_LOOP_PCC = {"10": 0.996, "50": 0.996}
 
 
 @torch.no_grad()
-def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, debug_mode):
+def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_inference_steps, debug_mode):
     torch.manual_seed(0)
 
     if isinstance(prompts, str):
@@ -49,8 +49,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
     pcc = UNET_LOOP_PCC.get(str(num_inference_steps), 0)
 
     # 0. Set up default height and width for unet
-    height = 1024
-    width = 1024
+    height, width = image_resolution
 
     # 1. Load components
     base = DiffusionPipeline.from_pretrained(
@@ -70,7 +69,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
     )
 
     # 2. Load tt_unet and tt_scheduler
-    tt_model_config = RefinerModelOptimisations()
+    tt_model_config = load_refiner_model_optimisations(image_resolution)
     tt_unet = TtUNet2DConditionModel(
         ttnn_device,
         pipeline.unet.state_dict(),
@@ -351,6 +350,13 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="SDXL supported on WH only")
 @pytest.mark.parametrize(
+    "image_resolution",
+    [
+        # 1024x1024 image resolution
+        (1024, 1024),
+    ],
+)
+@pytest.mark.parametrize(
     "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
 )
 @pytest.mark.parametrize(
@@ -361,8 +367,9 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
 def test_unet_loop(
     device,
     is_ci_env,
+    image_resolution,
     prompt,
     loop_iter_num,
     debug_mode,
 ):
-    return run_unet_inference(device, is_ci_env, prompt, loop_iter_num, debug_mode)
+    return run_unet_inference(device, is_ci_env, image_resolution, prompt, loop_iter_num, debug_mode)

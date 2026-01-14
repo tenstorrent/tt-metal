@@ -6,7 +6,7 @@ from loguru import logger
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -15,15 +15,20 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, down_block_id, query_dim, num_attn_heads, out_dim, pcc",
+    "image_resolution, input_shape, encoder_shape, down_block_id, query_dim, num_attn_heads, out_dim, pcc",
     [
-        ((1, 640, 64, 64), (1, 77, 2048), 1, 640, 10, 640, 0.998),
-        ((1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.995),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 640, 64, 64), (1, 77, 2048), 1, 640, 10, 640, 0.998),
+        ((1024, 1024), (1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.995),
+        # 512x512 image resolution
+        ((512, 512), (1, 640, 32, 32), (1, 77, 2048), 1, 640, 10, 640, 0.998),
+        ((512, 512), (1, 1280, 16, 16), (1, 77, 2048), 2, 1280, 20, 1280, 0.995),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_transformermodel(
     device,
+    image_resolution,
     input_shape,
     encoder_shape,
     down_block_id,
@@ -45,7 +50,7 @@ def test_transformermodel(
     state_dict = unet.state_dict()
 
     torch_transformerblock = unet.down_blocks[down_block_id].attentions[0]
-    model_config = ModelOptimisations()
+    model_config = load_model_optimisations(image_resolution)
     tt_transformerblock = TtTransformer2DModel(
         device,
         state_dict,

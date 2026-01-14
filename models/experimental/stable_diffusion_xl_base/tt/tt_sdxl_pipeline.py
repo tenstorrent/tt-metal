@@ -14,11 +14,9 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import (
-    ModelOptimisations,
-    RefinerModelOptimisations,
-)
-from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     create_tt_clip_text_encoders,
@@ -33,6 +31,7 @@ from models.common.utility_functions import profiler
 
 @dataclass
 class TtSDXLPipelineConfig:
+    image_resolution: tuple
     num_inference_steps: int
     guidance_scale: float
     is_galaxy: bool
@@ -139,9 +138,41 @@ class TtSDXLPipeline(LightweightModule):
         self.num_in_channels_unet = 4
         # Hardcoded input tensor parameters
 
-        # Tensor shapes
-        B, C, H, W = 1, self.num_in_channels_unet, 128, 128
-        self.tt_latents_shape = [B, C, H, W]
+        # Latents tensor shape
+        height, width = self.pipeline_config.image_resolution
+        self.tt_latents_shape = self.get_latents_shape(1, self.num_in_channels_unet, height, width)
+
+    def get_latents_shape(self, batch_size, num_channels_latents, height, width):
+        """
+        Calculate the shape of latent tensors for the given image dimensions.
+
+        Computes the latent space dimensions by scaling down the image height and width
+        using the VAE scale factor.
+
+        Args:
+            batch_size (int): Number of samples in the batch.
+            num_channels_latents (int): Number of channels in the latent representation
+                (typically 4 for SDXL).
+            height (int): Target image height in pixels.
+            width (int): Target image width in pixels.
+
+        Returns:
+            tuple: A 4-tuple representing the latent tensor shape:
+                (batch_size, num_channels_latents, latent_height, latent_width)
+                where latent_height and latent_width are calculated by dividing
+                the input height and width by the VAE scale factor.
+
+        Example:
+            >>> shape = pipeline.get_latents_shape(2, 4, 1024, 1024)
+            >>> # Returns (2, 4, 128, 128) if vae_scale_factor is 8
+        """
+        shape = (
+            batch_size,
+            num_channels_latents,
+            int(height) // self.torch_pipeline.vae_scale_factor,
+            int(width) // self.torch_pipeline.vae_scale_factor,
+        )
+        return shape
 
     def set_num_inference_steps(self, num_inference_steps: int):
         # When changing num_inference_steps, the timesteps and latents need to be recreated.
@@ -194,6 +225,13 @@ class TtSDXLPipeline(LightweightModule):
         assert 0.0 <= guidance_rescale <= 1.0, (
             f"`guidance_rescale` must be in range [0.0, 1.0] but is {guidance_rescale}. "
             "Typical values are 0.0 (no rescale) to 0.7."
+        )
+
+        # Validate image_resolution
+        image_resolution = self.pipeline_config.image_resolution
+        assert image_resolution in [(1024, 1024), (512, 512)], (
+            f"`image_resolution` = {image_resolution} is not allowed. "
+            "Only (1024, 1024) and (512, 512) are supported."
         )
 
         # Validate crop_coords_top_left
@@ -346,7 +384,47 @@ class TtSDXLPipeline(LightweightModule):
             self.image_processing_compiled = True
 
     def encode_prompts(self, prompts, negative_prompts, prompt_2=None, negative_prompt_2=None):
-        # Encode prompts using the text encoders.
+        """Encode text prompts using CLIP text encoders for Stable Diffusion XL.
+
+        This method processes text prompts through the CLIP text encoders (text_encoder and
+        text_encoder_2) to generate embeddings that condition the diffusion model. It supports
+        encoding on either the Tenstorrent device (if encoders_on_device=True) or on the host CPU.
+        The method handles both primary prompts and optional secondary prompts (prompt_2), along
+        with their corresponding negative prompts for classifier-free guidance.
+
+        Args:
+            prompts (str or List[str]): The primary text prompt(s) to encode. Can be a single
+                string or a list of strings for batch processing.
+            negative_prompts (str or List[str]): The negative prompt(s) used for classifier-free
+                guidance. Should match the structure of prompts (single string or list).
+            prompt_2 (str or List[str], optional): Optional secondary prompt(s) for SDXL's dual
+                text encoder architecture. Defaults to None.
+            negative_prompt_2 (str or List[str], optional): Optional secondary negative prompt(s).
+                Defaults to None.
+
+        Returns:
+            tuple: A tuple containing two tensors:
+                - all_prompt_embeds_torch (torch.Tensor): Concatenated embeddings for negative
+                    and positive prompts. Shape: [batch_size, 2, sequence_length, embedding_dim]
+                    where dimension 1 contains [negative_embeds, positive_embeds].
+                - torch_add_text_embeds (torch.Tensor): Concatenated pooled embeddings for
+                    negative and positive prompts. Shape: [batch_size, 2, projection_dim]
+                    where dimension 1 contains [negative_pooled, positive_pooled].
+
+        Raises:
+            AssertionError: If encoders_on_device is True but text encoders are not compiled.
+            ValueError: If input validation fails (via check_inputs method).
+
+        Note:
+            - When encoders_on_device=True, encoding is performed on the Tenstorrent device
+                using compiled text encoders, which requires prior compilation via compile_text_encoding().
+            - When encoders_on_device=False, encoding is performed on the host CPU using the
+                PyTorch pipeline's encode_prompt method.
+            - The method automatically handles batching and processes prompts in batches of
+                size self.batch_size when encoding on device.
+            - All embeddings are concatenated with negative prompts first, then positive prompts,
+                to support classifier-free guidance during inference.
+        """
 
         # Validate prompt inputs at the beginning of execution
         self.check_inputs(
@@ -476,7 +554,50 @@ class TtSDXLPipeline(LightweightModule):
         timesteps=None,
         sigmas=None,
     ):
-        # Generate user input tensors for the TT model.
+        """Generate user input tensors for the TT model.
+
+        This method prepares all input tensors required for the backbone part (UNet)
+        of the Stable Diffusion XL pipeline inference, including latents, prompt
+        embeddings, text embeddings, and time IDs
+
+        Args:
+            all_prompt_embeds_torch (torch.Tensor): Combined prompt embeddings from
+                both positive and negative prompts. Shape should be compatible with
+                the batch size and embedding dimensions.
+            torch_add_text_embeds (torch.Tensor): Additional text embeddings from
+                the text encoder, typically pooled embeddings.
+            start_latent_seed (int, optional): Seed value for generating random
+                latents. If None, latents are generated with random seeds. If
+                provided, this seed is used for deterministic latent generation.
+            fixed_seed_for_batch (bool): If True and start_latent_seed is provided,
+                all samples in the batch use the same seed. If False, each sample
+                uses start_latent_seed + index. Defaults to False.
+            timesteps (torch.Tensor, optional): Custom timesteps for the diffusion
+                process. If None, timesteps are generated based on the scheduler
+                configuration. Cannot be provided together with sigmas.
+            sigmas (torch.Tensor, optional): Custom noise schedule sigmas. If None,
+                sigmas are derived from the scheduler. Cannot be provided together
+                with timesteps.
+
+        Returns:
+            tuple: A tuple containing three tensors:
+                - tt_latents (ttnn.Tensor): Generated latents tensor with shape
+                    [batch_size, 1, H*W, C]. It is assumed that C=4.
+                - tt_prompt_embeds (ttnn.Tensor): Prompt embeddings tensor
+                    converted to TT format.
+                - tt_add_text_embeds (ttnn.Tensor): Additional text embeddings
+                    tensor converted to TT format.
+
+        Raises:
+            AssertionError: If num_channels_latents is not 4, if start_latent_seed
+                is not an integer or None, if text_encoder_projection_dim is not
+                1280, or if both timesteps and sigmas are provided.
+
+        Note:
+            This method sets self.generated_input_tensors to True upon successful
+            completion. The generated tensors are also allocated on the device
+            during this process.
+        """
 
         # Validate timesteps/sigmas at the beginning if custom values are provided
         if timesteps is not None or sigmas is not None:
@@ -487,8 +608,8 @@ class TtSDXLPipeline(LightweightModule):
 
         self._prepare_timesteps(timesteps, sigmas)
 
+        # Validate number of channels in the latent space
         num_channels_latents = self.torch_pipeline.unet.config.in_channels
-        height = width = 1024
         assert (
             num_channels_latents == self.num_in_channels_unet
         ), f"num_channels_latents is {num_channels_latents}, but it should be 4"
@@ -498,6 +619,7 @@ class TtSDXLPipeline(LightweightModule):
 
         # Generate random latents
         latents_list = []
+        height, width = self.pipeline_config.image_resolution
         for index in range(self.batch_size):
             if start_latent_seed is not None:
                 torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
@@ -523,13 +645,11 @@ class TtSDXLPipeline(LightweightModule):
             text_encoder_projection_dim == 1280
         ), f"text_encoder_projection_dim is {text_encoder_projection_dim}, but it should be 1280"
 
-        original_size = (height, width)
-        target_size = (height, width)
         crops_coords_top_left = self.pipeline_config.crop_coords_top_left
         add_time_ids = self.torch_pipeline._get_add_time_ids(
-            original_size,
+            self.pipeline_config.image_resolution,
             crops_coords_top_left,
-            target_size,
+            self.pipeline_config.image_resolution,
             dtype=all_prompt_embeds_torch.dtype,
             text_encoder_projection_dim=text_encoder_projection_dim,
         )
@@ -626,11 +746,11 @@ class TtSDXLPipeline(LightweightModule):
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
             # 2. Load tt_unet, tt_vae and tt_scheduler
             self.tt_unet_model_config = (
-                ModelOptimisations()
+                load_model_optimisations(self.pipeline_config.image_resolution)
                 if not self.torch_pipeline.unet.state_dict()["conv_in.weight"].shape[0] == 384
-                else RefinerModelOptimisations()
+                else load_refiner_model_optimisations(self.pipeline_config.image_resolution)
             )
-            self.tt_vae_model_config = VAEModelOptimisations()
+            self.tt_vae_model_config = load_vae_model_optimisations(self.pipeline_config.image_resolution)
             self.tt_unet = TtUNet2DConditionModel(
                 self.ttnn_device,
                 self.torch_pipeline.unet.state_dict(),

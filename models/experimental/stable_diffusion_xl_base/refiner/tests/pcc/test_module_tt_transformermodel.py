@@ -6,7 +6,7 @@ from loguru import logger
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -15,16 +15,18 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, down_block_id, query_dim, num_attn_heads, out_dim, pcc, block_type",
+    "image_resolution, input_shape, encoder_shape, down_block_id, query_dim, num_attn_heads, out_dim, pcc, block_type",
     [
-        ((1, 768, 64, 64), (1, 77, 1280), 1, 768, 12, 768, 0.998, "down_blocks"),
-        ((1, 1536, 32, 32), (1, 77, 1280), 2, 1536, 24, 1536, 0.987, "down_blocks"),
-        ((1, 1536, 16, 16), (1, 77, 1280), -1, 1536, 24, 1536, 0.997, "mid_block"),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 768, 64, 64), (1, 77, 1280), 1, 768, 12, 768, 0.998, "down_blocks"),
+        ((1024, 1024), (1, 1536, 32, 32), (1, 77, 1280), 2, 1536, 24, 1536, 0.987, "down_blocks"),
+        ((1024, 1024), (1, 1536, 16, 16), (1, 77, 1280), -1, 1536, 24, 1536, 0.997, "mid_block"),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_transformermodel(
     device,
+    image_resolution,
     input_shape,
     encoder_shape,
     down_block_id,
@@ -54,7 +56,7 @@ def test_transformermodel(
     else:
         raise ValueError(f"Unknown block_type: {block_type}")
 
-    model_config = RefinerModelOptimisations()
+    model_config = load_refiner_model_optimisations(image_resolution)
     tt_transformerblock = TtTransformer2DModel(
         device,
         state_dict,

@@ -31,6 +31,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline im
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    image_resolution,
     prompts,
     negative_prompts,
     num_inference_steps,
@@ -91,6 +92,7 @@ def run_demo_inference(
         ttnn_device=ttnn_device,
         torch_pipeline=pipeline,
         pipeline_config=TtSDXLImg2ImgPipelineConfig(
+            image_resolution=image_resolution,
             capture_trace=capture_trace,
             vae_on_device=vae_on_device,
             encoders_on_device=encoders_on_device,
@@ -126,7 +128,7 @@ def run_demo_inference(
 
     images = [tt_sdxl.torch_pipeline.image_processor.preprocess(image).to(dtype=torch.float32) for image in images]
 
-    images = torch.cat(images, dim=0)  # [batch_size, 3, 1024, 1024]
+    images = torch.cat(images, dim=0)  # [batch_size, 3, height, width]
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         torch_image=torch.randn(batch_size, images.shape[1], images.shape[2], images.shape[3]),
@@ -228,6 +230,14 @@ def run_demo_inference(
     return out_images
 
 
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        (512, 512),
+    ],
+    ids=["1024x1024", "512x512"],
+)
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
@@ -315,6 +325,7 @@ def test_demo(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    image_resolution,
     prompt,
     negative_prompt,
     num_inference_steps,
@@ -334,10 +345,14 @@ def test_demo(
     timesteps,
     sigmas,
 ):
+    if image_resolution == (512, 512):
+        pytest.skip("512x512 image resolution is not yet supported for base img2img pipeline.")
+
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        image_resolution,
         prompt,
         negative_prompt,
         num_inference_steps,
