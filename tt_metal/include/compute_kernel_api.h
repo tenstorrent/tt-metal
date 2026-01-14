@@ -325,29 +325,48 @@ ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_
  *
  * Return value: None
  *
- * | Template Parameter      | Description                                                    | Type     | Valid Range      | Default |
- * |-------------------------|----------------------------------------------------------------|----------|------------------|---------|
- * | legacy_compat           | When true: uses iterative approach (exponents 0,1,2,3)         | bool     | true, false      | false   |
- * |                         | When false: uses 21f approach (all exponents).                 |          |                  |         |
- *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0          | The float exponent reinterpreted as uint32_t                               | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <bool legacy_compat = false>
 ALWI void power_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_power<APPROX, legacy_compat>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_power<APPROX>(idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <bool legacy_compat = false>
-ALWI void power_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_power_init<APPROX, legacy_compat>()));
+ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPROX>())); }
+
+// Iterative approach for power operation
+// POWER : y = x^(const param0)
+// clang-format off
+/**
+ * Performs element-wise computation of power operation (x ^(const param0)) value on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Note: This version of power tile performs iterative approach for power operation for exponents 0,1,2,3.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The float exponent reinterpreted as uint32_t                               | uint32_t | Must be a positive, non fractional float value        | True     |
+ */
+// clang-format on
+ALWI void power_tile_iterative(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_power_iterative<APPROX>(idst, param0)));
 }
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void power_tile_iterative_init() { MATH((llk_math_eltwise_unary_sfpu_power_iterative_init<APPROX>())); }
 
 // clang-format off
 // exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]

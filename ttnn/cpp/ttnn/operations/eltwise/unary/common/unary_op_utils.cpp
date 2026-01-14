@@ -154,7 +154,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             uint32_t exponent = std::bit_cast<uint32_t>(exp_float);
             bool legacy_compat = (exp_float == 0.0f || exp_float == 1.0f || exp_float == 2.0f || exp_float == 3.0f);
             if (legacy_compat) {
-                return {"power_tile_init<true>();", fmt::format("power_tile<true>({}, {:#x}u);", idst, exponent)};
+                return {
+                    "power_tile_iterative_init();", fmt::format("power_tile_iterative({}, {:#x}u);", idst, exponent)};
             }
             return {"power_tile_init();", fmt::format("power_tile({}, {:#x}u);", idst, exponent)};
         }

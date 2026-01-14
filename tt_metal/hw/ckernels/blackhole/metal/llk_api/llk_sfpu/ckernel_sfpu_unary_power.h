@@ -153,29 +153,6 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
 }
 
 template <int ITERATIONS>
-inline void _power_iterative_(const uint32_t exponent) {
-    // Old iterative approach for integer exponents 0, 1, 2, 3
-    // exponent contains IEEE 754 float bits - convert to actual integer
-    const float exp_float = Converter::as_float(exponent);
-    const uint exp = (uint)exp_float;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        vFloat in = sfpi::dst_reg[0];
-        vFloat result = 1.0f;
-        uint e = exp;
-        while (e > 0) {
-            if (e & 1) {
-                result *= in;
-            }
-            in *= in;
-            e >>= 1;
-        }
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg++;
-    }
-}
-
-template <int ITERATIONS>
 inline void _sfpu_unary_power_(const uint32_t exponent) {
     // Convert exponent to float
     const float pow_scalar = Converter::as_float(exponent);
@@ -199,28 +176,47 @@ inline void _sfpu_unary_power_(const uint32_t exponent) {
 }
 
 /**
- * @brief Compute power operation with optional legacy compatibility mode
+ * @brief Compute power operation
  *
- * @tparam legacy_compat When false (default), always use 21f Approach.
- *                       When true , use old iterative approach for exponents 0, 1, 2, 3 - Faster approach
  * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool legacy_compat = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_power(const uint32_t exponent) {
-    if constexpr (!legacy_compat) {
-        _sfpu_unary_power_<ITERATIONS>(exponent);
-    } else {
-        _power_iterative_<ITERATIONS>(exponent);
+    _sfpu_unary_power_<ITERATIONS>(exponent);
+}
+
+/**
+ * @brief Compute power operation using iterative approach
+ *
+ * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
+ */
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_unary_power_iterative(const uint32_t exponent) {
+    // Old iterative approach for integer exponents 0, 1, 2, 3
+    // exponent contains IEEE 754 float bits - convert to actual integer
+    const float exp_float = Converter::as_float(exponent);
+    const uint exp = (uint)exp_float;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat in = sfpi::dst_reg[0];
+        vFloat result = 1.0f;
+        uint e = exp;
+        while (e > 0) {
+            if (e & 1) {
+                result *= in;
+            }
+            in *= in;
+            e >>= 1;
+        }
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
     }
 }
 
-template <bool legacy_compat = false>
 inline void sfpu_unary_pow_init() {
-    if constexpr (!legacy_compat) {
-        sfpi::vConstFloatPrgm0 = 1.4426950408889634f;
-        sfpi::vConstFloatPrgm1 = -127.0f;
-        sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
-    }
+    sfpi::vConstFloatPrgm0 = 1.4426950408889634f;
+    sfpi::vConstFloatPrgm1 = -127.0f;
+    sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
 }
 
 }  // namespace sfpu
