@@ -48,3 +48,16 @@ def test_tilize_fp32_truncation(device, shape, use_multicore):
     input_tensor = ttnn.tilize(input_tensor, use_multicore=use_multicore)
     output_tensor = ttnn.to_torch(input_tensor)
     assert torch.allclose(input_a, output_tensor)
+
+
+@pytest.mark.parametrize("input_shape", [(32, 15936), (160, 5210112)])
+def test_run_tilize_large_row_input(device, input_shape):
+    orig_shape = input_shape
+
+    input = torch.randn(orig_shape, dtype=torch.bfloat16)
+    halos = ttnn.from_torch(input, dtype=ttnn.bfloat16, device=device)
+    halos_tile = ttnn.to_layout(halos, layout=ttnn.TILE_LAYOUT)
+    halos_rm = ttnn.to_layout(halos_tile, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    output = ttnn.to_torch(halos_rm)
+    assert_equal(input, output)
