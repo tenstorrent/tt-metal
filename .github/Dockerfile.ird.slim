@@ -3,7 +3,7 @@ FROM ghcr.io/tenstorrent/tt-llk/tt-llk-ci-ubuntu-22-04:${FROM_TAG} AS llk-ird-bu
 
 # Install additional packages needed for IRD (ssh and sudo)
 # All other dependencies are already installed in the ci base image
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -qq && apt-get install -qq -y --no-install-recommends \
     ssh \
     sudo && \
     apt-get clean && rm -rf /var/lib/apt/lists/*

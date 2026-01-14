@@ -892,6 +892,7 @@ class TestConfig:
                         0 if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else None
                     ),
                     return_start_address=True,
+                    verify_write=False,
                 )
                 write_words_to_device(
                     location, TestConfig.TRISC_START_ADDRS[i], [start_address]
@@ -904,6 +905,7 @@ class TestConfig:
                     neo_id=(
                         0 if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else None
                     ),
+                    verify_write=False,
                 )
 
         # Reset the profiler barrier
@@ -926,6 +928,7 @@ class TestConfig:
                             ),
                             location=location,
                             risc_name="brisc",
+                            verify_write=False,
                         )
                 else:
                     if not TestConfig.BRISC_ELF_LOADED:
@@ -936,6 +939,7 @@ class TestConfig:
                             ),
                             location=location,
                             risc_name="brisc",
+                            verify_write=False,
                         )
                 set_tensix_soft_reset(0, [RiscCore.BRISC], location)
             case BootMode.TRISC:

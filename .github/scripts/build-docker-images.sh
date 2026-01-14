@@ -31,7 +31,6 @@ build_and_push() {
     else
         echo "Building image $image_name:$DOCKER_TAG"
         docker build \
-            --progress=plain \
             --build-arg FROM_TAG=$DOCKER_TAG \
             ${from_image:+--build-arg FROM_IMAGE=$from_image} \
             -t $image_name:$DOCKER_TAG \

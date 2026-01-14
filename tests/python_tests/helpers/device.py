@@ -135,7 +135,7 @@ def exalens_device_setup(chip_arch, location="0,0", device_id=0):
     context = check_context()
     device = context.devices[device_id]
     chip_coordinate = OnChipCoordinate.create(location, device=device)
-    debug_tensix = TensixDebug(chip_coordinate, device_id, context)
+    debug_tensix = TensixDebug(chip_coordinate)
     ops = debug_tensix.device.instructions
 
     if chip_arch == ChipArchitecture.BLACKHOLE:

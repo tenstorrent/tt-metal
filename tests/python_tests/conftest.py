@@ -150,9 +150,11 @@ def pytest_configure(config):
 
     if TestConfig.MODE != TestMode.PRODUCE:
         if test_target.run_simulator:
-            tt_exalens_init.init_ttexalens_remote(port=test_target.simulator_port)
+            tt_exalens_init.init_ttexalens_remote(
+                port=test_target.simulator_port, use_4B_mode=False
+            )
         else:
-            tt_exalens_init.init_ttexalens()
+            tt_exalens_init.init_ttexalens(use_4B_mode=False)
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):

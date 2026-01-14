@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=.github/scripts/versions.sh
 source "${SCRIPT_DIR}/versions.sh"
 
-wget -O "${EXALENS_WHEEL}" "${EXALENS_URL}" || exit 1
-pip install --no-cache-dir "${EXALENS_WHEEL}"
-rm "${EXALENS_WHEEL}"
+# Install tt-umd and tt-exalens from test.pypi.org
+pip install -q --no-cache-dir --index-url https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ tt-exalens==${EXALENS_VERSION} \
+    tt-umd==${TT_UMD_VERSION}

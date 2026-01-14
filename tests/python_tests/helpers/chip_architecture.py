@@ -47,7 +47,7 @@ def get_chip_architecture():
     chip_architecture = os.getenv("CHIP_ARCH")
     if not chip_architecture:
         context = check_context()
-        chip_architecture = context.devices[0]._arch
+        chip_architecture = str(context.devices[0]._arch)
         if chip_architecture == "wormhole_b0":
             chip_architecture = "wormhole"
         os.environ["CHIP_ARCH"] = chip_architecture
