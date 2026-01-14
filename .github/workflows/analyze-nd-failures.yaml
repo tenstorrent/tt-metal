@@ -1,0 +1,28 @@
+name: Auto Triage
+
+on:
+  workflow_dispatch:
+    inputs:
+      starting_date:
+        description: "Starting date to analyze failures"
+        required: true
+        type: string
+
+
+jobs:
+  analyze-nd-failures:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run analyze nd failures
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack-output-analysis@main
+        with:
+          starting_date: ${{ inputs.starting_date }}
