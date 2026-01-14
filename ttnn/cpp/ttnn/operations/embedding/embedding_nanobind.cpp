@@ -37,31 +37,11 @@ void py_module(nb::module_& mod) {
             ttnn.Tensor: the output tensor of layout == layout or layout of the weights tensor.
         )doc";
 
-    using OperationType = decltype(ttnn::embedding);
     bind_registered_operation(
         mod,
         ttnn::embedding,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight,
-               const std::optional<int>& padding_idx,
-               const std::optional<ttnn::Layout>& layout,
-               EmbeddingsType embeddings_type,
-               const std::optional<const DataType> dtype,
-               std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(
-                    input_tensor,
-                    weight,
-                    padding_idx,
-                    layout,
-                    embeddings_type,
-                    dtype,
-                    memory_config,
-                    optional_output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("weight").noconvert(),
             nb::kw_only(),
