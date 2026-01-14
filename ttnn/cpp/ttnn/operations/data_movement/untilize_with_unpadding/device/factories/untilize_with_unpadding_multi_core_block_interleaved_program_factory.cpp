@@ -76,9 +76,6 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
         TT_FATAL(false, "single_block_size is not divided by single_sblock_size");
     }
 
-    // std::cout << "single_block_size:" << single_block_size << "," << "single_sblock_size:" << single_sblock_size <<
-    // "," << single_sblock_size << std::endl;
-
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
     uint32_t padded_row_size_bytes;
