@@ -291,7 +291,7 @@ void copy_tensor_to_host_from_device(
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-void memcpy3(
+void copy_tensor_to_device_from_host(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const void* src,

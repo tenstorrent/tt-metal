@@ -18,7 +18,7 @@ void write_buffer(
     auto& cq = mesh_device->mesh_command_queue(*cq_id);
     auto device_tensors = ttnn::distributed::get_device_tensors(dst);
     for (size_t i = 0; i < device_tensors.size(); i++) {
-        tt::tt_metal::memcpy3(cq, device_tensors[i], src.at(i).get(), region);
+        tt::tt_metal::copy_tensor_to_device_from_host(cq, device_tensors[i], src.at(i).get(), region);
     }
 }
 
