@@ -48,7 +48,7 @@ bool telemetry_changed(
     for (const auto& [node_id, channels_after] : after.words_sent_per_channel) {
         auto it_before = before.words_sent_per_channel.find(node_id);
         if (it_before == before.words_sent_per_channel.end()) {
-            continue;  // New node appeared, consider as change
+            continue;  // Skip nodes not in before snapshot - only compare existing data
         }
 
         for (const auto& [channel_id, words_sent_after] : channels_after) {
