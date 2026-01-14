@@ -70,17 +70,7 @@ void bind_quantize_operation(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const T& self,
-               const ttnn::Tensor& input_tensor,
-               const std::variant<ttnn::Tensor, float>& scale,
-               const std::variant<Tensor, int32_t>& zero_point,
-               const std::optional<int32_t> axis,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, scale, zero_point, axis, dtype, memory_config, output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("scale"),
             nb::arg("zero_point"),
@@ -172,28 +162,7 @@ void bind_requantize_operation(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const T& self,
-               const ttnn::Tensor& input_tensor,
-               const std::variant<ttnn::Tensor, float>& in_scale,
-               const std::variant<Tensor, int32_t>& in_zero_point,
-               const std::variant<ttnn::Tensor, float>& out_scale,
-               const std::variant<Tensor, int32_t>& out_zero_point,
-               const std::optional<int32_t> axis,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    in_scale,
-                    in_zero_point,
-                    out_scale,
-                    out_zero_point,
-                    axis,
-                    dtype,
-                    memory_config,
-                    output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("in_scale"),
             nb::arg("in_zero_point"),
@@ -258,17 +227,7 @@ void bind_dequantize_operation(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const T& self,
-               const ttnn::Tensor& input_tensor,
-               const std::variant<ttnn::Tensor, float>& scale,
-               const std::variant<Tensor, int32_t>& zero_point,
-               const std::optional<int32_t> axis,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, scale, zero_point, axis, dtype, memory_config, output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("scale"),
             nb::arg("zero_point"),
