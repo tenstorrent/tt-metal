@@ -543,10 +543,17 @@ void kernel_main() {
     if constexpr (!one_scalar_per_core) {
         uint32_t config_l1_addr = get_read_ptr(config_cb_id);
         if constexpr (config_in_dram) {
-            constexpr uint32_t config_tensor_args_index =
-                TensorAccessorArgs<reader_tensor_args_index>().next_compile_time_args_offset();
-            load_config_tensor_if_in_dram<config_dram_addr, config_page_size, config_tensor_args_index, config_cb_id>(
-                core_nhw_index);
+            if (reader_id == 0) {
+                constexpr uint32_t config_tensor_args_index =
+                    TensorAccessorArgs<reader_tensor_args_index>().next_compile_time_args_offset();
+                load_config_tensor_if_in_dram<
+                    config_dram_addr,
+                    config_page_size,
+                    config_tensor_args_index,
+                    config_cb_id>(core_nhw_index);
+            } else {
+                cb_wait_front(config_cb_id, 1);
+            }
         }
         config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
         scalar_start = config_ptr[0];
