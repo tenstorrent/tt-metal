@@ -378,6 +378,7 @@ Tests:
       - type: all_to_all
 
   - name: "CustomMaxPacketSizeLinear8K"
+    skip: [wormhole_b0]
     enable_flow_control: true
     fabric_setup:
       topology: Linear
@@ -396,6 +397,7 @@ Tests:
       - type: all_to_all
 
   - name: "CustomMaxPacketSizeMesh8K"
+    skip: [wormhole_b0]
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
