@@ -7,9 +7,20 @@
 # Supports:
 #   - Ubuntu 22.04/24.04 (pip-based installation with PEP 668 handling)
 #   - Fedora (native dnf package available)
-#   - macOS (pip-based installation)
+#   - macOS (pip-based installation with PEP 668 handling)
 #
 # The script auto-detects the distribution and uses the appropriate installation method.
+#
+# Requirements:
+#   - Python 3 with pip installed
+#   - For macOS: pip 23.0+ recommended for --break-system-packages support
+#   - For Linux: dnf/yum (Fedora/RHEL) or pip (Ubuntu/Debian)
+#
+# Behavior:
+#   - On failure, the script will exit with a non-zero status code
+#   - For PEP 668 restrictions, the script will automatically retry with appropriate flags
+#   - The script updates PATH to include ~/.local/bin if uv is installed there
+#   - Final verification ensures uv is available before exiting
 
 set -euo pipefail
 
@@ -42,14 +53,36 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
             # PEP 668 restriction detected, use --break-system-packages if available
             if python3 -m pip install --help 2>&1 | grep -q "\-\-break-system-packages"; then
                 echo "PEP 668 restriction detected, using --break-system-packages..."
-                python3 -m pip install ${PIP_ARGS} --break-system-packages "uv==${UV_VERSION}"
+                if python3 -m pip install ${PIP_ARGS} --break-system-packages "uv==${UV_VERSION}"; then
+                    # Verify it worked - update PATH if needed
+                    if ! command -v uv &>/dev/null; then
+                        USER_BIN="${HOME}/.local/bin"
+                        if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+                            export PATH="$USER_BIN:$PATH"
+                        fi
+                    fi
+                else
+                    # Retry failed, try --user
+                    echo "Warning: --break-system-packages installation failed, trying --user..." >&2
+                    python3 -m pip install --user --no-cache-dir "uv==${UV_VERSION}"
+                    # Update PATH for --user installation
+                    USER_BIN="${HOME}/.local/bin"
+                    if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+                        export PATH="$USER_BIN:$PATH"
+                    fi
+                fi
             else
                 # Fall back to --user installation if --break-system-packages not available
                 echo "Warning: PEP 668 restriction detected but --break-system-packages not available, using --user installation..." >&2
                 python3 -m pip install --user --no-cache-dir "uv==${UV_VERSION}"
+                # Update PATH for --user installation
+                USER_BIN="${HOME}/.local/bin"
+                if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+                    export PATH="$USER_BIN:$PATH"
+                fi
             fi
-        elif echo "$PIP_OUTPUT" | grep -qi "error"; then
-            # Different error, re-raise it
+        elif echo "$PIP_OUTPUT" | grep -qiE "error:|failed|exception"; then
+            # More specific error detection - only match actual errors, not warnings
             echo "$PIP_OUTPUT" >&2
             exit 1
         fi

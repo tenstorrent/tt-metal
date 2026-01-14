@@ -92,17 +92,29 @@ if ! command -v uv &>/dev/null; then
         fi
     else
         echo "Warning: install-uv.sh not found, falling back to pip installation"
-        # Use the same pinned version as install-uv.sh to maintain consistency.
-        # NOTE: Keep this version in sync with scripts/install-uv.sh (see UV_VERSION on line 18).
-        UV_VERSION="0.7.12"
+        # Extract version from install-uv.sh to maintain consistency (if file exists but wasn't executable)
+        # Otherwise use fallback version
+        if [ -f "$SCRIPT_DIR/scripts/install-uv.sh" ]; then
+            UV_VERSION=$(grep -m1 '^UV_VERSION=' "$SCRIPT_DIR/scripts/install-uv.sh" 2>/dev/null | sed -n 's/^UV_VERSION="\([^"]*\)".*/\1/p')
+            if [ -z "$UV_VERSION" ]; then
+                UV_VERSION="0.7.12"  # Fallback if extraction fails
+            fi
+        else
+            UV_VERSION="0.7.12"  # Fallback if install-uv.sh not found
+        fi
         if ! ${PYTHON_CMD} -m pip install --no-cache-dir "uv==${UV_VERSION}"; then
             echo "Initial 'pip install uv' failed. This can happen in PEP 668 externally-managed environments."
             echo "Retrying uv installation with --break-system-packages..."
             if ! ${PYTHON_CMD} -m pip install --no-cache-dir --break-system-packages "uv==${UV_VERSION}"; then
                 echo "Retry with --break-system-packages failed. Retrying uv installation with --user..."
                 if ! ${PYTHON_CMD} -m pip install --no-cache-dir --user "uv==${UV_VERSION}"; then
-                    echo "Error: failed to install uv via pip even after applying PEP 668 workarounds."
-                    echo "Please run '$SCRIPT_DIR/scripts/install-uv.sh' if available, or install 'uv' manually."
+                    echo "Error: Failed to install uv via pip after trying:" >&2
+                    echo "  1. Standard installation" >&2
+                    echo "  2. --break-system-packages flag" >&2
+                    echo "  3. --user installation" >&2
+                    echo "" >&2
+                    echo "Please ensure Python and pip are properly configured, or install uv manually." >&2
+                    echo "You can also try running '$SCRIPT_DIR/scripts/install-uv.sh' if available." >&2
                     exit 1
                 fi
             fi
