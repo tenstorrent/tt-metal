@@ -46,13 +46,7 @@ void bind_complex_unary_tensor(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const complex_unary_operation_t& self,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> Tensor { return self(input_tensor, memory_config); },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config")});
+        ttnn::nanobind_arguments_t{nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config")});
 }
 
 template <typename complex_unary_operation_t>
@@ -81,13 +75,7 @@ void bind_complex_unary_complextensor(
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const complex_unary_operation_t& self,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> ComplexTensor { return self(input_tensor, memory_config); },
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config")});
+        ttnn::nanobind_arguments_t{nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config")});
 }
 
 }  // namespace
