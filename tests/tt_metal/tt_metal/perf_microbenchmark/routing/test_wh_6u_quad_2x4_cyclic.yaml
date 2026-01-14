@@ -36,3 +36,20 @@ Tests:
         patterns:
           - destination:
               device: [0, 4]
+
+  - name: "FlowControlCyclicMultiMesh"
+    enable_flow_control: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all

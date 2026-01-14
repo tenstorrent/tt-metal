@@ -791,12 +791,12 @@ def test_div_int32_optional_output(device):
         (2021531526, 2147483647, 9, 123),
     ],
 )
-@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
-def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round_mode, device):
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+def test_div_int32_rounding_modes(input_shapes, low_a, high_a, low_b, high_b, rounding_mode, device):
     # Skip some cases for rounding_mode==None that aren't supported due to:
     # https://github.com/tenstorrent/tt-metal/issues/33334
-    if round_mode is None and low_a == -2147483648:
-        pytest.skip("a == -2147483648 is not supported for round_mode=None")
+    if rounding_mode is None and low_a == -2147483648:
+        pytest.skip("a == -2147483648 is not supported for rounding_mode=None")
 
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
@@ -827,20 +827,20 @@ def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round
 
     golden_function = ttnn.get_golden_function(ttnn.div)
     torch_output_tensor = golden_function(
-        torch_input_tensor_a, torch_input_tensor_b, round_mode=round_mode, device=device
+        torch_input_tensor_a, torch_input_tensor_b, rounding_mode=rounding_mode, device=device
     )
 
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, round_mode=round_mode)
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if round_mode is not None:
+    if rounding_mode is not None:
         assert_equal(torch_output_tensor, output_tensor)
     else:
         assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
 
 
-@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
-def test_div_edge_cases(round_mode, device):
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+def test_div_edge_cases(rounding_mode, device):
     pairs = [
         (16777215, 1),
         (16777216, 2),
@@ -883,13 +883,13 @@ def test_div_edge_cases(round_mode, device):
 
     golden_function = ttnn.get_golden_function(ttnn.div)
     torch_output_tensor = golden_function(
-        torch_input_tensor_a, torch_input_tensor_b, round_mode=round_mode, device=device
+        torch_input_tensor_a, torch_input_tensor_b, rounding_mode=rounding_mode, device=device
     )
 
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, round_mode=round_mode)
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if round_mode is None:
+    if rounding_mode is None:
         assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
     else:
         assert torch.equal(torch_output_tensor, output_tensor)
@@ -1065,3 +1065,28 @@ def test_divide_inf_nan_cases(device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-5, equal_nan=True)
+
+
+def test_binary_scalar_div_int32(device):
+    torch_dtype = torch.int32
+    ttnn_dtype = ttnn.int32
+
+    x_torch = torch.tensor([[1000, -1000, 1000, -1999]], dtype=torch_dtype)
+    y_torch = 500
+    z_torch = torch.divide(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = 500
+    z_tt = ttnn.divide(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt)
+
+    z_tt_floor = ttnn.divide(x_tt, y_tt, rounding_mode="floor")
+    tt_out_floor = ttnn.to_torch(z_tt_floor)
+    z_torch_floor = torch.divide(x_torch, y_torch, rounding_mode="floor")
+
+    z_tt_trunc = ttnn.divide(x_tt, y_tt, rounding_mode="trunc")
+    tt_out_trunc = ttnn.to_torch(z_tt_trunc)
+    z_torch_trunc = torch.divide(x_torch, y_torch, rounding_mode="trunc")
+
+    assert torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=True)
+    assert torch.equal(z_torch_floor, tt_out_floor)
+    assert torch.equal(z_torch_trunc, tt_out_trunc)

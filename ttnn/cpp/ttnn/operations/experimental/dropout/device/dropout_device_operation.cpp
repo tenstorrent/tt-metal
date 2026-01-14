@@ -11,12 +11,11 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::dropout {
 
 DropoutDeviceOperation::program_factory_t DropoutDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.use_per_device_seed) {
         return program::DropoutMeshWorkloadFactory{};
-    } else {
-        return program::DropoutProgramFactory{};
     }
+    return program::DropoutProgramFactory{};
 }
 
 void DropoutDeviceOperation::validate_on_program_cache_hit(
@@ -88,7 +87,7 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t DropoutDeviceOperation::compute_output_specs(
+TensorSpec DropoutDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -103,7 +102,7 @@ spec_return_value_t DropoutDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
 }
 
-tensor_return_value_t DropoutDeviceOperation::create_output_tensors(
+Tensor DropoutDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
@@ -139,13 +138,17 @@ ttnn::operations::experimental::dropout::DropoutDeviceOperation::tensor_return_v
     uint32_t seed,
     bool use_per_device_seed,
     DataType output_dtype,
-    const MemoryConfig& output_memory_config,
+    const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
     using OperationType = ttnn::operations::experimental::dropout::DropoutDeviceOperation;
 
+    auto resolved_memory_config = preallocated_output.has_value()
+                                      ? preallocated_output.value().memory_config()
+                                      : output_memory_config.value_or(input.memory_config());
+
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_dtype = output_dtype,
-        .output_memory_config = output_memory_config,
+        .output_memory_config = resolved_memory_config,
         .seed = seed,
         .use_per_device_seed = use_per_device_seed,
         .prob = prob,

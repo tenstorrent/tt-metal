@@ -158,7 +158,22 @@ private:
     /// @brief getting any available dispatch core for a device
     /// @param device_id
     /// @return
+    /// @note This method is not thread safe, it should be called with the dispatch_core_assignments_mutex held
     CoreCoord get_next_available_dispatch_core(ChipId device_id);
+
+    /// @brief Internal version of dispatcher_core that assumes the caller already holds dispatch_core_assignments_mutex
+    /// @note This method is not thread safe, it should be called with the dispatch_core_assignments_mutex held
+    const tt_cxy_pair& dispatcher_core_locked(ChipId device_id, uint16_t channel, uint8_t cq_id);
+
+    /// @brief Internal version of dispatcher_d_core that assumes the caller already holds
+    /// dispatch_core_assignments_mutex
+    /// @note This method is not thread safe, it should be called with the dispatch_core_assignments_mutex held
+    const tt_cxy_pair& dispatcher_d_core_locked(ChipId device_id, uint16_t channel, uint8_t cq_id);
+
+    /// @brief Internal version of add_dispatch_core_to_device that assumes the caller already holds
+    /// dispatch_core_assignments_mutex
+    /// @note This method is not thread safe, it should be called with the dispatch_core_assignments_mutex held
+    void add_dispatch_core_to_device_locked(ChipId device_id, const CoreCoord& core);
 
     void log_dispatch_assignment(
         std::string name,
@@ -168,6 +183,7 @@ private:
         uint8_t cq_id,
         bool force_ethernet = false);
 
+    std::mutex dispatch_core_assignments_mutex;
     // {device ID : {channel (hugepage) : {cq_id : dispatch assignment}}}
     // Each device has an assigned hugepage at a specific channel that holds (up to 2) hardware command queues
     // (represented by cq_id)

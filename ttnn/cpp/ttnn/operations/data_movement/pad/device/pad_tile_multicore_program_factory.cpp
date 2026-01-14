@@ -26,9 +26,7 @@ static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::S
 }
 
 PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& pad_value = operation_attributes.pad_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
@@ -222,9 +220,9 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
 
 void PadTileMulticoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
 

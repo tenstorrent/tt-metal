@@ -105,11 +105,14 @@ def test_chunked_prefill_single_user(
         max_num_blocks=page_params["page_max_num_blocks"],
     )
     # Implied shuffling of blocks
-    permutation = torch.randperm(paged_attention_config.max_num_blocks)
-    # Page table which maps virtual blocks to physical
-    reverse_permutation = torch.argsort(permutation)
+    # Physical block 0 is reserved as null block in vLLM, so use blocks 1 to max_num_blocks-1
+    # (permute max_num_blocks-1 values, then add 1 to shift range from 0..max-2 to 1..max-1)
+    num_usable_blocks = paged_attention_config.max_num_blocks - 1
+    permutation = torch.randperm(num_usable_blocks)
+    # Page table which maps virtual blocks to physical (offset by 1 to skip block 0)
+    reverse_permutation = torch.argsort(permutation) + 1
     static_page_table = reverse_permutation.reshape(
-        model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        model_args.max_batch_size, num_usable_blocks // model_args.max_batch_size
     )
 
     # Load TTNN model
@@ -141,25 +144,43 @@ def test_chunked_prefill_single_user(
     logger.info("Running reference model")
     ref_output = reference_model(pt_prefill_input, start_pos, mode="decode")
 
-    # Run TT model, collecting various last_token_idxs
+    # Run TT model for various last_token_idxs and start_pos values
+    # to test the chunked prefill and prefix caching functionalities.
+    # These are implemented together, primarily in
+    # Generator.prefill_forward_single_user_text(), both using chunked SDPA,
+    # and thus tested together here.
     logger.info("Running TT model")
-    for last_token_idx in range(prefill_chunk_size - 10, seq_len, prefill_chunk_size):
-        logger.info(f"Running TT model for last_token_idx: {last_token_idx}")
-        tt_output_device = generator.prefill_forward_single_user_text(
-            tt_prefill_input,
-            page_table=static_page_table,
-            user_id=0,
-            last_token_idx=last_token_idx,
-            kv_cache=tt_kv_cache,
-        )
+    for last_token_idx in [
+        prefill_chunk_size - 2,  # one chunk minus one token
+        prefill_chunk_size - 1,  # exactly one chunk
+        prefill_chunk_size,  # one chunk plus one token
+        prefill_chunk_size + 1,  # one chunk plus two tokens
+        seq_len - 10,  # less than seq_len (two chunks)
+        seq_len - 1,  # exactly seq_len (two chunks)
+    ]:
+        prefill_input_trimmed = tt_prefill_input[:, : last_token_idx + 1]
 
-        tt_output_torch = tt_model.process_output_prefill(tt_output_device, last_token_idx=(last_token_idx % 32))
-        tt_output_torch = tt_output_torch.reshape(batch_size, 1, -1)
+        for start_pos in [
+            0,
+            1 * block_size,
+            2 * block_size,
+            3 * block_size,
+            4 * block_size,
+        ]:  # Reuse zero or more blocks of cache
+            logger.info(f"Running TT model for last_token_idx: {last_token_idx}, start_pos: {start_pos}")
+            tt_output_torch = generator.prefill_forward_text(
+                prefill_input_trimmed,
+                page_table=static_page_table,
+                kv_cache=[tt_kv_cache],
+                enable_trace=False,
+                start_pos=[start_pos],
+            )
+            ref_output_slice = ref_output[:, last_token_idx : last_token_idx + 1, :]
 
-        ref_output_slice = ref_output[:, last_token_idx : last_token_idx + 1, :]
+            passing, pcc_message = comp_pcc(ref_output_slice, tt_output_torch, pcc)
 
-        passing, pcc_message = comp_pcc(ref_output_slice, tt_output_torch, pcc)
-
-        logger.info(comp_allclose(ref_output, tt_output_torch))
-        logger.info(f"PCC: {pcc_message}")
-        assert passing
+            logger.info(comp_allclose(ref_output_slice, tt_output_torch))
+            logger.info(
+                f"passing: {passing}, PCC: {pcc_message} (for last_token_idx: {last_token_idx}, start_pos: {start_pos})"
+            )
+            assert passing

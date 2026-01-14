@@ -17,8 +17,8 @@ namespace ttnn::operations::reduction::manual_seed {
 struct ManualSeedDeviceOperation {
     using operation_attributes_t = manual_seed::operation_attributes_t;
     using tensor_args_t = manual_seed::tensor_args_t;
-    using spec_return_value_t = manual_seed::spec_return_value_t;
-    using tensor_return_value_t = manual_seed::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         program::ManualSeedSingleSeedToAllCoresProgramFactory,
         program::ManualSeedSingleSeedSingleCoreProgramFactory,

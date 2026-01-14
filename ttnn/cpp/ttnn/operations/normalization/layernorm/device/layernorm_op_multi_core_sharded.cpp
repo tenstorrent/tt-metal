@@ -76,11 +76,9 @@ bool should_use_two_stage_reduce(
     bool mcast_1d, bool row_wise, CoreCoord grid_size, CoreCoord compute_with_storage_grid_size) {
     if (mcast_1d) {
         // only do this for row/col dim are full length
-        if (row_wise && grid_size.x > 1 && grid_size.x <= compute_with_storage_grid_size.x &&
-            grid_size.y > 1) {  // row major and multiple rows
-            return true;
-        } else if (!row_wise && grid_size.x > 1 && grid_size.y == compute_with_storage_grid_size.y) {  // col major and
-                                                                                                       // multiple cols
+        // row major with multiple rows, or col major with multiple cols
+        if ((row_wise && grid_size.x > 1 && grid_size.x <= compute_with_storage_grid_size.x && grid_size.y > 1) ||
+            (!row_wise && grid_size.x > 1 && grid_size.y == compute_with_storage_grid_size.y)) {
             return true;
         }
     }
@@ -90,11 +88,11 @@ bool should_use_two_stage_reduce(
 uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const ShardSpec& shard_spec) {
     if (mcast_1d) {
         return shard_spec.num_cores();
-    } else if (row_wise) {
-        return grid_size.x;
-    } else {
-        return grid_size.y;
     }
+    if (row_wise) {
+        return grid_size.x;
+    }
+    return grid_size.y;
 
     return uint32_t{};
 }
@@ -102,9 +100,7 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 }  // namespace
 
 LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
@@ -1414,9 +1410,9 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
 
 void LayerNormShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     auto* const src_buffer_a = tensor_args.input.buffer();
     const auto& b_tensor = tensor_args.residual_input_tensor;
     const auto& gamma_tensor = tensor_args.weight;

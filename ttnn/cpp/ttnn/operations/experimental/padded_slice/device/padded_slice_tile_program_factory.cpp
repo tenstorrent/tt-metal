@@ -44,7 +44,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& actual_output_shape,
     const std::vector<CoreCoord>& cores,
-    uint32_t max_read_size,
     uint32_t max_num_tiles_per_row,
     bool is_non_aligned) {
     auto input_padded_shape = input_tensor.padded_shape();
@@ -347,9 +346,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
 }
 
 PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.padded_slice_start;
     const auto& output_tensor_end = operation_attributes.padded_slice_end;
@@ -517,14 +514,7 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
 
     auto all_runtime_args = get_padded_slice_runtime_args_tile_sharded_output(
-        a,
-        output,
-        output_tensor_start,
-        actual_output_shape,
-        iter_cores,
-        max_read_size,
-        max_num_tiles_per_row,
-        is_non_aligned);
+        a, output, output_tensor_start, actual_output_shape, iter_cores, max_num_tiles_per_row, is_non_aligned);
 
     uint32_t i = 0;
     for (const auto& core : iter_cores) {
@@ -550,9 +540,9 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
 
 void PaddedSliceTileProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     const auto& src_tensor = tensor_args.input;
     auto& dst_tensor = output;
@@ -568,7 +558,6 @@ void PaddedSliceTileProgramFactory::override_runtime_arguments(
         shared_vars.output_tensor_start,
         shared_vars.actual_output_shape,
         shared_vars.iter_cores,
-        shared_vars.max_read_size,
         shared_vars.max_num_tiles_per_row,
         is_non_aligned);
 

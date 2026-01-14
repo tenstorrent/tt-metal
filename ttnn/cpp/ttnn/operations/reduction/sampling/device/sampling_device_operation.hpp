@@ -18,8 +18,8 @@ namespace ttnn::operations::reduction::sampling {
 struct SamplingDeviceOperation {
     using operation_attributes_t = sampling::operation_attributes_t;
     using tensor_args_t = sampling::tensor_args_t;
-    using spec_return_value_t = sampling::spec_return_value_t;
-    using tensor_return_value_t = sampling::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::SamplingProgramFactory>;
     using shared_variables_t = program::SamplingProgramFactory::shared_variables_t;
 

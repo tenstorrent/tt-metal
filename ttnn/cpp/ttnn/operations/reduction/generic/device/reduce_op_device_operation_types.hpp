@@ -26,7 +26,4 @@ struct tensor_args_t {
     Tensor input_tensor;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
-
 }  // namespace ttnn::operations::reduction::generic

@@ -16,7 +16,7 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_event.hpp>
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -43,11 +43,7 @@ void WriteShard(
     std::vector<DType>& src,
     const MeshCoordinate& coord,
     bool blocking = false) {
-    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = coord,
-        .host_data = src.data(),
-        .region = std::nullopt,
-    }};
+    std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(src.data())};
     mesh_cq.enqueue_write_shards(mesh_buffer, shard_data_transfers, blocking);
 }
 
@@ -67,11 +63,7 @@ void ReadShard(
 
     auto* shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
-    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = coord,
-        .host_data = dst.data(),
-        .region = std::nullopt,
-    }};
+    std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(dst.data())};
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 }
 
