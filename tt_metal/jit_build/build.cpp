@@ -157,6 +157,12 @@ void JitBuildEnv::init(
             log_info(tt::LogBuildKernels, "CCACHE: Base directory: {}", basedir);
         }
 
+        // Ignore build directories to prevent cache pollution from generated files
+        // This ensures ccache doesn't include headers from build/ or build_Release/ directories
+        std::string ignore_headers = root_ + "build/," + root_ + "build_Release/," + root_ + ".cache/";
+        setenv("CCACHE_IGNOREHEADERS", ignore_headers.c_str(), 0);
+        log_info(tt::LogBuildKernels, "CCACHE: Ignoring headers from: {}", ignore_headers);
+
         this->gpp_ = "ccache ";
     } else {
         this->gpp_ = "";
