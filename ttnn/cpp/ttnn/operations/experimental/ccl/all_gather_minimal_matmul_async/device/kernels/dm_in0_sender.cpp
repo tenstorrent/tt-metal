@@ -5,11 +5,11 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
-#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
 using ttnn::ccl::Topology;
 
@@ -30,30 +30,25 @@ constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
 constexpr uint32_t in0_tile_size = get_compile_time_arg_val(11);
 constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
 constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-uint32_t in0_sender_backward_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-uint32_t in0_sender_forward_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-uint32_t in0_receiver_backward_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
-uint32_t in0_receiver_forward_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
-uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(18));
-constexpr uint32_t is_output_writer = get_compile_time_arg_val(19);
-constexpr uint32_t is_injector_core_backward = get_compile_time_arg_val(20);
-constexpr uint32_t is_injector_core_forward = get_compile_time_arg_val(21);
-constexpr uint32_t num_devices = get_compile_time_arg_val(22);
-constexpr uint32_t my_rank = get_compile_time_arg_val(23);
-constexpr uint32_t in3_tile_size = get_compile_time_arg_val(24);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(25);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(26);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(27);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(28));
- 
-#ifdef USE_MUX
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(29);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(30);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(31);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(32);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(33);
+constexpr uint32_t is_output_writer = get_compile_time_arg_val(14);
+constexpr uint32_t is_injector_core_backward = get_compile_time_arg_val(15);
+constexpr uint32_t is_injector_core_forward = get_compile_time_arg_val(16);
+constexpr uint32_t num_devices = get_compile_time_arg_val(17);
+constexpr uint32_t my_rank = get_compile_time_arg_val(18);
+constexpr uint32_t in3_tile_size = get_compile_time_arg_val(19);
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(20);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(21);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(22);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(23));
 
-constexpr uint32_t mux_arg_count = 34;
+#ifdef USE_MUX
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(26);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(27);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(28);
+
+constexpr uint32_t mux_arg_count = 29;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
   ccl_routing_utils::get_line_unicast_route_info_from_args<mux_arg_count>();
@@ -67,7 +62,7 @@ constexpr uint32_t ct_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_lin
 const auto& unicast_route_info =
   is_injector_core_backward ? forward_unicast_route_info : backward_unicast_route_info;
 #else
-constexpr uint32_t ct_arg_count = 29;
+constexpr uint32_t ct_arg_count = 24;
 #endif
 
 namespace detail {
@@ -113,6 +108,11 @@ void kernel_main() {
     const uint32_t in0_sender_backward_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_forward_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_forward_noc_y = get_arg_val<uint32_t>(argidx++);
+    uint32_t in0_sender_backward_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    uint32_t in0_sender_forward_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    uint32_t in0_receiver_backward_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    uint32_t in0_receiver_forward_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    uint32_t in0_valid_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
