@@ -20,14 +20,7 @@ namespace {
 template <typename data_movement_operation_t>
 void bind_stack_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
     bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self, const std::vector<ttnn::Tensor>& input_tensors, const int dim)
-                -> ttnn::Tensor { return self(input_tensors, dim); },
-            nb::arg("input_tensors"),
-            nb::arg("dim")});
+        mod, operation, doc, ttnn::nanobind_arguments_t{nb::arg("input_tensors"), nb::arg("dim")});
 }
 
 }  // namespace
