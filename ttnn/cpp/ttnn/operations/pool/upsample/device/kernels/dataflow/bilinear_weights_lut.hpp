@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "fixed_point_arithmetic.hpp"
+#include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 
 //
 // BilinearWeightsLUT: Compile-time lookup table for bilinear interpolation weights
