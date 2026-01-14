@@ -624,11 +624,6 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
-        in0_sender_backward_semaphore_id,
-        in0_sender_forward_semaphore_id,
-        in0_receiver_backward_semaphore_id,
-        in0_receiver_forward_semaphore_id,
-        in0_valid_semaphore_id,
         in0_is_output_writer,
         true,   // is_injector_core_backward
         false,  // is_injector_core_forward
@@ -638,7 +633,7 @@ all_gather_minimal_matmul_async_factory_helper(
         num_tiles_to_write_per_packet,
         num_targets_forward,
         num_targets_backward,
-	static_cast<uint32_t>(topology),
+        static_cast<uint32_t>(topology),
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
@@ -676,11 +671,6 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
-        in0_sender_backward_semaphore_id,
-        in0_sender_forward_semaphore_id,
-        in0_receiver_backward_semaphore_id,
-        in0_receiver_forward_semaphore_id,
-        in0_valid_semaphore_id,
         in0_is_output_writer,
         false,  // is_injector_core_backward
         true,   // is_injector_core_forward
@@ -690,7 +680,7 @@ all_gather_minimal_matmul_async_factory_helper(
         num_tiles_to_write_per_packet,
         num_targets_forward,
         num_targets_backward,
-	static_cast<uint32_t>(topology),
+        static_cast<uint32_t>(topology),
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
@@ -728,11 +718,6 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
-        in0_sender_backward_semaphore_id,
-        in0_sender_forward_semaphore_id,
-        in0_receiver_backward_semaphore_id,
-        in0_receiver_forward_semaphore_id,
-        in0_valid_semaphore_id,
         in0_is_output_writer,
         false,  // is_injector_core
         false,  // is_injector_core
@@ -769,9 +754,6 @@ all_gather_minimal_matmul_async_factory_helper(
         in1_tile_size,
         out_tile_size,
         in2_tile_size,
-        in1_sender_semaphore_id,
-        in1_receiver_semaphore_id,
-        in1_valid_semaphore_id,
         in1_is_output_writer,
         true,  // is_injector_core
         ring_size,
@@ -801,9 +783,6 @@ all_gather_minimal_matmul_async_factory_helper(
         in1_tile_size,
         out_tile_size,
         in2_tile_size,
-        in1_sender_semaphore_id,
-        in1_receiver_semaphore_id,
-        in1_valid_semaphore_id,
         in1_is_output_writer,
         false,  // is_injector_core
         ring_size,
@@ -975,6 +954,11 @@ all_gather_minimal_matmul_async_factory_helper(
             (std::uint32_t)in0_backward_prev_core_physical.y,  // in0_sender_noc_y
             (std::uint32_t)in0_forward_prev_core_physical.x,   // in0_sender_noc_x
             (std::uint32_t)in0_forward_prev_core_physical.y,   // in0_sender_noc_y
+            in0_sender_backward_semaphore_id,
+            in0_sender_forward_semaphore_id,
+            in0_receiver_backward_semaphore_id,
+            in0_receiver_forward_semaphore_id,
+            in0_valid_semaphore_id,
             M_start_tile,
             M_end_tile,
             N_start_tile,
@@ -1048,6 +1032,9 @@ all_gather_minimal_matmul_async_factory_helper(
             (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
             (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
             (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
+            in1_sender_semaphore_id,
+            in1_receiver_semaphore_id,
+            in1_valid_semaphore_id,
             M_start_tile,
             M_end_tile,
             N_start_tile,
