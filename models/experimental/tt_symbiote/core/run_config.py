@@ -304,6 +304,7 @@ def compose_transforms(*transforms):
 
 class NormalRun:
     verbose = False
+    signpost_mode = None
 
     def __new__(cls, *args, **kwargs):
         raise TypeError("This class cannot be instantiated")
@@ -473,7 +474,8 @@ class NormalRun:
         DispatchManager.record_timing(
             "TTNN", self.module_name, self.__class__.__name__ + "_move_weights_to_device", {}, end - begin
         )
-        signpost(f"{self.module_name}", f"{self.__class__.__name__}")
+        if NormalRun.signpost_mode is not None:
+            signpost(f"{self.module_name}", f"{self.__class__.__name__}")
         begin = time.time()
         result = self.forward(*func_args, **func_kwargs)
         result = tree_map(wrap_to_torch_ttnn_tensor, result)
@@ -798,16 +800,21 @@ def get_tensor_run_implementation():
     global _current_run_mode
     global _RUN_MODE_REGISTRY
     env_mode = os.environ.get("TT_SYMBIOTE_RUN_MODE", _current_run_mode)
+    signpost_mode = os.environ.get("TT_SYMBIOTE_SIGNPOST_MODE", None)
     if env_mode is None and _current_run_mode is None:
         _current_run_mode = "NORMAL"
     if env_mode != _current_run_mode and _current_run_mode is not None and env_mode is not None:
         print(
             f"Warning: Run mode from environment variable '{env_mode}' overrides the previously set run mode '{_current_run_mode}'."
         )
-    if env_mode is not None:
+
+    if env_mode is None:
+        result = _RUN_MODE_REGISTRY[_current_run_mode]
+    else:
         if env_mode not in _RUN_MODE_REGISTRY:
             raise ValueError(
                 f"Invalid run mode '{env_mode}' from environment variable. Valid modes: {list(_RUN_MODE_REGISTRY.keys())}"
             )
-        return _RUN_MODE_REGISTRY[env_mode]
-    return _RUN_MODE_REGISTRY[_current_run_mode]
+        result = _RUN_MODE_REGISTRY[env_mode]
+    result.signpost_mode = signpost_mode
+    return result
