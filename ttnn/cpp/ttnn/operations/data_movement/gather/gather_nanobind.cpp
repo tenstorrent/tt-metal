@@ -67,29 +67,11 @@ void bind_gather_operation(nb::module_& mod) {
             - Interleaved: DRAM and L1
     )doc";
 
-    using OperationType = decltype(ttnn::gather);
     bind_registered_operation(
         mod,
         ttnn::gather,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int8_t dim,
-               const ttnn::Tensor& input_index_tensor,
-               const bool sparse_grad,
-               std::optional<ttnn::Tensor> optional_output_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> Tensor {
-                return self(
-                    input_tensor,
-                    dim,
-                    input_index_tensor,
-                    sparse_grad,
-                    memory_config,
-                    optional_output_tensor,
-                    sub_core_grids);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input").noconvert(),
             nb::arg("dim"),
             nb::arg("index"),
