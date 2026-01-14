@@ -2328,4 +2328,142 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_ResultStructure) {
     EXPECT_EQ(result.constraint_stats.required_satisfied, 1u) << "Should satisfy required constraint";
     EXPECT_GE(result.constraint_stats.preferred_satisfied, 0u) << "Should track preferred constraints";
 }
+
+TEST_F(TopologySolverTest, MappingConstraintsOneToManyRequired) {
+    // Test one target to many globals (required constraint)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_required_constraint(1, global_nodes);
+
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 1u);
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 20));
+
+    // Test intersection with existing constraint
+    std::set<TestGlobalNode> global_nodes2 = {11, 12, 13};
+    constraints.add_required_constraint(1, global_nodes2);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);  // Intersection: {11, 12}
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 0u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(13), 0u);
+
+    // Test many targets to one global (required constraint)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints2;
+    std::set<TestTargetNode> target_nodes = {1, 2, 3};
+    constraints2.add_required_constraint(target_nodes, 10);
+
+    EXPECT_EQ(constraints2.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints2.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints2.get_valid_mappings(2).size(), 1u);
+    EXPECT_EQ(constraints2.get_valid_mappings(2).count(10), 1u);
+    EXPECT_EQ(constraints2.get_valid_mappings(3).size(), 1u);
+    EXPECT_EQ(constraints2.get_valid_mappings(3).count(10), 1u);
+
+    // Test intersection with existing constraint for multiple targets
+    std::set<TestGlobalNode> global_nodes3 = {10, 11};
+    std::set<TestGlobalNode> global_nodes4 = {10, 12};
+    constraints2.add_required_constraint(1, global_nodes3);
+    constraints2.add_required_constraint(2, global_nodes4);
+    EXPECT_EQ(constraints2.get_valid_mappings(1).size(), 1u);  // Still {10}
+    EXPECT_EQ(constraints2.get_valid_mappings(2).size(), 1u);  // Still {10}
+    EXPECT_EQ(constraints2.get_valid_mappings(3).size(), 1u);  // Still {10}
+
+    // Test conflict: many targets to one global, then conflicting constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints3;
+    std::set<TestTargetNode> target_nodes2 = {1, 2};
+    constraints3.add_required_constraint(target_nodes2, 10);
+    EXPECT_THROW(constraints3.add_required_constraint(1, 20), std::runtime_error);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsOneToManyPreferred) {
+    // Test one target to many globals (preferred constraint)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_preferred_constraint(1, global_nodes);
+
+    EXPECT_EQ(constraints.get_preferred_mappings(1).size(), 3u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(12), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 0u);  // Preferred doesn't restrict valid
+
+    // Test intersection with existing preferred constraint
+    std::set<TestGlobalNode> global_nodes2 = {11, 12, 13};
+    constraints.add_preferred_constraint(1, global_nodes2);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).size(), 2u);  // Intersection: {11, 12}
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(12), 1u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(10), 0u);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(13), 0u);
+
+    // Test many targets to one global (preferred constraint)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints2;
+    std::set<TestTargetNode> target_nodes = {1, 2, 3};
+    constraints2.add_preferred_constraint(target_nodes, 10);
+
+    EXPECT_EQ(constraints2.get_preferred_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints2.get_preferred_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints2.get_preferred_mappings(2).size(), 1u);
+    EXPECT_EQ(constraints2.get_preferred_mappings(2).count(10), 1u);
+    EXPECT_EQ(constraints2.get_preferred_mappings(3).size(), 1u);
+    EXPECT_EQ(constraints2.get_preferred_mappings(3).count(10), 1u);
+
+    // Test intersection with existing preferred constraint for multiple targets
+    std::set<TestGlobalNode> global_nodes3 = {10, 11};
+    std::set<TestGlobalNode> global_nodes4 = {10, 12};
+    constraints2.add_preferred_constraint(1, global_nodes3);
+    constraints2.add_preferred_constraint(2, global_nodes4);
+    EXPECT_EQ(constraints2.get_preferred_mappings(1).size(), 1u);  // Intersection: {10}
+    EXPECT_EQ(constraints2.get_preferred_mappings(2).size(), 1u);  // Intersection: {10}
+    EXPECT_EQ(constraints2.get_preferred_mappings(3).size(), 1u);  // Still {10}
+
+    // Test that preferred constraints don't restrict valid mappings
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints3;
+    std::set<TestGlobalNode> preferred_globals = {10, 11};
+    std::set<TestGlobalNode> required_globals = {20, 21};
+    constraints3.add_preferred_constraint(1, preferred_globals);
+    constraints3.add_required_constraint(1, required_globals);
+    EXPECT_EQ(constraints3.get_preferred_mappings(1).size(), 2u);  // {10, 11}
+    EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 2u);      // {20, 21}
+    EXPECT_TRUE(constraints3.is_valid_mapping(1, 20));
+    EXPECT_TRUE(constraints3.is_valid_mapping(1, 21));
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsOneToManyIntersection) {
+    // Test intersection between one-to-many and one-to-one constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Start with one-to-many constraint
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_required_constraint(1, global_nodes);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 3u);
+
+    // Intersect with one-to-one constraint
+    constraints.add_required_constraint(1, 11);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+
+    // Test intersection between many-to-one and one-to-many
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints2;
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    constraints2.add_required_constraint(target_nodes, 10);
+    std::set<TestGlobalNode> global_nodes2 = {10, 11};
+    constraints2.add_required_constraint(1, global_nodes2);
+    EXPECT_EQ(constraints2.get_valid_mappings(1).size(), 1u);  // Intersection: {10}
+    EXPECT_EQ(constraints2.get_valid_mappings(2).size(), 1u);  // Still {10}
+
+    // Test intersection between trait constraints and one-to-many
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints3;
+    std::map<TestTargetNode, uint8_t> target_traits = {{1, 0}};
+    std::map<TestGlobalNode, uint8_t> global_traits = {{10, 0}, {11, 0}, {20, 1}};
+    constraints3.add_required_trait_constraint<uint8_t>(target_traits, global_traits);
+    EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 2u);  // {10, 11}
+
+    std::set<TestGlobalNode> global_nodes3 = {10, 12};
+    constraints3.add_required_constraint(1, global_nodes3);
+    EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 1u);  // Intersection: {10}
+}
 }  // namespace tt::tt_fabric
