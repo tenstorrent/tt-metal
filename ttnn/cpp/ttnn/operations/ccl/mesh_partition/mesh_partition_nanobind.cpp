@@ -39,19 +39,11 @@ void bind_mesh_partition(nb::module_& mod) {
                             memory_config=output_mem_config)
         )doc";
 
-    using OperationType = decltype(ttnn::mesh_partition);
     ttnn::bind_registered_operation(
         mod,
         ttnn::mesh_partition,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t dim,
-               std::optional<uint32_t> cluster_axis,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, dim, cluster_axis, memory_config);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
