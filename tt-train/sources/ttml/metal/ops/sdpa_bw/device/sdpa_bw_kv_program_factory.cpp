@@ -160,7 +160,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // Get tensor dimensions and extract heads from shapes
     const auto [qB, qNH, qS, qEmbd] = grad_output.padded_shape().to_array_4D();
     const auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
-    const auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
 
     // For backward pass we split work over rows of K and V
     // Each row corresponds to a group in K and V, and all associated heads in Q
@@ -174,7 +173,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     const uint32_t heads_per_group = qNH / kv_heads;  // we read heads_per_group heads from Q for one group of K and V
     const uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
     const uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
-    const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
 
     // Scale factor for attention computation
     // Note: qEmbd is already the per-head dimension (tensor shape is B, NH, S, Embd)
