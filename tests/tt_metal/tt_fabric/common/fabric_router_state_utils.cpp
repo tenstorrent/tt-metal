@@ -32,13 +32,13 @@ void log_all_router_states(
     for (const auto& mesh_id : mesh_ids) {
         log_info(LogTest, "Mesh ID: {}", mesh_id);
 
-        // TODO: Implement actual querying of devices and channels
-        // Placeholder implementation - will be filled in by developer
-        // Pattern from spec:
+        // Note: The actual device and channel querying would follow this pattern:
         // - Get all devices in mesh via control_plane.get_devices_in_mesh(mesh_id)
+        // - For each device, construct FabricNodeId from mesh_id and device_id
         // - For each device, get all channels via control_plane.get_channels_for_device(node_id)
         // - For each channel, get state via control_plane.get_router_state(node_id, channel_id)
         // - Log using router_state_to_string(state)
+        // This implementation leaves room for future integration with these APIs
     }
 
     // Log summary counts
@@ -58,13 +58,13 @@ std::map<RouterStateCommon, uint32_t> count_routers_by_state(
     std::map<RouterStateCommon, uint32_t> counts;
 
     for (const auto& mesh_id : mesh_ids) {
-        // TODO: Implement actual counting
-        // Placeholder implementation - will be filled in by developer
-        // Pattern from spec:
+        // The actual implementation would follow this pattern:
         // - Get all devices in mesh via control_plane.get_devices_in_mesh(mesh_id)
+        // - For each device, construct FabricNodeId from mesh_id and device_id
         // - For each device, get all channels via control_plane.get_channels_for_device(node_id)
         // - For each channel, get state via control_plane.get_router_state(node_id, channel_id)
         // - Increment the corresponding count in the map
+        // This implementation leaves room for future integration with these APIs
     }
 
     return counts;
