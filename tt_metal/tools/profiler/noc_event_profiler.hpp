@@ -130,7 +130,7 @@ FORCE_INLINE void recordMulticastNocEvent(
     kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
 }
 
-template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, typename AddrGen, typename NocIDU32>
+template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted, typename AddrGen, typename NocIDU32>
 FORCE_INLINE void recordNocEventWithID(
     uint32_t local_addr, NocIDU32 noc_id, AddrGen addrgen, uint32_t num_bytes, uint32_t offset, int8_t vc) {
     static_assert(std::is_same_v<NocIDU32, uint32_t>);
@@ -141,10 +141,10 @@ FORCE_INLINE void recordNocEventWithID(
     if constexpr (kernel_profiler::NON_DROPPING) {
         auto noc_addr_local =
             decode_noc_addr_to_local_addr(get_noc_addr_from_bank_id<addrgen.is_dram>(noc_id, offset, noc_index));
-        recordNocEvent<noc_event_type, false>(
+        recordNocEvent<noc_event_type, posted>(
             decoded_x, decoded_y, num_bytes, vc, noc_index, local_addr, noc_addr_local);
     } else {
-        recordNocEvent<noc_event_type, false>(decoded_x, decoded_y, num_bytes, vc, noc_index, 0, 0);
+        recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc_index, 0, 0);
     }
 }
 
@@ -175,16 +175,17 @@ FORCE_INLINE void recordNocEventWithAddr(uint32_t local_addr, NocAddrU64 noc_add
         }                                                                                                           \
     }
 
-#define RECORD_NOC_EVENT_WITH_ID(event_type, local_addr, noc_id, addrgen, offset, num_bytes, vc)                  \
-    {                                                                                                             \
-        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                        \
-        noc_event_profiler::recordNocEventWithID<event_type>(local_addr, noc_id, addrgen, offset, num_bytes, vc); \
+#define RECORD_NOC_EVENT_WITH_ID(event_type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted) \
+    {                                                                                                    \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                               \
+        noc_event_profiler::recordNocEventWithID<event_type, posted>(                                    \
+            local_addr, noc_id, addrgen, offset, num_bytes, vc);                                         \
     }
 
-#define RECORD_NOC_EVENT(event_type)                                       \
+#define RECORD_NOC_EVENT(event_type, posted)                               \
     {                                                                      \
         using NocEventType = KernelProfilerNocEventMetadata::NocEventType; \
-        noc_event_profiler::recordNocEvent<event_type, false>();           \
+        noc_event_profiler::recordNocEvent<event_type, posted>();          \
     }
 
 // preemptive quick push if transitioning from unlinked state to linked state
@@ -197,8 +198,8 @@ FORCE_INLINE void recordNocEventWithAddr(uint32_t local_addr, NocAddrU64 noc_add
 
 // null macros when noc tracing is disabled
 #define RECORD_NOC_EVENT_WITH_ADDR(type, local_addr, noc_addr, num_bytes, vc, posted)
-#define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc)
-#define RECORD_NOC_EVENT(type)
+#define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted)
+#define RECORD_NOC_EVENT(type, posted)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 #endif
