@@ -56,7 +56,6 @@ constexpr uint32_t kQKResultTiles = 1U;
 constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;
-constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kIntermediateTiles = 2U;  // max_val at col 0, recip_sum_exp at col 32
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
