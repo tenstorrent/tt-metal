@@ -11,17 +11,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn {
 
-void write_buffer(
-    QueueId cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<BufferRegion>& region) {
-    auto* mesh_device = dst.device();
-    TT_FATAL(mesh_device, "Tensor must be on device");
-    auto& cq = mesh_device->mesh_command_queue(*cq_id);
-    auto device_tensors = ttnn::distributed::get_device_tensors(dst);
-    for (size_t i = 0; i < device_tensors.size(); i++) {
-        tt::tt_metal::fill_tensor_from_host_buffer(cq, device_tensors[i], src.at(i).get(), region);
-    }
-}
-
 void queue_synchronize(tt::tt_metal::distributed::MeshCommandQueue& cq) { cq.finish(); }
 
 void event_synchronize(const tt::tt_metal::distributed::MeshEvent& event) {

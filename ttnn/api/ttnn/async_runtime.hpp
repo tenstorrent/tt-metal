@@ -11,12 +11,6 @@
 
 namespace ttnn {
 
-void write_buffer(
-    QueueId cq_id,
-    Tensor& dst,
-    std::vector<std::shared_ptr<void>> src,
-    const std::optional<tt::tt_metal::BufferRegion>& region = std::nullopt);
-
 void queue_synchronize(tt::tt_metal::distributed::MeshCommandQueue& cq);
 
 void event_synchronize(const tt::tt_metal::distributed::MeshEvent& event);
