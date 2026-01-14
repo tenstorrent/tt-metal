@@ -526,36 +526,6 @@ void copy_tensor_to_device_from_host(
     queue.enqueue_write_shards(dst.mesh_buffer(), shard_data_transfers, false);
 }
 
-void memcpy5(
-    distributed::MeshCommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
-    ZoneScoped;
-    TT_ASSERT(dst.dtype() == src.dtype());
-    TT_ASSERT(dst.layout() == src.layout());
-
-    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        auto dst_buffer = host_buffer::get_host_buffer(dst);
-        copy_tensor_to_host_from_device(queue, dst_buffer.view_bytes().data(), src, region);
-    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        auto src_buffer = host_buffer::get_host_buffer(src);
-        copy_tensor_to_device_from_host(queue, dst, src_buffer.view_bytes().data(), region);
-    } else {
-        TT_THROW("Unsupported memcpy");
-    }
-}
-
-void memcpy6(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
-    ZoneScoped;
-    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        auto* mesh_device = src.device();
-        memcpy5(mesh_device->mesh_command_queue(), dst, src, region);
-    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        auto* mesh_device = dst.device();
-        memcpy5(mesh_device->mesh_command_queue(), dst, src, region);
-    } else {
-        TT_THROW("Unsupported memcpy");
-    }
-}
-
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
