@@ -533,13 +533,6 @@ void memcpy3(
     queue.enqueue_write_shards(dst.mesh_buffer(), shard_data_transfers, false);
 }
 
-void memcpy4(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
-    ZoneScoped;
-    auto* mesh_device = dst.device();
-    TT_FATAL(mesh_device, "Tensor must be on device");
-    memcpy3(mesh_device->mesh_command_queue(), dst, src, region);
-}
-
 void memcpy5(
     distributed::MeshCommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
