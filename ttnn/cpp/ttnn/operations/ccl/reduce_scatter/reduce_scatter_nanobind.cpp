@@ -49,39 +49,11 @@ void bind_reduce_scatter(nb::module_& mod) {
             [1, 1, 32, 256]
         )doc";
 
-    using OperationType = decltype(ttnn::reduce_scatter);
     ttnn::bind_registered_operation(
         mod,
         ttnn::reduce_scatter,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t dim,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
-               std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology,
-               const std::optional<uint32_t> chunks_per_sync,
-               const std::optional<uint32_t> num_workers_per_link,
-               const std::optional<uint32_t> num_buffers_per_channel) {
-                return self(
-                    input_tensor,
-                    dim,
-                    cluster_axis,
-                    subdevice_id,
-                    memory_config,
-                    intermediate_memory_config,
-                    optional_output_tensor,
-                    num_links,
-                    topology,
-                    chunks_per_sync,
-                    num_workers_per_link,
-                    num_buffers_per_channel);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
             nb::kw_only(),
