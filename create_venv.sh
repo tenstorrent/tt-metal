@@ -72,7 +72,7 @@ else
 fi
 
 # Verify Python command exists
-if ! command -v $PYTHON_CMD &>/dev/null; then
+if ! command -v "$PYTHON_CMD" &>/dev/null; then
     echo "Python command not found: $PYTHON_CMD"
     exit 1
 fi
@@ -92,16 +92,7 @@ if ! command -v uv &>/dev/null; then
         fi
     else
         echo "Warning: install-uv.sh not found, falling back to pip installation"
-        # Extract version from install-uv.sh to maintain consistency (if file exists but wasn't executable)
-        # Otherwise use fallback version
-        if [ -f "$SCRIPT_DIR/scripts/install-uv.sh" ]; then
-            UV_VERSION=$(grep -m1 '^UV_VERSION=' "$SCRIPT_DIR/scripts/install-uv.sh" 2>/dev/null | sed -n 's/^UV_VERSION="\([^"]*\)".*/\1/p')
-            if [ -z "$UV_VERSION" ]; then
-                UV_VERSION="0.7.12"  # Fallback if extraction fails
-            fi
-        else
-            UV_VERSION="0.7.12"  # Fallback if install-uv.sh not found
-        fi
+        UV_VERSION="0.7.12"  # Fallback version - keep in sync with scripts/install-uv.sh
         if ! ${PYTHON_CMD} -m pip install --no-cache-dir "uv==${UV_VERSION}"; then
             echo "Initial 'pip install uv' failed. This can happen in PEP 668 externally-managed environments."
             echo "Retrying uv installation with --break-system-packages..."
@@ -142,9 +133,9 @@ echo "Creating virtual env in: $PYTHON_ENV_DIR"
 
 # Install Python via uv and create virtual environment
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
-uv python install ${VENV_PYTHON_VERSION}
-uv venv $PYTHON_ENV_DIR --python ${VENV_PYTHON_VERSION}
-source $PYTHON_ENV_DIR/bin/activate
+uv python install "${VENV_PYTHON_VERSION}"
+uv venv "$PYTHON_ENV_DIR" --python "${VENV_PYTHON_VERSION}"
+source "$PYTHON_ENV_DIR/bin/activate"
 
 # Import functions for detecting OS
 . ./install_dependencies.sh --source-only
@@ -163,13 +154,13 @@ fi
 
 echo "Installing dev dependencies"
 # Use --extra-index-url for PyTorch CPU wheels and index-strategy for transitive deps
-uv pip install --extra-index-url "$PYTORCH_INDEX" --index-strategy unsafe-best-match -r $(pwd)/tt_metal/python_env/requirements-dev.txt
+uv pip install --extra-index-url "$PYTORCH_INDEX" --index-strategy unsafe-best-match -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
 
 echo "Installing tt-metal"
 uv pip install -e .
 
 # Do not install hooks when this is a worktree
-if [ $(git rev-parse --git-dir) = $(git rev-parse --git-common-dir) ]; then
+if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
     echo "Generating git hooks"
     pre-commit install
     pre-commit install --hook-type commit-msg

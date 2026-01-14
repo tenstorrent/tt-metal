@@ -28,115 +28,141 @@ set -euo pipefail
 # Update this version when upgrading uv across all Dockerfiles
 UV_VERSION="0.7.12"
 
-# Detect OS
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    # macOS
-    echo "Installing uv ${UV_VERSION} on macOS..."
-    PIP_ARGS="--no-cache-dir"
+# Helper: Add ~/.local/bin to PATH if needed
+ensure_local_bin_in_path() {
+    local user_bin="${HOME}/.local/bin"
+    if [[ -d "$user_bin" ]] && [[ ":$PATH:" != *":$user_bin:"* ]]; then
+        export PATH="$user_bin:$PATH"
+    fi
+}
 
-    # Check for PEP 668 (externally-managed-environment) restrictions
-    # This can occur on newer macOS Python installations
-    # Try installation first, and if it fails with PEP 668 error, retry with --break-system-packages
-    # Use || true to prevent script exit on failure, then check output for error type
-    PIP_OUTPUT=$(python3 -m pip install ${PIP_ARGS} "uv==${UV_VERSION}" 2>&1) || true
+# Helper: Check if pip supports --break-system-packages
+pip_supports_break_system_packages() {
+    python3 -m pip install --help 2>&1 | grep -q "\-\-break-system-packages"
+}
 
-    # Add pip's bin directory to PATH immediately after installation attempt
-    # This ensures that if uv was installed to ~/.local/bin, it will be found by command -v
-    USER_BIN="${HOME}/.local/bin"
-    if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
-        export PATH="$USER_BIN:$PATH"
+# Helper: Install uv via pip with PEP 668 fallback handling
+# Tries: normal install -> --break-system-packages -> --user
+install_uv_with_pip_fallback() {
+    local pip_args="--no-cache-dir"
+
+    # First attempt: standard pip install
+    # shellcheck disable=SC2086
+    local pip_output
+    pip_output=$(python3 -m pip install ${pip_args} "uv==${UV_VERSION}" 2>&1) || true
+    ensure_local_bin_in_path
+
+    # Success on first try
+    if command -v uv &>/dev/null; then
+        return 0
     fi
 
-    # Check if installation failed and if it's due to PEP 668
-    if ! command -v uv &>/dev/null; then
-        if echo "$PIP_OUTPUT" | grep -q "externally-managed-environment"; then
-            # PEP 668 restriction detected, use --break-system-packages if available
-            if python3 -m pip install --help 2>&1 | grep -q "\-\-break-system-packages"; then
-                echo "PEP 668 restriction detected, using --break-system-packages..."
-                if python3 -m pip install ${PIP_ARGS} --break-system-packages "uv==${UV_VERSION}"; then
-                    # Verify it worked - update PATH if needed
-                    if ! command -v uv &>/dev/null; then
-                        USER_BIN="${HOME}/.local/bin"
-                        if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
-                            export PATH="$USER_BIN:$PATH"
-                        fi
-                    fi
-                else
-                    # Retry failed, try --user
-                    echo "Warning: --break-system-packages installation failed, trying --user..." >&2
-                    python3 -m pip install --user --no-cache-dir "uv==${UV_VERSION}"
-                    # Update PATH for --user installation
-                    USER_BIN="${HOME}/.local/bin"
-                    if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
-                        export PATH="$USER_BIN:$PATH"
-                    fi
-                fi
-            else
-                # Fall back to --user installation if --break-system-packages not available
-                echo "Warning: PEP 668 restriction detected but --break-system-packages not available, using --user installation..." >&2
-                python3 -m pip install --user --no-cache-dir "uv==${UV_VERSION}"
-                # Update PATH for --user installation
-                USER_BIN="${HOME}/.local/bin"
-                if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
-                    export PATH="$USER_BIN:$PATH"
-                fi
+    # Check for PEP 668 restriction
+    if echo "$pip_output" | grep -q "externally-managed-environment"; then
+        echo "PEP 668 restriction detected, trying alternative installation methods..."
+
+        # Second attempt: --break-system-packages (if available)
+        if pip_supports_break_system_packages; then
+            echo "Trying --break-system-packages..."
+            # shellcheck disable=SC2086
+            if python3 -m pip install ${pip_args} --break-system-packages "uv==${UV_VERSION}"; then
+                ensure_local_bin_in_path
+                return 0
             fi
-        elif echo "$PIP_OUTPUT" | grep -qiE "error:|failed|exception"; then
-            # More specific error detection - only match actual errors, not warnings
-            echo "$PIP_OUTPUT" >&2
+            echo "Warning: --break-system-packages failed, falling back to --user..." >&2
+        fi
+
+        # Third attempt: --user installation
+        echo "Trying --user installation..."
+        python3 -m pip install --user --no-cache-dir "uv==${UV_VERSION}"
+        ensure_local_bin_in_path
+        return 0
+    fi
+
+    # Non-PEP-668 error - check for actual errors (not just warnings)
+    if echo "$pip_output" | grep -qiE "error:|failed|exception"; then
+        echo "$pip_output" >&2
+        return 1
+    fi
+
+    # Unknown state - let final verification handle it
+    return 0
+}
+
+# Helper: Install uv on Fedora/RHEL family
+install_uv_fedora() {
+    if command -v dnf &>/dev/null; then
+        dnf install -y uv
+    elif command -v yum &>/dev/null; then
+        yum install -y uv
+    else
+        echo "Error: No package manager found (dnf/yum)" >&2
+        return 1
+    fi
+}
+
+# Helper: Install uv on Ubuntu/Debian
+install_uv_debian() {
+    local distro_id="$1"
+    local distro_version="$2"
+    local pip_args="--no-cache-dir"
+
+    # Add --break-system-packages for Ubuntu 24.04+ / Debian 12+
+    if [[ "${distro_id}" == "ubuntu" && "${distro_version}" == "24.04" ]] || \
+       [[ "${distro_id}" == "debian" && "${distro_version%%.*}" -ge 12 ]]; then
+        pip_args="${pip_args} --break-system-packages"
+    fi
+
+    # shellcheck disable=SC2086
+    python3 -m pip install ${pip_args} "uv==${UV_VERSION}"
+}
+
+# ============================================================================
+# Main Installation Logic
+# ============================================================================
+
+# Detect OS and install
+case "$(uname -s)" in
+    Darwin)
+        echo "Installing uv ${UV_VERSION} on macOS..."
+        install_uv_with_pip_fallback
+        ;;
+    Linux)
+        if [[ ! -f /etc/os-release ]]; then
+            echo "Error: /etc/os-release not found" >&2
             exit 1
         fi
-    fi
-elif [[ -f /etc/os-release ]]; then
-    # Linux: Detect distribution
-    # shellcheck source=/dev/null
-    source /etc/os-release
-    DISTRO_ID="${ID:-unknown}"
-    DISTRO_VERSION="${VERSION_ID:-unknown}"
 
-    echo "Installing uv ${UV_VERSION} on ${DISTRO_ID} ${DISTRO_VERSION}..."
+        # shellcheck source=/dev/null
+        source /etc/os-release
+        DISTRO_ID="${ID:-unknown}"
+        DISTRO_VERSION="${VERSION_ID:-unknown}"
 
-    case "${DISTRO_ID}" in
-        fedora|rhel|centos|rocky|almalinux)
-            # Fedora and RHEL-family have uv in their repos
-            if command -v dnf &>/dev/null; then
-                dnf install -y uv
-            elif command -v yum &>/dev/null; then
-                yum install -y uv
-            else
-                echo "Error: No package manager found" >&2
-                exit 1
-            fi
-            ;;
-        ubuntu|debian)
-            # Ubuntu/Debian: Install via pip with version pinning
-            # Handle PEP 668 (externally-managed-environment) for Ubuntu 24.04+
-            PIP_ARGS="--no-cache-dir"
+        echo "Installing uv ${UV_VERSION} on ${DISTRO_ID} ${DISTRO_VERSION}..."
 
-            # Check if we need --break-system-packages (Ubuntu 24.04+ / Debian 12+)
-            if [[ "${DISTRO_ID}" == "ubuntu" && "${DISTRO_VERSION}" == "24.04" ]] || \
-               [[ "${DISTRO_ID}" == "debian" && "${DISTRO_VERSION%%.*}" -ge 12 ]]; then
-                PIP_ARGS="${PIP_ARGS} --break-system-packages"
-            fi
+        case "${DISTRO_ID}" in
+            fedora|rhel|centos|rocky|almalinux)
+                install_uv_fedora
+                ;;
+            ubuntu|debian)
+                install_uv_debian "${DISTRO_ID}" "${DISTRO_VERSION}"
+                ;;
+            *)
+                echo "Warning: Unknown distribution '${DISTRO_ID}', attempting pip installation..." >&2
+                python3 -m pip install --no-cache-dir "uv==${UV_VERSION}" || {
+                    echo "Error: Failed to install uv" >&2
+                    exit 1
+                }
+                ;;
+        esac
+        ;;
+    *)
+        echo "Error: Unsupported operating system: $(uname -s)" >&2
+        exit 1
+        ;;
+esac
 
-            # Install specific version
-            # shellcheck disable=SC2086
-            python3 -m pip install ${PIP_ARGS} "uv==${UV_VERSION}"
-            ;;
-        *)
-            echo "Warning: Unknown distribution '${DISTRO_ID}', attempting pip installation..." >&2
-            python3 -m pip install --no-cache-dir "uv==${UV_VERSION}" || {
-                echo "Error: Failed to install uv" >&2
-                exit 1
-            }
-            ;;
-    esac
-else
-    echo "Error: Unsupported operating system" >&2
-    exit 1
-fi
-
-# Verify installation
+# Final verification
 if command -v uv &>/dev/null; then
     echo "uv installed successfully: $(uv --version)"
 else
