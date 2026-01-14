@@ -716,21 +716,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if profiler:
             profiler.end("encoder", profiler_iteration)
 
-        # transformer_dtype = self.transformer.dtype if self.transformer is not None else self.transformer_2.dtype
-        # prompt_embeds = prompt_embeds.to(transformer_dtype)
-        # if negative_prompt_embeds is not None:
-        #     negative_prompt_embeds = negative_prompt_embeds.to(transformer_dtype)
-
         # 4. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps = self.scheduler.timesteps
 
         # 5. Prepare latent variables
-        # num_channels_latents = (
-        #     self.transformer.config.in_channels
-        #     if self.transformer is not None
-        #     else self.transformer_2.config.in_channels
-        # )
         num_channels_latents = self.torch_transformer.config.in_channels
         if seed is not None:
             torch.manual_seed(seed)
@@ -758,6 +748,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         if profiler:
             profiler.start("denoising", profiler_iteration)
+
+        permuted_latent = None
+        rope_args = None
+        prompt_embeds_map = {"transformer": None, "transformer_2": None}
+        negative_prompt_embeds_map = {"transformer": None, "transformer_2": None}
+        current_model_name = None
+
+        latent_frames, latent_height, latent_width = latents.shape[2], latents.shape[3], latents.shape[4]
+
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
@@ -773,6 +772,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                             self._load_transformer1()
                     # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer
+                    current_model_name = "transformer"
                     current_guidance_scale = guidance_scale
                 else:
                     # low-noise stage in wan2.2
@@ -783,10 +783,30 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         if not hasattr(self, "transformer_2"):
                             self._load_transformer2()
                     current_model = self.transformer_2
+                    current_model_name = "transformer_2"
                     current_guidance_scale = guidance_scale_2
 
+                if permuted_latent is None:
+                    # First iteration, preprocess spatial input and prepare rope features
+                    permuted_latent, patchified_seqlen = current_model.preprocess_spatial_input_host(latents)
+
+                    rope_cos_1HND, rope_sin_1HND, trans_mat = current_model.prepare_rope_features(latents)
+                    rope_args = {
+                        "rope_cos_1HND": rope_cos_1HND,
+                        "rope_sin_1HND": rope_sin_1HND,
+                        "trans_mat": trans_mat,
+                    }
+
+                # Cache text conditioning
+                if prompt_embeds_map[current_model_name] is None:
+                    prompt_embeds_map[current_model_name] = current_model.prepare_text_conditioning(prompt_embeds)
+                if self.do_classifier_free_guidance and negative_prompt_embeds_map[current_model_name] is None:
+                    negative_prompt_embeds_map[current_model_name] = current_model.prepare_text_conditioning(
+                        negative_prompt_embeds
+                    )
+
                 # latent_model_input = latents.to(transformer_dtype)
-                latent_model_input = latents.clone()
+                # latent_model_input = latents.clone()
                 if self.config.expand_timesteps:
                     # seq_len: num_latent_frames * latent_height//2 * latent_width//2
                     temp_ts = (mask[0][0][:, ::2, ::2] * t).flatten()
@@ -795,35 +815,28 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 else:
                     timestep = t.expand(latents.shape[0])
 
-                logger.info(f"step {i} of {num_inference_steps}")
-                logger.info(f"latent_model_input.shape: {latent_model_input.shape}")
-                logger.info(f"timestep.shape: {timestep.shape}")
-                logger.info(f"prompt_embeds.shape: {prompt_embeds.shape}")
-                logger.info(f"negative_prompt_embeds.shape: {negative_prompt_embeds.shape}")
-                logger.info(f"attention_kwargs: {attention_kwargs}")
-
-                # with current_model.cache_context("cond"):
-                noise_pred = current_model(
-                    spatial=latent_model_input,
-                    timestep=timestep,
-                    prompt=prompt_embeds,
-                    # attention_kwargs=attention_kwargs,
-                    # return_dict=False,
+                permuted_noise_pred = current_model.inner_step(
+                    spatial_1BNI_torch=permuted_latent,
+                    prompt_1BLP=prompt_embeds_map[current_model_name],
+                    N=patchified_seqlen,
+                    timestep_torch=timestep,
+                    **rope_args,
                 )
 
                 if self.do_classifier_free_guidance:
-                    # with current_model.cache_context("uncond"):
-                    noise_uncond = current_model(
-                        spatial=latent_model_input,
-                        timestep=timestep,
-                        prompt=negative_prompt_embeds,
-                        # attention_kwargs=attention_kwargs,
-                        # return_dict=False,
+                    permuted_noise_uncond = current_model.inner_step(
+                        spatial_1BNI_torch=permuted_latent,
+                        prompt_1BLP=negative_prompt_embeds_map[current_model_name],
+                        N=patchified_seqlen,
+                        timestep_torch=timestep,
+                        **rope_args,
                     )
-                    noise_pred = noise_uncond + current_guidance_scale * (noise_pred - noise_uncond)
+                    permuted_noise_pred = permuted_noise_uncond + current_guidance_scale * (
+                        permuted_noise_pred - permuted_noise_uncond
+                    )
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                permuted_latent = self.scheduler.step(permuted_noise_pred, t, permuted_latent, return_dict=False)[0]
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -842,6 +855,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("denoising", profiler_iteration)
 
         self._current_timestep = None
+
+        # Postprocess spatial output
+        latents = current_model.postprocess_spatial_output_host(
+            permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=patchified_seqlen
+        )
 
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
