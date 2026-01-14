@@ -6,14 +6,6 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    const uint32_t cache_addr = get_arg_val<uint32_t>(0);
-    const uint32_t cache_start_id = get_arg_val<uint32_t>(1);
-    uint32_t cache_tile_offset_B = get_arg_val<uint32_t>(2);
-    const uint32_t my_batch_idx = get_arg_val<uint32_t>(3);
-    const bool send_signal = get_arg_val<uint32_t>(4) == 1;
-    const uint32_t send_core_x = get_arg_val<uint32_t>(5);
-    const uint32_t send_core_y = get_arg_val<uint32_t>(6);
-
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(2);
@@ -36,6 +28,19 @@ void kernel_main() {
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(16));  // semaphore for receiver
 
     constexpr auto s0_args = TensorAccessorArgs<17>();
+
+    uint32_t cache_addr = get_arg_val<uint32_t>(0);
+    uint32_t cache_start_id = get_arg_val<uint32_t>(1);
+    uint32_t cache_tile_offset_B = get_arg_val<uint32_t>(2);
+    const uint32_t my_batch_idx = get_arg_val<uint32_t>(3);
+    const bool send_signal = get_arg_val<uint32_t>(4) == 1;
+    const uint32_t send_core_x = get_arg_val<uint32_t>(5);
+    const uint32_t send_core_y = get_arg_val<uint32_t>(6);
+    const uint32_t noop = get_arg_val<uint32_t>(7);
+
+    if (noop == 1) {
+        return;  // Early exit, no work done
+    }
 
     constexpr uint32_t head_offset_t = Wt * St;
 
