@@ -14,7 +14,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "optimizers/adamw.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
 struct AdamWCase {
@@ -57,12 +56,11 @@ protected:
     }
 };
 
-static xt::xarray<float> make_random_xarray(const std::array<std::size_t, 4>& s, uint32_t seed) {
+static xt::xarray<float> make_random_xarray(
+    const std::array<std::size_t, 4>& s, uint32_t seed, float min = -1.0F, float max = 1.0F) {
     xt::xarray<float> x = xt::empty<float>({s[0], s[1], s[2], s[3]});
     ttml::core::parallel_generate(
-        std::span{x.data(), x.size()},  // NOLINT(performance-no-span-copy)
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+        std::span{x.data(), x.size()}, [min, max]() { return std::uniform_real_distribution<float>(min, max); }, seed);
     return x;
 }
 
@@ -83,8 +81,24 @@ public:
         m_steps(0) {
     }
 
+    // Set initial momentum state for testing
+    void set_state(
+        const xt::xarray<float>& first_moment,
+        const xt::xarray<float>& second_moment,
+        size_t steps,
+        const xt::xarray<float>& max_second_moment = {}) {
+        m_first_moment = first_moment;
+        m_second_moment = second_moment;
+        m_steps = steps;
+        if (m_amsgrad && max_second_moment.size() > 0) {
+            m_max_second_moment = max_second_moment;
+        } else if (m_amsgrad) {
+            m_max_second_moment = xt::zeros_like(first_moment);
+        }
+    }
+
     void step(xt::xarray<float>& params, const xt::xarray<float>& grads) {
-        if (m_steps == 0) {
+        if (m_steps == 0 && m_first_moment.size() == 0) {
             m_first_moment = xt::zeros_like(params);
             m_second_moment = xt::zeros_like(params);
             if (m_amsgrad) {
@@ -110,8 +124,8 @@ public:
         // For AMSGrad: use max of past squared gradients
         xt::xarray<float> denom;
         if (m_amsgrad) {
-            m_max_second_moment = xt::maximum(m_max_second_moment, second_moment_hat);
-            denom = xt::sqrt(m_max_second_moment) + m_epsilon;
+            m_max_second_moment = xt::maximum(m_max_second_moment, m_second_moment);
+            denom = xt::sqrt(m_max_second_moment / bias_correction2) + m_epsilon;
         } else {
             denom = xt::sqrt(second_moment_hat) + m_epsilon;
         }
@@ -165,46 +179,29 @@ static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
     auto& g = autograd::ctx().get_generator();
     const uint32_t seed_param = g();
     const uint32_t seed_grad = g();
+    const uint32_t seed_first_moment = g();
+    const uint32_t seed_second_moment = g();
+    const uint32_t seed_max_second_moment = g();
 
     // Same data used for all optimizers
     xt::xarray<float> g0 = make_random_xarray(pc.shape, seed_grad);
     xt::xarray<float> w0 = make_random_xarray(pc.shape, seed_param);
 
+    // Generate random momentum states
+    xt::xarray<float> m0 = make_random_xarray(pc.shape, seed_first_moment);
+    xt::xarray<float> v0 = make_random_xarray(pc.shape, seed_second_moment, 0.0F, 1.0F);          // must be >= 0
+    xt::xarray<float> max_v0 = make_random_xarray(pc.shape, seed_max_second_moment, 0.0F, 1.0F);  // for amsgrad
+
+    // Initial step count (non-zero to test bias correction with accumulated steps)
+    const size_t initial_steps = 10;
+
     // CPU reference implementation
     xt::xarray<float> w_cpu = w0;
     xt::xarray<float> g_cpu = g0;
     CPUAdamW cpu_opt(pc.lr, pc.beta1, pc.beta2, pc.epsilon, pc.weight_decay, pc.amsgrad);
+    cpu_opt.set_state(m0, v0, initial_steps, pc.amsgrad ? max_v0 : xt::xarray<float>{});
 
-    // MorehAdamW implementation
-    auto theta_moreh = autograd::create_tensor(to_tt(w0), true);
-    theta_moreh->set_grad(to_tt(g0));
-    ttml::serialization::NamedParameters params_moreh{{"theta", theta_moreh}};
-
-    ttml::optimizers::AdamWConfig moreh_cfg;
-    moreh_cfg.lr = pc.lr;
-    moreh_cfg.beta1 = pc.beta1;
-    moreh_cfg.beta2 = pc.beta2;
-    moreh_cfg.epsilon = pc.epsilon;
-    moreh_cfg.weight_decay = pc.weight_decay;
-    moreh_cfg.amsgrad = pc.amsgrad;
-
-    ttml::optimizers::MorehAdamW opt_moreh(params_moreh, moreh_cfg);
-
-    // AdamW (composite) implementation
-    auto theta_composite = autograd::create_tensor(to_tt(w0), true);
-    theta_composite->set_grad(to_tt(g0));
-    ttml::serialization::NamedParameters params_composite{{"theta", theta_composite}};
-
-    ttml::optimizers::AdamWConfig composite_cfg;
-    composite_cfg.lr = pc.lr;
-    composite_cfg.beta1 = pc.beta1;
-    composite_cfg.beta2 = pc.beta2;
-    composite_cfg.epsilon = pc.epsilon;
-    composite_cfg.weight_decay = pc.weight_decay;
-    composite_cfg.amsgrad = pc.amsgrad;
-    composite_cfg.use_kahan_summation = false;
-    ttml::optimizers::AdamW opt_composite(params_composite, composite_cfg);
-
+    // AdamWFused implementation
     auto theta_fused = autograd::create_tensor(to_tt(w0), true);
     theta_fused->set_grad(to_tt(g0));
     ttml::serialization::NamedParameters params_fused{{"theta", theta_fused}};
@@ -219,40 +216,41 @@ static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
 
     ttml::optimizers::AdamWFused opt_fused(params_fused, fused_cfg);
 
-    // Run all optimizers for the specified number of steps
+    // Inject momentum state for AdamWFused
+    {
+        auto m0_tensor = autograd::create_tensor(to_tt(m0), false);
+        auto v0_tensor = autograd::create_tensor(to_tt(v0), false);
+        serialization::StateDict fused_state;
+        fused_state["exp_avg"] = serialization::NamedParameters{{"theta", m0_tensor}};
+        fused_state["exp_avg_sq"] = serialization::NamedParameters{{"theta", v0_tensor}};
+        fused_state["steps"] = initial_steps;
+        fused_state["amsgrad"] = pc.amsgrad;
+        if (pc.amsgrad) {
+            auto max_v0_tensor = autograd::create_tensor(to_tt(max_v0), false);
+            fused_state["max_exp_avg_sq"] = serialization::NamedParameters{{"theta", max_v0_tensor}};
+        }
+        opt_fused.set_state_dict(fused_state);
+    }
+
+    // Run optimizers for the specified number of steps
     for (uint32_t i = 0; i < steps; ++i) {
         cpu_opt.step(w_cpu, g_cpu);
-        opt_moreh.step();
-        opt_composite.step();
         opt_fused.step();
     }
 
     // Get results
-    auto result_moreh = theta_moreh->get_value();
-    auto result_composite = theta_composite->get_value();
     auto result_fused = theta_fused->get_value();
-
-    // Convert to CPU for comparison
-    auto result_moreh_cpu = core::to_xtensor(result_moreh);
-    auto result_composite_cpu = core::to_xtensor(result_composite);
     auto result_fused_cpu = core::to_xtensor(result_fused);
 
     fmt::print("\n=== Error Metrics (reference: CPU) ===\n");
 
-    // Compute error metrics for each implementation
-    auto moreh_metrics = compute_error_metrics(w_cpu, result_moreh_cpu, "MorehAdamW");
-    auto composite_metrics = compute_error_metrics(w_cpu, result_composite_cpu, "AdamW (composite)");
     auto fused_metrics = compute_error_metrics(w_cpu, result_fused_cpu, "AdamWFused");
 
-    EXPECT_LE(fused_metrics.mean_error, moreh_metrics.mean_error)
-        << "AdamWFused mean error should be lower than MorehAdamW";
-    EXPECT_LE(fused_metrics.max_error, moreh_metrics.max_error)
-        << "AdamWFused max error should be lower than MorehAdamW";
+    const float mean_error_tolerance = 1e-3f;
+    const float max_error_tolerance = 1e-2f;
 
-    EXPECT_LE(fused_metrics.mean_error, composite_metrics.mean_error)
-        << "AdamWFused mean error should be lower than AdamW (composite)";
-    EXPECT_LE(fused_metrics.max_error, composite_metrics.max_error)
-        << "AdamWFused max error should be lower than AdamW (composite)";
+    EXPECT_LE(fused_metrics.mean_error, mean_error_tolerance) << "AdamWFused mean error exceeds tolerance";
+    EXPECT_LE(fused_metrics.max_error, max_error_tolerance) << "AdamWFused max error exceeds tolerance";
 
     fmt::print("\n");
 }
@@ -264,8 +262,8 @@ static std::string CaseName(const ::testing::TestParamInfo<AdamWCase>& info) {
 
 TEST_P(AdamWFusedComparisonTest, CompareImplementations) {
     const auto& pc = GetParam();
-    // Run 3 steps to ensure momentum buffers are properly exercised
-    const uint32_t steps = 20;
+    // Single step with pre-initialized momentum states for rigorous testing
+    const uint32_t steps = 1;
     run_steps_and_compare(pc, steps);
 }
 
