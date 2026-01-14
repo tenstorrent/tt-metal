@@ -11,6 +11,13 @@ from models.experimental.uniad.tt.ttnn_temporal_self_attention import TtTemporal
 from models.experimental.uniad.tt.ttnn_spatial_cross_attention import TtSpatialCrossAttention
 from models.experimental.uniad.tt.ttnn_ffn import TtFFN
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ImportError:
+    use_signpost = False
+
 
 class TtBEVFormerEncoder:
     def __init__(
@@ -150,22 +157,32 @@ class TtBEVFormerEncoder:
         ones = ttnn.ones_like(reference_points[..., :1])
         reference_points = ttnn.concat((reference_points, ones), dim=-1)
 
-        reference_points = ttnn.permute(reference_points, (1, 0, 2, 3))  # [D, B, Q, 4]
-        D = reference_points.shape[0]
-        B = reference_points.shape[1]
+        B = reference_points.shape[0]
+        D = reference_points.shape[1]
         num_query = reference_points.shape[2]
         num_cam = lidar2img.shape[1]
 
-        reference_points = ttnn.unsqueeze(reference_points, 2)
-        reference_points = ttnn.repeat(reference_points, (1, 1, num_cam, 1, 1))
-        reference_points = ttnn.unsqueeze(reference_points, -1)
+        if use_signpost:
+            signpost(header="Applying lidar to image transformation")
 
-        lidar2img = ttnn.unsqueeze(lidar2img, 0)
-        lidar2img = ttnn.unsqueeze(lidar2img, 3)
-        lidar2img = ttnn.repeat(lidar2img, (D, 1, 1, num_query, 1, 1))
+        reference_points_cam_list = []
 
-        reference_points_cam = ttnn.matmul(lidar2img, reference_points)
-        reference_points_cam = ttnn.squeeze(reference_points_cam, -1)
+        for cam_idx in range(num_cam):
+            cam_lidar2img = lidar2img[:, cam_idx, :, :]  # [4, 4] for current camera
+            ref_points_flat = ttnn.reshape(reference_points, (B, D * num_query, 4))  # [B, D*Q, 4]
+
+            # [B, D*Q, 4] @ [B, 4, 4]
+            cam_lidar2img_T = ttnn.transpose(cam_lidar2img, -2, -1)  # Last two dims transpose
+            points_cam_flat = ttnn.matmul(ref_points_flat, cam_lidar2img_T)  # [B, D*Q, 4]
+
+            points_cam = ttnn.reshape(points_cam_flat, (B, D, 1, num_query, 4))  # [B, D, 1, Q, 4]
+            points_cam = ttnn.permute(points_cam, (1, 0, 2, 3, 4))  # [D, B, 1, Q, 4]
+            reference_points_cam_list.append(points_cam)
+
+        reference_points_cam = ttnn.concat(reference_points_cam_list, dim=2)  # [D, B, num_cam, Q, 4]
+
+        if use_signpost:
+            signpost(header="Completed lidar to image transformation")
 
         eps = 1e-5
         z = reference_points_cam[..., 2:3]
