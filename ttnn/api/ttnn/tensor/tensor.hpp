@@ -291,7 +291,7 @@ void copy_tensor_to_host_from_device(
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-void memcpy(
+void memcpy2(
     void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
 
 void memcpy3(
