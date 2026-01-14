@@ -174,6 +174,15 @@ Tensor create_tt_tensor_from_py_data(
     std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
+    // ASAN VERIFICATION TEST - REMOVE AFTER CI CONFIRMS ASAN WORKS
+    // Deliberate heap-buffer-overflow: allocate 10 bytes, write at offset 100
+    {
+        volatile char* p = new char[10];
+        p[100] = 'X';  // heap-buffer-overflow - ASan must catch this!
+        delete[] p;
+    }
+    // END ASAN VERIFICATION TEST
+
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
             py_data, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
