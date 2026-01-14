@@ -26,24 +26,7 @@ void bind_create_qkv_heads_from_separate_tensors_template(nb::module_& mod, cons
         R"doc(
             Splits a [B, 1, Seq_len, H] q matrix and fused kv matrix (where H is num_q_heads * head_dim for q and num_kv_heads * head_dim * 2 for kv) into a Q tensor [B, num_q_heads, Seq_len, head_dim], K tensor [B, num_kv_heads, Seq_len, head_dim] (with the last two dims transposed if applicable) and V tensor [B, num_kv_heads, Seq_len, head_dim].
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const transformer_operation_t& self,
-               const ttnn::Tensor& input_tensor_q,
-               const ttnn::Tensor& input_tensor_kv,
-               const uint32_t num_heads,
-               const std::optional<uint32_t> num_kv_heads,
-               const bool transpose_k_heads,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<std::array<Tensor, 3>> optional_output_tensors) {
-                return self(
-                    input_tensor_q,
-                    input_tensor_kv,
-                    num_heads,
-                    num_kv_heads,
-                    transpose_k_heads,
-                    memory_config,
-                    optional_output_tensors);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input").noconvert(),
             nb::arg("input_kv").noconvert(),
             nb::kw_only(),
