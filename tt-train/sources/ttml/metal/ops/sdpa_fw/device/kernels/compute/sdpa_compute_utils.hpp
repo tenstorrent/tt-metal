@@ -278,21 +278,33 @@ void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
     cb_push_back(cb_in_idx, onetile);
 }
 
-void pack_intermediate_result(uint32_t cb_in_idx, uint32_t cb_out_idx, uint32_t tiles_count = 1U) {
+// Pack intermediate result with masking to ensure only column 0 has value, rest are zeros.
+// cb_mask_tile should contain 1.0 in column 0 and 0.0 elsewhere (use cb_matmul_reduce).
+// Input tile has reduced value in column 0 after row reduction.
+// Output tile will have value only in column 0, all other columns zeroed out.
+void pack_intermediate_result(
+    uint32_t cb_in_idx, uint32_t cb_out_idx, uint32_t cb_mask_tile, uint32_t tiles_count = 1U) {
     cb_wait_front(cb_in_idx, tiles_count);
     cb_reserve_back(cb_out_idx, tiles_count);
 
-    reconfig_data_format(cb_in_idx, cb_out_idx);
+    const uint32_t dst_idx = 0;
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_count; ++tile_idx) {
         tile_regs_acquire();
-        copy_tile_init(cb_in_idx);
-        copy_tile(cb_in_idx, /* tile_idx */ tile_idx, /* register idx */ 0);
+        copy_tile_to_dst_init_short_with_dt(/* old_cb_idx */ cb_mask_tile, /* new_cb_idx */ cb_in_idx);
+        copy_tile(cb_in_idx, /* tile_idx */ tile_idx, /* register idx */ dst_idx);
+
+        copy_tile_to_dst_init_short_with_dt(/* old_cb_idx */ cb_in_idx, /* new_cb_idx */ cb_mask_tile);
+        copy_tile(cb_mask_tile, /* tile_idx */ 0, /* register idx */ dst_idx + 1U);
+
+        mask_tile_init();
+        mask_tile(dst_idx, dst_idx + 1U);
+
         tile_regs_commit();
 
         tile_regs_wait();
         pack_reconfig_data_format(cb_out_idx);
-        pack_tile(0, cb_out_idx);
+        pack_tile(dst_idx, cb_out_idx);
         tile_regs_release();
     }
 
