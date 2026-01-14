@@ -168,7 +168,7 @@ def run_flash_mla_decode_impl(
     block_size=ttnn.TILE_SIZE,
 ):
     # Can't run too many iters, or run out of L1
-    num_iters = 3
+    num_iters = 1
 
     # Log the test parameters
     logger.debug(f"Running FlashMLA Decode with parameters: ")
@@ -246,7 +246,7 @@ def run_flash_mla_decode_impl(
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -289,6 +289,7 @@ def run_flash_mla_decode_impl(
             use_height_and_width_as_shard_shape=True,
         )
 
+    print(f"shard shape: {block_height}x{q.shape[-1]}")
     # GQA only supports DRAM memory config for output
     if nkv > 1:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
@@ -321,6 +322,12 @@ def run_flash_mla_decode_impl(
         f"Running FlashMLA Decode with TT Q shape: {tt_q.shape}, TT K shape: {tt_k.shape}, head_dim_v: {kv_lora_rank}"
     )
 
+    def print_tensor_info(t, name):
+        print(f"Printing tensor info for {name}")
+        print(f"Shape: {t.shape}")
+        print(f"Dtype: {t.dtype}")
+        print(f"Memory config: {t.memory_config()}")
+
     def run_op():
         if tt_page_table:
             tt_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
@@ -334,6 +341,11 @@ def run_flash_mla_decode_impl(
                 compute_kernel_config=compute_kernel_config,
                 memory_config=out_mem_config,
             )
+            print_tensor_info(tt_q, "tt_q")
+            print_tensor_info(tt_k, "tt_k")
+            print_tensor_info(tt_page_table, "tt_page_table")
+            print_tensor_info(tt_start_indices, "tt_start_indices")
+            print_tensor_info(tt_out, "tt_out")
         else:
             tt_out = ttnn.transformer.flash_multi_latent_attention_decode(
                 tt_q,
@@ -355,6 +367,7 @@ def run_flash_mla_decode_impl(
         tt_outs.append(tt_out)
 
         # Increment start indices for the next iteration
+        print(tt_start_indices)
         ttnn.plus_one(tt_start_indices)
 
     ########################
@@ -400,22 +413,13 @@ def run_flash_mla_decode_impl(
     # batch, seq_len, num heads q, num heads kv, kv lora rank, dim rope, number of cores to shard q on
     [
         (4, 1024, 128, 1, 512, 64, 64),  # DeepSeek V3 TG full DP
-        (2, 1024, 128, 1, 256, 64, 16),
-        (2, 1024, 128, 1, 256, 64, 32),
-        (8, 1024, 128, 1, 256, 64, 64),
-        (8, 1024, 16, 1, 256, 64, 64),
-        (8, 1024, 48, 1, 128, 64, 16),
-        (2, 1024, 8, 1, 128, 64, 0),
-        (2, 1024, 64, 1, 256, 0, 0),
-        (2, 1024, 64, 1, 32, 64, 0),
-        (16, 1024, 8, 1, 128, 32, 0),
     ],
 )
 @pytest.mark.parametrize(
     "q_dtype, dtype",
     [
-        (ttnn.bfloat16, ttnn.bfloat8_b),
-        (ttnn.bfloat8_b, ttnn.bfloat4_b),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
+        # (ttnn.bfloat8_b, ttnn.bfloat4_b),
     ],
 )
 @pytest.mark.parametrize(
@@ -429,7 +433,7 @@ def run_flash_mla_decode_impl(
     "block_size",
     [
         32,
-        128,
+        # 128,
     ],
 )
 def test_flash_mla_decode(

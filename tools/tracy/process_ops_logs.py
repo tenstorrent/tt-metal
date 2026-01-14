@@ -341,7 +341,7 @@ def import_tracy_op_logs(
         df = pd.read_csv(tracyOpTimesLog)
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
-    tt_mask = df["name"].str.contains("TT_DNN|TT_METAL", regex=True, na=False)
+    tt_mask = df["name"].astype(str).str.contains("TT_DNN|TT_METAL", regex=True, na=False)
     if tt_mask.any():
         tt_df = df[tt_mask]
         for op in tt_df.to_dict(orient="records"):
@@ -349,10 +349,10 @@ def import_tracy_op_logs(
             assert opID in ops, f"Op time for op {opID} must present. OpID: {opID}, Name: {op['name']}"
             ops[opID]["host_time"] = op
 
-    parent_mask = df["special_parent_text"].str.contains("id:", na=False)
+    parent_mask = df["special_parent_text"].astype(str).str.contains("id:", na=False)
     if parent_mask.any():
         child_df = df[parent_mask].copy()
-        child_df["parentOpID"] = child_df["special_parent_text"].str.rsplit(":", n=1).str[-1].astype(int)
+        child_df["parentOpID"] = child_df["special_parent_text"].astype(str).str.rsplit(":", n=1).str[-1].astype(int)
 
         # Only process children of ops we know about
         child_df = child_df[child_df["parentOpID"].isin(ops)]

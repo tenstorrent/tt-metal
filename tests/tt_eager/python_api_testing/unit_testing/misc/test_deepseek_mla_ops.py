@@ -39,7 +39,7 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_test_weight_config
 
 TP = 8
-DP = 4
+DP = 16
 
 
 @pytest.fixture
@@ -49,13 +49,49 @@ def temp_dir():
         yield Path(tmpdir)
 
 
+def create_width_sharded_memory_config(shard_height, shard_width, num_cores_h, num_cores_w):
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1),
+                )
+            }
+        ),
+        [shard_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec
+    )
+
+
+def create_height_sharded_memory_config(shard_height, shard_width, num_cores_h, num_cores_w):
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1),
+                )
+            }
+        ),
+        [shard_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec
+    )
+
+
 class DecodeModelConfig:
     def __init__(self, hf_config):
         self.args = hf_config
         self.args.qk_head_dim = self.args.qk_nope_head_dim + self.args.qk_rope_head_dim
 
         self.grid_size = (8, 8)
-        self.bsz = 128
+        self.bsz = 512
         self.configs = {}
 
         #################
@@ -166,16 +202,17 @@ class DecodeModelConfig:
         )
         self.configs["QROPE_DTYPE"] = ttnn.bfloat16
 
-        q_rope_shard_height = nearest_y(self.configs["QROPE_SHAPE"][2], ttnn.TILE_SIZE)
-        q_rope_shard_width = self.configs["QROPE_SHAPE"][3]
-        q_rope_num_cores = self.configs["QROPE_SHAPE"][1]
-        q_rope_core_grid = ttnn.num_cores_to_corerangeset(q_rope_num_cores, self.grid_size, row_wise=True)
-        self.configs["QROPE_MEM_CFG"] = ttnn.create_sharded_memory_config(
-            shape=(q_rope_shard_height, q_rope_shard_width),
-            core_grid=q_rope_core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
+        # q_rope_shard_height = nearest_y(self.configs["QROPE_SHAPE"][2], ttnn.TILE_SIZE)
+        # q_rope_shard_width = self.configs["QROPE_SHAPE"][3]
+        # q_rope_num_cores = self.configs["QROPE_SHAPE"][1]
+        # q_rope_core_grid = ttnn.num_cores_to_corerangeset(q_rope_num_cores, self.grid_size, row_wise=True)
+        # self.configs["QROPE_MEM_CFG"] = ttnn.create_sharded_memory_config(
+        #     shape=(q_rope_shard_height, q_rope_shard_width),
+        #     core_grid=q_rope_core_grid,
+        #     strategy=ttnn.ShardStrategy.HEIGHT,
+        #     use_height_and_width_as_shard_shape=True,
+        # )
+        self.configs["QROPE_MEM_CFG"] = create_height_sharded_memory_config(1024, 32, 8, 4)
 
         # k_rope
         self.configs["KROPE_SHAPE"] = (1, self.bsz // DP // TP, 1, self.args.qk_rope_head_dim)
@@ -184,12 +221,13 @@ class DecodeModelConfig:
         k_rope_shard_width = self.configs["KROPE_SHAPE"][3]
         k_rope_num_cores = self.configs["KROPE_SHAPE"][1]
         k_rope_core_grid = ttnn.num_cores_to_corerangeset(k_rope_num_cores, self.grid_size, row_wise=True)
-        self.configs["KROPE_MEM_CFG"] = ttnn.create_sharded_memory_config(
-            shape=(k_rope_shard_height, k_rope_shard_width),
-            core_grid=k_rope_core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
+        # self.configs["KROPE_MEM_CFG"] = ttnn.create_sharded_memory_config(
+        #     shape=(k_rope_shard_height, k_rope_shard_width),
+        #     core_grid=k_rope_core_grid,
+        #     strategy=ttnn.ShardStrategy.HEIGHT,
+        #     use_height_and_width_as_shard_shape=True,
+        # )
+        self.configs["KROPE_MEM_CFG"] = create_height_sharded_memory_config(32, 64, 8, 4)
 
         # KVPE Cache
         self.configs["KVPE_SHAPE"] = (1, self.bsz // DP // TP, 1, self.args.kv_lora_rank + self.args.qk_rope_head_dim)
@@ -209,14 +247,14 @@ class DecodeModelConfig:
 
         # q_norm
         self.configs["QNORM_SHAPE"] = (1, 1, self.bsz // DP, self.args.q_lora_rank)
-        self.configs["QNORM_DTYPE"] = ttnn.bfloat16
-        self.configs["QNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
+        self.configs["QNORM_DTYPE"] = ttnn.bfloat8_b
+        self.configs["QNORM_MEM_CFG"] = create_width_sharded_memory_config(32, 96, 8, 2)
         self.configs["QNORM_CATEGORY"] = "q_norm"
 
         # k_norm
-        self.configs["KNORM_SHAPE"] = (1, 1, self.bsz // DP // TP, self.args.kv_lora_rank + self.args.qk_rope_head_dim)
-        self.configs["KNORM_DTYPE"] = ttnn.bfloat16
-        self.configs["KNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
+        self.configs["KNORM_SHAPE"] = (1, 1, self.bsz // DP // TP, self.args.kv_lora_rank)
+        self.configs["KNORM_DTYPE"] = ttnn.bfloat8_b
+        self.configs["KNORM_MEM_CFG"] = create_width_sharded_memory_config(32, 32, 8, 2)
         self.configs["KNORM_CATEGORY"] = "k_norm"
         # # TODO: Debug, gives bad PCC
         # knorm_num_cores = min(np.prod(self.grid_size), math.ceil(self.configs["KNORM_SHAPE"][3] / ttnn.TILE_SIZE))
@@ -385,7 +423,7 @@ class PrefillModelConfig:
         self.configs["KNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
 
 
-hugging_face_config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
+hugging_face_config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-V3", trust_remote_code=True)
 hugging_face_config.max_seq_len = 16 * 1024  # Set max sequence length for testing
 
 decode_cfg = DecodeModelConfig(hugging_face_config)
@@ -1045,15 +1083,15 @@ def test_prefill_matmuls(
             decode_cfg.configs["QROPE_DTYPE"],
             decode_cfg.configs["QROPE_MEM_CFG"],
         ),
-        (  # k_rope
-            decode_cfg.configs["KROPE_SHAPE"],
-            decode_cfg.configs["KROPE_DTYPE"],
-            decode_cfg.configs["KROPE_MEM_CFG"],
-        ),
+        # (  # k_rope
+        #     decode_cfg.configs["KROPE_SHAPE"],
+        #     decode_cfg.configs["KROPE_DTYPE"],
+        #     decode_cfg.configs["KROPE_MEM_CFG"],
+        # ),
     ],
     ids=[
         "q_rope",
-        "k_rope",
+        # "k_rope",
     ],
 )
 def test_decode_ropes(

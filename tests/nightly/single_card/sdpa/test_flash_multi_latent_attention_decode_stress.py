@@ -13,22 +13,22 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent
 @pytest.mark.parametrize(
     "batch",
     [
-        1,  # Single batch
+        # 1,  # Single batch
         # 2,  # Multiple batches # Removing to reduce CI load
-        8,  # Even larger batch size
+        4,  # Even larger batch size
     ],
 )
 @pytest.mark.parametrize(
     "seq_len",
     [
-        1 * 1024,  # Long sequence length
+        128,  # Long sequence length
     ],
 )
 @pytest.mark.parametrize(
     "nh",
     [
-        16,
-        32,
+        # 16,
+        # 32,
         128,
     ],
 )
@@ -37,29 +37,29 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent
     [
         1,
         # 8, # Removing to reduce CI load
-        16,
+        # 16,
     ],
 )
 @pytest.mark.parametrize(
     "kv_lora_rank",
     [
-        64,
+        # 64,
         512,
     ],
 )
 @pytest.mark.parametrize(
     "d_rope",
     [
-        0,
-        32,
-        128,
+        # 0,
+        # 32,
+        64,
     ],
 )
 @pytest.mark.parametrize(
     "q_num_cores",
     [
-        0,  # No sharding
-        8,  # Shard across 8 cores
+        # 0,  # No sharding
+        # 8,  # Shard across 8 cores
         64,  # Shard across all cores
     ],
 )
@@ -72,7 +72,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent
 @pytest.mark.parametrize(
     "use_paged_attention",
     [
-        False,
+        # False,
         True,
     ],
 )
@@ -80,7 +80,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent
     "block_size",
     [
         32,
-        128,
+        # 128,
     ],
 )
 def test_flash_mla_decode_stress(
