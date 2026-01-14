@@ -124,7 +124,7 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
         tensor_args.weight,
         tensor_args.bias,
         output_tensors.mm,
-        args.matmul_struct.user_fused_activation,
+        args.matmul_struct.fused_activation,
         bcast_batch,
         compute_kernel_config,
         untilize_out,
@@ -141,13 +141,12 @@ void MinimalMatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+    for (const auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
         std::vector<Tensor> matmul_output_tensors = {output_tensors.mm};
-        operations::matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+        operations::experimental::minimal_matmul::program::MinimalMatmulProgramFactory::override_runtime_arguments(
             program,
-            shared_vars.matmul_shared_variables,
             args.matmul_struct,
             {.input_tensors = {tensor_args.input, tensor_args.weight},
              .optional_input_tensors = {tensor_args.bias},

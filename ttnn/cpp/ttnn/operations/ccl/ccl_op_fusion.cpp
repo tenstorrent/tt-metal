@@ -464,6 +464,19 @@ void MinimalMatmulFusedOpSignaler::init_all_gather(
     initialized_all_gather = true;
 }
 
+// Used to propagate semaphore information from matmul to reduce_scatter in matmul_reduce_scatter op
+void MinimalMatmulFusedOpSignaler::init_reduce_scatter(
+    const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
+    const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
+    FusedOpSignalerMode fused_op_signaler_mode) {
+    this->fused_op_receiver_cores_noc = fused_op_receiver_cores_noc;
+    this->fused_op_receiver_signal_semaphores = fused_op_receiver_signal_semaphores;
+    this->num_fused_op_cores_to_signal = fused_op_receiver_cores_noc.size();
+    this->fused_op_signaler_mode = fused_op_signaler_mode;
+
+    initialized_reduce_scatter = true;
+}
+
 void MinimalMatmulFusedOpSignaler::init_fused_op(
     Program& program,
     const IDevice* device,
