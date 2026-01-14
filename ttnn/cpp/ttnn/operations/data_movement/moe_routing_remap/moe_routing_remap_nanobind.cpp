@@ -52,27 +52,11 @@ Returns:
 
     )doc";
 
-    using OperationType = decltype(ttnn::moe_routing_remap);
     ttnn::bind_registered_operation(
         mod,
         ttnn::moe_routing_remap,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& routing_weights_tensor,
-               const uint32_t non_zero_weight_size,
-               const uint32_t expert_parallel_size,
-               const uint32_t cluster_axis,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& optional_output_tensor) {
-                return self(
-                    routing_weights_tensor,
-                    non_zero_weight_size,
-                    expert_parallel_size,
-                    cluster_axis,
-                    memory_config,
-                    optional_output_tensor);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("routing_weights_tensor").noconvert(),
             nb::arg("non_zero_weight_size"),
             nb::arg("expert_parallel_size"),
