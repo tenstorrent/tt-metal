@@ -131,6 +131,18 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     # mux cores
     mux_cores = [ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 1), ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 3)]
 
+    # results in better perf compared to automating the generation of worker cores (other than data cores)
+    extra_worker_cores = [
+        ttnn.CoreCoord(0, 4),
+        ttnn.CoreCoord(0, 5),
+        ttnn.CoreCoord(0, 6),
+        ttnn.CoreCoord(0, 7),
+        ttnn.CoreCoord(1, 4),
+        ttnn.CoreCoord(1, 5),
+        ttnn.CoreCoord(1, 6),
+        ttnn.CoreCoord(1, 7),
+    ]
+
     # Shard config
     shard_grid = ttnn.CoreRangeSet(
         {
@@ -256,6 +268,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
         coord_intermediate_tensor=coord_intermediate,
         topology=topology,
         input_mux_cores=mux_cores,
+        extra_worker_cores=extra_worker_cores,
     )
     ttnn.synchronize_device(submesh_device)
 
@@ -276,6 +289,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
             coord_intermediate_tensor=coord_intermediate,
             topology=topology,
             input_mux_cores=mux_cores,
+            extra_worker_cores=extra_worker_cores,
         )
     ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh_device)
@@ -297,6 +311,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
             coord_intermediate_tensor=coord_intermediate,
             topology=topology,
             input_mux_cores=mux_cores,
+            extra_worker_cores=extra_worker_cores,
         )
     ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh_device)

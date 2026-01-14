@@ -131,7 +131,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         all_coord_cores.insert(all_coord_cores.end(), cores.begin(), cores.end());
     }
 
-    /* Automate core selection logic
+    // Automate core selection logic
     // Determine mux cores early so we can exclude them from worker core selection
     std::vector<CoreCoord> mux_cores_for_exclusion = {
         CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};
@@ -155,7 +155,12 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         available_cores_vec.size());
     std::vector<CoreCoord> non_shard_cores_vec(
         available_cores_vec.begin(), available_cores_vec.begin() + num_non_shard_cores_needed);
-    const CoreRangeSet non_shard_grid = CoreRangeSet(non_shard_cores_vec);
+    CoreRangeSet non_shard_grid = CoreRangeSet(non_shard_cores_vec);
+
+    if (operation_attributes.extra_worker_cores.has_value()) {
+        non_shard_cores_vec = operation_attributes.extra_worker_cores.value();
+        non_shard_grid = CoreRangeSet(non_shard_cores_vec);
+    }
 
     // Construct all_worker_cores: interleave data cores and non-shard cores per link
     // Format: 4 data cores (link 1), 4 non-shard cores (link 1), 4 data cores (link 2), 4 non-shard cores (link 2)
@@ -176,39 +181,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         all_worker_cores_vec.end(), non_shard_cores_vec.begin() + cores_per_link, non_shard_cores_vec.end());
 
     const CoreRangeSet all_cores = CoreRangeSet(all_worker_cores_vec);
-    */
-
-    // hardcoding cores gives better perf
-    const auto all_worker_cores_vec = {
-        CoreCoord(0, 0),
-        CoreCoord(0, 1),
-        CoreCoord(0, 2),
-        CoreCoord(0, 3),
-        CoreCoord(0, 4),
-        CoreCoord(0, 5),
-        CoreCoord(0, 6),
-        CoreCoord(0, 7),
-        CoreCoord(1, 0),
-        CoreCoord(1, 1),
-        CoreCoord(1, 2),
-        CoreCoord(1, 3),
-        CoreCoord(1, 4),
-        CoreCoord(1, 5),
-        CoreCoord(1, 6),
-        CoreCoord(1, 7)};
-
-    const CoreRangeSet all_cores = CoreRangeSet(all_worker_cores_vec);
-
-    const auto non_shard_cores = {
-        CoreCoord(0, 4),
-        CoreCoord(0, 5),
-        CoreCoord(0, 6),
-        CoreCoord(0, 7),
-        CoreCoord(1, 4),
-        CoreCoord(1, 5),
-        CoreCoord(1, 6),
-        CoreCoord(1, 7)};
-    const CoreRangeSet non_shard_grid = CoreRangeSet(non_shard_cores);
 
     const uint32_t num_shard_cores = all_coord_cores.size();
 

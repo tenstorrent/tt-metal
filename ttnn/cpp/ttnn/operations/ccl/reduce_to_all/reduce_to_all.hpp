@@ -27,7 +27,8 @@ struct ExecuteReduceToAll {
         const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_coord_intermediate_tensor = std::nullopt,
-        const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt);
+        const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt,
+        const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores = std::nullopt);
 };
 
 std::vector<ttnn::TensorSpec> reduce_to_all_tensor_spec(
@@ -37,7 +38,8 @@ std::vector<ttnn::TensorSpec> reduce_to_all_tensor_spec(
     const MeshCoordinate& root_coord,
     float scale_fp32,
     tt::tt_fabric::Topology topology,
-    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores);
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
+    const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores = std::nullopt);
 
 }  // namespace operations::ccl
 

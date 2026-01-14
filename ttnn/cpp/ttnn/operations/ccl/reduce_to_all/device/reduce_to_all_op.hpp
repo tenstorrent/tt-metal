@@ -20,13 +20,14 @@ struct ReduceToAllOp {
         const float scale_fp32;
         const tt::tt_fabric::Topology topology;
         const std::optional<std::vector<ttnn::CoreCoord>> input_mux_cores;
+        const std::optional<std::vector<ttnn::CoreCoord>> extra_worker_cores;
 
         const std::vector<ttnn::TensorSpec> _input_tensor_spec;
 
         static constexpr auto attribute_names =
-            std::forward_as_tuple("root_coord", "scale_fp32", "topology", "input_mux_cores");
+            std::forward_as_tuple("root_coord", "scale_fp32", "topology", "input_mux_cores", "extra_worker_cores");
         auto attribute_values() const {
-            return std::forward_as_tuple(root_coord, scale_fp32, topology, input_mux_cores);
+            return std::forward_as_tuple(root_coord, scale_fp32, topology, input_mux_cores, extra_worker_cores);
         };
     };
 
@@ -133,6 +134,7 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const std::optional<Tensor>& optional_fw_intermediate_tensor = std::nullopt,
     const std::optional<Tensor>& optional_bw_intermediate_tensor = std::nullopt,
     const std::optional<Tensor>& optional_coord_intermediate_tensor = std::nullopt,
-    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt);
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt,
+    const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores = std::nullopt);
 }  // namespace prim
 }  // namespace ttnn
