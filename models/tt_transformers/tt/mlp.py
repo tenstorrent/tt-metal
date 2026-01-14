@@ -157,7 +157,7 @@ class MLP(LightweightModule):
                     dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    num_links=self.args.num_reduce_scatter_links,
+                    num_links=self.tt_ccl.get_num_links(cluster_axis),
                     cluster_axis=cluster_axis,
                     memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
                     intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -188,7 +188,6 @@ class MLP(LightweightModule):
                     self.mesh_device,
                     self.tt_ccl,
                     cluster_axis=1,
-                    num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
                     topology=self.args.ccl_topology(),
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
@@ -198,7 +197,6 @@ class MLP(LightweightModule):
                     self.mesh_device,
                     self.tt_ccl,
                     cluster_axis=1,
-                    num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
                     topology=self.args.ccl_topology(),
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
@@ -260,8 +258,6 @@ class MLP(LightweightModule):
             self.tt_ccl,
             cluster_axis=0,
             dim=0 if (TG and self.dim < 8192) else 3,
-            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-            num_all_gather_links=self.args.num_all_gather_links,
             sharded=(mode == "decode"),
             memory_config=(
                 (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())

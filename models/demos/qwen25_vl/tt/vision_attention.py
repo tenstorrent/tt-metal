@@ -66,8 +66,7 @@ class VisionAttention(LightweightModule):
         # self.use_kv_cache = use_kv_cache
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
-        self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
-        self.num_all_gather_links = configuration.num_all_gather_links
+
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
 
