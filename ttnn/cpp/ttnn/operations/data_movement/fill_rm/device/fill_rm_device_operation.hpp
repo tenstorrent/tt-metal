@@ -15,8 +15,8 @@
 namespace ttnn::operations::data_movement::fill_rm {
 
 struct FillRMDeviceOperation {
-    using operation_attributes_t = fill_rm::operation_attributes_t;
-    using tensor_args_t = fill_rm::tensor_args_t;
+    using operation_attributes_t = FillRmParams;
+    using tensor_args_t = FillRmInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::FillRMProgramFactory>;
