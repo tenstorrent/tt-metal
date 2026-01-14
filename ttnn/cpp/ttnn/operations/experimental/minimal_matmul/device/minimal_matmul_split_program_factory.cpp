@@ -88,7 +88,7 @@ CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
 void append_accessors_split(
     std::vector<uint32_t>& args,
     const Tensor& main_tensor,
-    std::vector<Tensor>& output_tensors,
+    const std::vector<Tensor>& output_tensors,
     const std::optional<const Tensor>& bias_tensor) {
     tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
 
@@ -108,9 +108,6 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
     split_tensor_return_value_t& tensor_return_value) {
     // Validate chunks == 3
     const uint32_t N_chunks = operation_attributes.chunks;
-
-    TT_FATAL(N_chunks == 3, "Only chunks=3 is supported, got chunks={}", N_chunks);
-    TT_FATAL(tensor_return_value.size() == 3, "Expected 3 output tensors, got {}", tensor_return_value.size());
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -307,13 +304,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
     uint32_t in0_addr = input_tensor.buffer()->address();
     uint32_t in1_addr = weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
-
-    // Get 3 output addresses
-    uint32_t out0_addr = output_tensors[0].buffer()->address();
-    uint32_t out1_addr = output_tensors[1].buffer()->address();
-    uint32_t out2_addr = output_tensors[2].buffer()->address();
-
-    std::vector<Tensor> output_tensors_vector = {output_tensors[0], output_tensors[1], output_tensors[2]};
+    // Note: N output addresses are pushed dynamically in the runtime args loop
 
     /**
      * Create kernels
@@ -347,7 +338,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         N_tiles_per_chunk,  // NEW: for split logic
         in0_tile_size,      // placeholder for in3_tile_size
     };
-    append_accessors_split(in0_sender_compile_time_args, input_tensor, output_tensors_vector, bias_tensor);
+    append_accessors_split(in0_sender_compile_time_args, input_tensor, output_tensors, bias_tensor);
 
     auto in0_sender_kernels_id = CreateKernel(
         program,
@@ -380,7 +371,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         N_tiles_per_chunk,  // NEW: for split logic
         in0_tile_size,      // placeholder for in3_tile_size
     };
-    append_accessors_split(in0_receiver_compile_time_args, input_tensor, output_tensors_vector, bias_tensor);
+    append_accessors_split(in0_receiver_compile_time_args, input_tensor, output_tensors, bias_tensor);
 
     auto in0_receiver_kernels_id = CreateKernel(
         program,
@@ -413,7 +404,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         N_chunks,
         N_tiles_per_chunk,  // NEW: for split logic
     };
-    append_accessors_split(in1_sender_compile_time_args, weight_tensor, output_tensors_vector, bias_tensor);
+    append_accessors_split(in1_sender_compile_time_args, weight_tensor, output_tensors, bias_tensor);
 
     auto in1_sender_kernels_id = CreateKernel(
         program,
@@ -446,7 +437,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         N_tiles_per_chunk,  // NEW: for split logic
     };
 
-    append_accessors_split(in1_receiver_compile_time_args, weight_tensor, output_tensors_vector, bias_tensor);
+    append_accessors_split(in1_receiver_compile_time_args, weight_tensor, output_tensors, bias_tensor);
 
     auto in1_receiver_kernels_id = CreateKernel(
         program,
@@ -551,12 +542,9 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
 
-        // in0 args - writes to all 3 outputs
+        // in0 args - writes to all N outputs (addresses at end for flexibility)
         std::vector<uint32_t> in0_args = {
             in0_addr,
-            out0_addr,  // NEW: 3 separate addresses
-            out1_addr,
-            out2_addr,
             in2_addr,
             0,  // in3_addr placeholder
             is_in0_sink,
@@ -570,6 +558,10 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
             N_end_tile,
             defer_write_k_block,
         };
+        // Push N output addresses at the end
+        for (const auto& output_tensor : output_tensors) {
+            in0_args.push_back(output_tensor.buffer()->address());
+        }
 
         if (in1_idx == 0) {
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
@@ -577,12 +569,9 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
         }
 
-        // in1 args - writes to all 3 outputs
+        // in1 args - writes to all N outputs (addresses at end for flexibility)
         std::vector<uint32_t> in1_args = {
             in1_addr,
-            out0_addr,  // NEW: 3 separate addresses
-            out1_addr,
-            out2_addr,
             in2_addr,
             is_in1_sink,
             (std::uint32_t)in1_next_core_physical.x,
@@ -595,6 +584,10 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
             N_end_tile,
             defer_write_k_block,
         };
+        // Push N output addresses at the end
+        for (const auto& output_tensor : output_tensors) {
+            in1_args.push_back(output_tensor.buffer()->address());
+        }
 
         if (in0_idx == 0) {
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
@@ -633,15 +626,20 @@ void MinimalMatmulSplitProgramFactory::override_runtime_arguments(
 
     auto in0_addr = tensor_args.input_tensor.buffer()->address();
     auto in1_addr = tensor_args.weight_tensor.buffer()->address();
-    auto out0_addr = tensor_return_value[0].buffer()->address();
-    auto out1_addr = tensor_return_value[1].buffer()->address();
-    auto out2_addr = tensor_return_value[2].buffer()->address();
     auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
 
     auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
     auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
+
+    // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
+    // out_addrs(N)...] RT args layout for in1: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
+    // out_addrs(N)...]
+    constexpr uint32_t in0_in2_addr_idx = 1;
+    constexpr uint32_t in0_out_addr_start_idx = 13;  // After defer_write_k_block
+    constexpr uint32_t in1_in2_addr_idx = 1;
+    constexpr uint32_t in1_out_addr_start_idx = 12;  // After defer_write_k_block
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
         CoreCoord core = override_variables.cores.at(i);
@@ -651,31 +649,35 @@ void MinimalMatmulSplitProgramFactory::override_runtime_arguments(
         if (in1_idx == 0) {
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
             in0_sender_args[0] = in0_addr;
-            in0_sender_args[1] = out0_addr;
-            in0_sender_args[2] = out1_addr;
-            in0_sender_args[3] = out2_addr;
-            in0_sender_args[4] = in2_addr;
+            in0_sender_args[in0_in2_addr_idx] = in2_addr;
+            // Update N output addresses at the end
+            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
+                in0_sender_args[in0_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
+            }
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
-            in0_receiver_args[1] = out0_addr;
-            in0_receiver_args[2] = out1_addr;
-            in0_receiver_args[3] = out2_addr;
-            in0_receiver_args[4] = in2_addr;
+            in0_receiver_args[in0_in2_addr_idx] = in2_addr;
+            // Update N output addresses at the end
+            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
+                in0_receiver_args[in0_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
+            }
         }
 
         if (in0_idx == 0) {
             auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
             in1_sender_args[0] = in1_addr;
-            in1_sender_args[1] = out0_addr;
-            in1_sender_args[2] = out1_addr;
-            in1_sender_args[3] = out2_addr;
-            in1_sender_args[4] = in2_addr;
+            in1_sender_args[in1_in2_addr_idx] = in2_addr;
+            // Update N output addresses at the end
+            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
+                in1_sender_args[in1_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
+            }
         } else {
             auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-            in1_receiver_args[1] = out0_addr;
-            in1_receiver_args[2] = out1_addr;
-            in1_receiver_args[3] = out2_addr;
-            in1_receiver_args[4] = in2_addr;
+            in1_receiver_args[in1_in2_addr_idx] = in2_addr;
+            // Update N output addresses at the end
+            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
+                in1_receiver_args[in1_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
+            }
         }
     }
 }

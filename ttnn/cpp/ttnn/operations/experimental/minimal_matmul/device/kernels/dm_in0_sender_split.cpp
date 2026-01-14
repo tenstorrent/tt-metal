@@ -31,13 +31,9 @@ void kernel_main() {
     constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
 
     // Load input/output addresses and range parameters
+    // Output addresses are at the end (N_chunks of them)
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
-    // Save the RT arg index where output addresses start (for make_tensor_accessor_tuple_uniform_page_size)
-    const uint32_t out_addr_rt_arg_idx = argidx;
-    const uint32_t out0_addr = get_arg_val<uint32_t>(argidx++);  // NEW: 3 output addresses
-    const uint32_t out1_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in3_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
@@ -50,6 +46,8 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    // N output addresses are at the end - save the RT arg index for make_tensor_accessor_tuple_uniform_page_size
+    const uint32_t out_addr_rt_arg_idx = argidx;
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<22>();
