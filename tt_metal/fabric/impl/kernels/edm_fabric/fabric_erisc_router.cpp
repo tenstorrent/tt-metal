@@ -2016,105 +2016,172 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 local_fabric_telemetry);
 #endif  // FABRIC_2D_VC1_SERVICED
     };
-    auto run_active_loop = [&](uint32_t& tx_progress, uint32_t& rx_progress) {
+    auto execute_run_step_hot_loop = [&](uint32_t& tx_progress, uint32_t& rx_progress) {
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
             run_step(tx_progress, rx_progress);
         }
     };
-    auto run_drain_loop = [&](uint32_t& tx_progress, uint32_t& rx_progress) {
-        while (any_sender_channels_active(local_sender_channel_free_slots_stream_ids) ||
-               (get_ptr_val<to_receiver_packets_sent_streams[0]>() != 0)) {
-            run_step(tx_progress, rx_progress);
-        }
-    };
+
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
-
-    uint64_t loop_start_cycles;
-    while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
-        did_something = false;
-
-        uint32_t tx_progress = 0;
-        uint32_t rx_progress = 0;
-
-        if constexpr (is_sender_channel_serviced[0]) {
-            open_perf_recording_window(inner_loop_perf_telemetry_collector);
-        }
+    auto execute_main_loop = [&]() {
+        while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) || !state_manager_l1->is_non_run_command_pending<ENABLE_RISC_CPU_DATA_CACHE>()) {
+            did_something = false;
     
-        if (state_manager_l1->command == RouterCommand::NONE) [[likely]] {
-            if (state_manager_l1->state == RouterStateCommon::ACTIVE) {
-                if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-                    loop_start_cycles = get_timestamp();
-                }
-
-                run_active_loop(tx_progress, rx_progress);
-
-                if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-                    uint64_t loop_end_cycles = get_timestamp();
-                    uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
-                    update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
-                }
+            uint32_t tx_progress = 0;
+            uint32_t rx_progress = 0;
+    
+            if constexpr (is_sender_channel_serviced[0]) {
+                open_perf_recording_window(inner_loop_perf_telemetry_collector);
             }
-        } else {
-            switch (state_manager_l1->command) {
-                case RouterCommand::ACTIVATE: state_manager_l1->state = RouterStateCommon::ACTIVE; break;
-                case RouterCommand::PAUSE: {
-                    state_manager_l1->state = RouterStateCommon::DRAINING;
-                    // run_drain_loop(tx_progress, rx_progress);
-                    state_manager_l1->state = RouterStateCommon::PAUSED;
-                } break;
-                case RouterCommand::STOP: {
-                    state_manager_l1->state = RouterStateCommon::DRAINING;
-                    // run_drain_loop(tx_progress, rx_progress);
-                    state_manager_l1->state = RouterStateCommon::STOPPED;
-                } break;
-                case RouterCommand::NONE:
-                default: break;
+        
+            execute_run_step_hot_loop(tx_progress, rx_progress);
+    
+            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                uint64_t loop_end_cycles = get_timestamp();
+                uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
+                update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
+            }   
+            // Compute idle conditions and update heartbeats in one helper
+            if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
+                update_telemetry(
+                    local_sender_channel_free_slots_stream_ids,
+                    tx_progress,
+                    rx_progress,
+                    local_fabric_telemetry,
+                    fabric_telemetry);
             }
-            state_manager_l1->command = RouterCommand::NONE;
-        }
-
-        // Compute idle conditions and update heartbeats in one helper
-        if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
-            update_telemetry(
-                local_sender_channel_free_slots_stream_ids,
-                tx_progress,
-                rx_progress,
-                local_fabric_telemetry,
-                fabric_telemetry);
-        }
-
-        if constexpr (enable_context_switch) {
-            // shouldn't do noc counter sync since we are not incrementing them
-            if constexpr (IDLE_CONTEXT_SWITCHING) {
-                if (did_something) {
-                    did_nothing_count = 0;
+    
+            if constexpr (enable_context_switch) {
+                // shouldn't do noc counter sync since we are not incrementing them
+                if constexpr (IDLE_CONTEXT_SWITCHING) {
+                    if (did_something) {
+                        did_nothing_count = 0;
+                    } else {
+                        if (did_nothing_count++ > SWITCH_INTERVAL) {
+                            did_nothing_count = 0;
+                            run_routing_without_noc_sync();
+                        }
+                    }
                 } else {
                     if (did_nothing_count++ > SWITCH_INTERVAL) {
                         did_nothing_count = 0;
                         run_routing_without_noc_sync();
                     }
                 }
-            } else {
-                if (did_nothing_count++ > SWITCH_INTERVAL) {
-                    did_nothing_count = 0;
-                    run_routing_without_noc_sync();
+            }
+    
+            if constexpr (is_sender_channel_serviced[0]) {
+                close_perf_recording_window(inner_loop_perf_telemetry_collector);
+                if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
+                    if (captured_an_event(inner_loop_perf_telemetry_collector) ||
+                        any_sender_channels_active(local_sender_channel_free_slots_stream_ids)) {
+                        write_perf_recording_window_results(
+                            inner_loop_perf_telemetry_collector, local_perf_telemetry_buffer);
+                    }
                 }
             }
+        }
+    };
+
+    uint64_t loop_start_cycles;
+
+    // Input State(s): PAUSED
+    // Output State(s): DRAINING
+    auto run_drain_step = [&]() {
+        state_manager_l1->state = RouterStateCommon::DRAINING;
+        ASSERT(false); // not implemented
+        while (state_manager_l1->command == RouterCommand::DRAIN && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         }
 
-        if constexpr (is_sender_channel_serviced[0]) {
-            close_perf_recording_window(inner_loop_perf_telemetry_collector);
-            if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
-                if (captured_an_event(inner_loop_perf_telemetry_collector) ||
-                    any_sender_channels_active(local_sender_channel_free_slots_stream_ids)) {
-                    write_perf_recording_window_results(
-                        inner_loop_perf_telemetry_collector, local_perf_telemetry_buffer);
+        ASSERT(state_manager_l1->state == RouterStateCommon::PAUSED);
+    }
+
+    // Input State(s): PAUSED
+    // Output State(s): PAUSED
+    auto run_retrain_step = []() {
+        // Placeholder
+        state_manager_l1->state = RouterStateCommon::RETRAINING;
+        run_routing_without_noc_sync();
+        while (state_manager_l1->command == RouterCommand::RETRAIN && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+            // Wait for confirmation from host to avoid the WAW hazard:
+            // Host issues retrain
+            // Router enters retrain state
+            // Router completes retrain
+            // Router goes back to pause state, sets current state to PAUSED
+            // Host status read lands - it doesn't know if the RETRAIN landed and is done or was raced ahead
+            //
+            // For the time being, the implementation is conservative
+            //
+            // This can be avoided if the host guarantees that the reads are queued strictly behind writes
+            // For the entirety of the H->D datapath. For the time being, this is too strong of a requirement
+            // for cases where router code is not running in traditional H->D server/PC configurations 
+            // (i.e. some custom IP integrations may not easily satisfy this guarantee this)
+        }
+
+        // PAUSED is the only legal output state
+        ASSERT(state_manager_l1->state == RouterStateCommon::PAUSED);
+    };
+
+    auto execute_pause_command = [&]() {
+        if constexpr (MY_ERISC_ID == 0) {
+            // Master erisc will handle the pause command but we need to make sure the other erisc is in its wait loop before we 
+            // proceed. This coordination is not implemented yet. When mainlined, it will be integrated here.
+            
+            //
+            // Wait for other eriscs will go here
+            //
+    
+            bool keep_running_pause = true;
+            while (keep_running_pause && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                state_manager_l1->state = RouterStateCommon::PAUSED;
+                switch (state_manager_l1->command) {
+                    case RouterCommand::RUN:
+                        keep_running_pause = false;
+                        break;
+                    case RouterCommand::PAUSE:
+                        // nothing to do, we are paused
+                        break;
+                    case RouterCommand::DRAIN:
+                        run_drain_step();
+                        break;
+                    case RouterCommand::RETRAIN:
+                        run_retrain_step();
+                        break;
+                    default:
+                        ASSERT(false); // illegal state transition
                 }
             }
+
+            //
+            // Likewise, we should resume other eriscs here
+            //
         }
+    };
+
+    if constexpr (MY_ERISC_ID == 0) {
+        while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+            switch (state_manager_l1->command) {
+                case RouterCommand::RUN:
+                    execute_main_loop();
+                    break;
+                case RouterCommand::PAUSE:
+                    execute_pause_command();
+                    break;
+                default:
+                    ASSERT(false); // illegal state transition
+                    // Wait that's illegal
+                    break;
+            };
+        }
+    } else {
+        // We are erisc1, a purely subordinate erisc. We never do anything specific to the state machine so we 
+        // immediately jump into the main loop. Any time the the master erisc is not in the run state (e.g. it 
+        // is paused, draining, retraining, etc.), we will wait enter a busy wait loop in the main run loop
+        execute_main_loop();
     }
+    
 }
 
 template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>

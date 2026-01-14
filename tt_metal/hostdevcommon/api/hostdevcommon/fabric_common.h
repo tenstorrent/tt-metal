@@ -467,19 +467,27 @@ struct tensix_fabric_connections_l1_info_t {
 };
 
 enum RouterCommand : std::uint32_t {
-    NONE = 0,
-    ACTIVATE = 1,
-    PAUSE = 2,
-    STOP = 3,
+    RUN = 0, // ACTIVATE
+
+    //
+    PAUSE = 1,
+
+    //
+    STOP = 2,
+
+    //
+    DRAIN = 3,
+
+    RETRAIN = 4
 };
 
 // TODO: move to *_msgs.h definition
 enum RouterStateCommon : std::uint32_t {
-    INITIALIZED = 0,
-    ACTIVE = 1,
+    INITIALIZING = 0, // INITIALIZED = 0,
+    RUNNING = 1,
     PAUSED = 2,
     DRAINING = 3,
-    STOPPED = 4,
+    RETRAINING = 4
 };
 
 struct RouterStateManager {
@@ -487,6 +495,12 @@ struct RouterStateManager {
     uint8_t padding0[12];     //
     RouterCommand command;    // 4B, written by host, read by device
     uint8_t padding1[12];     //
+
+    template <bool ENABLE_RISC_CPU_DATA_CACHE>
+    bool is_non_run_command_pending() const {
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        return command != RUN;
+    }
 };
 
 struct routing_l1_info_t {
