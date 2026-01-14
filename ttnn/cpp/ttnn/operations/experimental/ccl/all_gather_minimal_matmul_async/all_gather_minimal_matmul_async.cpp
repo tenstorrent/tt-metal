@@ -28,7 +28,7 @@ ttnn::Tensor ExecuteAllGatherMinimalMatmulAsync::invoke(
     uint32_t num_links,
     std::optional<uint32_t> cluster_axis,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    uint32_t chunks_per_sync,
+    const bool force_transpose,
     uint32_t num_workers_per_link,
     uint32_t num_buffers_per_channel) {
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -61,7 +61,7 @@ ttnn::Tensor ExecuteAllGatherMinimalMatmulAsync::invoke(
                    cluster_axis,
                    barrier_semaphore,
                    using_persistent_buffers,
-                   chunks_per_sync,
+                   force_transpose,
                    num_workers_per_link,
                    num_buffers_per_channel},
                {input_tensor, weight_tensor},
