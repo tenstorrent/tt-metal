@@ -6,7 +6,7 @@ Getting Started
 TT-Metalium is a framework for accelerating both ML and non-ML workloads on Tenstorrent hardware.
 It offers an abstraction between the host system (e.g., desktop with x86 CPU) and Tenstorrent hardware.
 
-TT-Metalium provides a C++ API for writing kernels that run on Tensix hardware; for configuring these kernels; and for executing kernels on the hardware. It gives the programmer full control over the hardware and data movement. This allows for code to optimized for performance and efficiency. Since hardware details are exposed, the programmer can write code that is tailored to their specific use case.
+TT-Metalium provides a C++ API for writing kernels that run on Tensix hardware; for configuring these kernels; and for executing kernels on the hardware. It gives the programmer full control over the hardware and data movement. This allows code to be optimized for performance and efficiency. Since hardware details are exposed, the programmer can write code that is tailored to their specific use case.
 
 The GitHub repository for the project is located here:
 https://github.com/tenstorrent/tt-metal
@@ -127,7 +127,7 @@ Next Steps
 **For ML Developers**
     Use the higher-level `TT-NN <https://docs.tenstorrent.com/tt-metal/latest/ttnn/>`_ API for model development and deployment. TT-NN builds on TT-Metalium but provides PyTorch-like operations and automatic kernel selection.
 
-**For Understanding the Architecture**
+**For Architecture Deep Dives**
     Read the comprehensive `Metalium Architecture Guide <https://github.com/tenstorrent/tt-metal/blob/main/METALIUM_GUIDE.md>`_ for deep dives into hardware architecture, NoC topology, and advanced programming patterns.
 
 **For Contributors**
