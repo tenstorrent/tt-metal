@@ -23,8 +23,6 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint
 split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t ntiles_h, uint32_t ntiles_w) {
     uint32_t ncores, ncores_h, ncores_w, ntiles_per_core_h, ntiles_per_core_w, nbatch_per_core_h, ncores_per_batch_h;
 
-    ncores_h = 1;
-
     // each batch needs to be padded independently
     switch (nbatch) {
         case 1:
@@ -91,13 +89,13 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t ntiles_h, uint
             break;
 
         default:
-            TT_ASSERT(false, "unhandled nbatch. TODO");
+            TT_THROW("Unsupported nbatch value {} for pad operation. Supported values are 1, 2, and 8.", nbatch);
 
             // generic case -- TODO
 
             // one of the following will be 0 when grid_size.y != nbatch
-            uint32_t nbatch_per_core_h = nbatch / grid_size.y;   // floor
-            uint32_t ncores_per_batch_h = grid_size.y / nbatch;  // floor
+            nbatch_per_core_h = nbatch / grid_size.y;   // floor
+            ncores_per_batch_h = grid_size.y / nbatch;  // floor
             if (nbatch == grid_size.y) {
                 nbatch_per_core_h = 1;
                 ncores_per_batch_h = 1;
@@ -115,16 +113,19 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t ntiles_h, uint
                 nbatch_per_core_h = 1;
             } else if (ncores_per_batch_h == 0) {
                 // unsupported case. TODO.
-                TT_ASSERT(false);
+                TT_THROW(
+                    "Unsupported configuration: multiple batches per core along height dimension "
+                    "(nbatch={}, grid_size.y={})",
+                    nbatch,
+                    grid_size.y);
                 // there are multiple batch per core along h
                 // ncores_per_batch_h = 1;
             } else {
-                TT_THROW("Something went terribly wrong in splitting acrtoss cores");
+                TT_THROW("Something went terribly wrong in splitting across cores");
             }
             break;
     }
 
-    ncores_w = 1;
     switch (ntiles_w) {
         case 2: ncores_w = 2; break;
         case 4: ncores_w = 4; break;
