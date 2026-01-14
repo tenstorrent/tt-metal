@@ -108,6 +108,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto input_page_size = detail::get_page_size_st(input_tensor);
     auto indices_page_size = detail::get_page_size_st(indices_tensor);
     auto mapping_page_size = detail::get_page_size_st(mapping_tensor);
+    auto scores_page_size = detail::get_page_size_st(input_scores_tensor);
     auto output_page_size = detail::get_page_size_st(output_tensor);
 
     auto input_pages = detail::get_num_pages_st(input_tensor);
@@ -135,8 +136,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t tilizer_input_cb_id = tt::CBIndex::c_5;
     // Tilizer output buffer for tilized tokens (from compute to writer)
     uint32_t tilizer_output_cb_id = tt::CBIndex::c_6;
-    // Experts activation buffer [T, E + 1] {token id, expert_0_activated, expert_1_activated, ...}
-    // k+1 if not activated, k value in the indices tensor for that token if activated
+    // Experts activation buffer [T, 2*E + 1] each row is {token id, expert_0_activated, expert_1_activated,...,
+    // expert_0_score, expert_1_score, ...} k+1 if not activated, k value in the indices tensor for that token if
+    // activated
     uint32_t expert_activation_cb_id = tt::CBIndex::c_7;
     // after determining the total number of tokens for each expert, this buffer will store the total number of tokens
     // for each expert to pass to the other kernels
@@ -177,6 +179,15 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         output_pages,
         output_page_size,
         aligned_output_page_size);
+
+    uint32_t aligned_scores_page_size = detail::get_aligned_page_size_st(input_scores_tensor);
+    log_debug(
+        tt::LogOp,
+        "scores shape: {}, scores_pages: {}, scores_page_size: {}, aligned_scores_page_size: {}",
+        input_scores_tensor.logical_shape(),
+        scores_pages,
+        scores_page_size,
+        aligned_scores_page_size);
 
     CoreRangeSet selective_tilize_core_range_set = operation_attributes.selective_tilize_core_range_set.value();
 
@@ -274,7 +285,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         program,
         selective_tilize_core_range_set,
         aligned_mapping_page_size,
-        2,
+        mapping_pages,
         mapping_data_format);
 
     // Tilizer input buffer: holds subtokens for tokens_per_chunk tokens, double-buffered
@@ -291,7 +302,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         expert_activation_cb_id,
         program,
         selective_tilize_core_range_set,
-        selected_experts_k * sizeof(uint32_t),
+        tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment),
         tokens,
         tt::DataFormat::UInt32);
 
@@ -367,6 +378,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"aligned_indices_page_size", aligned_indices_page_size},
         {"aligned_mapping_page_size", aligned_mapping_page_size},
         {"aligned_output_page_size", aligned_output_page_size},
+        {"aligned_scores_page_size", aligned_scores_page_size},
 
         {"l1_alignment", l1_alignment},
         {"dram_alignment", dram_alignment},
