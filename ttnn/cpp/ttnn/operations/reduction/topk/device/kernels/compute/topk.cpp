@@ -24,8 +24,13 @@ namespace NAMESPACE {
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer
  * Used in final stage to convert sorted results back to output format
+ *
+ * @param input_cb_index    Circular buffer index containing tiles to transpose (source buffer)
+ * @param dest_cb_index     Circular buffer index to store transposed tiles (destination buffer)
+ * @param total_tiles       Number of tiles to process and transpose
  */
-FORCE_INLINE void transpose_and_pack(uint32_t input_cb_index, uint32_t dest_cb_index, uint32_t total_tiles) {
+FORCE_INLINE void transpose_and_pack(
+    const uint32_t input_cb_index, const uint32_t dest_cb_index, const uint32_t total_tiles) {
     // Configure data formats for transpose operation
     reconfig_data_format_srca(input_cb_index);
     transpose_wh_init_short(input_cb_index);
@@ -51,8 +56,12 @@ FORCE_INLINE void transpose_and_pack(uint32_t input_cb_index, uint32_t dest_cb_i
 /**
  * Pack two destination tiles (values and indices) to their respective circular buffers
  * Used after merge operation to store sorted results
+ *
+ * @param cb0            Circular buffer index for packing the first tile (values)
+ * @param cb1            Circular buffer index for packing the second tile (indices)
+ * @param base_offset    Base offset in destination registers (first tile at base_offset, second at base_offset+1)
  */
-FORCE_INLINE void pack_results(uint32_t cb0, uint32_t cb1, uint32_t base_offset) {
+FORCE_INLINE void pack_results(const uint32_t cb0, const uint32_t cb1, const uint32_t base_offset) {
     // Pack first tile (values) to cb0
     pack_reconfig_data_format(cb0);
     pack_tile(base_offset, cb0);
@@ -67,8 +76,13 @@ FORCE_INLINE void pack_results(uint32_t cb0, uint32_t cb1, uint32_t base_offset)
 /**
  * Read tiles from circular buffer and transpose them to destination registers
  * Used to prepare input tiles for sorting operations
+ *
+ * @param cb               Circular buffer index to read tiles from
+ * @param base_offset      Base offset in destination registers where transposed tiles will be stored
+ * @param get_two         Boolean flag: true to transpose two tiles (tiles 0,1 -> dest base_offset, base_offset+1),
+ *                        false to transpose only one tile (tile 0 -> dest base_offset)
  */
-FORCE_INLINE void read_cb_and_transpose(uint32_t cb, uint32_t base_offset, bool get_two = true) {
+FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_offset, const bool get_two = true) {
     reconfig_data_format_srca(cb);
     transpose_wh_init_short(cb);
 
@@ -83,8 +97,11 @@ FORCE_INLINE void read_cb_and_transpose(uint32_t cb, uint32_t base_offset, bool 
 /**
  * Utility function: Wait for tiles and pop them from front of circular buffer
  * Refactored to reduce code duplication
+ *
+ * @param cb      Circular buffer index to operate on
+ * @param count   Number of tiles to wait for and then remove from the front of the buffer
  */
-FORCE_INLINE void cb_wait_pop_front(uint32_t cb, uint32_t count) {
+FORCE_INLINE void cb_wait_pop_front(const uint32_t cb, const uint32_t count) {
     cb_wait_front(cb, count);
     cb_pop_front(cb, count);
 }
@@ -92,8 +109,11 @@ FORCE_INLINE void cb_wait_pop_front(uint32_t cb, uint32_t count) {
 /**
  * Utility function: Reserve space and push tiles to back of circular buffer
  * Refactored to reduce code duplication
+ *
+ * @param cb      Circular buffer index to operate on
+ * @param count   Number of tile slots to reserve at the back and then mark as available
  */
-FORCE_INLINE void cb_reserve_push_back(uint32_t cb, uint32_t count) {
+FORCE_INLINE void cb_reserve_push_back(const uint32_t cb, const uint32_t count) {
     cb_reserve_back(cb, count);
     cb_push_back(cb, count);
 }
@@ -118,7 +138,7 @@ void MAIN {
     transpose_wh_init(input_val_cb_index, output_val_cb_index);
     transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
 
-    int end_phase = 5;  // The end phase of the local sort, based on topk_local_sort documentation
+    constexpr int end_phase = 5;  // The end phase of the local sort, based on topk_local_sort documentation
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         uint32_t ktiles_saved = 0;
         /*
@@ -139,7 +159,7 @@ void MAIN {
         ALGORITHM PHASES:
 
         PHASE 1: INITIALIZATION (First iteration, count=1)
-        - Read first TWO input tiles (values + indices)
+        - Read first TWO input tiles (2 x values + 2 x indices)
         - Transpose from WH to HW format for processing
         - Sort these 64 elements using topk_local_sort
         - Store sorted results in result_prep buffer
