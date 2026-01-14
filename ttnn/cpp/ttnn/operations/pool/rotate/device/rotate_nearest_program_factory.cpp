@@ -80,7 +80,6 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     uint32_t output_nsticks_per_core = 0;
     bool is_block_sharded = false;
     bool is_width_sharded = false;
-    bool is_height_sharded = false;
     uint32_t num_cores_x = 0;
     uint32_t shard_width = 0;
 
@@ -98,8 +97,6 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
             input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
         is_width_sharded =
             input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
-        is_height_sharded =
-            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
         num_cores_x = input_shard_spec.grid.bounding_box().grid_size().x;
         shard_width = input_shard_spec.shape[1];
     } else if (is_nd_sharded) {
@@ -171,27 +168,18 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     const bool fill_is_zero = (fill_value_bf16 == 0);
     const uint32_t batch_size = num_cb_pages < MAX_BATCH_SIZE ? num_cb_pages : MAX_BATCH_SIZE;
 
-    const uint32_t kernel_channels =
-        (any_sharded && (is_block_sharded || is_width_sharded)) || is_nd_sharded ? shard_width : input_channels;
-    const uint32_t kernel_stick_nbytes = (any_sharded && (is_block_sharded || is_width_sharded)) || is_nd_sharded
-                                             ? (shard_width * element_size)
-                                             : input_stick_nbytes;
-
-    const bool is_locally_sharded = is_width_sharded || is_height_sharded || is_block_sharded || is_nd_sharded;
     std::vector<uint32_t> reader_compile_time_args = {
         output_cb_index,
         aligned_input_stick_nbytes,
         input_batch,
         input_height,
         input_width,
-        kernel_channels,
+        input_channels,
         num_cb_pages,
         fill_cb_index,
-        kernel_stick_nbytes,
+        input_stick_nbytes,
         static_cast<uint32_t>(fill_is_zero),
         batch_size,
-        static_cast<uint32_t>(is_locally_sharded),
-        input_cb_index,
     };
 
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
@@ -212,15 +200,12 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    tt::tt_metal::KernelHandle writer_kernel_id = 0;
-    if (!is_locally_sharded) {
-        writer_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
-            "writer_rotate_nearest_interleaved.cpp",
-            all_cores,
-            tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-    }
+    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
+        "writer_rotate_nearest_interleaved.cpp",
+        all_cores,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     if (any_sharded) {
         for (uint32_t i = 0; i < num_cores; i++) {
@@ -249,7 +234,14 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
                 static_cast<uint32_t>(fill_value_bf16),
             };
 
+            std::vector<uint32_t> writer_runtime_args = {
+                output_tensor.buffer()->address(),
+                input_nsticks_per_core,
+                start_stick_id,
+            };
+
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
     } else {
         uint32_t sticks_processed = 0;

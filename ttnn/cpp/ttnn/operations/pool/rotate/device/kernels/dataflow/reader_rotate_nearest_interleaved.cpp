@@ -29,14 +29,9 @@ void kernel_main() {
     constexpr uint32_t input_stick_nbytes_unaligned = get_compile_time_arg_val(8);
     constexpr bool fill_is_zero = get_compile_time_arg_val(9) != 0;
     constexpr uint32_t batch_size = get_compile_time_arg_val(10);
-    constexpr bool is_locally_sharded = get_compile_time_arg_val(11) != 0;
-    constexpr uint32_t input_cb_index = get_compile_time_arg_val(12);
 
-    constexpr auto src_args = TensorAccessorArgs<13>();
-    const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
-
-    const uint32_t l1_input_base_addr = is_locally_sharded ? get_read_ptr(input_cb_index) : 0;
-    const uint32_t l1_output_base_addr = get_write_ptr(output_cb_index);
+    constexpr auto src_args = TensorAccessorArgs<11>();
+    const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes_unaligned);
 
     uint32_t fill_stick_addr = get_write_ptr(fill_cb_index);
     if constexpr (fill_is_zero) {
@@ -55,18 +50,10 @@ void kernel_main() {
     }
 
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks;) {
-        uint32_t sticks_this_batch;
-        uint32_t l1_write_addr;
-
-        if constexpr (is_locally_sharded) {
-            sticks_this_batch = num_sticks - local_stick_idx;
-            l1_write_addr = l1_output_base_addr + local_stick_idx * input_stick_nbytes;
-        } else {
-            sticks_this_batch =
-                (num_sticks - local_stick_idx) < batch_size ? (num_sticks - local_stick_idx) : batch_size;
-            cb_reserve_back(output_cb_index, sticks_this_batch);
-            l1_write_addr = get_write_ptr(output_cb_index);
-        }
+        uint32_t sticks_this_batch =
+            (num_sticks - local_stick_idx) < batch_size ? (num_sticks - local_stick_idx) : batch_size;
+        cb_reserve_back(output_cb_index, sticks_this_batch);
+        uint32_t l1_write_addr = get_write_ptr(output_cb_index);
 
         for (uint32_t i = 0; i < sticks_this_batch; i++, local_stick_idx++) {
             const uint32_t global_stick_idx = start_stick_id + local_stick_idx;
@@ -93,25 +80,15 @@ void kernel_main() {
             if (x_valid && y_valid) {
                 const uint32_t input_stick_index =
                     batch_idx * (input_height * input_width) + nearest_y * input_width + nearest_x;
-                if constexpr (is_locally_sharded) {
-                    const uint32_t l1_src_addr = l1_input_base_addr + input_stick_index * input_stick_nbytes;
-                    noc_async_read(get_noc_addr(l1_src_addr), l1_write_addr, input_stick_nbytes);
-                } else {
-                    const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
-                    noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes);
-                }
+                const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
+                noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes_unaligned);
             } else {
-                noc_async_read(
-                    get_noc_addr(fill_stick_addr),
-                    l1_write_addr,
-                    is_locally_sharded ? input_stick_nbytes : input_stick_nbytes_unaligned);
+                noc_async_read(get_noc_addr(fill_stick_addr), l1_write_addr, input_stick_nbytes_unaligned);
             }
             l1_write_addr += input_stick_nbytes;
         }
 
         noc_async_read_barrier();
-        if constexpr (!is_locally_sharded) {
-            cb_push_back(output_cb_index, sticks_this_batch);
-        }
+        cb_push_back(output_cb_index, sticks_this_batch);
     }
 }
