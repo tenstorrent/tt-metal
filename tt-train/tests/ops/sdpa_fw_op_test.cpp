@@ -41,16 +41,13 @@ protected:
 
 xt::xarray<float> generate_mask(const xt::xarray<float>& query) {
     auto shape = query.shape();
-    size_t B = shape[0], H = shape[1], S = shape[2];
-    xt::xarray<float> mask = xt::zeros<float>({B, H, S, S});
+    size_t S = shape[2];
+    // Create mask with shape (1, 1, S, S) - same mask for all batches/heads
+    xt::xarray<float> mask = xt::zeros<float>({1UL, 1UL, S, S});
 
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t s = 0; s < S; ++s) {
-                for (size_t w = 0; w <= s; ++w) {
-                    mask(b, h, s, w) = 1.0F;  // causal mask - upper triangular part
-                }
-            }
+    for (size_t s = 0; s < S; ++s) {
+        for (size_t w = 0; w <= s; ++w) {
+            mask(0, 0, s, w) = 1.0F;  // causal mask - lower triangular part
         }
     }
     return mask;
@@ -162,7 +159,7 @@ xt::xarray<float> sdpa_grouped_naive(
                     for (std::size_t t = 0; t < Dh; ++t) {
                         dot += Q(b, 0, i, q_off + t) * K(b, 0, j, kv_off + t);
                     }
-                    const float m = attn_mask(b, 0, i, j);  // expected 0 or 1
+                    const float m = attn_mask(0, 0, i, j);  // expected 0 or 1, mask is (1,1,S,S)
                     const float s = m * (dot * scale) + (m - 1.0F) * 1e9F;
                     // float s = dot * scale + attn_mask(b, 0, i, j);
                     scores_row[j] = s;
@@ -239,7 +236,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_grouped_naive_with_intermed
                     for (std::size_t t = 0; t < Dh; ++t) {
                         dot += Q(b, 0, i, q_off + t) * K(b, 0, j, kv_off + t);
                     }
-                    const float m = attn_mask(b, 0, i, j);  // expected 0 or 1
+                    const float m = attn_mask(0, 0, i, j);  // expected 0 or 1, mask is (1,1,S,S)
                     const float s = m * (dot * scale) + (m - 1.0F) * 1e9F;
                     scores_row[j] = s;
                     rmax = std::max(s, rmax);
@@ -269,7 +266,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_grouped_naive_with_intermed
     return std::make_pair(Out, Intermediates);
 }
 
-// New version that works with SPLIT-BY-HEADS tensors (B, H, S, D/H) but outputs FUSED format (B, 1, S, qD)
+// New version that works with SPLIT-BY-HEADS tensors (B, H, S, D/H) and outputs SPLIT format (B, H, S, Dh)
 std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_intermediates(
     const xt::xarray<float>& Q_split,
     const xt::xarray<float>& K_split,
@@ -280,14 +277,14 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
     const std::size_t kv_heads = K_split.shape()[1];
     const std::size_t S = Q_split.shape()[2];
     const std::size_t Dh = Q_split.shape()[3];
-    const std::size_t qD = q_heads * Dh;  // Total query dimension
 
-    // Output in FUSED format (B, 1, S, qD) - back to unsplit format
-    xt::xarray<float> Out = xt::xarray<float>::from_shape({B, std::size_t(1), S, qD});
+    // Output in SPLIT format (B, H, S, Dh) - heads NOT fused
+    xt::xarray<float> Out = xt::xarray<float>::from_shape({B, q_heads, S, Dh});
     std::fill(Out.begin(), Out.end(), 0.0F);
 
-    // Intermediates: (B, q_heads, S, 1) - reciprocal of sum of exponentials per head per sequence position
-    xt::xarray<float> Intermediates = xt::xarray<float>::from_shape({B, q_heads, S, std::size_t(1)});
+    // Intermediates: (B, q_heads, S, 64) - max_val at col 0, recip_sum_exp at col 32
+    constexpr std::size_t kIntermediateWidth = 64U;
+    xt::xarray<float> Intermediates = xt::xarray<float>::from_shape({B, q_heads, S, kIntermediateWidth});
     std::fill(Intermediates.begin(), Intermediates.end(), 0.0F);
 
     auto group_of_head = [&](std::size_t h) -> std::size_t {
@@ -301,7 +298,6 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
     for (std::size_t b = 0; b < B; ++b) {
         for (std::size_t h = 0; h < q_heads; ++h) {
             const std::size_t g = group_of_head(h);
-            const std::size_t q_off = h * Dh;  // Offset in fused output tensor
 
             for (std::size_t i = 0; i < S; ++i) {
                 // scores_row[j] = (q_i · k_j) * scale + mask(i,j)
@@ -311,7 +307,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                     for (std::size_t t = 0; t < Dh; ++t) {
                         dot += Q_split(b, h, i, t) * K_split(b, g, j, t);
                     }
-                    const float m = attn_mask(b, 0, i, j);  // expected 0 or 1
+                    const float m = attn_mask(0, 0, i, j);  // expected 0 or 1, mask is (1,1,S,S)
                     const float s = m * (dot * scale) + (m - 1.0F) * 1e9F;
                     scores_row[j] = s;
                     rmax = std::max(s, rmax);
@@ -322,17 +318,18 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                 for (std::size_t j = 0; j < S; ++j) denom += std::exp(scores_row[j] - rmax);
                 denom = std::max(denom, 1e-20F);
 
-                // Store intermediate: 1/denom (reciprocal of sum of exponentials)
-                Intermediates(b, h, i, 0) = 1.0F / denom;
+                // Store intermediates: max_val at col 0, recip_sum_exp at col 32
+                Intermediates(b, h, i, 0) = rmax;           // max_val at position 0
+                Intermediates(b, h, i, 32) = 1.0F / denom;  // recip_sum_exp at position 32
 
-                // out_i[h] = sum_j softmax_ij * V[j] - store in FUSED format
+                // out_i[h] = sum_j softmax_ij * V[j] - store in SPLIT format (B, H, S, Dh)
                 for (std::size_t t = 0; t < Dh; ++t) {
                     float acc = 0.0F;
                     for (std::size_t j = 0; j < S; ++j) {
                         float w = std::exp(scores_row[j] - rmax) / denom;
                         acc += w * V_split(b, g, j, t);
                     }
-                    Out(b, 0, i, q_off + t) = acc;  // Store in fused format
+                    Out(b, h, i, t) = acc;  // Store in split format (B, H, S, Dh)
                 }
             }
         }
@@ -440,16 +437,28 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
     }
 
     // Calculate intermediate results to test against kernel implementation
-    auto max_value = ttnn::max(qk_scaled, /* dim */ 3, /* keepdim */ true);
+    auto max_value = ttnn::max(qk_scaled, /* dim */ 3, /* keepdim */ true);  // (B, H, S, 1)
     auto qk_scaled_sub_max = ttnn::subtract(qk_scaled, max_value);
     auto exp_qk_scaled = ttnn::exp(qk_scaled_sub_max);
     auto sum_exp = ttnn::sum(exp_qk_scaled, /* dim */ 3, /* keepdim */ true);
-    auto recip_sum_exp = ttnn::reciprocal(sum_exp);
+    auto recip_sum_exp = ttnn::reciprocal(sum_exp);  // (B, H, S, 1)
+
+    // Build intermediates tensor with shape (B, H, S, 64)
+    // Format: max_value at col 0, recip_sum_exp at col 32
+    auto* device = query.device();
+    auto padded_zeros = core::zeros(ttnn::Shape{batch_num, heads, seq_len, 31U}, device, ttnn::DataType::BFLOAT16);
+
+    // Pad max_value: (B, H, S, 1) -> (B, H, S, 32) with zeros
+    auto max_value_padded = ttnn::concat(std::vector<ttnn::Tensor>{max_value, padded_zeros}, 3);
+    // Pad recip_sum_exp: (B, H, S, 1) -> (B, H, S, 32) with zeros
+    auto recip_sum_exp_padded = ttnn::concat(std::vector<ttnn::Tensor>{recip_sum_exp, padded_zeros}, 3);
+    // Concat to get (B, H, S, 64)
+    auto intermediates = ttnn::concat(std::vector<ttnn::Tensor>{max_value_padded, recip_sum_exp_padded}, 3);
 
     auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
 
     auto attention_qkv = group_shared_matmul(attention_weights, value, /*transpose_a=*/false, /*transpose_b=*/false);
-    return {attention_qkv, recip_sum_exp};
+    return {attention_qkv, intermediates};
 }
 
 struct SDPATestConfig {
@@ -499,7 +508,7 @@ void run_sdpa_test(const SDPATestConfig& config) {
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
-    // Create attention mask in kernel-expected format (B, qNH, S, S)
+    // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
 
     // Convert to device tensors
@@ -511,23 +520,20 @@ void run_sdpa_test(const SDPATestConfig& config) {
 
     // Run SDPA kernel with new interface - this is our reference implementation
     auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, config.dropout_prob, return_intermediates);
-    xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());  // Kernel returns (B, 1, S, qD*q_heads)
+    xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());  // Kernel returns (B, H, S, D) - heads NOT fused
     xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
 
-    // Run composite SDPA implementation with split tensors, then fuse output to match kernel
+    // Run composite SDPA implementation with split tensors - output is (B, H, S, D)
     auto composite_result_split = composite_sdpa_fw(query, key, value, attn_mask);
-    xt::xarray<float> composite_result_split_xtensor = core::to_xtensor(composite_result_split[0]);
+    xt::xarray<float> composite_result_xtensor = core::to_xtensor(composite_result_split[0]);  // Already (B, H, S, D)
     xt::xarray<float> composite_interm_xtensor = core::to_xtensor(composite_result_split[1]);
 
-    // Fuse composite output to match kernel format (B, 1, S, qD*q_heads)
-    xt::xarray<float> composite_result_xtensor = fuse_heads(composite_result_split_xtensor, config.num_query_heads);
-
-    // Run float reference implementation with split tensors (produces FUSED output)
+    // Run float reference implementation with split tensors - now outputs (B, H, S, D) format
     auto [float_result, float_intermediates] =
         sdpa_split_heads_naive_with_intermediates(query_tensor, key_tensor, value_tensor, attn_mask_tensor);
 
-    // All results are now in fused format (B, 1, S, qD*q_heads) to match kernel
-    // Shape validation - all should be in fused format (B, 1, S, qD*q_heads)
+    // All results are now in split format (B, H, S, D) - heads NOT fused
+    // Shape validation - all should be in split format (B, H, S, D)
     ASSERT_EQ(result_xtensor.shape(), float_result.shape()) << "Kernel result shape mismatch in " << config.test_name;
     ASSERT_EQ(composite_result_xtensor.shape(), float_result.shape())
         << "Composite result shape mismatch in " << config.test_name;
@@ -735,7 +741,7 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
-    // Create attention mask in kernel-expected format (B, qNH, S, S)
+    // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
 
     // Test Case 1: return_intermediates = false
@@ -751,9 +757,9 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         EXPECT_FALSE(result[1].has_value()) << "Intermediate should be null when return_intermediates=false";
 
         xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());
-        // Kernel returns fused format (B, 1, S, d) where d is total embedding dimension
-        std::vector<size_t> expected_shape = {B, 1U, S, d};
-        EXPECT_EQ(result_xtensor.shape(), expected_shape) << "Result should be in fused format (B, 1, S, d)";
+        // Kernel returns split format (B, H, S, Dh) - heads NOT fused
+        std::vector<size_t> expected_shape = {B, num_heads, S, head_dim};
+        EXPECT_EQ(result_xtensor.shape(), expected_shape) << "Result should be in split format (B, H, S, Dh)";
     }
 
     // Test Case 2: return_intermediates = true
@@ -771,16 +777,25 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());
         xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
 
-        // Kernel returns fused format (B, 1, S, d) where d is total embedding dimension
-        std::vector<size_t> expected_shape = {B, 1U, S, d};
-        EXPECT_EQ(result_xtensor.shape(), expected_shape) << "Result should be in fused format (B, 1, S, d)";
+        // Kernel returns split format (B, H, S, Dh) - heads NOT fused
+        std::vector<size_t> expected_shape = {B, num_heads, S, head_dim};
+        EXPECT_EQ(result_xtensor.shape(), expected_shape) << "Result should be in split format (B, H, S, Dh)";
 
-        // Check intermediate shape: (B, num_query_heads, S, 1)
-        std::vector<size_t> expected_interm_shape = {B, num_heads, S, 1U};
-        EXPECT_EQ(interm_xtensor.shape(), expected_interm_shape) << "Intermediate shape should be (B, q_heads, S, 1)";
+        // Check intermediate shape: (B, num_query_heads, S, 64)
+        constexpr size_t kIntermediateWidth = 64U;
+        std::vector<size_t> expected_interm_shape = {B, num_heads, S, kIntermediateWidth};
+        EXPECT_EQ(interm_xtensor.shape(), expected_interm_shape) << "Intermediate shape should be (B, q_heads, S, 64)";
 
-        // Verify intermediate values are reasonable (should be positive reciprocals)
-        EXPECT_TRUE(xt::all(interm_xtensor > 0.0f)) << "All intermediate values should be positive";
-        EXPECT_TRUE(xt::all(interm_xtensor <= 1.0f)) << "All intermediate values should be <= 1.0 (reciprocals)";
+        // Verify intermediate values at position 32 are reasonable (should be positive reciprocals)
+        // Note: position 0 contains max_val (can be any value), position 32 contains recip_sum_exp
+        for (size_t b_idx = 0; b_idx < B; ++b_idx) {
+            for (size_t h_idx = 0; h_idx < num_heads; ++h_idx) {
+                for (size_t s_idx = 0; s_idx < S; ++s_idx) {
+                    float recip_sum_exp = interm_xtensor(b_idx, h_idx, s_idx, 32);
+                    EXPECT_GT(recip_sum_exp, 0.0f) << "recip_sum_exp should be positive";
+                    EXPECT_LE(recip_sum_exp, 1.0f) << "recip_sum_exp should be <= 1.0";
+                }
+            }
+        }
     }
 }
