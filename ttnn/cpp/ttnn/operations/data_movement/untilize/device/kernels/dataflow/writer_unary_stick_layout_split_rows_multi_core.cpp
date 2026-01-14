@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // run-time args
@@ -118,9 +119,11 @@ void kernel_main() {
 
     // Each input block processed separately
     uint32_t height_wise_input_block_index = height_wise_input_block_start_index;
+    DPRINT << "num_input_blocks_to_process: " << num_input_blocks_to_process << ENDL();
     for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
+        DPRINT << "height_wise_input_block_index: " << height_wise_input_block_index << ENDL();
         // Process the current block
         write_tiles_in_current_block(height_wise_input_block_index);
-        height_wise_input_block_index++;
+        height_wise_input_block_index += 2;  // WAS ++. HARDCODED MUST FIGURE OUT CORRECT LOGIC
     }
 }
