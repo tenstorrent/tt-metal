@@ -218,7 +218,7 @@ jobs:
           # NOTE: We export here rather than in container env: to avoid affecting other
           # processes like bash, apt, git, etc. which aren't ASan-compatible.
           export LD_PRELOAD="/usr/lib/llvm-20/lib/clang/20/lib/linux/libclang_rt.asan-x86_64.so"
-          export ASAN_OPTIONS="color=always"
+          export ASAN_OPTIONS="color=always:external_symbolizer_path=/usr/lib/llvm-17/bin/llvm-symbolizer"
           export LSAN_OPTIONS="suppressions=/work/tt_metal/test/lsan.supp"
 
           pytest \
