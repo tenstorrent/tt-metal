@@ -414,19 +414,19 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT:
             if (dtype == DataType::UINT32) {
-                return {"binary_shift_tile_init();", "binary_left_shift_uint32_tile"};
-            } else if (dtype == DataType::INT32) {
-                return {"binary_shift_tile_init();", "binary_left_shift_int32_tile"};
+                return {"binary_shift_tile_init();", "binary_left_shift_tile<DataFormat::UInt32>"};
+            } else if (dtype == DataType::UINT16) {
+                return {"binary_shift_tile_init();", "binary_left_shift_tile<DataFormat::UInt16>"};
             } else {
-                return {"binary_shift_tile_init();", "binary_left_shift_tile"};
+                return {"binary_shift_tile_init();", "binary_left_shift_tile<DataFormat::Int32>"};
             }
         case RIGHT_SHIFT:
             if (dtype == DataType::UINT32) {
-                return {"binary_shift_tile_init();", "binary_right_shift_uint32_tile"};
-            } else if (dtype == DataType::INT32) {
-                return {"binary_shift_tile_init();", "binary_right_shift_int32_tile"};
+                return {"binary_shift_tile_init();", "binary_right_shift_tile<DataFormat::UInt32>"};
+            } else if (dtype == DataType::UINT16) {
+                return {"binary_shift_tile_init();", "binary_right_shift_tile<DataFormat::UInt16>"};
             } else {
-                return {"binary_shift_tile_init();", "binary_right_shift_tile"};
+                return {"binary_shift_tile_init();", "binary_right_shift_tile<DataFormat::Int32>"};
             }
         case LOGICAL_RIGHT_SHIFT:
             if (dtype == DataType::UINT32) {
