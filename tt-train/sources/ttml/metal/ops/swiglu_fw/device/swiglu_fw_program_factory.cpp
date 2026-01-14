@@ -337,8 +337,6 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     const uint32_t twice_block_size = 2U * block_size;
 
     // Check if row of M fits in L1 to determine CB sizing strategy
-    // TEMPORARY: Force non-flash-attention path for testing multicast
-    // const bool row_of_m_fits_in_l1 = false;
     const bool row_of_m_fits_in_l1 =
         row_of_m_fits_in_l1_check(hidden_Wt, block_size, bfloat16_single_tile_size_bytes, device);
 
@@ -484,12 +482,9 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
 
     // Only create receiver kernel if multicast is enabled and we have receiver cores
     if (use_multicast && !receiver_ranges.empty()) {
-        // Receiver kernel compile-time args (NO W1 buffer access - comes via multicast)
+        // Receiver kernel compile-time args (all weights come via multicast, only X uses buffer access)
         std::vector<uint32_t> receiver_compile_time_args{block_size, Wt, hidden_Wt};
         tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(receiver_compile_time_args);
-        // NOTE: W1 buffer NOT included for receivers!
-        tt::tt_metal::TensorAccessorArgs(w2_buffer).append_to(receiver_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(w3_buffer).append_to(receiver_compile_time_args);
         kernels.reader_w1_receiver = create_reader_kernel(
             program, all_except_left_column_set, receiver_compile_time_args, defines, kReaderW1ReceiverKernelPath);
     }
