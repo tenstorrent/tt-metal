@@ -325,7 +325,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   generate-tt-dit-matrix:
-    if: ${{ (inputs.runner-label == 'P300-viommu' || inputs.runner-label == 'BH-QB-GE') && (inputs.model == 'all' || inputs.model == 'flux.1-dev' || inputs.model == 'wan2.2-t2v-a14b') }}
+    if: ${{ (inputs.runner-label == 'P300-viommu' || inputs.runner-label == 'BH-QB-GE' || inputs.runner-label == 'BH-LoudBox') && (inputs.model == 'all' || inputs.model == 'flux.1-dev' || inputs.model == 'wan2.2-t2v-a14b') }}
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
@@ -358,6 +358,15 @@ jobs:
               "owner_name": "Samuel Adesoye"
             },
             {
+              "name": "Flux.1-dev BH-LoudBox performance (bh_2x4sp0tp1)",
+              "model": "flux.1-dev",
+              "arch": "blackhole",
+              "runner-label": "BH-LoudBox",
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"bh_2x4sp0tp1\"",
+              "owner_id": "U09ELB03XRU",
+              "owner_name": "Stephen Osborne"
+            },
+            {
               "name": "Wan2.2-T2V-A14B BH-QB-GE performance",
               "model": "wan2.2-t2v-a14b",
               "arch": "blackhole",
@@ -365,6 +374,15 @@ jobs:
               "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"1x4sp0tp1 and resolution_480p\"",
               "owner_id": "U08TED0JM9D",
               "owner_name": "Samuel Adesoye"
+            },
+            {
+              "name": "Wan2.2-T2V-A14B BH-LoudBox performance",
+              "model": "wan2.2-t2v-a14b",
+              "arch": "blackhole",
+              "runner-label": "BH-LoudBox",
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"1x8sp0tp1 and resolution_480p\"",
+              "owner_id": "U09ELB03XRU",
+              "owner_name": "Stephen Osborne"
             }
           ]'
 
