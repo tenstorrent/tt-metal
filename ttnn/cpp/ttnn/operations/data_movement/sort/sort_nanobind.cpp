@@ -68,21 +68,11 @@ void bind_sort_operation(nb::module_& mod) {
             - Interleaved: DRAM and L1
     )doc";
 
-    using OperationType = decltype(ttnn::sort);
     bind_registered_operation(
         mod,
         ttnn::sort,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int8_t dim,
-               const bool descending,
-               const bool stable,
-               std::optional<std::tuple<ttnn::Tensor&, ttnn::Tensor&>> optional_output_tensors,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                return self(input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim") = -1,
             nb::arg("descending") = false,
