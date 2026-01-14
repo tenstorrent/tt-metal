@@ -71,7 +71,34 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
                             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                         )
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](const decltype(ttnn::adaptive_avg_pool2d)& self,
+               const ttnn::Tensor& input_tensor,
+               uint32_t batch_size,
+               uint32_t input_h,
+               uint32_t input_w,
+               uint32_t channels,
+               std::array<uint32_t, 2> output_size,
+               const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const op_slicing::Op2DSliceConfig>& dram_slice_config,
+               const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
+               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+               bool deallocate_input,
+               bool reallocate_output) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    batch_size,
+                    input_h,
+                    input_w,
+                    channels,
+                    output_size,
+                    memory_config,
+                    dram_slice_config,
+                    applied_shard_scheme,
+                    compute_kernel_config,
+                    deallocate_input,
+                    reallocate_output);
+            },
             nb::arg("input_tensor"),
             nb::arg("batch_size"),
             nb::arg("input_h"),
@@ -136,7 +163,32 @@ void bind_adaptive_max_pool2d_operation(nb::module_& mod) {
                             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                         )
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::nanobind_overload_t{
+            [](const decltype(ttnn::adaptive_max_pool2d)& self,
+               const ttnn::Tensor& input_tensor,
+               uint32_t batch_size,
+               uint32_t input_h,
+               uint32_t input_w,
+               uint32_t channels,
+               std::array<uint32_t, 2> output_size,
+               const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const op_slicing::Op2DSliceConfig>& dram_slice_config,
+               const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
+               bool deallocate_input,
+               bool reallocate_output) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    batch_size,
+                    input_h,
+                    input_w,
+                    channels,
+                    output_size,
+                    memory_config,
+                    dram_slice_config,
+                    applied_shard_scheme,
+                    deallocate_input,
+                    reallocate_output);
+            },
             nb::arg("input_tensor"),
             nb::arg("batch_size"),
             nb::arg("input_h"),
