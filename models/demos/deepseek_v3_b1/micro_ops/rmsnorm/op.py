@@ -135,7 +135,7 @@ class RMSNormSingleCore:
             tile=tile_descriptor,
         )
         interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=(num_tiles + 1) * cb_page_size,
+            total_size=num_tiles * cb_page_size,
             core_ranges=core_grid,
             format_descriptors=[interm_cb_format],
         )
