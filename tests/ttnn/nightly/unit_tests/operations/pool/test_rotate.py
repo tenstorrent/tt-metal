@@ -129,7 +129,6 @@ def test_rotate_exact_multiples_of_90(device, input_shape, angle):
     assert equal_passed, f"90-degree rotation should be equal: angle={angle}°"
 
 
-@pytest.mark.skip(reason="Fill value testing needs investigation - may have precision issues at boundaries")
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -302,9 +301,7 @@ def test_rotate_large_angles(device, input_shape):
 @pytest.mark.parametrize(
     "angle_pair",
     [
-        pytest.param((45, -45), marks=pytest.mark.skip(reason="Round-trip rotations accumulate interpolation error")),
-        pytest.param((30, -30), marks=pytest.mark.skip(reason="Round-trip rotations accumulate interpolation error")),
-        (90, -90),  # Keep 90-degree round-trip as it's more exact
+        (90, -90),
     ],
 )
 def test_rotate_opposite_angles(device, input_shape, angle_pair):
