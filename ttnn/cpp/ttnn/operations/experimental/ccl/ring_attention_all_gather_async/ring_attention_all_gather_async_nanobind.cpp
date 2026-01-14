@@ -28,30 +28,7 @@ void bind_ring_attention_all_gather_async(nb::module_& mod, const ccl_operation_
         mod,
         operation,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const std::vector<ttnn::Tensor>& input_tensor,
-               std::vector<ttnn::Tensor>& persistent_output_buffer,
-               const int32_t dim,
-               const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-               const uint32_t num_links,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               const std::optional<MemoryConfig>& memory_config,
-               const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> std::vector<ttnn::Tensor> {
-                return self(
-                    input_tensor,
-                    persistent_output_buffer,
-                    dim,
-                    multi_device_global_semaphore,
-                    cluster_axis,
-                    mesh_device,
-                    topology,
-                    num_links,
-                    memory_config,
-                    subdevice_id);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::arg("persistent_output_buffer"),
             nb::arg("dim"),
