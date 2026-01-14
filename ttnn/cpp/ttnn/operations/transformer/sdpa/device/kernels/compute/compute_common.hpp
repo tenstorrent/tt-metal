@@ -576,7 +576,8 @@ void calculate_exponential_polynomial_init() {
  * where r = x - k*ln(2). Uses either SFPARECIP instruction or multi-term polynomial (degree 1-4)
  * to compute exp(r), then reconstructs full result via exponent manipulation.
  *
- * @tparam USE_SFPARECIP_INSTR Use hardware SFPARECIP instruction (true) or polynomial evaluation (false)
+ * @tparam USE_SFPARECIP_INSTR Use hardware SFPARECIP instruction (true) or polynomial evaluation (false). Only
+ * supported on Blackhole.
  * @tparam SCALE_EN Apply scaling factor from LREG11 to input values
  * @tparam ITERATIONS Number of 32-element vectors to process per tile
  * @tparam NUM_TERMS Polynomial degree (1-4) when USE_SFPARECIP_INSTR=false; higher improves accuracy
@@ -593,11 +594,7 @@ void calculate_exponential_polynomial() {
     }
         .set(ADDR_MOD_7);
 
-    if (USE_SFPARECIP_INSTR) {
-#ifndef ARCH_BLACKHOLE
-        ASSERT(false, "TTI_SFPARECIP instruction only supported on Blackhole");
-#endif
-    } else {
+    if (!USE_SFPARECIP_INSTR) {
         ASSERT(
             POLY_DEGREE >= 1 && POLY_DEGREE <= 4,
             "Only degree 1-4 polynomials are supported in calculate_exponential_polynomial");
@@ -654,6 +651,7 @@ void calculate_exponential_polynomial() {
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
         if constexpr (USE_SFPARECIP_INSTR) {
+#ifdef ARCH_BLACKHOLE
             // Calculate floor(x) by setting v=v-1 if v>u.
             TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);                                    // SFPGT_MOD1_SET_CC
             TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 2);  // SFPMAD_MOD1_NEGATE_VC
@@ -661,8 +659,9 @@ void calculate_exponential_polynomial() {
 
             // Calculate exp(x - k*ln2).
             TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-#ifdef ARCH_BLACKHOLE
             TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
+#else
+            ASSERT(false, "TTI_SFPARECIP instruction only supported on Blackhole");
 #endif
         } else {
             TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
