@@ -41,29 +41,11 @@ Returns:
 
     )doc";
 
-    using OperationType = decltype(ttnn::moe_expert_token_remap);
     ttnn::bind_registered_operation(
         mod,
         ttnn::moe_expert_token_remap,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& topk_tensor,
-               const ttnn::Tensor& expert_mapping_tensor,
-               const ttnn::Tensor& expert_metadata_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& optional_output_mapping_tensor,
-               const std::optional<ttnn::Tensor>& optional_output_reduced_tensor,
-               const uint32_t reduction_size) {
-                return self(
-                    topk_tensor,
-                    expert_mapping_tensor,
-                    expert_metadata_tensor,
-                    memory_config,
-                    optional_output_mapping_tensor,
-                    optional_output_reduced_tensor,
-                    reduction_size);
-            },
+        ttnn::nanobind_arguments_t{
             nb::arg("topk_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),
