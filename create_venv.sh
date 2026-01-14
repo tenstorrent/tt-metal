@@ -39,6 +39,11 @@ EOF
 while [[ $# -gt 0 ]]; do
     case $1 in
         --python)
+            if [ -z "$2" ]; then
+                echo "Error: --python requires a version argument (e.g., --python 3.10)"
+                echo "Run '$0 --help' for usage information"
+                exit 1
+            fi
             VENV_PYTHON_VERSION="$2"
             shift 2
             ;;
@@ -47,7 +52,9 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         *)
-            shift
+            echo "Error: Unknown argument '$1'"
+            echo "Run '$0 --help' for usage information"
+            exit 1
             ;;
     esac
 done
