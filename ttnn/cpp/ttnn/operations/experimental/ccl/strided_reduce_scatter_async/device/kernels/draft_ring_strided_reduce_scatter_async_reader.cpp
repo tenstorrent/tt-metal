@@ -105,88 +105,104 @@ void kernel_main() {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
 
-    uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
+    uint32_t padded_M_tiles = round_up(input_tensor_Ht, mm_cores_y);
+    uint32_t M_tiles_per_core = padded_M_tiles / mm_cores_y;
+    uint32_t M_blocks_per_core = div_up(M_tiles_per_core, mm_block_ht);
+    unit32_t M_tiles_per_block = mm_block_ht;
+    uint32_t stride_size = M_tiles_per_core;
+    uint32_t num_batches = input_tensor_B;
 
-    uint32_t stride_size = padded_M_tiles / mm_cores_y;
+    // TODO: direction --> should the backward direction handle the second half of the chunk?
+    // or every other half of the block?
+    // TODO: workers
 
-    for (uint32_t b = 0; b < input_tensor_B; b++) {
+    // for now only support single channel
+    ASSERT(dim == 3);
+    ASSERT(slice_C == 1);
+
+    // the following will need to be defined
+    // assume constant
+    // hunk_counts_per_slice (device_block_counts elsewhere) is the number of chunks per slice
+    const uint32_t chunk_counts_per_slice;
+    // device_chunk_width should be equal to, or be a multiple of,
+    // the width (in tiles) in a matmul block (mm_block_wt)
+    const uint32_t chunk_width;
+
+    for (uint32_t b = 0; b < num_batches; b++) {
         if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
         }
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
         uint32_t batch_offset = input_batch_num_pages * b;
 
-        for (uint32_t stride_idx = 0; stride_idx < stride_size; stride_idx++) {
-            if constexpr (fuse_op) {
-                matmul_receiver.wait_for_matmul_stride(stride_idx);
-            }
-            // Loop over the slices, starting from the furthest, and working backwards until we get to ourselves
-            // Read our local slice at this slice idx into cb_input_id or cb_output_id
-            // If we are not the first slice, then read intermediate into the cb_intermediate_id
-            // Then reduce those two CB's, and push that to cb_output_id
-            // If slices_forwarded in writer is 7, we don't forward anymore and write it to output_buffer
-            // Otherwise, the writer will write cb_output_id to the next chip in the forward direction
-            for (uint32_t i = 0; i < ring_size; ++i) {
-                const bool do_reduce = i != 0;
-                uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
+        // chunk_counts_per_slice is the total number of chunks that are sent (in all rounds)
+        // in strided all gather this is device_k_block_counts[my_chip_id]
+        // but here the chunks must be the same on all devices by definition
+        // chunk_counts_per_slice will be one if a single chunk is a full strided block row
 
-                uint32_t actual_slice_idx;
-                if (direction) {
-                    actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
-                } else {
-                    actual_slice_idx =
-                        slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+        for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+            // each block has a height of mm_block_ht (tiles of matmul block)
+            // this is what has to be sent in one step
+            for (uint32_t strided_chunk_idx = 0; strided_chunk_idx < chunk_counts_per_slice; strided_chunk_idx++) {
+                if constexpr (fuse_op) {
+                    // this has to be sent to all devices in the direction
+                    // note that the order of sending these must be consistent with the order of matmul
+                    // this may be nontrivial, in the worst case, can wait for full blocks above
+                    matmul_receiver.wait_for_matmul_chunk(strided_chunk_idx);
                 }
+                for (uint32_t i = 0; i < ring_size; ++i) {
+                    const bool do_reduce = i != 0;
+                    uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
-                // for now only support single channel
-                ASSERT(dim == 3);
-                ASSERT(slice_C == 1);
+                    uint32_t actual_slice_idx;
+                    if (direction) {
+                        actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+                    } else {
+                        actual_slice_idx =
+                            slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+                    }
 
-                uint32_t input_chunk_start_tile = get_input_chunk_start_tile(actual_slice_idx, stride_idx);
-                uint32_t intermediate_tile_id_start = get_intermediate_chunk_start_tile(actual_slice_idx, stride_idx);
-                uint32_t M_blocks_per_core;
-                const uint32_t device_block_counts =
-                    device_k_block_counts[my_chip_id];  // not sure this can be different for different slices
-                const uint32_t device_chunk_widths =
-                    device_chunk_widths[my_chip_id];  // not sure this can be different for different slices
+                    // start tile is the tile at the start of the chunk in the current batch
+                    uint32_t input_chunk_start_tile =
+                        get_input_chunk_start_tile(actual_slice_idx, strided_chunk_idx, batch_offset);
+                    // intermediate_chunk_start_tile is the tile at the start of the chunk in the intermediate tensor
+                    // (so maybe just need to subtract the batch offset from the tile above)
+                    // confirm: intermediate is the size of a single element in the batch (no batch offset needed)
+                    // (actually, possibly this could be the size of all the chunks across devices in the direction)
+                    uint32_t intermediate_tile_id_start =
+                        get_intermediate_chunk_start_tile(actual_slice_idx, strided_chunk_idx);
 
-                for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-                    for (uint32_t chunk_idx = 0; chunk_idx < device_block_counts; chunk_idx++) {
-                        // it is not clear to me that chunks are meaningful here
-                        // maybe could simplify to chunk being entire block row for this slice?
-                        // on the other hand, this gives some granularity to the matmul -- can fire off faster?
-                        uint32_t actual_chunk_w =
-                            device_chunk_widths[chunk_idx];  // again, this should probably be the same
-                        uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
-                            input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
-                        uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
+                    uint32_t actual_chunk_w = device_chunk_width;
+                    uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
+                        input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
+                    uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
 
-                        read_single_chunk_strided_tiles_from_noc_and_put_into_cb(
+                    read_strided_chunk_from_noc_and_put_into_cb(
+                        input_chunk_start_tile,
+                        cb_in0,
+                        tiles_in_current_chunk,
+                        actual_chunk_w,
+                        actual_chunk_h,
+                        stride_size,
+                        tile_granularity,
+                        page_size,
+                        direction);
+
+                    if (do_reduce) {
+                        // wait for the chunk to be ready in noc
+                        wait_for_semaphore(out_ready_sem, sem_target + 1);
+                        sem_target++;
+                        read_strided_chunk_from_noc_and_put_into_cb(
                             input_chunk_start_tile,
-                            cb_in0,
+                            batch_input_tile_offset,
+                            cb_intermediate_id,
                             tiles_in_current_chunk,
                             actual_chunk_w,
                             actual_chunk_h,
-                            stride_size,
+                            M_tiles_per_core,
                             tile_granularity,
                             direction);
-
-                        if (do_reduce) {
-                            wait_for_semaphore(out_ready_sem, sem_target + 1);
-                            read_single_chunk_strided_tiles_from_noc_and_put_into_cb(
-                                input_chunk_start_tile,
-                                batch_input_tile_offset,
-                                cb_intermediate_id,
-                                tiles_in_current_chunk,
-                                actual_chunk_w,
-                                actual_chunk_h,
-                                padded_M_tiles / mm_cores_y,
-                                tile_granularity,
-                                direction);
-                            // synchronize after reading chunk into intermediate CB
-                            synchronize_workers_and_signal_op(actual_slice_idx);
-                        }
                     }
                 }
 
