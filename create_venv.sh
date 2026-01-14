@@ -85,7 +85,9 @@ if ! command -v uv &>/dev/null; then
         bash "$SCRIPT_DIR/scripts/install-uv.sh"
     else
         echo "Warning: install-uv.sh not found, falling back to pip installation"
-        ${PYTHON_CMD} -m pip install uv
+        # Use the same pinned version as install-uv.sh to maintain consistency
+        UV_VERSION="0.7.12"
+        ${PYTHON_CMD} -m pip install --no-cache-dir "uv==${UV_VERSION}"
         # Add pip's bin directory to PATH for the current session
         USER_BIN="${HOME}/.local/bin"
         if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
