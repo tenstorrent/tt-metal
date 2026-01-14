@@ -635,8 +635,8 @@ class ModelArgs:
         self.processor = None if dummy_weights else self.create_processor()
 
         # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
-        # We currently disable this fusion of ops for vision-capable models
-        self.use_qk_fused = not self.is_vision()
+        # We currently disable this fusion of ops for vision-capable or multimodal models
+        self.use_qk_fused = not self.is_multimodal
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
