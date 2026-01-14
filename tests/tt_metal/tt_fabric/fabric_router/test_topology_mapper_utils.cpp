@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
-#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_metal::experimental::tt_fabric {
 namespace {
@@ -62,8 +61,8 @@ protected:
 
     // Build a linear chain: n0 -- n1 -- n2 -- ... -- n(count-1)
     template <typename NodeType>
-    static ::tt::tt_fabric::AdjacencyGraph<NodeType> build_chain_adjacency(const std::vector<NodeType>& nodes) {
-        typename ::tt::tt_fabric::AdjacencyGraph<NodeType>::AdjacencyMap adj;
+    static auto build_chain_adjacency(const std::vector<NodeType>& nodes) {
+        std::map<NodeType, std::vector<NodeType>> adj;
         for (size_t i = 0; i < nodes.size(); ++i) {
             adj[nodes[i]] = {};
             if (i > 0) {
@@ -73,13 +72,13 @@ protected:
                 adj[nodes[i]].push_back(nodes[i + 1]);
             }
         }
-        return ::tt::tt_fabric::AdjacencyGraph<NodeType>(adj);
+        return adj;
     }
 
     // Build a fully connected graph (clique)
     template <typename NodeType>
-    static ::tt::tt_fabric::AdjacencyGraph<NodeType> build_clique_adjacency(const std::vector<NodeType>& nodes) {
-        typename ::tt::tt_fabric::AdjacencyGraph<NodeType>::AdjacencyMap adj;
+    static auto build_clique_adjacency(const std::vector<NodeType>& nodes) {
+        std::map<NodeType, std::vector<NodeType>> adj;
         for (size_t i = 0; i < nodes.size(); ++i) {
             adj[nodes[i]] = {};
             for (size_t j = 0; j < nodes.size(); ++j) {
@@ -88,14 +87,13 @@ protected:
                 }
             }
         }
-        return ::tt::tt_fabric::AdjacencyGraph<NodeType>(adj);
+        return adj;
     }
 
     // Build a 2D grid: rows x cols with 4-connectivity
     template <typename NodeType>
-    static ::tt::tt_fabric::AdjacencyGraph<NodeType> build_grid_adjacency(
-        const std::vector<NodeType>& nodes, size_t rows, size_t cols) {
-        typename ::tt::tt_fabric::AdjacencyGraph<NodeType>::AdjacencyMap adj;
+    static auto build_grid_adjacency(const std::vector<NodeType>& nodes, size_t rows, size_t cols) {
+        std::map<NodeType, std::vector<NodeType>> adj;
         auto idx = [cols](size_t r, size_t c) { return r * cols + c; };
 
         for (size_t r = 0; r < rows; ++r) {
@@ -115,7 +113,7 @@ protected:
                 }
             }
         }
-        return ::tt::tt_fabric::AdjacencyGraph<NodeType>(adj);
+        return adj;
     }
 
     // -------------------------------------------------------------------------
@@ -163,14 +161,13 @@ protected:
     // Verify that logical connectivity is preserved in physical mapping
     static void verify_connectivity_preserved(
         const TopologyMappingResult& result,
-        const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_adj,
-        const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_adj) {
-        for (const auto& node : logical_adj.get_nodes()) {
+        const LogicalAdjacencyMap& logical_adj,
+        const PhysicalAdjacencyMap& physical_adj) {
+        for (const auto& [node, neighbors] : logical_adj) {
             const auto mapped_asic = result.fabric_node_to_asic.at(node);
-            const auto& physical_neighbors = physical_adj.get_neighbors(mapped_asic);
-            const auto& logical_neighbors = logical_adj.get_neighbors(node);
+            const auto& physical_neighbors = physical_adj.at(mapped_asic);
 
-            for (const auto& neighbor : logical_neighbors) {
+            for (const auto& neighbor : neighbors) {
                 const auto neighbor_asic = result.fabric_node_to_asic.at(neighbor);
                 bool found = std::find(physical_neighbors.begin(), physical_neighbors.end(), neighbor_asic) !=
                              physical_neighbors.end();
@@ -196,8 +193,8 @@ protected:
 // =============================================================================
 
 TEST_F(TopologyMapperUtilsTest, EmptyGraph_ReturnsSuccess) {
-    const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId> logical_adj;
-    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID> physical_adj;
+    const LogicalAdjacencyMap logical_adj;
+    const PhysicalAdjacencyMap physical_adj;
     const std::map<FabricNodeId, MeshHostRankId> node_ranks;
     const std::map<tt::tt_metal::AsicID, MeshHostRankId> asic_ranks;
 
@@ -213,13 +210,11 @@ TEST_F(TopologyMapperUtilsTest, SingleNode_MapsCorrectly) {
     const auto nodes = make_nodes(1);
     const auto asics = make_asics(1);
 
-    ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>::AdjacencyMap logical_adj_map;
-    logical_adj_map[nodes[0]] = {};
-    ::tt::tt_fabric::AdjacencyGraph<FabricNodeId> logical_adj(logical_adj_map);
+    LogicalAdjacencyMap logical_adj;
+    logical_adj[nodes[0]] = {};
 
-    ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap physical_adj_map;
-    physical_adj_map[asics[0]] = {};
-    ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID> physical_adj(physical_adj_map);
+    PhysicalAdjacencyMap physical_adj;
+    physical_adj[asics[0]] = {};
 
     const auto node_ranks = make_uniform_node_ranks(nodes, rank0_);
     const auto asic_ranks = make_uniform_asic_ranks(asics, rank0_);
@@ -392,16 +387,14 @@ TEST_F(TopologyMapperUtilsTest, StrictMode_SufficientChannels_Succeeds) {
     const auto asics = make_asics(2);
 
     // Two logical channels between nodes
-    ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>::AdjacencyMap logical_adj_map;
-    logical_adj_map[nodes[0]] = {nodes[1], nodes[1]};
-    logical_adj_map[nodes[1]] = {nodes[0], nodes[0]};
-    ::tt::tt_fabric::AdjacencyGraph<FabricNodeId> logical_adj(logical_adj_map);
+    LogicalAdjacencyMap logical_adj;
+    logical_adj[nodes[0]] = {nodes[1], nodes[1]};
+    logical_adj[nodes[1]] = {nodes[0], nodes[0]};
 
     // Two physical channels between ASICs
-    ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap physical_adj_map;
-    physical_adj_map[asics[0]] = {asics[1], asics[1]};
-    physical_adj_map[asics[1]] = {asics[0], asics[0]};
-    ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID> physical_adj(physical_adj_map);
+    PhysicalAdjacencyMap physical_adj;
+    physical_adj[asics[0]] = {asics[1], asics[1]};
+    physical_adj[asics[1]] = {asics[0], asics[0]};
 
     const auto node_ranks = make_uniform_node_ranks(nodes, rank0_);
     const auto asic_ranks = make_uniform_asic_ranks(asics, rank0_);
@@ -419,16 +412,14 @@ TEST_F(TopologyMapperUtilsTest, StrictMode_InsufficientChannels_Fails) {
     const auto asics = make_asics(2);
 
     // Two logical channels required
-    ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>::AdjacencyMap logical_adj_map;
-    logical_adj_map[nodes[0]] = {nodes[1], nodes[1]};
-    logical_adj_map[nodes[1]] = {nodes[0], nodes[0]};
-    ::tt::tt_fabric::AdjacencyGraph<FabricNodeId> logical_adj(logical_adj_map);
+    LogicalAdjacencyMap logical_adj;
+    logical_adj[nodes[0]] = {nodes[1], nodes[1]};
+    logical_adj[nodes[1]] = {nodes[0], nodes[0]};
 
     // Only one physical channel available
-    ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap physical_adj_map;
-    physical_adj_map[asics[0]] = {asics[1]};
-    physical_adj_map[asics[1]] = {asics[0]};
-    ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID> physical_adj(physical_adj_map);
+    PhysicalAdjacencyMap physical_adj;
+    physical_adj[asics[0]] = {asics[1]};
+    physical_adj[asics[1]] = {asics[0]};
 
     const auto node_ranks = make_uniform_node_ranks(nodes, rank0_);
     const auto asic_ranks = make_uniform_asic_ranks(asics, rank0_);
@@ -447,16 +438,14 @@ TEST_F(TopologyMapperUtilsTest, RelaxedMode_InsufficientChannels_Succeeds) {
     const auto asics = make_asics(2);
 
     // Two logical channels required
-    ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>::AdjacencyMap logical_adj_map;
-    logical_adj_map[nodes[0]] = {nodes[1], nodes[1]};
-    logical_adj_map[nodes[1]] = {nodes[0], nodes[0]};
-    ::tt::tt_fabric::AdjacencyGraph<FabricNodeId> logical_adj(logical_adj_map);
+    LogicalAdjacencyMap logical_adj;
+    logical_adj[nodes[0]] = {nodes[1], nodes[1]};
+    logical_adj[nodes[1]] = {nodes[0], nodes[0]};
 
     // Only one physical channel available
-    ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap physical_adj_map;
-    physical_adj_map[asics[0]] = {asics[1]};
-    physical_adj_map[asics[1]] = {asics[0]};
-    ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID> physical_adj(physical_adj_map);
+    PhysicalAdjacencyMap physical_adj;
+    physical_adj[asics[0]] = {asics[1]};
+    physical_adj[asics[1]] = {asics[0]};
 
     const auto node_ranks = make_uniform_node_ranks(nodes, rank0_);
     const auto asic_ranks = make_uniform_asic_ranks(asics, rank0_);
