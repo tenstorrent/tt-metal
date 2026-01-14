@@ -304,7 +304,7 @@ def generate_reference(
                     print(f"Decoded so far: {decoded!r}")
                 payload = build_payload(
                     reference_tokens_tensor,
-                    self.top5_tokens_full[:current_len].cpu(),
+                    self.top5_tokens_full[:current_len].clone().cpu(),
                 )
                 torch.save(payload, self.reference_file)
             return False
@@ -357,7 +357,7 @@ def generate_reference(
     print("Decoded generation (raw):", repr(tokenizer.decode(generated_tokens, skip_special_tokens=False)))
 
     total_length = int(full_sequence_tensor.numel())
-    top5_tokens_full = snapshotter.top5_tokens_full[:total_length].cpu()
+    top5_tokens_full = snapshotter.top5_tokens_full[:total_length].clone().cpu()
 
     # --- Save payload (explicit prompt/generated + full sequence) ---
     payload = build_payload(full_sequence_tensor.unsqueeze(0).cpu(), top5_tokens_full)
