@@ -349,20 +349,21 @@ void kernel_main() {
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
 
                 uint32_t k_block = 0;
-#ifdef USE_MUX
-                k_block = compute_actual_k_block(
-                    k_block_iter,
-                    K_num_blocks,
-                    my_rank,
-                    K_num_blocks / num_devices,
-                    num_devices,
-                    k_forward,
-                    n_block_iter == 0,
-                    out_ready_sem_addr_ptr,
-                    sem_target,
-                    slices_received);
-#endif
                 if (is_injector_core) {
+#ifdef USE_MUX
+                    k_block = compute_actual_k_block(
+                        k_block_iter,
+                        K_num_blocks,
+                        my_rank,
+                        K_num_blocks / num_devices,
+                        num_devices,
+                        k_forward,
+                        n_block_iter == 0,
+                        out_ready_sem_addr_ptr,
+                        sem_target,
+                        is_injector_core,
+                        slices_received);
+#endif
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
@@ -430,7 +431,7 @@ void kernel_main() {
                 }
 
 #ifdef USE_MUX
-                if (n_block_iter == 0) {
+                if ((is_injector_core || (k_block_iter < K_block_tiles)) && n_block_iter == 0) {
                     // If not the last block
                     if (slices_received <= writes_expected) {
                         // If backward, send forward
