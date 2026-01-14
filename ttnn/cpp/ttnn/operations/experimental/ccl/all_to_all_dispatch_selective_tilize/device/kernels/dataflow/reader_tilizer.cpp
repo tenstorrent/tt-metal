@@ -227,6 +227,33 @@ FORCE_INLINE void print_expert_activation_buffer(
     DPRINT << "================================" << ENDL();
 }
 
+// Print the E-T buffer (Expert-Token buffer)
+// Format: E sections, each with up to T token IDs, terminated by -1
+template <uint32_t experts_per_device, uint32_t tokens>
+void print_e_t_buffer(uint32_t cb_id) {
+    volatile tt_l1_ptr uint32_t* buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id));
+
+    DPRINT << "=== E-T Buffer (Expert -> Tokens) ===" << ENDL();
+    for (uint32_t e = 0; e < experts_per_device; e++) {
+        DPRINT << "Expert " << e << ": [";
+        uint32_t base = e * tokens;
+        bool first = true;
+        for (uint32_t i = 0; i < tokens; i++) {
+            uint32_t token_id = buffer[base + i];
+            if (token_id == static_cast<uint32_t>(-1)) {
+                DPRINT << " -1]" << ENDL();
+                break;
+            }
+            if (!first) {
+                DPRINT << ", ";
+            }
+            DPRINT << token_id;
+            first = false;
+        }
+    }
+    DPRINT << "======================================" << ENDL();
+}
+
 // Tile indexing helpers for 32x32 tiles with 4 faces (16x16 each)
 // Face layout in memory: top-left, top-right, bottom-left, bottom-right
 template <typename DataType>
@@ -383,6 +410,7 @@ void kernel_main() {
 
     // indices is already in CB as it's sharded in L1
     uint32_t num_activated_tokens = 0;
+    uint32_t num_activated_tokens_per_expert[experts_per_device] = {0};
     for (uint32_t t = 0; t < tokens; t++) {
         // read in the token's source device's mapping
         uint32_t source_device =
@@ -424,6 +452,13 @@ void kernel_main() {
                         expert_activation_l1_ptr[1 + e] = k;
                         // set the score to the token's score (cast bf16 to uint32_t for storage)
                         expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
+                        // write to e_t buffer the token id for the expert (compact list per expert)
+                        // e_t buffer is E*T sized, each expert gets T slots
+                        uint32_t write_offset = e * tokens + num_activated_tokens_per_expert[e];
+                        uint32_t e_t_buffer_addr = get_write_ptr(e_t_buffer_id) + write_offset * sizeof(uint32_t);
+                        uint32_t* e_t_buffer_ptr = reinterpret_cast<uint32_t*>(e_t_buffer_addr);
+                        *e_t_buffer_ptr = t;
+                        num_activated_tokens_per_expert[e]++;
                         activated = true;
                     }
                 }
@@ -433,8 +468,18 @@ void kernel_main() {
             num_activated_tokens++;
         }
     }
-    DPRINT << "Number of activated tokens: " << num_activated_tokens << ENDL();
-    print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0, tokens);
+
+    // DPRINT << "Number of activated tokens: " << num_activated_tokens << ENDL();
+    // print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0, tokens);
+
+    // cap off e_t buffer with -1
+    for (uint32_t e = 0; e < experts_per_device; e++) {
+        uint32_t e_t_buffer_addr = get_write_ptr(e_t_buffer_id) + e * tokens * sizeof(uint32_t);
+        uint32_t* e_t_buffer_ptr = reinterpret_cast<uint32_t*>(e_t_buffer_addr);
+        e_t_buffer_ptr[num_activated_tokens_per_expert[e]] = -1;
+    }
+
+    // print_e_t_buffer<experts_per_device, tokens>(e_t_buffer_id);
 
     // TODO: Implement selective tilize logic
     // 1. Read through all indices to determine which tokens belong to this device's experts
