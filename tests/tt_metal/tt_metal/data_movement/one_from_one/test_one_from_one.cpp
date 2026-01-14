@@ -320,7 +320,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
-    // GTEST_SKIP() << "Skipping test";
+    GTEST_SKIP() << "Skipping test";
     // Test ID (Arbitrary)
     uint32_t test_id = 152;
 

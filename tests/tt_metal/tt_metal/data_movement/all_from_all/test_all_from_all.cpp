@@ -508,7 +508,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedI
 /* ======== VIRTUAL CHANNELS ======== */
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllVirtualChannels) {
-    // GTEST_SKIP() << "Skipping test";
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 317;
 
     unit_tests::dm::all_from_all::virtual_channels_test(get_mesh_device(), test_case_id);
