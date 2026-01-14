@@ -10,8 +10,9 @@
 constexpr uint8_t noc_index = NOC_INDEX;
 constexpr uint8_t noc_mode = NOC_MODE;
 #else
-
-extern uint8_t noc_index;
+extern brisc_noc_id_and_mode_t prev_brisc_noc_id_and_mode;
+uint8_t& noc_index = prev_brisc_noc_id_and_mode.brisc_noc_id;
+//extern uint8_t noc_index;
 // noc_mode may switch dynamically while in the firmware, so we can't define it here.
 #endif
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];

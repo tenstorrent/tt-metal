@@ -20,7 +20,7 @@ uint32_t traceCount __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
-uint8_t noc_index = 0;  // TODO: remove hardcoding
+brisc_noc_id_and_mode_t prev_brisc_noc_id_and_mode = { .brisc_noc_id = 0, .brisc_noc_mode = DM_DEDICATED_NOC };
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));

@@ -25,7 +25,7 @@
 #include "api/debug/waypoint.h"
 #include "internal/debug/stack_usage.h"
 
-uint8_t noc_index;
+brisc_noc_id_and_mode_t prev_brisc_noc_id_and_mode = { .brisc_noc_id = 0, .brisc_noc_mode = DM_DEDICATED_NOC };
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -155,7 +155,7 @@ int main() {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
-            brisc_noc_id_and_mode_t brisc_noc_id_and_mode{.brisc_noc_id_and_mode = launch_msg_address->kernel_config.brisc_noc_id_and_mode.brisc_noc_id_and_mode};
+            prev_brisc_noc_id_and_mode.brisc_noc_id_and_mode = launch_msg_address->kernel_config.brisc_noc_id_and_mode.brisc_noc_id_and_mode;
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
@@ -186,9 +186,9 @@ int main() {
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
-                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                DEBUG_SANITIZE_NOC_ADDR(prev_brisc_noc_id_and_mode.brisc_noc_id, dispatch_addr, 4);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                notify_dispatch_core_done(dispatch_addr, noc_index);
+                notify_dispatch_core_done(dispatch_addr, prev_brisc_noc_id_and_mode.brisc_noc_id);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
