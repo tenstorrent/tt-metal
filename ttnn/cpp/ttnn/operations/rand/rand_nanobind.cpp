@@ -42,21 +42,11 @@ void bind_rand_operation(nb::module_& mod) {
             ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
         )doc";
 
-    using OperationType = decltype(ttnn::rand);
     bind_registered_operation(
         mod,
         ttnn::rand,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Shape& shape,
-               MeshDevice& device,
-               const DataType dtype,
-               const Layout layout,
-               const MemoryConfig& memory_config,
-               float from,
-               float to,
-               uint32_t seed) { return self(shape, device, dtype, layout, memory_config, from, to, seed); },
+        ttnn::nanobind_arguments_t{
             nb::arg("shape"),
             nb::arg("device"),
             nb::kw_only(),
