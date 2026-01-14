@@ -62,7 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install uv with version pinning (centralized in install-uv.sh)
-COPY dockerfile/install-uv.sh /tmp/install-uv.sh
+COPY scripts/install-uv.sh /tmp/install-uv.sh
 RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
 
 # Set up virtual environment using uv with centralized Python version
