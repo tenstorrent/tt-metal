@@ -420,8 +420,12 @@ public:
     static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
 
     // Architecture-specific maximum packet payload size limits
-    static constexpr size_t max_packet_payload_size_bytes_wormhole = 7 * 1088;    // 7616 bytes
-    static constexpr size_t max_packet_payload_size_bytes_blackhole = 14 * 1088;  // 15232 bytes
+    // The maximum payload size is calculated based on the maximum NoC packet size (wormhole: 8192 bytes, blackhole:
+    // 16384 bytes)
+    static constexpr size_t max_packet_payload_size_bytes_wormhole =
+        tt::tile_size(tt::DataFormat::Bfp8_b) * 7;  // 7616 bytes
+    static constexpr size_t max_packet_payload_size_bytes_blackhole =
+        tt::tile_size(tt::DataFormat::Bfp8_b) * 14;  // 15232 bytes
 
     static_assert(default_packet_payload_size_bytes == 4352, "Packet size must be 4352 bytes");
     static_assert(default_mesh_packet_payload_size_bytes == 4352, "Mesh packet size must be 4352 bytes");

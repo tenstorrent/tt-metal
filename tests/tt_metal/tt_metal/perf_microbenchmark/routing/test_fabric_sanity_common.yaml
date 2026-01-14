@@ -359,8 +359,8 @@ Tests:
             destination:
               device: [0, 1]
 
-  - name: "CustomMaxPacketSizeLinear"
-    sync: true
+  - name: "CustomMaxPacketSizeLinear7K"
+    enable_flow_control: true
     fabric_setup:
       topology: Linear
       max_packet_size: 7616
@@ -372,6 +372,42 @@ Tests:
 
     defaults:
       ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "CustomMaxPacketSizeLinear8K"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+      max_packet_size: 8704
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [7616, 8704]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "CustomMaxPacketSizeMesh8K"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 8704
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [7616, 8704]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
       num_packets: 20000
 
     patterns:
