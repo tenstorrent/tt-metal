@@ -152,35 +152,26 @@ tt::tt_metal::Tensor ring_shift(
 
     auto output_tensor = ttnn::empty_like(tensor);
 
+    auto send_through_sockets = [&](const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
+                                    const tt::tt_metal::Tensor& input_tensor,
+                                    tt::tt_metal::Tensor& output_tensor) {
+        tt::tt_metal::distributed::SocketConfig config{};
+        config.socket_mem_config = socket_mem_config;
+        config.socket_connection_config = connections;
+
+        auto [send_socket, recv_socket] =
+            tt::tt_metal::distributed::MeshSocket::create_socket_pair(mesh_device_ptr, mesh_device_ptr, config);
+
+        ttnn::experimental::send_async(tensor, send_socket);
+        ttnn::experimental::recv_async(output_tensor, recv_socket);
+        tt::tt_metal::distributed::Synchronize(
+            mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+    };
+
     // Phase 1: Even → Odd (even sends, odd receives)
-    if (!even_to_odd_connections.empty()) {
-        tt::tt_metal::distributed::SocketConfig config{};
-        config.socket_mem_config = socket_mem_config;
-        config.socket_connection_config = even_to_odd_connections;
-
-        auto [send_socket, recv_socket] =
-            tt::tt_metal::distributed::MeshSocket::create_socket_pair(mesh_device_ptr, mesh_device_ptr, config);
-
-        ttnn::experimental::send_async(tensor, send_socket);
-        ttnn::experimental::recv_async(output_tensor, recv_socket);
-        tt::tt_metal::distributed::Synchronize(
-            mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
-    }
-
+    send_through_sockets(even_to_odd_connections, tensor, output_tensor);
     // Phase 2: Odd → Even (odd sends, even receives)
-    if (!odd_to_even_connections.empty()) {
-        tt::tt_metal::distributed::SocketConfig config{};
-        config.socket_mem_config = socket_mem_config;
-        config.socket_connection_config = odd_to_even_connections;
-
-        auto [send_socket, recv_socket] =
-            tt::tt_metal::distributed::MeshSocket::create_socket_pair(mesh_device_ptr, mesh_device_ptr, config);
-
-        ttnn::experimental::send_async(tensor, send_socket);
-        ttnn::experimental::recv_async(output_tensor, recv_socket);
-        tt::tt_metal::distributed::Synchronize(
-            mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
-    }
+    send_through_sockets(odd_to_even_connections, tensor, output_tensor);
 
     return output_tensor;
 }
