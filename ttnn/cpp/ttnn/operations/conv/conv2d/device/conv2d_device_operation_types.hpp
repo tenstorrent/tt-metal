@@ -187,7 +187,7 @@ struct Conv2dBlockConfig {
     uint32_t out_subblock_w_ntiles;
 };
 
-struct operation_attributes_t {
+struct Conv2dParams {
     sliding_window::SlidingWindowConfig sliding_window_config{};
     uint32_t output_channels = 0;
     uint32_t groups = 0;
@@ -228,7 +228,7 @@ struct hashable_operation_attributes_t {
     std::optional<bool> force_split_reader;
 };
 
-struct tensor_args_t {
+struct Conv2dInputs {
     Tensor a;
     Tensor b;
     std::optional<Tensor> bias;
