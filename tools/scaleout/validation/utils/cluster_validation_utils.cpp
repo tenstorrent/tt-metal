@@ -13,7 +13,6 @@
 #include <future>
 #include <chrono>
 
-#include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/hal.hpp>
@@ -1218,7 +1217,7 @@ void forward_link_reset_metadata_from_controller(
 }
 
 void reset_local_ethernet_links(
-    const PhysicalSystemDescriptor& physical_system_descriptor, const AsicTopology& asic_topology) {
+    const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
 
@@ -1270,7 +1269,7 @@ void reset_local_ethernet_links(
 
 void get_cross_node_ethernet_links_to_reset(
     const PhysicalSystemDescriptor& physical_system_descriptor,
-    const AsicTopology& asic_topology,
+    const tt::tt_metal::AsicTopology& asic_topology,
     std::vector<EthChannelIdentifier>& cross_node_links_to_reset,
     std::vector<ResetPair>& cross_node_reset_pairs) {
     constexpr uint32_t CONTROLLER_RANK = 0;
@@ -1308,14 +1307,14 @@ void get_cross_node_ethernet_links_to_reset(
                     ordered_exit_nodes[src_host_rank].push_back(EthChannelIdentifier{
                         physical_system_descriptor.get_host_name_for_asic(asic_id),
                         asic_id,
-                        TrayID{0},
-                        ASICLocation{0},
+                        tt::tt_metal::TrayID{0},
+                        tt::tt_metal::ASICLocation{0},
                         eth_connection.src_chan});
                     ordered_exit_nodes[dst_host_rank].push_back(EthChannelIdentifier{
                         physical_system_descriptor.get_host_name_for_asic(dst_asic_id),
                         dst_asic_id,
-                        TrayID{0},
-                        ASICLocation{0},
+                        tt::tt_metal::TrayID{0},
+                        tt::tt_metal::ASICLocation{0},
                         eth_connection.dst_chan});
                     ordered_reset_pairs[src_host_rank].push_back(ResetPair{src_host_rank, dst_host_rank});
                     ordered_reset_pairs[dst_host_rank].push_back(ResetPair{src_host_rank, dst_host_rank});
@@ -1368,7 +1367,7 @@ void reset_cross_node_ethernet_links(
 }
 
 void reset_ethernet_links(
-    const PhysicalSystemDescriptor& physical_system_descriptor, const AsicTopology& asic_topology) {
+    const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     // Reset All Local Ethernet Links, specified in the topology. Ethernet Links on Exit Nodes are reset separately.
     reset_local_ethernet_links(physical_system_descriptor, asic_topology);
@@ -1433,40 +1432,42 @@ bool generate_link_metrics(
     return result.unhealthy_links.empty();
 }
 
-AsicTopology generate_asic_topology_from_connections(
+tt::tt_metal::AsicTopology generate_asic_topology_from_connections(
     const std::set<PhysicalChannelConnection>& physical_connections,
     PhysicalSystemDescriptor& physical_system_descriptor) {
-    AsicTopology asic_topology;
+    tt::tt_metal::AsicTopology asic_topology;
     std::unordered_map<tt_metal::AsicID, std::set<tt_metal::AsicID>> visited;
     std::unordered_map<tt_metal::AsicID, std::unordered_map<tt_metal::AsicID, uint32_t>> visited_idx;
     for (const auto& connection : physical_connections) {
         auto src = connection.first;
         auto dst = connection.second;
         auto src_asic_id = physical_system_descriptor.get_asic_id(
-            src.hostname, tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
+            src.hostname, tt::tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
         auto dst_asic_id = physical_system_descriptor.get_asic_id(
-            dst.hostname, tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
+            dst.hostname, tt::tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
         if (!visited[src_asic_id].contains(dst_asic_id)) {
             asic_topology[src_asic_id].push_back(
                 {dst_asic_id,
-                 {EthConnection(
+                 {tt::tt_metal::EthConnection(
                      *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname)}});
             visited[src_asic_id].insert(dst_asic_id);
             visited_idx[src_asic_id][dst_asic_id] = asic_topology[src_asic_id].size() - 1;
         } else {
-            asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(EthConnection(
-                *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
+            asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(
+                tt::tt_metal::EthConnection(
+                    *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
         }
         if (!visited[dst_asic_id].contains(src_asic_id)) {
             asic_topology[dst_asic_id].push_back(
                 {src_asic_id,
-                 {EthConnection(
+                 {tt::tt_metal::EthConnection(
                      *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname)}});
             visited[dst_asic_id].insert(src_asic_id);
             visited_idx[dst_asic_id][src_asic_id] = asic_topology[dst_asic_id].size() - 1;
         } else {
-            asic_topology[dst_asic_id][visited_idx[dst_asic_id][src_asic_id]].second.push_back(EthConnection(
-                *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname));
+            asic_topology[dst_asic_id][visited_idx[dst_asic_id][src_asic_id]].second.push_back(
+                tt::tt_metal::EthConnection(
+                    *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname));
         }
     }
     return asic_topology;
@@ -1537,7 +1538,7 @@ void perform_link_reset(
     bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
     TT_FATAL(link_retrain_supported, "Link reset is only supported on WORMHOLE_B0 architecture");
 
-    AsicTopology reset_topology =
+    tt::tt_metal::AsicTopology reset_topology =
         build_reset_topology(reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);
 
     reset_ethernet_links(physical_system_descriptor, reset_topology);
@@ -1585,7 +1586,7 @@ fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
     return fsd_proto;
 }
 
-tt_metal::AsicTopology validate_connectivity(
+tt::tt_metal::AsicTopology validate_connectivity(
     const fsd::proto::FactorySystemDescriptor& fsd_proto,
     const YAML::Node& gsd_yaml_node,
     bool fail_on_warning,

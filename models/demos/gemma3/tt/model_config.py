@@ -89,6 +89,7 @@ class ModelArgs(TTModelArgs):
         self.tile_size = 32
         self.is_70b = False
         self.is_90b = False
+        self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)

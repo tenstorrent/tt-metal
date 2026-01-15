@@ -82,8 +82,4 @@ struct tensor_args_t {
     Tensor input;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
 }  // namespace ttnn::operations::experimental::ccl::slice_reshard_async

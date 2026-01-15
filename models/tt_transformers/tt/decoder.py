@@ -52,6 +52,7 @@ class TransformerBlock(LightweightModule):
         self.attention = ActualAttentionClass(
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
+            args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
