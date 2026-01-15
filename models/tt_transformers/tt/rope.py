@@ -384,7 +384,7 @@ class RotarySetup(LightweightModule):
         rope_scaling: Optional[RopeScaling] = None,
         use_qk_fused: bool = False,
         datatype: ttnn.DataType = ttnn.bfloat16,
-        data_parallel: int = 1,
+        shard_batch_to_mesh_dim: Optional[int] = 1,
     ) -> None:
         super().__init__()
         self.use_qk_fused = use_qk_fused
@@ -398,14 +398,14 @@ class RotarySetup(LightweightModule):
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:
-            self.batch_size_per_device_group = max(self.doubled_batch_size // list(device.shape)[1], 1)
+            self.batch_size_per_device_group = max(
+                self.doubled_batch_size // list(device.shape)[shard_batch_to_mesh_dim], 1
+            )
         else:
             self.batch_size_per_device_group = self.doubled_batch_size
         self.core_grid = (
             ttnn.CoreCoord(8, 8) if ttnn.get_arch_name() == "blackhole" else device.compute_with_storage_grid_size()
         )
-        self.batch_size_per_device_group = batch_size
-        self.batch_size = batch_size * data_parallel
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = get_rot_mats(
@@ -417,13 +417,15 @@ class RotarySetup(LightweightModule):
             datatype=datatype,
         )
 
-        self.batch_grid = ttnn.num_cores_to_corerangeset(self.doubled_batch_size, self.core_grid, row_wise=True)
+        self.batch_grid = ttnn.num_cores_to_corerangeset(
+            self.batch_size_per_device_group, self.core_grid, row_wise=True
+        )
 
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
             1,
-            self.doubled_batch_size,
+            self.batch_size_per_device_group,
             1,
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
