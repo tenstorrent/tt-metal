@@ -103,7 +103,7 @@
   sku: wh_llmbox
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
-  timeout: 60
+  timeout: 35
   model-name: flux1-dev
 
 - name: t3k_motif_tests
@@ -113,6 +113,14 @@
   team: models
   timeout: 25
   model-name: motif
+
+- name: t3k_qwenimage_tests
+  cmd: run_t3000_qwenimage_tests
+  sku: wh_llmbox
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  timeout: 25
+  model-name: qwenimage
 
 - name: t3k_mistral_tests
   cmd: run_t3000_mistral_tests

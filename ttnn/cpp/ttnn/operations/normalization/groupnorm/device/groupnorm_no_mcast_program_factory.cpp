@@ -22,7 +22,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::normalization::group_norm {
 
 GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const GroupNormParams& operation_attributes, const GroupNormInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input;
     const auto& gamma = tensor_args.gamma;
     const auto& beta = tensor_args.beta;
@@ -1107,8 +1107,8 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
 
 void GroupNormNoMcastProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const GroupNormParams& /*operation_attributes*/,
+    const GroupNormInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;

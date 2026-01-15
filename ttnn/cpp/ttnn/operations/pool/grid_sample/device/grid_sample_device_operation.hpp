@@ -21,8 +21,8 @@ constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST = 2;
 constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
 
 struct GridSampleOperation {
-    using operation_attributes_t = grid_sample::operation_attributes_t;
-    using tensor_args_t = grid_sample::tensor_args_t;
+    using operation_attributes_t = GridSampleParams;
+    using tensor_args_t = GridSampleInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t =

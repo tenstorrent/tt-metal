@@ -20,12 +20,12 @@ struct GeluBackwardProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args, Tensor& output);
+        const GeluBackwardParams& args, const GeluBackwardInputs& tensor_args, Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const GeluBackwardParams& operation_attributes,
+        const GeluBackwardInputs& tensor_args,
         Tensor& output);
 };
 

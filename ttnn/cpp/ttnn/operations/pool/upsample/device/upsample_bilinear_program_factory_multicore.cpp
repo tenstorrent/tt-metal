@@ -10,6 +10,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 
 namespace ttnn::operations::pool::upsample::program {
 
@@ -20,11 +21,17 @@ constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
 static FixedPoint float_to_fixed(float value) { return static_cast<FixedPoint>(value * FIXED_ONE); }
 
 UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output_tensor) {
+    const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
     const ttnn::Tensor& input = tensor_args.input_tensor;
     const ttnn::Tensor& output = output_tensor;
-    const uint32_t scale_factor_h = operation_attributes.scale_factor_h;
-    const uint32_t scale_factor_w = operation_attributes.scale_factor_w;
+    // This factory only supports integer scale factors
+    TT_FATAL(
+        is_integer_scale(operation_attributes.scale_factor_h) && is_integer_scale(operation_attributes.scale_factor_w),
+        "Bilinear upsample factory requires integer scale factors, got scale_h={}, scale_w={}",
+        operation_attributes.scale_factor_h,
+        operation_attributes.scale_factor_w);
+    const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
+    const uint32_t scale_factor_w = static_cast<uint32_t>(operation_attributes.scale_factor_w);
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -313,8 +320,8 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
 
 void UpsampleBilinearProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const UpsampleParams& /*operation_attributes*/,
+    const UpsampleInputs& tensor_args,
     Tensor& output_tensor) {
     tt::tt_metal::Program& program = cached_program.program;
     tt::tt_metal::CBHandle& cb_src0 = cached_program.shared_variables.cb_src0;

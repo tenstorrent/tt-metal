@@ -679,7 +679,8 @@ void MetalContext::set_fabric_config(
     std::optional<uint8_t> num_routing_planes,
     tt_fabric::FabricTensixConfig fabric_tensix_config,
     tt_fabric::FabricUDMMode fabric_udm_mode,
-    tt_fabric::FabricManagerMode fabric_manager) {
+    tt_fabric::FabricManagerMode fabric_manager,
+    tt_fabric::FabricRouterConfig router_config) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
@@ -737,6 +738,7 @@ void MetalContext::set_fabric_config(
     this->set_fabric_tensix_config(fabric_tensix_config);
     this->fabric_udm_mode_ = fabric_udm_mode;
     this->fabric_manager_ = fabric_manager;
+    this->fabric_router_config_ = router_config;
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -748,7 +750,7 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
-        control_plane.initialize_fabric_context(this->fabric_config_);
+        control_plane.initialize_fabric_context(this->fabric_config_, this->fabric_router_config_);
     }
     control_plane.configure_routing_tables_for_fabric_ethernet_channels(
         this->fabric_config_, this->fabric_reliability_mode_);
@@ -769,6 +771,8 @@ void MetalContext::initialize_fabric_tensix_datamover_config() {
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
 
 tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
+
+const tt_fabric::FabricRouterConfig& MetalContext::get_fabric_router_config() const { return fabric_router_config_; }
 
 void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
     fabric_tensix_config_ = fabric_tensix_config;
