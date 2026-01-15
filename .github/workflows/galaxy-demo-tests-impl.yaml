@@ -47,7 +47,7 @@ jobs:
           # Ashai Reddy - sentence_bert
           # Aniruddha Tupe - whisper
           # Colman Glagovich - sd35, wan22
-          # Samuel Adesoye - flux1, motif
+          # Samuel Adesoye - flux1, motif, qwenimage
           # Stuti Raizada - gpt-oss
           # Stephen Osborne - mochi
           # Rico Zhu - qwen3_32b, qwen3_32b_long_context
@@ -71,7 +71,8 @@ jobs:
             { "name": "Galaxy Motif-Image-6B-Preview demo tests", "arch": "wormhole_b0", "model": "motif", "timeout": 20, "owner_id": "U08TED0JM9D" },
             { "name": "Galaxy Wan2.2 demo tests", "arch": "wormhole_b0", "model": "wan22", "timeout": 25, "owner_id": "U03FJB5TM5Y" },
             { "name": "Galaxy Mochi demo tests", "arch": "wormhole_b0", "model": "mochi", "timeout": 30, "owner_id": "U09ELB03XRU" },
-            { "name": "Galaxy DeepSeek v3 demo tests", "arch": "wormhole_b0", "model": "deepseek_v3", "timeout": 30, "owner_id": "U08H32XUS9W" }
+            { "name": "Galaxy DeepSeek v3 demo tests", "arch": "wormhole_b0", "model": "deepseek_v3", "timeout": 30, "owner_id": "U08H32XUS9W" },
+            { "name": "Galaxy QwenImage demo tests", "arch": "wormhole_b0", "model": "qwenimage", "timeout": 20, "owner_id": "U08TED0JM9D" }
           ]'
 
           # Filter matrix based on model selection
@@ -303,6 +304,17 @@ jobs:
           MESH_DEVICE: TG
         run: |
           pytest models/demos/deepseek_v3/demo/test_demo.py --timeout 600
+      - name: Run QwenImage demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'qwenimage' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_DIT_CACHE_DIR: /tmp/TT_DIT_CACHE
+          NO_PROMPT: 1
+        run: |
+          pytest -n auto \
+            models/experimental/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py \
+            -k "4x8" \
+            --timeout 1200
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
