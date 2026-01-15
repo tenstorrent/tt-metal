@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::nonzero {
+namespace ttnn::prim {
 
 struct NonzeroParams {
     tt::tt_metal::MemoryConfig output_memory_config;
@@ -20,4 +20,4 @@ using tensor_return_value_t = std::tuple<Tensor, Tensor>;
 
 using spec_return_value_t = std::tuple<TensorSpec, TensorSpec>;
 
-}  // namespace ttnn::operations::data_movement::nonzero
+}  // namespace ttnn::prim

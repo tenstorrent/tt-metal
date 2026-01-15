@@ -9,11 +9,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::nonzero {
+namespace ttnn::prim {
 
 NonZeroIndicesDeviceOperation::program_factory_t NonZeroIndicesDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::NonZeroIndicesProgramFactory{};
+    return NonZeroIndicesProgramFactory{};
 }
 
 void NonZeroIndicesDeviceOperation::validate_on_program_cache_hit(
@@ -51,14 +51,10 @@ tensor_return_value_t NonZeroIndicesDeviceOperation::create_output_tensors(
         create_device_tensor(std::get<1>(output_specs), tensor_args.input.device()),
     };
 }
-}  // namespace ttnn::operations::data_movement::nonzero
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation::tensor_return_value_t nonzero(
-    const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& memory_config) {
-    using OperationType = ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{.output_memory_config = memory_config},
-        OperationType::tensor_args_t{.input = input_tensor});
+tensor_return_value_t nonzero(const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& memory_config) {
+    return ttnn::device_operation::launch<NonZeroIndicesDeviceOperation>(
+        NonzeroParams{.output_memory_config = memory_config}, NonzeroInputs{.input = input_tensor});
 }
+
 }  // namespace ttnn::prim

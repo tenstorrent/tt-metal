@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::nonzero::program {
+namespace ttnn::prim {
 
 struct NonZeroIndicesSharedVariables {
     tt::tt_metal::KernelHandle kernel_id{};
@@ -31,4 +31,4 @@ struct NonZeroIndicesProgramFactory {
         tensor_return_value_t& output_tensors);
 };
 
-}  // namespace ttnn::operations::data_movement::nonzero::program
+}  // namespace ttnn::prim

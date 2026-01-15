@@ -10,7 +10,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::nonzero::program {
+namespace ttnn::prim {
 
 NonZeroIndicesProgramFactory::cached_program_t NonZeroIndicesProgramFactory::create(
     const NonzeroParams& /*operation_attributes*/,
@@ -115,4 +115,4 @@ void NonZeroIndicesProgramFactory::override_runtime_arguments(
     runtime_args[5] = input.element_size();
 }
 
-}  // namespace ttnn::operations::data_movement::nonzero::program
+}  // namespace ttnn::prim
