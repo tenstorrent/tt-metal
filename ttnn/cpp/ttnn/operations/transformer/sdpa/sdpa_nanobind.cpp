@@ -107,6 +107,7 @@ void bind_sdpa(nb::module_& mod) {
             page_table_tensor (ttnn.Tensor): the page table tensor.  [b x num_pages]
             chunk_start_idx (int): Absolute position in the sequence where this chunk starts.
                 Must be a multiple of program_config.q_chunk_size.
+                Must be a multiple of program_config.k_chunk_size (workaround for https://github.com/tenstorrent/tt-metal/issues/35225)
 
         Keyword args:
             scale (float, optional): Defaults to `None`.
