@@ -216,7 +216,6 @@ void MeshDeviceImpl::mark_allocations_unsafe() { this->allocator_impl()->mark_al
 void MeshDeviceImpl::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 MeshDeviceImpl::MeshDeviceImpl(
-    MeshDevice* pimpl_wrapper,
     std::shared_ptr<ScopedDevices> mesh_handle,
     std::unique_ptr<MeshDeviceView> mesh_device_view,
     std::shared_ptr<MeshDevice> parent_mesh) :
@@ -226,11 +225,8 @@ MeshDeviceImpl::MeshDeviceImpl(
     parent_mesh_(std::move(parent_mesh)),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
-    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
-    pimpl_wrapper_(pimpl_wrapper) {
-    pimpl_wrapper_->pimpl_ = std::unique_ptr<MeshDeviceImpl>(this);
-    Inspector::mesh_device_created(
-        pimpl_wrapper_, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
+    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
+    Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
     const auto& mpi_context = MetalContext::instance().global_distributed_context();
     distributed_context_ =
         mpi_context.split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context.rank()));
@@ -328,13 +324,12 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     const auto root_devices = scoped_devices->root_devices();
 
     auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice());
-    auto mesh_device_impl = new MeshDeviceImpl(
-        mesh_device.get(),
+    mesh_device->pimpl_ = std::make_unique<MeshDeviceImpl>(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
-    mesh_device_impl->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
 
     // TODO #20966: Remove these calls
     for (auto* device : extract_locals(root_devices)) {
@@ -342,7 +337,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     }
 
     // Wait for all ranks to finish initializing the mesh device before proceeding.
-    mesh_device_impl->distributed_context_->barrier();
+    mesh_device->pimpl_->distributed_context_->barrier();
 
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     tt_metal::MetalContext::instance().device_manager()->init_profiler();
@@ -414,13 +409,12 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     const auto root_devices = scoped_devices->root_devices();
 
     auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice());
-    auto mesh_device_impl = new MeshDeviceImpl(
-        mesh_device.get(),
+    mesh_device->pimpl_ = std::make_unique<MeshDeviceImpl>(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
-    auto submeshes = mesh_device_impl->create_submeshes(mesh_device, MeshShape(1, 1));
+    auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
         device_ids.size() == submeshes.size(),
         "Created an unexpected number of submeshes: {} instead of {}",
@@ -432,7 +426,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     }
 
     // Wait for all ranks to finish initializing the mesh device before proceeding.
-    mesh_device_impl->distributed_context_->barrier();
+    mesh_device->pimpl_->distributed_context_->barrier();
 
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     tt_metal::MetalContext::instance().device_manager()->init_profiler();
@@ -530,14 +524,13 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     }
 
     auto submesh = std::shared_ptr<MeshDevice>(new MeshDevice());
-    auto submesh_impl = new MeshDeviceImpl(
-        submesh.get(),
+    submesh->pimpl_ = std::make_unique<MeshDeviceImpl>(
         scoped_devices_,
         std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
         parent_mesh);
 
     const auto& allocator_config = reference_device()->allocator_impl()->get_config();
-    submesh_impl->initialize(
+    submesh->initialize(
         num_hw_cqs(),
         allocator_config.l1_small_size,
         allocator_config.trace_region_size,
@@ -545,22 +538,22 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         allocator_config.l1_bank_remap);
 
     // TODO #20966: Remove these calls
-    if (!submesh_impl->get_view().get_devices().empty()) {
-        for (auto* device : submesh_impl->get_devices()) {
+    if (!submesh->pimpl_->get_view().get_devices().empty()) {
+        for (auto* device : submesh->pimpl_->get_devices()) {
             dynamic_cast<Device*>(device)->set_mesh_device(submesh);
         }
     }
 
     submeshes_.push_back(submesh);
-    log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh_impl->id(), submesh_shape, offset);
-    if (!submesh_impl->get_view().get_devices().empty()) {
+    log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->pimpl_->id(), submesh_shape, offset);
+    if (!submesh->pimpl_->get_view().get_devices().empty()) {
         log_trace(
             LogMetal,
             "Submesh {} instantiated with {} devices",
-            submesh_impl->id(),
-            submesh_impl->get_devices().size());
+            submesh->pimpl_->id(),
+            submesh->pimpl_->get_devices().size());
     } else {
-        log_trace(LogMetal, "Submesh {} instantiated with only remote devices", submesh_impl->id());
+        log_trace(LogMetal, "Submesh {} instantiated with only remote devices", submesh->pimpl_->id());
     }
     return submesh;
 }
@@ -593,10 +586,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_submeshes(
     return submeshes;
 }
 
-MeshDeviceImpl::~MeshDeviceImpl() {
-    Inspector::mesh_device_destroyed(this->pimpl_wrapper_);
-    close();
-}
+MeshDeviceImpl::~MeshDeviceImpl() = default;
 
 IDevice* MeshDeviceImpl::get_device(ChipId physical_device_id) const {
     for (auto* device : this->get_devices()) {
@@ -721,13 +711,17 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
 }
 
 bool MeshDeviceImpl::close() {
+    TT_THROW("close() is not supported on MeshDeviceImpl - use close_impl() instead");
+    return false;
+}
+
+bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     ZoneScoped;
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
     if (this->is_initialized()) {
-        // TODO(p1-0tr): Figure out a way of doing this without the pimpl_wrapper_
-        ReadMeshDeviceProfilerResults(*this->pimpl_wrapper_, ProfilerReadState::LAST_FD_READ);
+        ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
     }
 
     if (distributed_context_) {
@@ -1106,8 +1100,20 @@ void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_i
 uint32_t MeshDeviceImpl::get_trace_buffers_size() const { return trace_buffers_size_; }
 void MeshDeviceImpl::set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
 
-// Dispatch and initialization
 bool MeshDeviceImpl::initialize(
+    const uint8_t /*num_hw_cqs*/,
+    size_t /*l1_small_size*/,
+    size_t /*trace_region_size*/,
+    size_t /*worker_l1_size*/,
+    tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
+    bool /*minimal*/) {
+    TT_THROW("initialize() is not supported on MeshDeviceImpl - use initialize_impl() instead");
+    return false;
+}
+
+// Dispatch and initialization
+bool MeshDeviceImpl::initialize_impl(
+    MeshDevice* pimpl_wrapper,
     const uint8_t /*num_hw_cqs*/,
     size_t /*l1_small_size*/,
     size_t /*trace_region_size*/,
@@ -1133,7 +1139,7 @@ bool MeshDeviceImpl::initialize(
     const auto& allocator = reference_device()->allocator_impl();
     // SubDeviceManagerTracker needs a MeshDevice pointer.
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this->pimpl_wrapper_, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
+        pimpl_wrapper, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ =
@@ -1142,7 +1148,7 @@ bool MeshDeviceImpl::initialize(
     if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
-                this->pimpl_wrapper_,  // TODO(p1-0tr): should pass impl?
+                pimpl_wrapper,
                 cq_id,
                 dispatch_thread_pool_,
                 reader_thread_pool_,
@@ -1151,13 +1157,11 @@ bool MeshDeviceImpl::initialize(
         }
     } else {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
-                this->pimpl_wrapper_ /* TODO(p1-0tr): should pass impl? */,
-                cq_id,
-                std::bind(&MeshDeviceImpl::lock_api, this)));
+            mesh_command_queues_.push_back(
+                std::make_unique<SDMeshCommandQueue>(pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this)));
         }
     }
-    Inspector::mesh_device_initialized(this->pimpl_wrapper_);
+    Inspector::mesh_device_initialized(this);
     is_internal_state_initialized = true;
     return true;
 }
@@ -1299,7 +1303,10 @@ std::shared_ptr<distributed::MeshDevice> MeshDeviceImpl::get_mesh_device() {
     return nullptr;
 }
 
-MeshDevice::~MeshDevice() {}
+MeshDevice::~MeshDevice() {
+    Inspector::mesh_device_destroyed(this->pimpl_.get());
+    pimpl_->close_impl(this);
+}
 
 // MeshDevice PIMPL forwarding methods
 tt::ARCH MeshDevice::arch() const { return pimpl_->arch(); }
@@ -1421,14 +1428,15 @@ bool MeshDevice::initialize(
     size_t worker_l1_size,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
-    return pimpl_->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
+    return pimpl_->initialize_impl(
+        this, num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
 void MeshDevice::init_command_queue_host() { pimpl_->init_command_queue_host(); }
 void MeshDevice::init_command_queue_device() { pimpl_->init_command_queue_device(); }
 bool MeshDevice::compile_fabric() { return pimpl_->compile_fabric(); }
 void MeshDevice::configure_fabric() { pimpl_->configure_fabric(); }
 void MeshDevice::init_fabric() { pimpl_->init_fabric(); }
-bool MeshDevice::close() { return pimpl_->close(); }
+bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }
 void MeshDevice::disable_and_clear_program_cache() { pimpl_->disable_and_clear_program_cache(); }

@@ -154,11 +154,8 @@ private:
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
-    MeshDevice* pimpl_wrapper_;
-
 public:
     MeshDeviceImpl(
-        MeshDevice* pimpl_wrapper,
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::shared_ptr<MeshDevice> parent_mesh = {});
@@ -240,12 +237,21 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
+    bool initialize_impl(
+        MeshDevice* pimpl_wrapper,
+        uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t worker_l1_size,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        bool minimal = false);
     void init_command_queue_host() override;
     void init_command_queue_device() override;
     bool compile_fabric() override;
     void configure_fabric() override;
     void init_fabric() override;
     bool close() override;
+    bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;
     void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
