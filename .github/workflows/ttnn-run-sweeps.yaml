@@ -821,7 +821,7 @@ jobs:
     needs:
       - ttnn-generate-sweeps
       - build-artifact
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Lead Models)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
