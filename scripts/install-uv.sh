@@ -321,11 +321,27 @@ fail_system_install() {
 # Install uv on Fedora/RHEL family using system package manager
 install_uv_fedora_system() {
     if command -v dnf &>/dev/null; then
-        dnf install -y uv
+        if ! dnf install -y uv; then
+            echo "Error: dnf install failed" >&2
+            return 1
+        fi
     elif command -v yum &>/dev/null; then
-        yum install -y uv
+        if ! yum install -y uv; then
+            echo "Error: yum install failed" >&2
+            return 1
+        fi
     else
         echo "Error: No package manager found (dnf/yum)" >&2
+        return 1
+    fi
+
+    # Verify installation succeeded
+    if ! command -v uv &>/dev/null; then
+        echo "Error: uv not found after package installation" >&2
+        echo "This may indicate:" >&2
+        echo "  - The package was installed to a location not in PATH" >&2
+        echo "  - The installation completed but the binary is missing" >&2
+        echo "  - PATH needs to be updated to include the installation directory" >&2
         return 1
     fi
 }
@@ -380,7 +396,16 @@ install_uv_macos_system() {
                     return 0
                 fi
                 echo "Error: pip install succeeded but uv is not available in PATH" >&2
+                echo "This may indicate:" >&2
+                echo "  - uv was installed to a location not in PATH" >&2
+                echo "  - PATH was not updated after installation" >&2
+                echo "  - Installation completed but binary is missing" >&2
             fi
+        fi
+        # Fallback to standalone installer if --break-system-packages doesn't work
+        echo "pip installation blocked by PEP 668, trying standalone installer..." >&2
+        if install_uv_standalone; then
+            return 0
         fi
         fail_system_install
     fi
@@ -396,6 +421,10 @@ install_uv_macos_system() {
     # pip exited 0 but uv not available - unusual case
     if ! command -v uv &>/dev/null; then
         echo "Error: pip install appeared to succeed but uv is not available" >&2
+        echo "This may indicate:" >&2
+        echo "  - uv was installed to a location not in PATH" >&2
+        echo "  - PATH was not updated after installation" >&2
+        echo "  - Installation completed but binary is missing" >&2
         echo "pip output: $pip_output" >&2
         fail_system_install
     fi
@@ -485,5 +514,10 @@ if command -v uv &>/dev/null; then
     echo "uv installed successfully: $(uv --version)"
 else
     echo "Error: uv not found after installation" >&2
+    echo "This may indicate:" >&2
+    echo "  - Installation completed but uv is not in PATH" >&2
+    echo "  - The installation method failed silently" >&2
+    echo "  - PATH needs to be updated manually" >&2
+    echo "Try running: export PATH=\"\$HOME/.local/bin:\$PATH\" and verify uv is available." >&2
     exit 1
 fi

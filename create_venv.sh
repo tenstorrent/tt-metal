@@ -230,6 +230,15 @@ validate_env_dir "$PYTHON_ENV_DIR"
 # Determine script directory (used for locating sibling scripts)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Extract UV_VERSION from install-uv.sh for consistency (if available)
+# This ensures we're aware of the version being used, even though install-uv.sh handles installation
+if [ -f "$SCRIPT_DIR/scripts/install-uv.sh" ]; then
+    UV_VERSION=$(grep -m1 '^UV_VERSION=' "$SCRIPT_DIR/scripts/install-uv.sh" | cut -d'"' -f2)
+    if [ -n "$UV_VERSION" ]; then
+        echo "Using uv version from install-uv.sh: $UV_VERSION"
+    fi
+fi
+
 # Install uv if not already available
 if ! command -v uv &>/dev/null; then
     if [ -f "$SCRIPT_DIR/scripts/install-uv.sh" ]; then
