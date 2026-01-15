@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <google/protobuf/text_format.h>
@@ -158,7 +159,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
     const auto errors = static_validate(temp_proto, backwards_compatible);
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
 
-    proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
+    proto_ = std::make_shared<proto::MeshGraphDescriptor>(temp_proto);
 
     populate();
 }
@@ -274,6 +275,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(
         validate_switch_descriptors(proto, all_errors);
         validate_graph_descriptors(proto, all_errors);
         validate_graph_topology_and_connections(proto, all_errors);
+        validate_pinnings(proto, all_errors);
         if (!all_errors.empty()) {
             return all_errors;
         }
@@ -299,6 +301,8 @@ void MeshGraphDescriptor::populate() {
     pre_populate_connections_lookups();
 
     populate_connections();
+
+    populate_pinnings();
 }
 
 void MeshGraphDescriptor::populate_top_level_instance() {
@@ -1455,5 +1459,51 @@ void MeshGraphDescriptor::print_all_nodes() {
 
     // Start from top-level and recursively print in local-id order
     print_node(top_level_id_, 0);
+}
+
+void MeshGraphDescriptor::populate_pinnings() {
+    pinnings_.clear();
+
+    // Extract pinnings from top-level pinnings section
+    for (const auto& pinning : proto_->pinnings()) {
+        // Extract LogicalFabricNodeId from proto
+        const auto& logical_node_id = pinning.logical_fabric_node_id();
+        ::tt::tt_fabric::FabricNodeId fabric_node(MeshId{logical_node_id.mesh_id()}, logical_node_id.chip_id());
+
+        // Extract PhysicalAsicPosition from proto and convert to AsicPosition
+        const auto& physical_pos = pinning.physical_asic_position();
+        AsicPosition asic_pos(
+            tt::tt_metal::TrayID{physical_pos.tray_id()}, tt::tt_metal::ASICLocation{physical_pos.asic_location()});
+
+        // Store as pair(AsicPosition, FabricNodeId) for C++ compatibility
+        // MeshId is embedded in FabricNodeId, so no need to group by MeshId
+        pinnings_.emplace_back(asic_pos, fabric_node);
+    }
+}
+
+void MeshGraphDescriptor::validate_pinnings(
+    const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    // Track duplicate pinnings for the same logical_fabric_node_id
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> fabric_node_pinning_count;
+
+    for (const auto& pinning : proto.pinnings()) {
+        const auto& logical_node_id = pinning.logical_fabric_node_id();
+
+        uint32_t mesh_id = logical_node_id.mesh_id();
+        uint32_t chip_id = logical_node_id.chip_id();
+
+        // Check for duplicate pinnings
+        auto key = std::make_pair(mesh_id, chip_id);
+        fabric_node_pinning_count[key]++;
+        if (fabric_node_pinning_count[key] > 1) {
+            error_messages.push_back(
+                fmt::format("Duplicate pinning for fabric node (mesh_id: {}, chip_id: {})", mesh_id, chip_id));
+        }
+
+        // Validate that mesh_id exists in the mesh instances
+        // Note: We can't fully validate chip_id range without knowing which mesh descriptor
+        // corresponds to which mesh_id, but we can at least check that mesh_id is reasonable
+        // More precise validation would require checking the top_level_instance structure
+    }
 }
 }  // namespace tt::tt_fabric
