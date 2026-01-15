@@ -5,10 +5,10 @@
 """
 TTNN DRAM Streaming Matmul Micro Op Test
 
-Tests the DRAM streaming matmul operation where:
-- Input A is WIDTH_SHARDED in L1 across compute cores
+Tests the simplified DRAM streaming matmul operation where:
+- Input A is REPLICATED on compute cores (each core has full [M, K])
 - Input B (weights) is WIDTH_SHARDED in DRAM across DRAM banks
-- Output is WIDTH_SHARDED in L1
+- Output is WIDTH_SHARDED in L1 on compute cores
 """
 
 import pytest
@@ -31,16 +31,36 @@ def pad_to_dram_banks(num, tile_w, lcm):
 
 @pytest.mark.parametrize("k, n", [(7168, 2048), (2048, 7168)])
 @pytest.mark.parametrize("has_bias", [False, True])
-@pytest.mark.parametrize("grid_size", [(8, 1)])
-def test_dram_streaming_matmul(device, k, n, has_bias, grid_size):
-    """Test DRAM streaming matmul using the cleaner ttnn API patterns."""
+@pytest.mark.parametrize("m", [32])
+def test_dram_streaming_matmul(device, k, n, has_bias, m):
+    """Test simplified DRAM streaming matmul.
 
-    m = 32  # Standard tile height
-    tile_h = 32
+    In the simplified version:
+    - Input A is REPLICATED on compute cores (each core has full [M, K])
+    - No multicast needed - each core has its own copy
+    - Output is WIDTH_SHARDED across N dimension
+
+    Supports both standard tiles (32x32) and tiny tiles (1x32) for m=1.
+    """
+
+    tile_h = m  # Tile height matches m (1 for tiny tiles, 32 for standard)
     tile_w = 32
 
-    # Get number of DRAM banks
+    # Create tile object for tiny tiles when m=1
+    in0_tile = ttnn.Tile([tile_h, tile_w])
+    out_tile = ttnn.Tile([tile_h, tile_w])
+
+    # Get compute cores from optimal DRAM bank assignment
+    # These are the cores that will do the compute (8 on BH, 12 on WH)
+    compute_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_cores = len(compute_cores)
+
+    # Get number of DRAM banks (should match num_cores)
     num_banks = device.dram_grid_size().x
+    assert num_cores == num_banks, f"num_cores ({num_cores}) must equal num_banks ({num_banks})"
+
+    logger.info(f"num_compute_cores={num_cores}, num_dram_banks={num_banks}")
+
     n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
 
     # Define shapes
@@ -49,35 +69,37 @@ def test_dram_streaming_matmul(device, k, n, has_bias, grid_size):
     in1_shard_shape = [k, n_padded // num_banks]
     bias_shape = [1, 1, n]
     bias_shard_shape = [tile_h, n_padded // num_banks]
-    num_cores = grid_size[0] * grid_size[1]
 
     # Calculate block dimensions
-    in0_block_w = k // num_cores // 32
-    out_block_h = m // tile_h
-    out_block_w = n // num_cores // tile_w
+    # in0_block_w: how many K tiles to process per block
+    in0_block_w = k // tile_w // num_cores
 
-    logger.debug(
-        f"n_padded={n_padded}, in0_block_w={in0_block_w}, out_block_h={out_block_h}, out_block_w={out_block_w}"
-    )
+    logger.debug(f"n_padded={n_padded}, in0_block_w={in0_block_w}")
 
     # Create PyTorch tensors
     torch.manual_seed(42)
     in0 = torch.randn(in0_shape).bfloat16().float()
     in1 = torch.randn(in1_shape).bfloat16().float()
 
-    # Input A - WIDTH_SHARDED in L1 using create_sharded_memory_config
-    in0_memory_config = ttnn.create_sharded_memory_config(
-        (1, 1, m, k),
-        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    # Build CoreRangeSet for specific compute cores (not bounding box)
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
     )
+
+    # Input A - REPLICATED on compute cores (each core has full [M, K])
+    # First replicate the tensor num_cores times along height, then HEIGHT_SHARD
+    # so each core gets [M, K]
+    in0_replicated = in0.repeat(1, 1, num_cores, 1)  # Shape: [1, 1, M * num_cores, K]
+    in0_shard_shape_full = [m, k]  # Each core gets [M, K]
+    in0_shard_spec = ttnn.ShardSpec(compute_core_grid, in0_shard_shape_full, ttnn.ShardOrientation.ROW_MAJOR)
+    in0_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
     in0_t = ttnn.from_torch(
-        in0,
+        in0_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=in0_memory_config,
+        tile=in0_tile,
     )
 
     # Input B (weights) - WIDTH_SHARDED in DRAM
@@ -106,26 +128,20 @@ def test_dram_streaming_matmul(device, k, n, has_bias, grid_size):
         bias_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec
         )
+        bias_tile = ttnn.Tile([tile_h, tile_w])
         bias_t = ttnn.from_torch(
             bias_padded,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=bias_mem_config,
+            tile=bias_tile,
         )
 
-    # Output memory config - WIDTH_SHARDED in L1
-    sharded_mem_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-    )
-
-    # Create output tensor
-    output_shard_width = n // num_cores
-    output_core_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))]
-    )
-    output_shard_spec = ttnn.ShardSpec(output_core_grid, (m, output_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
+    # Output tensor - WIDTH_SHARDED in L1 on same compute cores
+    # Shard width must match in1 shard width (padded)
+    output_shard_width = n_padded // num_banks
+    output_shard_spec = ttnn.ShardSpec(compute_core_grid, (m, output_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
     torch_output_zeros = torch.zeros([1, 1, m, n]).bfloat16().float()
@@ -135,10 +151,11 @@ def test_dram_streaming_matmul(device, k, n, has_bias, grid_size):
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=output_mem_config,
+        tile=out_tile,
     )
 
     # Run DRAM streaming matmul
-    logger.info(f"Running DRAM streaming matmul: m={m}, k={k}, n={n}, grid={grid_size}, bias={has_bias}")
+    logger.info(f"Running DRAM streaming matmul: m={m}, k={k}, n={n}, num_cores={num_cores}, bias={has_bias}")
     try:
         ttnn_result = DRAMStreamingMatmul.op(
             in0_t,
@@ -146,8 +163,6 @@ def test_dram_streaming_matmul(device, k, n, has_bias, grid_size):
             ttnn_output,
             bias=bias_t,
             in0_block_w=in0_block_w,
-            per_core_M=out_block_h,
-            per_core_N=out_block_w,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
