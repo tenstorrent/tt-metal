@@ -870,7 +870,7 @@ class ModelArgs:
                     if self.num_devices == 8
                     and os.getenv("ACTUAL_DEVICE", "") != "TG"
                     and not is_blackhole()
-                    and 1024 % (self.dim / self.num_devices) == 0
+                    and 1024 % (self.dim // self.num_devices) == 0
                     else self.dim
                 )
             )
