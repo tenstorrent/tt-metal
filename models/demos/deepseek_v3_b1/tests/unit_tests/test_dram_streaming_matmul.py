@@ -223,7 +223,7 @@ def test_dram_streaming_matmul(device, k, n, m):
         pytest.skip(f"Operation failed (may need API adjustments): {e}")
 
     # Compute PyTorch reference
-    pt_out = in0 @ in1  # [1, 1, M, N]
+    pt_out = DRAMStreamingMatmul.golden(in0, in1)
 
     # Convert to torch for comparison
     tt_out = ttnn.to_torch(ttnn_result)
