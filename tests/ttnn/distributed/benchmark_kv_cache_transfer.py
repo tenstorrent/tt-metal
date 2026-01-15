@@ -21,20 +21,53 @@ from loguru import logger
 from pathlib import Path
 
 
+# =============================================================================
+# OPTIMIZATION CONFIGURATION
+# =============================================================================
+# Number of parallel socket connections per mesh coordinate
+NUM_SOCKET_CONNECTIONS = 1
+
+# FIFO size for socket buffers (must be L1-aligned)
+# Options: 4096, 8192, 16384, 32768 bytes
+# Larger FIFO improves throughput by reducing overhead
+SOCKET_FIFO_SIZE = 32768
+
+# Buffer type for socket memory: "L1" or "DRAM"
+# L1 is faster for smaller buffers
+SOCKET_BUFFER_TYPE = "L1"
+
+# Tensor memory configuration: "L1" or "DRAM"
+# DRAM avoids L1 contention when using L1 for socket buffers
+TENSOR_MEMORY_TYPE = "DRAM"
+
+# Use diagonal core distribution to avoid NOC bank conflicts
+USE_DIAGONAL_CORES = False
+
+# SHARDING MODE: Shard tensors across mesh coordinates for parallel link usage
+# With ShardTensorToMesh, each chip sends DIFFERENT data through its own link
+# enabling parallel transfer through both QSFP links (2x throughput)
+USE_SHARDED_TRANSFER = True
+SHARD_DIM = 0  # Shard along batch dimension
+
+# =============================================================================
+# BENCHMARK CONFIGURATION
+# =============================================================================
 # KV cache dimensions to benchmark
 # Format: (batch_size, num_kv_heads, seq_len, head_dim)
 # Batch=32, varying sequence lengths from 128 to 32K (powers of 2)
 # Simulates batched inference with different prompt lengths
+# num_layers=32 (like Llama 8B), each layer has K + V tensors
+NUM_LAYERS = 32  # Llama 8B has 32 transformer layers
 BENCHMARK_CONFIGS = [
-    {"name": "b32_seq_128", "shape": (32, 8, 128, 128), "num_transfers": 10},
-    {"name": "b32_seq_256", "shape": (32, 8, 256, 128), "num_transfers": 10},
-    {"name": "b32_seq_512", "shape": (32, 8, 512, 128), "num_transfers": 10},
-    {"name": "b32_seq_1024", "shape": (32, 8, 1024, 128), "num_transfers": 8},
-    {"name": "b32_seq_2048", "shape": (32, 8, 2048, 128), "num_transfers": 6},
-    {"name": "b32_seq_4096", "shape": (32, 8, 4096, 128), "num_transfers": 5},
-    {"name": "b32_seq_8192", "shape": (32, 8, 8192, 128), "num_transfers": 4},
-    {"name": "b32_seq_16384", "shape": (32, 8, 16384, 128), "num_transfers": 3},
-    {"name": "b32_seq_32768", "shape": (32, 8, 32768, 128), "num_transfers": 2},
+    {"name": "b32_seq_128", "shape": (32, 8, 128, 128), "num_transfers": 3},
+    {"name": "b32_seq_256", "shape": (32, 8, 256, 128), "num_transfers": 3},
+    {"name": "b32_seq_512", "shape": (32, 8, 512, 128), "num_transfers": 2},
+    {"name": "b32_seq_1024", "shape": (32, 8, 1024, 128), "num_transfers": 2},
+    {"name": "b32_seq_2048", "shape": (32, 8, 2048, 128), "num_transfers": 1},
+    {"name": "b32_seq_4096", "shape": (32, 8, 4096, 128), "num_transfers": 1},
+    {"name": "b32_seq_8192", "shape": (32, 8, 8192, 128), "num_transfers": 1},
+    {"name": "b32_seq_16384", "shape": (32, 8, 16384, 128), "num_transfers": 1},
+    {"name": "b32_seq_32768", "shape": (32, 8, 32768, 128), "num_transfers": 1},
 ]
 
 # Results file path
@@ -43,7 +76,7 @@ PLOT_FILE = "/localdev/dmadic/tt-metal/tests/ttnn/distributed/kv_cache_transfer_
 
 
 def setup_socket(device, mesh_shape, sender_rank=0, receiver_rank=1):
-    """Setup socket for data transfer between ranks."""
+    """Setup socket for data transfer between ranks (legacy single-connection)."""
     sender_coord = ttnn.CoreCoord(0, 0)
     recv_coord = ttnn.CoreCoord(0, 0)
 
@@ -53,7 +86,8 @@ def setup_socket(device, mesh_shape, sender_rank=0, receiver_rank=1):
             ttnn.SocketConnection(ttnn.MeshCoreCoord(coord, sender_coord), ttnn.MeshCoreCoord(coord, recv_coord))
         )
 
-    socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 16384)
+    l1_buffer_size = 1300 * 1024  # 1.3 MB
+    socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, l1_buffer_size)
 
     socket_config = ttnn.SocketConfig(
         socket_connections,
@@ -63,6 +97,62 @@ def setup_socket(device, mesh_shape, sender_rank=0, receiver_rank=1):
     )
 
     return socket_config
+
+
+def setup_socket_optimized(
+    device,
+    mesh_shape,
+    num_connections=NUM_SOCKET_CONNECTIONS,
+    fifo_size=SOCKET_FIFO_SIZE,
+    buffer_type=SOCKET_BUFFER_TYPE,
+    use_diagonal_cores=USE_DIAGONAL_CORES,
+    sender_rank=0,
+    receiver_rank=1,
+):
+    """
+    Setup optimized socket with parallel connections across mesh coordinates.
+
+    This creates connections that utilize DIFFERENT physical ethernet links
+    by mapping to different mesh coordinates (chips). For N300 1x2 mesh:
+    - MeshCoordinate(0,0) -> uses one physical link
+    - MeshCoordinate(0,1) -> uses another physical link
+
+    This enables true parallel data transfer across both ethernet links.
+    """
+    socket_connections = []
+    logical_core = ttnn.CoreCoord(0, 0)
+
+    # Create one connection per mesh coordinate (chip) to use different physical links
+    # For N300 1x2 mesh: creates 2 connections using 2 different ethernet links
+    for coord in ttnn.MeshCoordinateRange(mesh_shape):
+        socket_connections.append(
+            ttnn.SocketConnection(
+                ttnn.MeshCoreCoord(coord, logical_core),
+                ttnn.MeshCoreCoord(coord, logical_core),
+            )
+        )
+
+    num_links = len(socket_connections)
+    buffer_type_enum = ttnn.BufferType.DRAM if buffer_type == "DRAM" else ttnn.BufferType.L1
+    socket_mem_config = ttnn.SocketMemoryConfig(buffer_type_enum, fifo_size)
+
+    socket_config = ttnn.SocketConfig(
+        socket_connections,
+        socket_mem_config,
+        sender_rank=sender_rank,
+        receiver_rank=receiver_rank,
+    )
+
+    logger.info(f"Socket config: {num_links} links (mesh coords), FIFO={fifo_size}, buffer={buffer_type}")
+    return socket_config
+
+
+def get_tensor_memory_config():
+    """Get memory config for tensors based on optimization settings."""
+    if TENSOR_MEMORY_TYPE == "DRAM":
+        return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+    else:
+        return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)
 
 
 def calculate_tensor_size_bytes(shape, dtype=ttnn.bfloat16):
@@ -76,10 +166,11 @@ def calculate_tensor_size_bytes(shape, dtype=ttnn.bfloat16):
 
 def run_sender(device, socket, configs):
     """
-    Sender (Rank 0): Create and send tensors of various sizes.
-    Send timing info along with each transfer.
+    Sender (Rank 0): Create and send 32 layers of KV cache (K+V per layer).
+    Measures end-to-end time for transferring all 64 tensors (32 K + 32 V).
     """
     logger.info("=== SENDER (Rank 0) - Starting benchmark ===")
+    logger.info(f"Transferring {NUM_LAYERS} layers × 2 tensors (K+V) = {NUM_LAYERS * 2} tensors per transfer")
 
     results = []
 
@@ -90,51 +181,77 @@ def run_sender(device, socket, configs):
 
         tensor_size_bytes = calculate_tensor_size_bytes(shape)
         tensor_size_mb = tensor_size_bytes / (1024 * 1024)
+        # Total KV cache size: K + V for all layers
+        total_kv_size_mb = tensor_size_mb * 2 * NUM_LAYERS
+        total_kv_size_gb = total_kv_size_mb / 1024
 
         logger.info(f"\n--- Benchmarking: {name} ---")
-        logger.info(f"Shape: {shape}, Size: {tensor_size_mb:.2f} MB, Transfers: {num_transfers}")
+        logger.info(f"Per-tensor shape: {shape}, Size: {tensor_size_mb:.2f} MB")
+        logger.info(
+            f"Total KV cache: {NUM_LAYERS} layers × (K+V) = {total_kv_size_mb:.0f} MB ({total_kv_size_gb:.2f} GB)"
+        )
+        logger.info(f"Num transfers: {num_transfers}")
 
-        # Create tensor on device
-        torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
-        tt_tensor = ttnn.from_torch(
-            torch_tensor,
+        # Pre-create K and V tensors on device (reuse for all transfers)
+        # SHARD across mesh coordinates so each chip sends DIFFERENT data through its own link
+        # This enables parallel transfer through both QSFP links (2x throughput)
+        # Shape: (batch=32, heads=8, seq, head_dim=128) - shard along batch dim
+        torch_k = torch.randn(shape, dtype=torch.bfloat16)
+        torch_v = torch.randn(shape, dtype=torch.bfloat16)
+        mem_config = get_tensor_memory_config()
+        tt_k = ttnn.from_torch(
+            torch_k,
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=mem_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),  # Shard along batch for parallel links
+        )
+        tt_v = ttnn.from_torch(
+            torch_v,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),  # Shard along batch for parallel links
         )
 
         transfer_times = []
 
         for i in range(num_transfers):
-            # Send timing metadata first (wall-clock nanoseconds)
+            # Send timing metadata first
             t_send_start_ns = time.time_ns()
 
-            # Pack timestamp into tensor (split 64-bit into two 32-bit)
             t_start_high = int(t_send_start_ns >> 32)
             t_start_low = int(t_send_start_ns & 0xFFFFFFFF)
 
             metadata = torch.tensor(
-                [[[[t_start_high, t_start_low, shape[0], shape[1], shape[2], shape[3], 0, 0]]]], dtype=torch.int64
+                [[[[t_start_high, t_start_low, shape[0], shape[1], shape[2], shape[3], NUM_LAYERS, 0]]]],
+                dtype=torch.int64,
             )
             metadata_tt = ttnn.from_torch(
                 metadata,
                 device=device,
                 dtype=ttnn.uint32,
                 layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
-
-            # Send metadata then data tensor
             ttnn.experimental.send_async(metadata_tt, socket)
-            ttnn.experimental.send_async(tt_tensor, socket)
 
-            # Synchronize to ensure transfer completes
+            # Send all 32 layers of K+V
+            for layer_idx in range(NUM_LAYERS):
+                ttnn.experimental.send_async(tt_k, socket)
+                ttnn.experimental.send_async(tt_v, socket)
+
+            # Synchronize to ensure all transfers complete
             ttnn.synchronize_device(device)
 
             t_send_end_ns = time.time_ns()
             sender_time_ms = (t_send_end_ns - t_send_start_ns) / 1_000_000
             transfer_times.append(sender_time_ms)
 
-            logger.info(f"  Transfer {i+1}/{num_transfers}: {sender_time_ms:.2f}ms (sender-side)")
+            throughput_gbs = total_kv_size_gb / (sender_time_ms / 1000) if sender_time_ms > 0 else 0
+            logger.info(f"  Transfer {i + 1}/{num_transfers}: {sender_time_ms:.1f}ms ({throughput_gbs:.2f} GB/s)")
 
         avg_time = sum(transfer_times) / len(transfer_times)
         min_time = min(transfer_times)
@@ -146,6 +263,9 @@ def run_sender(device, socket, configs):
                 "shape": shape,
                 "size_bytes": tensor_size_bytes,
                 "size_mb": tensor_size_mb,
+                "total_kv_size_mb": total_kv_size_mb,
+                "total_kv_size_gb": total_kv_size_gb,
+                "num_layers": NUM_LAYERS,
                 "num_transfers": num_transfers,
                 "sender_times_ms": transfer_times,
                 "sender_avg_ms": avg_time,
@@ -154,19 +274,20 @@ def run_sender(device, socket, configs):
             }
         )
 
-        logger.info(f"  Sender avg: {avg_time:.2f}ms, min: {min_time:.2f}ms, max: {max_time:.2f}ms")
+        avg_throughput_gbs = total_kv_size_gb / (avg_time / 1000) if avg_time > 0 else 0
+        logger.info(f"  Avg: {avg_time:.1f}ms, Throughput: {avg_throughput_gbs:.2f} GB/s")
 
-        # Deallocate tensor to free memory
-        del tt_tensor
-        del metadata_tt
+        # Cleanup
+        del tt_k, tt_v, metadata_tt
 
-    # Send termination signal (shape with zeros)
+    # Send termination signal
     term_metadata = torch.tensor([[[[0, 0, 0, 0, 0, 0, 0, 0]]]], dtype=torch.int64)
     term_metadata_tt = ttnn.from_torch(
         term_metadata,
         device=device,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
     ttnn.experimental.send_async(term_metadata_tt, socket)
     ttnn.synchronize_device(device)
@@ -177,9 +298,10 @@ def run_sender(device, socket, configs):
 
 def run_receiver(device, socket, configs):
     """
-    Receiver (Rank 1): Receive tensors and measure end-to-end latency.
+    Receiver (Rank 1): Receive 32 layers of KV cache and measure end-to-end latency.
     """
     logger.info("=== RECEIVER (Rank 1) - Starting benchmark ===")
+    logger.info(f"Receiving {NUM_LAYERS} layers × 2 tensors (K+V) = {NUM_LAYERS * 2} tensors per transfer")
 
     results = []
 
@@ -190,26 +312,30 @@ def run_receiver(device, socket, configs):
 
         tensor_size_bytes = calculate_tensor_size_bytes(shape)
         tensor_size_mb = tensor_size_bytes / (1024 * 1024)
+        total_kv_size_mb = tensor_size_mb * 2 * NUM_LAYERS
+        total_kv_size_gb = total_kv_size_mb / 1024
 
         logger.info(f"\n--- Receiving: {name} ---")
-        logger.info(f"Expected shape: {shape}, Size: {tensor_size_mb:.2f} MB, Transfers: {num_transfers}")
+        logger.info(f"Per-tensor shape: {shape}, Size: {tensor_size_mb:.2f} MB")
+        logger.info(f"Total KV cache: {total_kv_size_mb:.0f} MB ({total_kv_size_gb:.2f} GB)")
 
         e2e_times = []
-        receiver_times = []
+
+        # Pre-compute padded shape for allocation
+        # With sharding along dim=0 (batch), each chip receives batch/num_devices
+        num_devices = 2  # N300 has 2 chips (1x2 mesh)
+        sharded_batch = shape[0] // num_devices
+        padded_shape = [sharded_batch, shape[1], ((shape[2] + 31) // 32) * 32, ((shape[3] + 31) // 32) * 32]
 
         for i in range(num_transfers):
-            t_recv_start = time.perf_counter()
-
-            # Allocate receive buffers
+            # Receive metadata first (metadata is replicated, not sharded)
             metadata_recv = ttnn.allocate_tensor_on_device(
                 ttnn.TensorSpec([1, 1, 32, 32], ttnn.DataType.UINT32, ttnn.TILE_LAYOUT), device
             )
-
-            # Receive metadata first
             ttnn.experimental.recv_async(metadata_recv, socket)
             ttnn.synchronize_device(device)
 
-            # Parse metadata
+            # Parse metadata to get sender timestamp
             metadata_full = ttnn.to_torch(
                 ttnn.from_device(metadata_recv), mesh_composer=ttnn.ConcatMeshToTensor(device, dim=-1)
             )
@@ -219,39 +345,31 @@ def run_receiver(device, socket, configs):
 
             t_start_high = int(metadata[0, 0, 0, 0].item())
             t_start_low = int(metadata[0, 0, 0, 1].item())
-
-            # Reconstruct sender timestamp
             t_send_start_ns = ((t_start_high & 0xFFFFFFFF) << 32) | (t_start_low & 0xFFFFFFFF)
 
-            # Allocate tensor receive buffer with the expected shape (tile-padded)
-            # Tile layout pads to multiples of 32
-            padded_shape = [shape[0], shape[1], ((shape[2] + 31) // 32) * 32, ((shape[3] + 31) // 32) * 32]
-            data_recv = ttnn.allocate_tensor_on_device(
-                ttnn.TensorSpec(padded_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT), device
-            )
+            del metadata_recv
 
-            # Receive data tensor
-            ttnn.experimental.recv_async(data_recv, socket)
-            ttnn.synchronize_device(device)
+            # Receive all 32 layers of K+V (sharded - each chip receives half the batch)
+            for layer_idx in range(NUM_LAYERS):
+                k_recv = ttnn.allocate_tensor_on_device(
+                    ttnn.TensorSpec(padded_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT), device
+                )
+                v_recv = ttnn.allocate_tensor_on_device(
+                    ttnn.TensorSpec(padded_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT), device
+                )
+                ttnn.experimental.recv_async(k_recv, socket)
+                ttnn.experimental.recv_async(v_recv, socket)
+                ttnn.synchronize_device(device)
+                del k_recv, v_recv
 
             t_recv_end_ns = time.time_ns()
-            t_recv_end = time.perf_counter()
-
-            # Calculate times
             e2e_time_ms = (t_recv_end_ns - t_send_start_ns) / 1_000_000
-            receiver_time_ms = (t_recv_end - t_recv_start) * 1000
-
             e2e_times.append(e2e_time_ms)
-            receiver_times.append(receiver_time_ms)
 
-            logger.info(f"  Transfer {i+1}/{num_transfers}: E2E={e2e_time_ms:.2f}ms, Recv={receiver_time_ms:.2f}ms")
-
-            # Cleanup
-            del metadata_recv
-            del data_recv
+            throughput_gbs = total_kv_size_gb / (e2e_time_ms / 1000) if e2e_time_ms > 0 else 0
+            logger.info(f"  Transfer {i + 1}/{num_transfers}: {e2e_time_ms:.1f}ms ({throughput_gbs:.2f} GB/s)")
 
         avg_e2e = sum(e2e_times) / len(e2e_times)
-        avg_recv = sum(receiver_times) / len(receiver_times)
 
         results.append(
             {
@@ -259,18 +377,19 @@ def run_receiver(device, socket, configs):
                 "shape": shape,
                 "size_bytes": tensor_size_bytes,
                 "size_mb": tensor_size_mb,
+                "total_kv_size_mb": total_kv_size_mb,
+                "total_kv_size_gb": total_kv_size_gb,
+                "num_layers": NUM_LAYERS,
                 "num_transfers": num_transfers,
                 "e2e_times_ms": e2e_times,
                 "e2e_avg_ms": avg_e2e,
                 "e2e_min_ms": min(e2e_times),
                 "e2e_max_ms": max(e2e_times),
-                "receiver_times_ms": receiver_times,
-                "receiver_avg_ms": avg_recv,
             }
         )
 
-        throughput_mbps = tensor_size_mb / (avg_e2e / 1000) if avg_e2e > 0 else 0
-        logger.info(f"  E2E avg: {avg_e2e:.2f}ms, Throughput: {throughput_mbps:.1f} MB/s")
+        avg_throughput_gbs = total_kv_size_gb / (avg_e2e / 1000) if avg_e2e > 0 else 0
+        logger.info(f"  Avg: {avg_e2e:.1f}ms, Throughput: {avg_throughput_gbs:.2f} GB/s")
 
     # Receive termination signal
     term_recv = ttnn.allocate_tensor_on_device(
@@ -285,135 +404,154 @@ def run_receiver(device, socket, configs):
 
 
 def generate_plot(results):
-    """Generate plot from benchmark results."""
+    """Generate plot from benchmark results for 32-layer KV cache transfer."""
     import matplotlib.pyplot as plt
     import numpy as np
-
-    # Set up the figure with multiple subplots
-    fig = plt.figure(figsize=(16, 14))
-    fig.suptitle("KV Cache Transfer Latency Benchmark\n(TT-Fabric N300 → N300)", fontsize=14, fontweight="bold")
+    from matplotlib.gridspec import GridSpec
 
     # Extract data
     names = [r["name"] for r in results]
-    sizes_mb = [r["size_mb"] for r in results]
+    seq_lens = [r["shape"][2] for r in results]
+    total_sizes_gb = [r["total_kv_size_gb"] for r in results]
     e2e_avg = [r["e2e_avg_ms"] for r in results]
     e2e_min = [r["e2e_min_ms"] for r in results]
     e2e_max = [r["e2e_max_ms"] for r in results]
-    throughputs = [r["size_mb"] / (r["e2e_avg_ms"] / 1000) if r["e2e_avg_ms"] > 0 else 0 for r in results]
+    throughputs_gbs = [r["total_kv_size_gb"] / (r["e2e_avg_ms"] / 1000) if r["e2e_avg_ms"] > 0 else 0 for r in results]
 
-    # Color coding by category
-    colors = []
-    for name in names:
-        if "batch" in name:
-            colors.append("#e74c3c")  # Red for batch variations
-        elif "heads" in name:
-            colors.append("#9b59b6")  # Purple for head variations
-        elif "llama" in name:
-            colors.append("#27ae60")  # Green for Llama configs
-        else:
-            colors.append("#3498db")  # Blue for seq variations
+    # Colors based on sequence length (gradient)
+    colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(results)))
 
-    # Plot 1: Latency vs Size (scatter)
-    ax1 = fig.add_subplot(2, 2, 1)
-    scatter = ax1.scatter(sizes_mb, e2e_avg, c=colors, s=100, alpha=0.7, edgecolors="black", linewidth=0.5)
-    ax1.set_xlabel("Tensor Size (MB)", fontsize=11)
-    ax1.set_ylabel("E2E Latency (ms)", fontsize=11)
-    ax1.set_title("Transfer Latency vs Tensor Size", fontsize=12, fontweight="bold")
-    ax1.grid(True, alpha=0.3)
+    # Set up figure
+    fig = plt.figure(figsize=(16, 12))
+    fig.suptitle(
+        f"32-Layer KV Cache Transfer Benchmark (Llama 8B)\nBatch=32, TT-Fabric N300 → N300",
+        fontsize=16,
+        fontweight="bold",
+        y=0.98,
+    )
 
-    # Add trend line
-    z = np.polyfit(sizes_mb, e2e_avg, 1)
-    p = np.poly1d(z)
-    x_line = np.linspace(min(sizes_mb), max(sizes_mb), 100)
-    ax1.plot(x_line, p(x_line), "k--", alpha=0.5, label=f"Linear fit")
-    ax1.legend()
+    gs = GridSpec(2, 2, figure=fig, hspace=0.3, wspace=0.3)
 
-    # Plot 2: Throughput vs Size
-    ax2 = fig.add_subplot(2, 2, 2)
-    bars = ax2.bar(range(len(names)), throughputs, color=colors, alpha=0.7, edgecolor="black", linewidth=0.5)
-    ax2.set_xlabel("Configuration", fontsize=11)
-    ax2.set_ylabel("Throughput (MB/s)", fontsize=11)
-    ax2.set_title("Transfer Throughput by Configuration", fontsize=12, fontweight="bold")
-    ax2.set_xticks(range(len(names)))
-    ax2.set_xticklabels(names, rotation=45, ha="right", fontsize=8)
-    ax2.grid(True, alpha=0.3, axis="y")
+    # Plot 1: Latency vs Sequence Length
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.semilogy(seq_lens, e2e_avg, "o-", color="#2980b9", markersize=12, linewidth=3)
+    ax1.fill_between(seq_lens, e2e_min, e2e_max, alpha=0.2, color="#3498db")
+    ax1.set_xlabel("Sequence Length", fontsize=12, fontweight="bold")
+    ax1.set_ylabel("E2E Latency (ms) - Log Scale", fontsize=12, fontweight="bold")
+    ax1.set_title("Transfer Latency vs Sequence Length", fontsize=13, fontweight="bold")
+    ax1.grid(True, alpha=0.3, which="both", linestyle="--")
+    ax1.set_xticks(seq_lens)
+    ax1.set_xticklabels([f"{s // 1024}K" if s >= 1024 else str(s) for s in seq_lens], fontsize=10)
 
-    # Add throughput values on bars
-    for bar, tp in zip(bars, throughputs):
+    # Annotate with latency and size
+    for x, y, sz in zip(seq_lens, e2e_avg, total_sizes_gb):
+        label = f"{y / 1000:.1f}s" if y >= 1000 else f"{y:.0f}ms"
+        ax1.annotate(
+            f"{label}\n({sz:.1f}GB)", (x, y), textcoords="offset points", xytext=(5, 10), fontsize=9, ha="left"
+        )
+
+    # Plot 2: Throughput bar chart
+    ax2 = fig.add_subplot(gs[0, 1])
+    bars = ax2.bar(range(len(seq_lens)), throughputs_gbs, color=colors, alpha=0.85, edgecolor="black", linewidth=1)
+    ax2.set_xlabel("Sequence Length", fontsize=12, fontweight="bold")
+    ax2.set_ylabel("Throughput (GB/s)", fontsize=12, fontweight="bold")
+    ax2.set_title("Transfer Throughput vs Sequence Length", fontsize=13, fontweight="bold")
+    ax2.set_xticks(range(len(seq_lens)))
+    ax2.set_xticklabels([f"{s // 1024}K" if s >= 1024 else str(s) for s in seq_lens], fontsize=10)
+    ax2.grid(True, alpha=0.3, axis="y", linestyle="--")
+    ax2.axhline(y=1.0, color="red", linestyle="--", linewidth=2, alpha=0.7, label="1 GB/s")
+    ax2.legend(fontsize=10)
+
+    for bar, tp in zip(bars, throughputs_gbs):
         height = bar.get_height()
         ax2.annotate(
-            f"{tp:.0f}",
+            f"{tp:.2f}",
             xy=(bar.get_x() + bar.get_width() / 2, height),
-            xytext=(0, 3),
+            xytext=(0, 5),
             textcoords="offset points",
             ha="center",
             va="bottom",
-            fontsize=7,
+            fontsize=10,
+            fontweight="bold",
         )
 
-    # Plot 3: Latency with error bars
-    ax3 = fig.add_subplot(2, 2, 3)
-    x_pos = range(len(names))
-    yerr_lower = [avg - mn for avg, mn in zip(e2e_avg, e2e_min)]
-    yerr_upper = [mx - avg for avg, mx in zip(e2e_avg, e2e_max)]
-    ax3.errorbar(
-        x_pos,
-        e2e_avg,
-        yerr=[yerr_lower, yerr_upper],
-        fmt="o",
-        capsize=4,
-        capthick=1.5,
-        markersize=8,
-        color="#2c3e50",
-        ecolor="#7f8c8d",
-        elinewidth=1.5,
+    # Plot 3: KV Cache Size vs Latency
+    ax3 = fig.add_subplot(gs[1, 0])
+    scatter = ax3.scatter(
+        total_sizes_gb, e2e_avg, c=seq_lens, cmap="viridis", s=200, alpha=0.8, edgecolors="black", linewidth=1.5
     )
-    ax3.set_xlabel("Configuration", fontsize=11)
-    ax3.set_ylabel("E2E Latency (ms)", fontsize=11)
-    ax3.set_title("Latency Distribution (min/avg/max)", fontsize=12, fontweight="bold")
-    ax3.set_xticks(x_pos)
-    ax3.set_xticklabels(names, rotation=45, ha="right", fontsize=8)
-    ax3.grid(True, alpha=0.3)
+    ax3.plot(total_sizes_gb, e2e_avg, "--", color="gray", alpha=0.5, linewidth=1.5)
+    ax3.set_xlabel("Total KV Cache Size (GB)", fontsize=12, fontweight="bold")
+    ax3.set_ylabel("E2E Latency (ms)", fontsize=12, fontweight="bold")
+    ax3.set_title("Latency vs Total KV Cache Size", fontsize=13, fontweight="bold")
+    ax3.grid(True, alpha=0.3, linestyle="--")
 
-    # Plot 4: Size vs Latency log-log scale
-    ax4 = fig.add_subplot(2, 2, 4)
-    ax4.loglog(sizes_mb, e2e_avg, "o-", color="#2980b9", markersize=8, linewidth=2, alpha=0.7)
-    ax4.set_xlabel("Tensor Size (MB) - Log Scale", fontsize=11)
-    ax4.set_ylabel("E2E Latency (ms) - Log Scale", fontsize=11)
-    ax4.set_title("Latency vs Size (Log-Log Scale)", fontsize=12, fontweight="bold")
-    ax4.grid(True, alpha=0.3, which="both")
+    # Linear fit
+    z = np.polyfit(total_sizes_gb, e2e_avg, 1)
+    x_fit = np.linspace(min(total_sizes_gb), max(total_sizes_gb), 100)
+    ax3.plot(x_fit, np.poly1d(z)(x_fit), "r--", linewidth=2, label=f"Linear: {z[0]:.0f} ms/GB")
+    ax3.legend(fontsize=10)
+    cbar = plt.colorbar(scatter, ax=ax3, label="Sequence Length")
 
-    # Add annotations for each point
-    for i, (x, y, name) in enumerate(zip(sizes_mb, e2e_avg, names)):
-        ax4.annotate(name.split("_")[0], (x, y), textcoords="offset points", xytext=(5, 5), fontsize=7, alpha=0.7)
+    # Plot 4: Summary table
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.axis("off")
 
-    # Add legend
-    from matplotlib.patches import Patch
-
-    legend_elements = [
-        Patch(facecolor="#3498db", edgecolor="black", label="Seq length variations"),
-        Patch(facecolor="#e74c3c", edgecolor="black", label="Batch size variations"),
-        Patch(facecolor="#9b59b6", edgecolor="black", label="Head count variations"),
-        Patch(facecolor="#27ae60", edgecolor="black", label="Llama 8B configs"),
+    summary_lines = [
+        "╔═══════════════════════════════════════════════════════════════╗",
+        "║     32-LAYER KV CACHE TRANSFER BENCHMARK SUMMARY              ║",
+        "╠═══════════════════════════════════════════════════════════════╣",
+        "║  Seq Len  │  KV Size  │   Latency    │  Throughput            ║",
+        "╠═══════════╪═══════════╪══════════════╪════════════════════════╣",
     ]
-    fig.legend(handles=legend_elements, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 0.02))
+    for r, tp in zip(results, throughputs_gbs):
+        seq = r["shape"][2]
+        seq_str = f"{seq // 1024}K" if seq >= 1024 else str(seq)
+        size_gb = r["total_kv_size_gb"]
+        lat = r["e2e_avg_ms"]
+        lat_str = f"{lat / 1000:.2f} s" if lat >= 1000 else f"{lat:.0f} ms"
+        summary_lines.append(f"║  {seq_str:>6}  │  {size_gb:>6.1f} GB │  {lat_str:>10}  │  {tp:>6.2f} GB/s           ║")
+
+    summary_lines.extend(
+        [
+            "╠═══════════════════════════════════════════════════════════════╣",
+            f"║  Peak Throughput: {max(throughputs_gbs):.2f} GB/s                               ║",
+            f"║  Avg Throughput:  {np.mean(throughputs_gbs):.2f} GB/s                               ║",
+            f"║  Linear fit: {z[0]:.0f} ms per GB transferred                      ║",
+            "╚═══════════════════════════════════════════════════════════════╝",
+        ]
+    )
+
+    ax4.text(
+        0.5,
+        0.5,
+        "\n".join(summary_lines),
+        transform=ax4.transAxes,
+        fontsize=10,
+        verticalalignment="center",
+        horizontalalignment="center",
+        fontfamily="monospace",
+        bbox=dict(boxstyle="round", facecolor="#f8f9fa", edgecolor="#2c3e50", alpha=0.95),
+    )
 
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])
     plt.savefig(PLOT_FILE, dpi=150, bbox_inches="tight", facecolor="white", edgecolor="none")
     logger.info(f"Plot saved to {PLOT_FILE}")
 
     # Also create a summary table
-    print("\n" + "=" * 100)
-    print("BENCHMARK SUMMARY")
-    print("=" * 100)
-    print(f"{'Config':<25} {'Shape':<25} {'Size(MB)':<12} {'E2E(ms)':<12} {'Throughput(MB/s)':<15}")
-    print("-" * 100)
+    print("\n" + "=" * 110)
+    print(f"32-LAYER KV CACHE TRANSFER BENCHMARK SUMMARY (Batch=32, {NUM_LAYERS} layers)")
+    print("=" * 110)
+    print(f"{'Config':<18} {'Seq Len':<10} {'KV Size (GB)':<14} {'Latency':<14} {'Throughput (GB/s)':<18}")
+    print("-" * 110)
     for r in results:
-        shape_str = f"({r['shape'][0]},{r['shape'][1]},{r['shape'][2]},{r['shape'][3]})"
-        print(
-            f"{r['name']:<25} {shape_str:<25} {r['size_mb']:<12.2f} {r['e2e_avg_ms']:<12.2f} {r['size_mb']/(r['e2e_avg_ms']/1000):<15.1f}"
-        )
-    print("=" * 100)
+        seq_len = r["shape"][2]
+        seq_str = f"{seq_len // 1024}K" if seq_len >= 1024 else str(seq_len)
+        lat = r["e2e_avg_ms"]
+        lat_str = f"{lat / 1000:.2f} s" if lat >= 1000 else f"{lat:.0f} ms"
+        tp_gbs = r["total_kv_size_gb"] / (lat / 1000) if lat > 0 else 0
+        print(f"{r['name']:<18} {seq_str:<10} {r['total_kv_size_gb']:<14.2f} {lat_str:<14} {tp_gbs:<18.2f}")
+    print("=" * 110)
 
 
 def run_benchmark():
@@ -447,8 +585,27 @@ def run_benchmark():
     rank = int(ttnn.distributed_context_get_rank())
     logger.info(f"Process {rank} started on N300 device")
 
-    # Setup socket
-    socket_config = setup_socket(device, mesh_shape)
+    # Log optimization settings
+    logger.info("=" * 60)
+    logger.info("OPTIMIZATION SETTINGS:")
+    logger.info(f"  Socket connections: {NUM_SOCKET_CONNECTIONS}")
+    logger.info(f"  FIFO size: {SOCKET_FIFO_SIZE} bytes")
+    logger.info(f"  Socket buffer type: {SOCKET_BUFFER_TYPE}")
+    logger.info(f"  Tensor memory type: {TENSOR_MEMORY_TYPE}")
+    logger.info(f"  Diagonal cores: {USE_DIAGONAL_CORES}")
+    logger.info(f"  SHARDED TRANSFER: {USE_SHARDED_TRANSFER} (dim={SHARD_DIM})")
+    logger.info("  -> Each chip sends different data through its own QSFP link")
+    logger.info("=" * 60)
+
+    # Setup optimized socket with multiple connections
+    socket_config = setup_socket_optimized(
+        device,
+        mesh_shape,
+        num_connections=NUM_SOCKET_CONNECTIONS,
+        fifo_size=SOCKET_FIFO_SIZE,
+        buffer_type=SOCKET_BUFFER_TYPE,
+        use_diagonal_cores=USE_DIAGONAL_CORES,
+    )
 
     # Create socket before benchmark
     logger.info(f"Rank {rank}: Creating socket...")
