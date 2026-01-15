@@ -66,7 +66,7 @@ def get_lead_models_mesh_runner_config():
     """
     return [
         {
-            # Single-chip operations (1x1 mesh)
+            # Single-chip operations (1x1 mesh) - runs on N150
             "mesh_shapes": ["1x1"],
             "test_group_name": "lead-models-single-chip",
             "arch": "wormhole_b0",
@@ -75,18 +75,8 @@ def get_lead_models_mesh_runner_config():
             "suite_name": "model_traced",
         },
         {
-            # Small multi-chip operations (N300 configurations: 2-8 chips)
-            # N300 llmbox supports up to 8 chips (1x4, 1x8, 2x4)
-            "mesh_shapes": [],
-            "test_group_name": "lead-models-n300",
-            "arch": "wormhole_b0",
-            "runs_on": "tt-ubuntu-2204-n300-llmbox-viommu-stable",
-            "tt_smi_cmd": "tt-smi -r",
-            "suite_name": "model_traced",
-        },
-        {
-            # Large multi-chip operations (Galaxy TG: 32 chips)
-            # Galaxy supports 4x8 and similar large mesh configurations
+            # Multi-chip operations - runs on Galaxy (32-chip topology)
+            # Handles all mesh shapes larger than 1x1
             "mesh_shapes": ["1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2"],
             "test_group_name": "lead-models-galaxy",
             "arch": "wormhole_b0",
@@ -94,7 +84,7 @@ def get_lead_models_mesh_runner_config():
                 "topology-6u",  # 32-chip galaxy topology
                 "arch-wormhole_b0",  # Wormhole B0 architecture
                 "in-service",  # Available for use
-                "pipeline-functional",  # Functional pipeline (use pipeline-model for model-specific)
+                "pipeline-functional",  # Functional pipeline
             ],
             "tt_smi_cmd": "tt-smi -r",
             "suite_name": "model_traced",
