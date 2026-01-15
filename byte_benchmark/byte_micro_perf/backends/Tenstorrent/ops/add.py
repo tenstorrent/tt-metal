@@ -52,7 +52,7 @@ class TenstorrentAddOp(BasicOp):
             raise NotImplementedError
 
         self.dtype = self.args_dict["dtype"]
-        if self.dtype not in ["bfloat16", "float32"]:
+        if self.dtype not in ["bfloat16", "float32", "bfloat8_b"]:
             raise NotImplementedError(f"dtype={self.dtype} not supported by ttnn")
 
         self.torch_dtype = getattr(torch, self.dtype)
@@ -84,8 +84,11 @@ class TenstorrentAddOp(BasicOp):
         }
 
         dtype_size = torch.tensor([], dtype=self.torch_dtype).element_size()
-        self.input_tensor_size = 2 * self.batch_size * self.dim_size * dtype_size
-        self.output_tensor_size = self.batch_size * self.dim_size * dtype_size
+        print(
+            f"Tenstorrent Add Op: batch_size={self.batch_size}, dim_size={self.dim_size}, height={self.height}, width={self.width}, dtype={self.dtype}, size = {dtype_size} bytes"
+        )
+        self.input_tensor_size = 2 * self.height * self.width * dtype_size
+        self.output_tensor_size = self.height * self.width * dtype_size
         self.tensor_size = self.input_tensor_size + self.output_tensor_size
 
         self.read_bytes = self.input_tensor_size
@@ -102,14 +105,17 @@ class TenstorrentAddOp(BasicOp):
         import ttnn
 
         all_tensor_list = []
-        print(f"Creating tensor on Tenstorrent device shape = ({self.height}, {self.width}), {instance_num} times")
+        print(
+            f"Creating tensor on Tenstorrent device shape = ({self.height}, {self.width}), type = {self.ttnn_dtype} {instance_num} times"
+        )
         for _ in range(instance_num):
             torch_a = torch.randn(1, 1, self.height, self.width, dtype=self.torch_dtype)
             torch_b = torch.randn(1, 1, self.height, self.width, dtype=self.torch_dtype)
 
             ttnn_a = ttnn.from_torch(torch_a, dtype=self.ttnn_dtype, device=self.device, layout=ttnn.TILE_LAYOUT)
+            # ttnn_a = ttnn.to_layout(ttnn_a, layout=ttnn.TILE_LAYOUT)
             ttnn_b = ttnn.from_torch(torch_b, dtype=self.ttnn_dtype, device=self.device, layout=ttnn.TILE_LAYOUT)
-
+            # ttnn_b = ttnn.to_layout(ttnn_b, layout=ttnn.TILE_LAYOUT)
             all_tensor_list.append({"a": ttnn_a, "b": ttnn_b})
         print("Done creating tensors on Tenstorrent device")
         return all_tensor_list
@@ -117,7 +123,6 @@ class TenstorrentAddOp(BasicOp):
     def add_run(self, tensor_mapping):
         import ttnn
 
-        print("Running add operation on Tenstorrent device" "")
         a, b = tensor_mapping["a"], tensor_mapping["b"]
         c = ttnn.add(a, b)
         ttnn.synchronize_device(self.device)
