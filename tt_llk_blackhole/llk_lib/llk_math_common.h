@@ -13,6 +13,7 @@
 
 using namespace ckernel::math;
 
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     // Legacy mode for ZEROACC
@@ -21,6 +22,10 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     uint int8_math_enabled = ((uint)(srca_data_format & 0xF) == (uint)DataFormat::Int8) || ((uint)(srcb_data_format & 0xF) == (uint)DataFormat::Int8) ||
                              ((uint)srca_data_format == (uint)DataFormat::Int32) || ((uint)srcb_data_format == (uint)DataFormat::Int32);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+
+    uint32_t fp32_dest_acc_en = is_fp32_dest_acc_en ? 1 : 0;
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(fp32_dest_acc_en);
 }
 
 inline void _llk_math_reconfig_remap_(const bool remap_enable)

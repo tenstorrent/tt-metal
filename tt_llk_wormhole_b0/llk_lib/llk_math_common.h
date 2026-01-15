@@ -13,6 +13,7 @@
 
 using namespace ckernel::math;
 
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
@@ -22,6 +23,10 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
                        (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
     constexpr uint config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
+
+    uint32_t fp32_dest_acc_en = is_fp32_dest_acc_en ? 1 : 0;
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(fp32_dest_acc_en);
 }
 
 template <DstSync Dst>

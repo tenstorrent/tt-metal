@@ -274,15 +274,12 @@ inline void configure_unpack_AB(
     // NOTE: This assumes these config fields are adjacent and in same register!!
     static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_FORMAT_SPEC_REG0_SrcA_ADDR32);
     static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32);
-    constexpr uint alu_dest_format_mask          = ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK | ALU_ACC_CTRL_Fp32_enabled_MASK;
-    alu_payload.f.ALU_ACC_CTRL_Fp32_enabled      = fp32_dest_acc_en;
-    alu_payload.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = fp32_dest_acc_en;
     constexpr uint alu_stoch_rnd_mask = ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
     alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en    = fpu_srnd_en;
     alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = pack_srnd_en;
     alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = pack_srnd_en;
 
-    constexpr uint alu_mask = alu_format_mask | alu_dest_format_mask | alu_stoch_rnd_mask;
+    constexpr uint alu_mask = alu_format_mask | alu_stoch_rnd_mask;
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 

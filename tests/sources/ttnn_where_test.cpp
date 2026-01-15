@@ -101,7 +101,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(4, MATH_FMT);
 #endif
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_(MATH_FMT, MATH_FMT);
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FMT, MATH_FMT);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         0, MATH_FMT, MATH_FMT); // buffer condition

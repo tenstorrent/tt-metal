@@ -56,7 +56,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     const bool enforce_fp32_accumulation = false;
     _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();
     _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
-    _llk_math_hw_configure_(formats.math, formats.math);
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid, enforce_fp32_accumulation>();
     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid, is_int_fpu_en, enforce_fp32_accumulation>(0);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

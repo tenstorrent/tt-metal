@@ -81,7 +81,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
         params->CT_DIM,
         params->RT_DIM);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_(formats.math, formats.math);
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<dest_sync>();
     for (uint32_t j = 0; j < params->KT_DIM; j++)
     {

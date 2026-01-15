@@ -74,7 +74,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_math_matmul_init_<MATH_FIDELITY>();
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_(formats_array[run].math, formats_array[run].math);
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats_array[run].math, formats_array[run].math);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_matmul_<MATH_FIDELITY>(0);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

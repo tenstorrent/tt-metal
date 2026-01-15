@@ -45,7 +45,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 {
     const bool is_int_fpu_en = false;
 
-    _llk_math_hw_configure_(formats.math, formats.math);
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 #ifdef ARCH_BLACKHOLE
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(4 /*num_faces*/, formats.math);
 #else

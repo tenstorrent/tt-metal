@@ -63,7 +63,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     {
         ZONE_SCOPED("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-        _llk_math_hw_configure_(formats.math, formats.math);
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
 #ifdef ARCH_BLACKHOLE
         _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(TILE_NUM_FACES, formats.math);

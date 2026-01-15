@@ -66,7 +66,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     {
         ZONE_SCOPED("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-        _llk_math_hw_configure_(formats.math, formats.math);
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, 0>(params->SRCA_REUSE_COUNT);
         PROFILER_SYNC();
     }

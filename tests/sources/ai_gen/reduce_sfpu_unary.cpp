@@ -80,7 +80,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
 
     // row_pool tells HW if pooling is performed across rows (affects transpose path)
-    _llk_math_hw_configure_(formats.math, formats.math);
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
     //------------------------------------------------------------------
     // 1) Reduce operation

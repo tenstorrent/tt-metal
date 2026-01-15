@@ -45,7 +45,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 {
     _llk_math_matmul_init_<MATH_FIDELITY>();
     _llk_math_pack_sync_init_<sync, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_(formats.math, formats.math);
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 #ifdef ARCH_BLACKHOLE
     _llk_math_reconfig_remap_(true);
 #endif
