@@ -280,16 +280,19 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         mesh_suffix = format_mesh_suffix(mesh_shape)
         mesh_module_name = f"{module_name}{mesh_suffix}"
 
-        # Update sweep_name in each vector to include mesh suffix
+        # Prepare a copy of vectors for export, updating sweep_name to include mesh suffix
+        export_vectors = []
         for vector in mesh_vectors:
-            base_sweep_name = vector.get("sweep_name", module_name)
+            new_vector = dict(vector)
+            base_sweep_name = new_vector.get("sweep_name", module_name)
             # Remove existing mesh suffix if present (for idempotency)
             if "__mesh_" in base_sweep_name:
                 base_sweep_name = base_sweep_name.split("__mesh_")[0]
-            vector["sweep_name"] = f"{base_sweep_name}{mesh_suffix}"
+            new_vector["sweep_name"] = f"{base_sweep_name}{mesh_suffix}"
+            export_vectors.append(new_vector)
 
         # Export vectors for this mesh shape
-        _export_mesh_vectors_to_file(mesh_module_name, suite_name, mesh_vectors)
+        _export_mesh_vectors_to_file(mesh_module_name, suite_name, export_vectors)
 
 
 def _export_mesh_vectors_to_file(module_name, suite_name, vectors):
