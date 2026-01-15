@@ -9,7 +9,7 @@
 
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::normalization::group_norm {
+namespace ttnn::prim {
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
@@ -104,4 +104,4 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
     return {max_tile_span, num_groups_before_start_again_at_tile_beginning};
 }
 
-}  // namespace ttnn::operations::normalization::group_norm
+}  // namespace ttnn::prim
