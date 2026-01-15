@@ -30,7 +30,8 @@ if [ -f "$YUNET_DIR/weights/best.pt" ]; then
     echo "Weights already present at $YUNET_DIR/weights/best.pt"
 else
     echo "WARNING: Weights not found at $YUNET_DIR/weights/best.pt"
-    echo "Please download weights manually or train the model."
+    echo "Please download weights from: https://github.com/jahongir7174/YUNet/releases"
+    echo "Or train the model following instructions in the YUNet repository."
 fi
 
 echo ""

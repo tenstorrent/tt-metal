@@ -146,7 +146,12 @@ def run_yunet_demo(
     """
     logger.info(f"Loading YUNet model (input size: {input_size}x{input_size})...")
 
-    torch_model = load_torch_model(get_default_weights_path())
+    weights_path = get_default_weights_path()
+    if not os.path.exists(weights_path):
+        raise FileNotFoundError(
+            f"Weights not found at {weights_path}. " f"Please run: cd models/experimental/yunet && ./setup.sh"
+        )
+    torch_model = load_torch_model(weights_path)
     torch_model = torch_model.to(torch.bfloat16)
     ttnn_model = create_yunet_model(device, torch_model)
 

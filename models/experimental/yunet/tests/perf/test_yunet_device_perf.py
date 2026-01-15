@@ -22,6 +22,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 
 
 # Expected performance for each input size (samples/s)
+# Measured on P150 Blackhole
 EXPECTED_PERF = {
     320: 1150,  # Range: 1100-1200 samples/s
     640: 450,  # Range: 400-500 samples/s

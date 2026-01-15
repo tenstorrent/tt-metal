@@ -33,12 +33,12 @@ The model supports two input sizes:
 
 All tests and demo default to 320×320. Use `--input-size 640` to run with 640×640.
 
-## Performance
+## Performance (P150 Blackhole)
 
 | Input Size | Device FPS (kernel) | E2E FPS (trace+2CQ) |
 |------------|---------------------|---------------------|
-| 320×320    | ~1150 samples/s     | TBD |
-| 640×640    | ~450 samples/s      | TBD |
+| 320×320    | ~1150 samples/s     | ~280 FPS |
+| 640×640    | ~450 samples/s      | ~70 FPS |
 
 ## Usage
 
@@ -46,14 +46,11 @@ All tests and demo default to 320×320. Use `--input-size 640` to run with 640×
 
 ```bash
 # Default 320x320 input size
-python -m models.experimental.yunet.demo.demo --input <image_path> --output <output_path>
+python models/experimental/yunet/demo/demo.py --input <image_path> --output <output_path>
 
 # With 640x640 input size
-python -m models.experimental.yunet.demo.demo --input <image_path> --output <output_path> --input-size 640
+python models/experimental/yunet/demo/demo.py --input <image_path> --output <output_path> --input-size 640
 
-# Example with test image
-python -m models.experimental.yunet.demo.demo -i models/experimental/yunet/test_images/group1.jpg -o output.jpg
-```
 
 ### Running PCC Tests
 
@@ -75,10 +72,10 @@ pytest models/experimental/yunet/tests/perf/test_e2e_performant.py -v
 pytest models/experimental/yunet/tests/perf/test_e2e_performant.py -v --input-size 640
 
 # Device perf test (requires profiler, default 320x320)
-pytest models/experimental/yunet/tests/perf/test_yunet_device_perf.py -v -m models_device_performance_bare_metal
+pytest models/experimental/yunet/tests/perf/test_yunet_device_perf.py -v
 
 # Device perf test with 640x640
-pytest models/experimental/yunet/tests/perf/test_yunet_device_perf.py -v -m models_device_performance_bare_metal --input-size 640
+pytest models/experimental/yunet/tests/perf/test_yunet_device_perf.py -v  --input-size 640
 ```
 
 ## Directory Structure
