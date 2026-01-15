@@ -179,6 +179,20 @@ class Generator:
 
         # Extract num_cached_tokens from start_pos
         num_cached_tokens_list = [int(start_pos[idx]) if start_pos is not None else 0 for idx in range(batch)]
+
+        # DEBUG: Prefix caching detection
+        prefix_caching_active = any(num_cached > 0 for num_cached in num_cached_tokens_list)
+        if prefix_caching_active:
+            logger.info(f"[PREFIX_CACHING] Prefix caching ACTIVATED for batch size {batch}")
+            for idx in range(batch):
+                logger.info(
+                    f"[PREFIX_CACHING] User {idx}: prompt_len={prompt_lens[idx]}, "
+                    f"num_cached_tokens={num_cached_tokens_list[idx]}, "
+                    f"new_tokens={prompt_lens[idx] - num_cached_tokens_list[idx]}"
+                )
+        else:
+            logger.info(f"[PREFIX_CACHING] Prefix caching NOT active (all start_pos are 0 or None)")
+
         # Calculate prefill_seq_lens excluding cached tokens
         prefill_seq_lens = [
             get_padded_prefill_len(seq_len - num_cached_tokens_list[idx]) for idx, seq_len in enumerate(prompt_lens)
@@ -412,6 +426,15 @@ class Generator:
         seq_len = tokens.shape[-1]
         use_prefix_caching = num_cached_tokens > 0
 
+        # DEBUG: Prefix caching status
+        logger.info(
+            f"[PREFIX_CACHING] prefill_forward_single_user_text: "
+            f"use_prefix_caching={use_prefix_caching}, "
+            f"num_cached_tokens={num_cached_tokens}, "
+            f"seq_len={seq_len}, "
+            f"last_token_idx={last_token_idx}"
+        )
+
         if use_prefix_caching:
             """
             Prefix caching requires paged attention.
@@ -447,11 +470,22 @@ class Generator:
 
             # For prefix caching, chunk_start_idx is the absolute position where new tokens start
             chunk_start_idx = num_cached_tokens
-            chunk_page_table = page_table_user_padded[
-                :, num_cached_tokens // block_size : (num_cached_tokens + seq_len) // block_size
-            ]
+            chunk_start_block = num_cached_tokens // block_size
+            chunk_end_block = (num_cached_tokens + seq_len) // block_size
+            chunk_page_table = page_table_user_padded[:, chunk_start_block:chunk_end_block]
 
-            prefill_input, tt_user_id, page_table_tt, _ = self.model.prepare_inputs_prefill(
+            # DEBUG: Prefix caching block calculations
+            logger.info(
+                f"[PREFIX_CACHING] Block calculations: "
+                f"block_size={block_size}, "
+                f"chunk_start_idx={chunk_start_idx}, "
+                f"chunk_start_block={chunk_start_block}, "
+                f"chunk_end_block={chunk_end_block}, "
+                f"chunk_page_table_shape={chunk_page_table.shape}, "
+                f"page_table_user_padded_shape={page_table_user_padded.shape}"
+            )
+
+            prefill_input, tt_user_id, page_table_tt, _, tt_rot_mats_prefill = self.model.prepare_inputs_prefill(
                 tokens,
                 user_id=user_id,
                 page_table=page_table_user_padded,
@@ -461,7 +495,7 @@ class Generator:
 
             tt_toks = self.model.ttnn_prefill_forward(
                 prefill_input,
-                rot_mats=None,
+                rot_mats=tt_rot_mats_prefill,  # Use sliced rotary matrices for prefix caching
                 user_id=tt_user_id,
                 page_table=page_table_tt,
                 chunk_page_table=chunk_page_table,
@@ -473,6 +507,12 @@ class Generator:
 
             # Process output for prefix caching
             last_token_idx_relative = last_token_idx - num_cached_tokens
+            logger.info(
+                f"[PREFIX_CACHING] Output processing: "
+                f"last_token_idx_absolute={last_token_idx}, "
+                f"last_token_idx_relative={last_token_idx_relative}, "
+                f"last_token_idx_mod32={last_token_idx_relative % 32}"
+            )
             tt_toks = self.model.process_output_prefill(
                 tt_toks, last_token_idx=(last_token_idx_relative % 32), tt_out_logits_saved=tt_out_logits_saved
             )
@@ -480,7 +520,7 @@ class Generator:
             return tt_toks
         else:
             # Non-prefix-cached path
-            prefill_input, tt_user_id, page_table_tt, _ = self.model.prepare_inputs_prefill(
+            prefill_input, tt_user_id, page_table_tt, _, tt_rot_mats_prefill = self.model.prepare_inputs_prefill(
                 tokens,
                 user_id=user_id,
                 page_table=page_table,
@@ -489,7 +529,7 @@ class Generator:
 
             tt_toks = self.model.ttnn_prefill_forward(
                 prefill_input,
-                rot_mats=None,
+                rot_mats=tt_rot_mats_prefill,  # Use rotary matrices from prepare_inputs_prefill
                 user_id=tt_user_id,
                 page_table=page_table_tt,
                 get_last_token=last_token_idx,  # (last_token_idx // 32) * 32,
