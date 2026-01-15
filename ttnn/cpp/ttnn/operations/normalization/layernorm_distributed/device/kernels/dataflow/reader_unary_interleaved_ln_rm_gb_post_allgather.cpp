@@ -8,8 +8,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 
 template <uint32_t t>
@@ -65,7 +65,7 @@ void kernel_main() {
 
     // Generate constant tiles for layernorm compute
     uint32_t scaler = get_arg_val<uint32_t>(5);
-    generate_reduce_scaler(cb_reduce, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_reduce, scaler);
     const uint32_t eps = get_arg_val<uint32_t>(6);
     generate_bcast_col_scalar(cb_eps, eps);
 

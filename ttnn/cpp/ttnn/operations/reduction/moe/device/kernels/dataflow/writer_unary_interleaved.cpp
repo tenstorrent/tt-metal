@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     uint32_t dst_addr0 = get_arg_val<uint32_t>(0);
@@ -23,7 +23,7 @@ void kernel_main() {
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     constexpr uint32_t scale_cb_index = tt::CBIndex::c_3;
-    generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
+    dataflow_kernel_lib::generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
 
     const auto interleaved_accessor0 = TensorAccessor(out_args, dst_addr0, tile_bytes);
 

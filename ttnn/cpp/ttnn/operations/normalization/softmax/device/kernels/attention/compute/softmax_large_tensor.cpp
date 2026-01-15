@@ -12,7 +12,7 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_int_sum.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #include "api/debug/assert.h"
 

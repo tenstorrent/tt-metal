@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 // HW-bcast scale for fused scale-attn-softmax
 FORCE_INLINE void generate_inv_sqrt_hw_bcast_tile() {
@@ -47,7 +47,7 @@ void kernel_main() {
             ++mask_id;
 
             if (h == 0 && w == 0) {
-                generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+                dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
             }
         }
         noc_async_read_barrier();
