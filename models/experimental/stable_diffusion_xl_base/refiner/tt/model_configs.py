@@ -382,6 +382,121 @@ class RefinerModelOptimisations(ModelOptimisations):
             fused_activation=None,
         )
 
+        # 40 cores configs
+        self.matmul_configs[
+            "2D_GEGLU_LINEAR1_4096x768x3072_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=3,  # TODO: Check if this is correct, should be 6 for 4096x768x3072
+            per_core_M=16,
+            per_core_N=20,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_GEGLU_LINEAR1_1024x1536x6144_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=4,
+            per_core_N=39,
+            out_subblock_h=1,
+            out_subblock_w=3,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "1D_GEGLU_LINEAR1_256x1536x6144_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=8,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            mcast_in0=True,
+            fuse_batch=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["2D_FF_LINEAR_4096x3072x768_40_CORES"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=16,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["2D_FF_LINEAR_1024x6144x1536_40_CORES"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=4,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["2D_FF_LINEAR_256x6144x1536_40_CORES"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=12,
+            per_core_M=1,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        # # # ATTENTION QKV # # #
+        self.matmul_configs[
+            "2D_ATTENTION_QKV_4096x768x2304_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=1,  # TODO: Check if this is correct, should be 4 for 4096x768x2304
+            per_core_M=16,
+            per_core_N=15,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_ATTENTION_QKV_1024x1536x4608_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=8,
+            per_core_M=4,
+            per_core_N=29,
+            out_subblock_h=4,
+            out_subblock_w=1,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "1D_ATTENTION_QKV_256x1536x4608_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=8,
+            per_core_N=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            mcast_in0=True,
+            fuse_batch=False,
+            fused_activation=None,
+        )
+
         self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
@@ -397,32 +512,41 @@ class RefinerModelOptimisations(ModelOptimisations):
         )
 
     def get_matmul_config(self, matmul_path):
+        # # # ATTENTION QKV # # #
+        if ".to_q" in matmul_path:
+            if "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
+                return self.matmul_configs["2D_ATTENTION_QKV_4096x768x2304_40_CORES"]
+            elif "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
+                return self.matmul_configs["2D_ATTENTION_QKV_1024x1536x4608_40_CORES"]
+            elif "mid_block" in matmul_path:
+                return self.matmul_configs["1D_ATTENTION_QKV_256x1536x4608_40_CORES"]
+
         # # # GEGLU # # #
         if "net.0.proj" in matmul_path:
             if "mid_block" in matmul_path:
                 if "gelu" in matmul_path:
                     return self.matmul_configs["1D_GEGLU_LINEAR_256_1536_SPLIT_GELU"]
                 else:
-                    return self.matmul_configs["2D_GEGLU_LINEAR1_256x1536x6144"]
+                    return self.matmul_configs["1D_GEGLU_LINEAR1_256x1536x6144_40_CORES"]
             elif "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
                 if "gelu" in matmul_path:
                     return self.matmul_configs["2D_GEGLU_LINEAR_4096_768_SPLIT_GELU"]
                 else:
-                    return self.matmul_configs["2D_GEGLU_LINEAR1_4096x768x3072"]
+                    return self.matmul_configs["2D_GEGLU_LINEAR1_4096x768x3072_40_CORES"]
             elif "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
                 if "gelu" in matmul_path:
                     return self.matmul_configs["2D_GEGLU_LINEAR_1024_1536_SPLIT_GELU"]
                 else:
-                    return self.matmul_configs["2D_GEGLU_LINEAR1_1024x1536x6144"]
+                    return self.matmul_configs["2D_GEGLU_LINEAR1_1024x1536x6144_40_CORES"]
 
         # # # FF LINEAR # # #
         if "ff.net.2" in matmul_path:
             if "mid_block" in matmul_path:
-                return self.matmul_configs["2D_FF_LINEAR_256x6144x1536"]
+                return self.matmul_configs["2D_FF_LINEAR_256x6144x1536_40_CORES"]
             elif "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
-                return self.matmul_configs["2D_FF_LINEAR_4096x3072x768"]
+                return self.matmul_configs["2D_FF_LINEAR_4096x3072x768_40_CORES"]
             elif "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
-                return self.matmul_configs["2D_FF_LINEAR_1024x6144x1536"]
+                return self.matmul_configs["2D_FF_LINEAR_1024x6144x1536_40_CORES"]
 
         # # # RESNET # # #
         if "resnets" in matmul_path:
@@ -500,6 +624,9 @@ class RefinerModelOptimisations(ModelOptimisations):
             return ttnn.DRAM_MEMORY_CONFIG
         if "resnets" in module_path and "conv_shortcut" in module_path:
             return ttnn.L1_MEMORY_CONFIG
+        # TODO: Check if this is correct, should be DRAM for GEGLU and FF operations
+        if "ff.net" in module_path or "proj.split" in module_path:
+            return ttnn.DRAM_MEMORY_CONFIG
         return None
 
     def get_conv_config(self, conv_path):
