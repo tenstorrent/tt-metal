@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "interleaved_to_sharded_partial_op_types.hpp"
 

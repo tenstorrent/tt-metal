@@ -104,8 +104,4 @@ struct tensor_args_t {
     std::optional<Tensor> persistent_output_buffer;
 };
 
-using spec_return_value_t = TensorSpec;
-
-using tensor_return_value_t = Tensor;
-
 }  // namespace ttnn::operations::experimental::ccl::all_gather_async

@@ -10,19 +10,16 @@
 
 namespace ttnn::operations::reduction::ema {
 
-struct operation_attributes_t {
+struct EmaParams {
     float alpha{};
     CoreCoord grid_size;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct EmaInputs {
     Tensor input;
     std::optional<Tensor> optional_output_tensor;
 };
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
 
 }  // namespace ttnn::operations::reduction::ema

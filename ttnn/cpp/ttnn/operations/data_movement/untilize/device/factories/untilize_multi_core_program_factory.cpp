@@ -151,12 +151,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             ReaderDataMovementConfig(reader_compile_time_args));
     }
 
-    // Writer compute defines
-    std::map<std::string, std::string> writer_compute_defines;
-    if (output_is_sharded) {
-        writer_compute_defines["SHARDED"] = "1";
-    }
-
     // Writer compile-time args
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
@@ -178,11 +172,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         (uint32_t)num_cols_per_input_block,
         (uint32_t)num_cols_per_output_block,
     };
-    if (output_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
-    } else {
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    }
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Writer kernel
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -190,7 +180,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_multi_core.cpp",
         compute_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
