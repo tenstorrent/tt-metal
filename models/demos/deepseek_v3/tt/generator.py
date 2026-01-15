@@ -9,7 +9,7 @@ from typing import Iterable, List, Tuple
 
 import torch
 from loguru import logger
-from tracy import Profiler, signpost
+from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
@@ -104,7 +104,6 @@ class DeepseekGenerator:
         enable_trace: bool = False,
         signpost: bool = False,
         prefill_max_tokens: int | None = None,
-        profile: str = "all",
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -174,10 +173,7 @@ class DeepseekGenerator:
         self.enable_trace = enable_trace
         self.signpost = signpost
         self.prefill_max_tokens = prefill_max_tokens
-        self.profile = profile
-        self.tracy_profiler = Profiler()
         logger.info(f"Enable trace: {self.enable_trace}")
-        logger.info(f"Profile mode: {self.profile}")
 
         # Initialize rope_setup once
         self.rope_setup = RotarySetup(
@@ -691,10 +687,6 @@ class DeepseekGenerator:
         # Run one or more prefill+decode batches
         for _ in range(repeat_batches):
             # Prefill
-            if self.profile in ("all", "prefill"):
-                self.tracy_profiler.enable()
-            else:
-                self.tracy_profiler.disable()
             signpost(header="prefill")
             profiler.start("inference_prefill")
             num_of_users = tokens_batched.shape[0]
@@ -725,7 +717,7 @@ class DeepseekGenerator:
             last_tokens = torch.stack(last_tokens)
             profiler.end("inference_prefill")
             signpost(header="prefill")
-            self.tracy_profiler.disable()
+            ttnn.ReadDeviceProfiler(self.mesh_device)
 
             assert len(last_tokens) == num_of_users
 
@@ -1095,10 +1087,6 @@ class DeepseekGenerator:
                 self._reset_trace_inputs(tokens, positions)
 
             self.ccl.reset_sem_counters()
-            if self.profile in ("all", "decode"):
-                self.tracy_profiler.enable()
-            else:
-                self.tracy_profiler.disable()
             signpost(header="decode_execute_trace")
             profiler.start(f"trace_execution_{gen_idx}")
             ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)

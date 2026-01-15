@@ -113,20 +113,9 @@ def create_parser() -> argparse.ArgumentParser:
         help="Enable trace for decode forward pass",
     )
     p.add_argument(
-        "--signpost",
-        action="store_true",
-        help="Enable signpost for tracing.",
-    )
-    p.add_argument(
         "--prefill-max-tokens",
         type=int,
         help="Maximum number of tokens to prefill.",
-    )
-    p.add_argument(
-        "--profile",
-        choices=["all", "decode", "prefill"],
-        help="Profile for decode or prefill. Default is all: profiler is enabled for all operations.",
-        default="all",
     )
     return p
 
@@ -241,9 +230,7 @@ def run_demo(
     generator: str = "bp",
     enable_trace: bool = False,
     repeat_batches: int = 1,
-    signpost: bool = False,
     prefill_max_tokens: int = 1024,
-    profile: str = "both",
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -329,9 +316,7 @@ def run_demo(
                 ),
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
-                signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
-                profile=profile,
             )
         else:  # generator == "pp"
             if enable_trace:
@@ -429,9 +414,7 @@ def main() -> None:
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
         enable_trace=args.enable_trace,
-        signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
-        profile=args.profile,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
