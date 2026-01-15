@@ -839,7 +839,7 @@ std::string QuasarDataMovementKernel::config_hash() const {
     return fmt::format("{}", fmt::join(this->dm_cores_, "_"));
 }
 
-uint8_t QuasarDataMovementKernel::expected_num_binaries() const { return this->dm_cores_.size(); /*return 1;*/ }
+uint8_t QuasarDataMovementKernel::expected_num_binaries() const { return this->dm_cores_.size(); }
 
 }  // namespace experimental
 
