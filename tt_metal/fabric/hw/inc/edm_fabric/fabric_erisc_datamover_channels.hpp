@@ -166,10 +166,6 @@ public:
     FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_impl() {
         // TODO: Issue #26311
     }
-
-    FORCE_INLINE void set_cached_next_buffer_slot_addr_impl(size_t addr) {
-        // TODO: Issue #26311
-    }
 };
 
 // Elastic channel buffer implementation (stub for now)
@@ -197,6 +193,10 @@ public:
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const {
         // TODO: Issue #26311
         return 0;
+    }
+
+    FORCE_INLINE void set_cached_next_buffer_slot_addr_impl(size_t addr) {
+        // TODO: Issue #26311
     }
 };
 
