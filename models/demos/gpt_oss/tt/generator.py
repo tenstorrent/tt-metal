@@ -110,7 +110,8 @@ class GPTOSSRowShardedGenerator(Generator):
                 if page_table is not None
                 else None
             )
-            page_table = page_table[1:, :]
+            if page_table is not None:
+                page_table = page_table[1:, :]
 
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
