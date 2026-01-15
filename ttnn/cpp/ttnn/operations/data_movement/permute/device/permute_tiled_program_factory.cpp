@@ -352,12 +352,23 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     if (output_H % tile_shape[1] != 0) {
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
-        if (input_tensor.dtype() == DataType::BFLOAT16) {
-            padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-        } else if (num_packed_values == 2) {
-            padding_val_packed = static_cast<uint32_t>(pad_value) | (static_cast<uint32_t>(pad_value) << 16);
-        } else {
-            padding_val_packed = std::bit_cast<uint32_t>(pad_value);
+        switch (input_tensor.dtype()) {
+            case DataType::INT32:
+            case DataType::UINT32: padding_val_packed = pad_value; break;
+            case DataType::BFLOAT16:
+                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+                break;
+            case DataType::UINT16:
+                padding_val_packed =
+                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+                break;
+            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
+            default:
+                padding_val_packed = 0;
+                TT_ASSERT(
+                    false,
+                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
+                    "FLOAT32");
         }
     }
 
@@ -630,12 +641,23 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
 
-        if (input_tensor.dtype() == DataType::BFLOAT16) {
-            padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-        } else if (num_packed_values == 2) {
-            padding_val_packed = static_cast<uint32_t>(pad_value) | (static_cast<uint32_t>(pad_value) << 16);
-        } else {
-            padding_val_packed = std::bit_cast<uint32_t>(pad_value);
+        switch (input_tensor.dtype()) {
+            case DataType::INT32:
+            case DataType::UINT32: padding_val_packed = pad_value; break;
+            case DataType::BFLOAT16:
+                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+                break;
+            case DataType::UINT16:
+                padding_val_packed =
+                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+                break;
+            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
+            default:
+                padding_val_packed = 0;
+                TT_ASSERT(
+                    false,
+                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
+                    "FLOAT32");
         }
     }
 
