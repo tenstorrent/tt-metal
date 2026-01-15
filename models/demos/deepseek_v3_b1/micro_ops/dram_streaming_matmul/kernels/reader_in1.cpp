@@ -13,28 +13,27 @@
  * Output CB (CB4) is backed directly by output tensor - no copy needed.
  */
 void kernel_main() {
-    // Compile time args (buffer addresses are constant across all cores)
-    constexpr uint32_t in1_tensor_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t in3_tensor_addr = get_compile_time_arg_val(1);  // bias addr, 0 if no bias
-    constexpr uint32_t in1_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t in1_num_pages = get_compile_time_arg_val(3);
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(6);
-    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(7);
+    // Compile time args - CB IDs first, then buffer addresses and sizes
+    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_in3 = get_compile_time_arg_val(1);  // bias CB
+    constexpr uint32_t cb_id_out = get_compile_time_arg_val(2);
+    constexpr uint32_t in1_tensor_addr = get_compile_time_arg_val(3);
+    constexpr uint32_t in3_tensor_addr = get_compile_time_arg_val(4);  // bias addr, 0 if no bias
+    constexpr uint32_t in1_page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t in1_num_pages = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(7);
+    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(9);
+    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(10);
 
 #ifdef FUSE_BIAS
-    constexpr uint32_t in3_page_size = get_compile_time_arg_val(8);
-    constexpr uint32_t in3_num_pages = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_id_in3 = 3;
+    constexpr uint32_t in3_page_size = get_compile_time_arg_val(11);
+    constexpr uint32_t in3_num_pages = get_compile_time_arg_val(12);
 #endif
 
     // Runtime args (per-core values)
     const uint32_t dram_bank_id = get_arg_val<uint32_t>(0);
     const uint32_t vc = get_arg_val<uint32_t>(1);
-
-    constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t cb_id_out = 4;  // Backed by output tensor
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 

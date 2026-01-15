@@ -310,9 +310,16 @@ class DRAMStreamingMatmul:
         if fp32_dest_acc_en:
             mm_kernel_defines.append(("FP32_DEST_ACC_EN", "1"))
 
+        # CB IDs
+        cb_id_in0 = 0
+        cb_id_in1 = 1
+        cb_id_in3 = 3  # bias
+        cb_id_out = 4
+
         # in0 reader compile args - simple, just signals tiles are ready
         in0_block_num_tiles = out_subblock_h * in0_block_w * (per_core_M // out_subblock_h)
         in0_reader_compile_args = [
+            cb_id_in0,
             in0_block_num_tiles,
             num_blocks,
         ]
@@ -323,6 +330,9 @@ class DRAMStreamingMatmul:
 
         # in1 reader compile args
         in1_reader_compile_args = [
+            cb_id_in1,
+            cb_id_in3,
+            cb_id_out,
             in1_buffer_addr,
             bias_buffer_addr,
             in1_page_size,
