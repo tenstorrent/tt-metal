@@ -223,15 +223,15 @@ public:
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
         buffer_size_in_bytes = buffer_size_bytes;
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
-
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
-// need to avoid unrolling to keep code size within limits
-#pragma GCC unroll 1
+            // need to avoid unrolling to keep code size within limits
+            #pragma GCC unroll 1
             for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
                 reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
             }
         }
+
         if constexpr (NUM_BUFFERS) {
             set_cached_next_buffer_slot_addr_impl(this->buffer_addresses[0]);
         }
@@ -273,10 +273,12 @@ public:
         this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
     }
 
+    FORCE_INLINE uint32_t channel_base_address() const {
+        return static_cast<uint32_t>(this->buffer_addresses[0]);
+    }
+
 private:
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
-
-    // header + payload regions only
     std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
     std::size_t max_eth_payload_size_in_bytes;
@@ -478,6 +480,8 @@ struct HeterogeneousChannelBuilder<HEADER_TYPE, ChannelPoolCollection,
 // Generic heterogeneous channel tuple wrapper - works for any channel mapping
 template <typename HEADER_TYPE, typename ChannelPoolCollection, typename ChannelTypes, auto& ChannelToPoolIndex>
 struct HeterogeneousChannelTuple {
+    static constexpr size_t const num_channels = std::tuple_size_v<ChannelTypes>;
+
     ChannelTypes channel_buffers;
 
     explicit HeterogeneousChannelTuple() = default;
