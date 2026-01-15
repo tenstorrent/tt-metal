@@ -207,8 +207,8 @@ def run_reduce_scatter_impl(
             3,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
-            True,  # True
-            5,  # 5
+            True,
+            5,
         ),  # T3K single link test - 4 tiles per slice forward, 4 tiles per slice backward
     ],
     # ids=[

@@ -346,19 +346,26 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const uint32_t num_tiles_per_worker = num_slice_page_sets_per_worker * tile_granularity;
 
     // runtime args
-    auto worker_core_iter = worker_core_range_set.ranges().cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t direction = 0; direction < num_directions_per_link; direction++) {
-            auto core = *((worker_core_iter++)->begin());
+            uint32_t worker_id = (link * num_directions_per_link) + direction;
+            uint32_t opposite_direction_worker_id =
+                (link * num_directions_per_link) + ((direction + 1) % num_directions_per_link);
+
+            CoreCoord core = worker_cores[worker_id];
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
+
+            CoreCoord opposite_direction_core = worker_cores[opposite_direction_worker_id];
+            CoreCoord opposition_direction_virtual_core =
+                mesh_device->worker_core_from_logical_core(opposite_direction_core);
 
             /*
              * NOTE
              * - need to create kernels even if worker not processing tiles, required for pre and post op barrier/sync
              * - min so that we don't try to process non-existent tiles on that dummy worker
              */
-            uint32_t start_tiles_read = num_tiles_per_worker * ((link * num_directions_per_link) + direction);
-            uint32_t start_tiles_to_read = num_tiles_per_worker * ((link * num_directions_per_link) + direction + 1);
+            uint32_t start_tiles_read = num_tiles_per_worker * worker_id;
+            uint32_t start_tiles_to_read = num_tiles_per_worker * (worker_id + 1);
             start_tiles_to_read = std::min(start_tiles_to_read, num_slice_pages);
 
             // reader
@@ -382,9 +389,11 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 intermediate_slice_tensors.at(6).buffer()->address(),  // intermediate_slice_6_address
                 intermediate_slice_tensors.at(7).buffer()->address(),  // intermediate_slice_7_address
                 output_tensor.buffer()->address(),                     // output_address
-                virtual_core.x,                                        // semaphore_noc0_x
-                virtual_core.y,                                        // semaphore_noc0_y
+                virtual_core.x,                                        // op_semaphore_noc0_x
+                virtual_core.y,                                        // op_semaphore_noc0_y
                 op_semaphore.address(),                                // op_semaphore
+                opposition_direction_virtual_core.x,                   // pre_op_barrier_semaphore_noc0_x
+                opposition_direction_virtual_core.y,                   // pre_op_barrier_semaphore_noc0_y
                 pre_op_barrier_semaphore.address(),                    // pre_op_barrier_semaphore
                 direction,                                             // direction
                 start_tiles_read,                                      // start_tiles_read
@@ -491,7 +500,7 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
             writer_rt_args[7] = intermediate_slice_tensors.at(7).buffer()->address();
             writer_rt_args[8] = output_tensor.buffer()->address();
             writer_rt_args[11] = op_semaphore.address();
-            writer_rt_args[12] = pre_op_barrier_semaphore.address();
+            writer_rt_args[14] = pre_op_barrier_semaphore.address();
         }
     }
 }

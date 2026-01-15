@@ -59,10 +59,14 @@ void kernel_main() {
     uint32_t intermediate_slice_7_address = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_address = get_arg_val<uint32_t>(arg_idx++);
 
-    const uint8_t semaphore_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t semaphore_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t op_semaphore_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t op_semaphore_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t op_semaphore = get_arg_val<uint32_t>(arg_idx++);
+
+    const uint8_t pre_op_barrier_semaphore_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t pre_op_barrier_semaphore_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t pre_op_barrier_semaphore = get_arg_val<uint32_t>(arg_idx++);
+
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
@@ -130,11 +134,8 @@ void kernel_main() {
     // pre-populate packet headers
     auto unicast_scatter_write_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     auto unicast_sem_inc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto multicast_sem_inc_route_id = PacketHeaderPool::allocate_header_n(num_connections);
 
     uint8_t unicast_num_hops[] = {static_cast<uint8_t>(1)};
-    uint8_t multicast_start_distances_in_hops[] = {static_cast<uint8_t>(1)};
-    uint8_t multicast_num_hops[] = {static_cast<uint8_t>(ring_size - 1)};
 
     fabric_unicast_noc_scatter_write_set_state<
         UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
@@ -153,24 +154,14 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
-    fabric_multicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        fabric_connection,
-        multicast_sem_inc_route_id,
-        multicast_start_distances_in_hops,
-        multicast_num_hops,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            0,                           // ignore
-            static_cast<uint32_t>(1)});  // increment 1
-
     // init barrier - multicast to entire ring of workers going in the same direction
-    uint64_t pre_op_barrier_semaphore_noc_addr_in_pkt =
-        safe_get_noc_addr(semaphore_noc0_x, semaphore_noc0_y, pre_op_barrier_semaphore, 0);
-    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+    uint64_t pre_op_barrier_semaphore_noc_addr_in_pkt = safe_get_noc_addr(
+        pre_op_barrier_semaphore_noc0_x, pre_op_barrier_semaphore_noc0_y, pre_op_barrier_semaphore, 0);
+    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection,
-        multicast_sem_inc_route_id,
+        unicast_sem_inc_route_id,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_addr_in_pkt, 0});
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), ring_size - 1);
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
 
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
@@ -256,7 +247,7 @@ void kernel_main() {
 
                 // TODO: (GR) fuse
                 uint64_t op_semaphore_noc_addr_in_pkt =
-                    safe_get_noc_addr(semaphore_noc0_x, semaphore_noc0_y, op_semaphore, 0);
+                    safe_get_noc_addr(op_semaphore_noc0_x, op_semaphore_noc0_y, op_semaphore, 0);
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     fabric_connection,
                     unicast_sem_inc_route_id,
