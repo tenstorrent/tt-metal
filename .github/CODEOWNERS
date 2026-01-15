@@ -410,3 +410,4 @@ tt_telemetry/docker/ @btrzynadlowski-tt @kluongTT @tenstorrent/codeowner-bypass 
 
 # Tech reports
 tech_reports/LLMs/vLLM_integration.md @skhorasganiTT @viktorpusTT @tenstorrent/codeowner-bypass
+models/experimental/yunet @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
