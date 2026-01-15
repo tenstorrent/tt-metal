@@ -12,7 +12,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::transpose::program {
+namespace ttnn::prim {
 
 namespace {
 
@@ -187,9 +187,9 @@ void set_runtime_args_wh_rm(
 }  // namespace
 
 TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
-    const transpose::TransposeParams& /*operation_attributes*/,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = tensor_return_value;
 
@@ -365,9 +365,9 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
 
 void TransposeWHProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::TransposeParams& /*operation_attributes*/,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
@@ -404,4 +404,4 @@ void TransposeWHProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::transpose::program
+}  // namespace ttnn::prim

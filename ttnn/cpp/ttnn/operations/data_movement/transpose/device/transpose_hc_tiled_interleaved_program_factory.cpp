@@ -14,7 +14,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::transpose::program {
+namespace ttnn::prim {
 
 namespace {
 
@@ -102,9 +102,9 @@ void set_runtime_args_hc_tiled_interleaved(
 }  // namespace
 
 TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInterleavedProgramFactory::create(
-    const transpose::TransposeParams& operation_attributes,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& operation_attributes,
+    const TransposeInputs& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = tensor_return_value;
     const auto& pad_value = operation_attributes.pad_value;
@@ -211,9 +211,9 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
 
 void TransposeHCTiledInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::TransposeParams& /*operation_attributes*/,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
     auto compute_with_storage_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
@@ -231,4 +231,4 @@ void TransposeHCTiledInterleavedProgramFactory::override_runtime_arguments(
         total_cores);
 }
 
-}  // namespace ttnn::operations::data_movement::transpose::program
+}  // namespace ttnn::prim
