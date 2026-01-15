@@ -15,11 +15,11 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::fused::normalization {
+namespace ttnn::experimental::prim {
 
 RMSAllGatherDeviceOperation::program_factory_t RMSAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::RMSAllGatherMeshWorkloadFactory{};
+    return RMSAllGatherMeshWorkloadFactory{};
 }
 
 void RMSAllGatherDeviceOperation::validate_on_program_cache_hit(
@@ -250,11 +250,11 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-}  // namespace ttnn::operations::fused::normalization
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
+ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
     const Tensor& input_tensor,
     const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
     uint32_t cluster_axis,
@@ -272,7 +272,7 @@ ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation::tensor_retu
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
     bool use_noc1_only) {
-    using OperationType = ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation;
+    using OperationType = ttnn::experimental::prim::RMSAllGatherDeviceOperation;
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
