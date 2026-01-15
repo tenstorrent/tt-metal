@@ -223,11 +223,10 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
         detail::ReadFromDeviceL1(device, sub_logical_core, sub_l1_base_address, bytes_per_transaction, packed_output);
 
         // Results comparison
-        bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-            packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+        bool is_equal = (packed_output == packed_golden);
 
-        if (!pcc) {
-            log_error(LogTest, "PCC Check failed");
+        if (!is_equal) {
+            log_error(LogTest, "Equality Check failed");
             log_info(LogTest, "Golden vector");
             print_vector<uint32_t>(packed_golden);
             log_info(LogTest, "Output vector");

@@ -12,7 +12,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
 #include <tt_stl/assert.hpp>
 
@@ -158,7 +158,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         // Enable updates at a fixed interval for link stability and link status updates
         constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 32;
         edm_builder->set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
-        edm_builder->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
+        edm_builder->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE);
     }
 
     // Create tensix builder if needed
@@ -543,14 +543,11 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
         const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
 
-        bool vc1_serviced = false;
-        if (!is_inter_mesh_ && intermesh_config.requires_vc1_full_mesh) {
-            // Intra-mesh router with full mesh VC1
-            vc1_serviced = true;
-        } else if (is_inter_mesh_ && intermesh_config.requires_vc1_mesh_pass_through) {
-            // Inter-mesh router with pass-through VC1
-            vc1_serviced = true;
-        }
+        // VC1 is serviced when:
+        // - Intra-mesh router with full mesh VC1, or
+        // - Inter-mesh router with pass-through VC1
+        bool vc1_serviced = (!is_inter_mesh_ && intermesh_config.requires_vc1_full_mesh) ||
+                            (is_inter_mesh_ && intermesh_config.requires_vc1_mesh_pass_through);
 
         if (vc1_serviced) {
             defines["FABRIC_2D_VC1_SERVICED"] = "";

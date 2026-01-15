@@ -354,7 +354,7 @@ inline CoreCoord TestDeviceResources::reserve_receiver_core(
     return core;
 }
 
-inline CoreResources& TestDeviceResources::get_or_create_core_resources(const CoreCoord& core, CoreType core_type) {
+inline CoreResources& TestDeviceResources::get_or_create_core_resources(const CoreCoord& core, CoreType /*core_type*/) {
     if (!core_resources_.contains(core)) {
         core_resources_.emplace(
             core,
@@ -720,9 +720,8 @@ public:
             last_topology_key_ = topology_key;
 
             return cached_policy_;  // Return new policy
-        } else {
-            return std::nullopt;  // Signal to reuse existing policy
         }
+        return std::nullopt;  // Signal to reuse existing policy
     }
 
     const AllocatorPolicies& get_cached_policy() const { return cached_policy_; }

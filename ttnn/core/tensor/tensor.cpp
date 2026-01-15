@@ -48,7 +48,7 @@ HostBuffer create_host_buffer_from_row_major_data(std::vector<T>&& data, const T
 
 }  // namespace
 
-static std::atomic<std::uint64_t> tensor_id_counter{0};
+std::atomic<std::uint64_t> Tensor::tensor_id_counter{0};
 
 Tensor::Tensor(
     HostBuffer buffer,
@@ -84,7 +84,8 @@ Tensor::Tensor(
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) : id_(next_id()) {
+Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    tensor_id(Tensor::next_tensor_id()) {
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
 }
 
@@ -102,19 +103,20 @@ Tensor& Tensor::operator=(const Tensor& other) {
     if (this == &other) {
         return *this;
     }
-    this->id_ = other.id_;
-    this->tensor_attributes = other.tensor_attributes;
+    this->tensor_id = other.tensor_id;
+    if (this->tensor_attributes != other.tensor_attributes) {
+        this->tensor_attributes = other.tensor_attributes;
+    }
     this->mesh_device_ = other.mesh_device_;
     return *this;
 }
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
-    if (this == &other) {
-        return *this;
+    this->tensor_id = other.tensor_id;
+    other.tensor_id = INVALID_TENSOR_ID;
+    if (this->tensor_attributes != other.tensor_attributes) {
+        this->tensor_attributes = std::move(other.tensor_attributes);
     }
-    this->id_ = other.id_;
-    other.id_ = INVALID_TENSOR_ID;
-    this->tensor_attributes = std::move(other.tensor_attributes);
     this->mesh_device_ = other.mesh_device_;
     return *this;
 }
@@ -148,9 +150,11 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_end();
 }
 
-std::uint64_t Tensor::get_id() const { return id_; }
+std::uint64_t Tensor::get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
 
-std::uint64_t Tensor::next_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
+void Tensor::set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id, std::memory_order_relaxed); }
+
+std::uint64_t Tensor::next_tensor_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
 
 template <typename T>
 Tensor Tensor::from_span(
@@ -456,6 +460,24 @@ bool Tensor::is_scalar() const {
     return logical_shape.rank() == 0 || logical_shape.volume() == 1;
 }
 
+static Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
+        coords.push_back(coord);
+    }
+    DeviceStorage device_storage(std::move(mesh_buffer), coords);
+    // TODO (#25340): Implement correct logic and add test for this
+    ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
+    for (size_t i = 0; i < device->shape().dims(); i++) {
+        placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+    }
+
+    auto tensor_topology = TensorTopology{device->shape(), placements, coords};
+    return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
+}
+
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
@@ -468,12 +490,12 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
     output = allocate_tensor_on_device(tensor_spec, mesh_device);
+    output = tt::tt_metal::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
 
     return output;
 }
-
 
 void memcpy(
     distributed::MeshCommandQueue& queue,
@@ -485,11 +507,10 @@ void memcpy(
     TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
 
     TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
-    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = *distributed::MeshCoordinateRange(queue.device()->shape()).begin(),
-        .host_data = dst,
-        .region = region,
-    }};
+    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
+        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
+            .host_data(dst)
+            .region(region)};
     queue.enqueue_read_shards(shard_data_transfers, src.mesh_buffer(), blocking);
 }
 
@@ -505,11 +526,10 @@ void memcpy(
     ZoneScoped;
     TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
     TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
-    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = *distributed::MeshCoordinateRange(queue.device()->shape()).begin(),
-        .host_data = const_cast<void*>(src),
-        .region = region,
-    }};
+    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
+        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
+            .host_data(const_cast<void*>(src))
+            .region(region)};
     queue.enqueue_write_shards(dst.mesh_buffer(), shard_data_transfers, false);
 }
 
@@ -550,24 +570,6 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
     }
 }
 
-Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
-    auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
-    std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
-        coords.push_back(coord);
-    }
-    DeviceStorage device_storage(std::move(mesh_buffer), coords);
-    // TODO (#25340): Implement correct logic and add test for this
-    ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
-    for (size_t i = 0; i < device->shape().dims(); i++) {
-        placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-    }
-
-    auto tensor_topology = TensorTopology{device->shape(), placements, coords};
-    return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
-}
-
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
@@ -585,6 +587,16 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
     // TODO (#25340): Implement correct logic and add test for this
     return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, TensorTopology{});
 }
+
+// TODO #32045: Remove this function since IDs are assigned in the constructor.
+Tensor set_tensor_id(const Tensor& tensor) {
+    if (not GraphTracker::instance().is_enabled()) {
+        return tensor;
+    }
+    auto output = tensor;
+    output.tensor_id = Tensor::next_tensor_id();
+    return output;
+};
 
 Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
 
@@ -635,6 +647,10 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
+    tt::stl::reflection::operator<<(os, tensor);
+    return os;
+}
 namespace ops {
 Tensor view(const Tensor& input_tensor, const Shape& new_shape, const Shape& new_padded_shape) {
     return tensor_ops::tensor_view(input_tensor, new_shape, new_padded_shape);
@@ -645,5 +661,4 @@ Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
 Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
 
 }  // namespace ops
-
 }  // namespace tt::tt_metal

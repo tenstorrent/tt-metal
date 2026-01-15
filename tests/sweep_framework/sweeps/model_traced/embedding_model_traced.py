@@ -9,7 +9,6 @@ from functools import partial
 import random
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -75,7 +74,6 @@ def run(
     input_memory_config,
     weight_memory_config,
     output_memory_config,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,  # Accept traced_source, traced_machine_info, etc.
@@ -94,7 +92,7 @@ def run(
     )(weight_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze(dim=0)
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
     # torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weight_tensor)
 
     input_tensor = ttnn.from_torch(

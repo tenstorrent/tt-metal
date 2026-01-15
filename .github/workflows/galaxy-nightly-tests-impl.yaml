@@ -35,7 +35,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          # { name: "Galaxy CCL tests", arch: wormhole_b0, cmd: "pytest tests/nightly/tg/ccl", timeout: 40, owner_id: U05ACKAJTHS}, # Naif Tarafdar #issue #35151
+          { name: "Galaxy CCL tests", arch: wormhole_b0, cmd: "pytest tests/nightly/tg/ccl", timeout: 40, owner_id: U05ACKAJTHS}, # Naif Tarafdar
           { name: "Galaxy Fabric unit tests", arch: wormhole_b0, cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*", timeout: 25, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
           { name: "Galaxy Fabric 2D Torus Nightly Tests", arch: wormhole_b0, cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_2d_torus_nightly.yaml, timeout: 45, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
           # {

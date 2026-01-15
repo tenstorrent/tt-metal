@@ -5,15 +5,15 @@
 #include "send_async_op_device_operation_types.hpp"
 #include "send_async_op_device_operation.hpp"
 
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 namespace ttnn::operations::experimental::ccl::send_async {
 
 SendAsyncDeviceOperation::program_factory_t SendAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return SendAsyncMeshWorkloadFactory{};
 }
 
@@ -33,23 +33,26 @@ void SendAsyncDeviceOperation::validate_on_program_cache_miss(
 }
 
 SendAsyncDeviceOperation::spec_return_value_t SendAsyncDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     // Op does not return any output tensors
     return {};
 }
 
 SendAsyncDeviceOperation::tensor_return_value_t SendAsyncDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     // Op does not return any output tensors
     return {};
 }
 
 tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& mesh_socket = args.mesh_socket;
-    const auto& input_tensors = tensor_args.input_tensor;
+    log_trace(tt::LogOp, "SendAsyncDeviceOperation::compute_program_hash is called");
+    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
 
-    return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(mesh_socket, input_tensors);
+    auto program_factory = select_program_factory(args, tensor_args);
+
+    return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(
+        args.mesh_socket, input_tensor, program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::send_async

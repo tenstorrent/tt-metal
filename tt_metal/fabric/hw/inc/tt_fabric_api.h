@@ -19,6 +19,9 @@ using namespace tt::tt_fabric;
 
 namespace tt::tt_fabric {
 
+// Type alias for cleaner access to 2D mesh routing constants
+using MeshRoutingFields = RoutingFieldsConstants::Mesh;
+
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id == routing_table->my_mesh_id) {
@@ -43,8 +46,8 @@ void fabric_set_route(
     uint32_t value = 0;
     switch (direction) {
         case eth_chan_directions::EAST:
-            local_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
-            forward_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
+            local_packet = MeshRoutingFields::FORWARD_WEST;
+            forward_packet = MeshRoutingFields::FORWARD_EAST;
             if constexpr (mcast) {
                 packet_header->routing_fields.branch_east_offset = start_hop;
             } else {
@@ -52,8 +55,8 @@ void fabric_set_route(
             }
             break;
         case eth_chan_directions::WEST:
-            local_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
-            forward_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
+            local_packet = MeshRoutingFields::FORWARD_EAST;
+            forward_packet = MeshRoutingFields::FORWARD_WEST;
             if constexpr (mcast) {
                 packet_header->routing_fields.branch_west_offset = start_hop;
             } else {
@@ -61,12 +64,12 @@ void fabric_set_route(
             }
             break;
         case eth_chan_directions::NORTH:
-            local_packet = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
-            forward_packet = LowLatencyMeshRoutingFields::FORWARD_NORTH | branch_forward;
+            local_packet = MeshRoutingFields::FORWARD_SOUTH;
+            forward_packet = MeshRoutingFields::FORWARD_NORTH | branch_forward;
             break;
         case eth_chan_directions::SOUTH:
-            local_packet = LowLatencyMeshRoutingFields::FORWARD_NORTH;
-            forward_packet = LowLatencyMeshRoutingFields::FORWARD_SOUTH | branch_forward;
+            local_packet = MeshRoutingFields::FORWARD_NORTH;
+            forward_packet = MeshRoutingFields::FORWARD_SOUTH | branch_forward;
             break;
         default: ASSERT(false);
     }
@@ -75,15 +78,15 @@ void fabric_set_route(
     uint32_t local_val;
     uint32_t forward_val;
     uint32_t end_hop = start_hop + num_hops;
-    ASSERT(end_hop <= HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE);
+    ASSERT(end_hop <= FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE);
     for (uint32_t i = start_hop; i < end_hop; i++) {
         if constexpr (mcast) {
             // If forward north or forward south is set, then it may be 2d mcast and requires east/west forwarding, in
             // addition to spine forwards on north/south. forward_packet bit 0 and 1 determine if mcast has to branch
             // east/west from spine. If this is not a north/south mcast, then it cannot be a 2D mcast, and we dont need
             // to branch.
-            uint32_t mcast_branch = forward_packet & LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS
-                                        ? forward_packet & LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW
+            uint32_t mcast_branch = forward_packet & MeshRoutingFields::WRITE_AND_FORWARD_NS
+                                        ? forward_packet & MeshRoutingFields::WRITE_AND_FORWARD_EW
                                         : 0;
             forward_val = i == end_hop - 1 ? mcast_branch : forward_packet;
             local_val = local_packet;
@@ -133,10 +136,10 @@ void fabric_set_mcast_route(
     // If api is called with east and/or west hops != 0, it may be a 2D mcast
     // If so, set the forwarding flags for east and/or west branchs.
     if (e_num_hops) {
-        mcast_branch |= LowLatencyMeshRoutingFields::FORWARD_EAST;
+        mcast_branch |= MeshRoutingFields::FORWARD_EAST;
     }
     if (w_num_hops) {
-        mcast_branch |= LowLatencyMeshRoutingFields::FORWARD_WEST;
+        mcast_branch |= MeshRoutingFields::FORWARD_WEST;
     }
 
     if (n_num_hops) {
@@ -208,17 +211,13 @@ bool fabric_set_unicast_route(
         // This is to prepend additional one step, which is not needed for worker sender.
         auto set_forward = [&](eth_chan_directions dir) {
             switch (dir) {
-                case eth_chan_directions::EAST:
-                    packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_EAST;
-                    break;
-                case eth_chan_directions::WEST:
-                    packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_WEST;
-                    break;
+                case eth_chan_directions::EAST: packet_header->route_buffer[0] = MeshRoutingFields::FORWARD_EAST; break;
+                case eth_chan_directions::WEST: packet_header->route_buffer[0] = MeshRoutingFields::FORWARD_WEST; break;
                 case eth_chan_directions::NORTH:
-                    packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_NORTH;
+                    packet_header->route_buffer[0] = MeshRoutingFields::FORWARD_NORTH;
                     break;
                 case eth_chan_directions::SOUTH:
-                    packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
+                    packet_header->route_buffer[0] = MeshRoutingFields::FORWARD_SOUTH;
                     break;
                 default: ASSERT(false); break;
             }
@@ -239,7 +238,7 @@ bool fabric_set_unicast_route(
                     get_next_hop_router_direction(packet_header->dst_start_mesh_id, packet_header->dst_start_chip_id);
                 set_forward(next_direction);
             }
-            packet_header->route_buffer[1] = LowLatencyMeshRoutingFields::NOOP;
+            packet_header->route_buffer[1] = MeshRoutingFields::NOOP;
             return true;  // early return, route_buffer[0] is enough
         }
     } else {

@@ -217,6 +217,7 @@ def run(
     output_memory_config=None,
     *,
     device,  # unused
+    **kwargs,
 ) -> list:
     # Check if this is a model_traced run (has input_a_memory_config)
     is_model_traced = input_a_memory_config is not None
@@ -254,7 +255,6 @@ def run(
             raise ValueError("output_memory_config is None - required parameter missing")
         elif isinstance(output_memory_config, str):
             # Parse the string representation back to a MemoryConfig
-            import json
             import ast
 
             # Try to parse as dict (might be a string representation of dict)

@@ -10,7 +10,8 @@ Usage:
 Options:
 
 Description:
-    Read important variables from fast dispatch kernels.
+    Read important variables from fast dispatch kernels. These can help identify the state the dispatcher is in, to help
+    determine the cause of any hangs.
 
 Owner:
     jbaumanTT
@@ -231,7 +232,7 @@ def read_wait_globals(
         if is_dispatcher_kernel:
             log_check(
                 wait_stream_value is not None,
-                f"Failed to read wait_stream_value for kernel {dispatcher_core_data.kernel_name}",
+                f"Failed to read wait_stream_value for kernel {dispatcher_core_data.kernel_name}. There may be a problem with the dispatcher kernel.",
             )
 
     if last_wait_count is not None and stream_width is not None:
@@ -254,7 +255,10 @@ def read_wait_globals(
             delta = (int(sem_value) - int(local_count)) & 0xFFFFFFFF
             sem_minus_local = delta - 0x100000000 if (delta & 0x80000000) else delta
     except Exception:
-        log_check(False, f"Failed to read sem_minus_local for kernel {dispatcher_core_data.kernel_name}")
+        log_check(
+            False,
+            f"Failed to read sem_minus_local for kernel {dispatcher_core_data.kernel_name}. There may be a problem with the dispatcher kernel.",
+        )
         # Leave as None if any lookups fail
         sem_minus_local = None
 

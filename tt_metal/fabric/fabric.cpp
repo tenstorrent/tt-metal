@@ -11,7 +11,6 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
@@ -335,9 +334,16 @@ void SetFabricConfig(
     std::optional<uint8_t> num_routing_planes,
     FabricTensixConfig fabric_tensix_config,
     FabricUDMMode fabric_udm_mode,
-    FabricManagerMode fabric_manager) {
+    FabricManagerMode fabric_manager,
+    FabricRouterConfig router_config) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode, fabric_manager);
+        fabric_config,
+        reliability_mode,
+        num_routing_planes,
+        fabric_tensix_config,
+        fabric_udm_mode,
+        fabric_manager,
+        router_config);
 }
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(

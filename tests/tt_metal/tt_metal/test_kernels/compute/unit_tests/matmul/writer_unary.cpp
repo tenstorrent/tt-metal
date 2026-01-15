@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
+#include "experimental/noc.h"
 
 void kernel_main() {
     const uint32_t out_cb = get_compile_time_arg_val(0);
@@ -11,19 +14,22 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
 
     // single-tile ublocks
-    uint32_t ublock_size_bytes = get_tile_size(out_cb);
+
+    experimental::CircularBuffer cb(out_cb);
+    experimental::Noc noc;
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_dst;
+
+    uint32_t ublock_size_bytes = cb.get_tile_size();
     uint32_t ublock_size_tiles = 1;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_dram_bank_id_addr, dst_addr);
+        cb.wait_front(ublock_size_tiles);
 
-        cb_wait_front(out_cb, ublock_size_tiles);
-        uint32_t l1_read_addr = get_read_ptr(out_cb);
-        noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);
+        noc.async_write(cb, dram_dst, ublock_size_bytes, {}, {.bank_id = dst_dram_bank_id_addr, .addr = dst_addr});
 
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
-        cb_pop_front(out_cb, ublock_size_tiles);
+        cb.pop_front(ublock_size_tiles);
         dst_addr += ublock_size_bytes;
     }
 }

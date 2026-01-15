@@ -596,7 +596,7 @@ class ModelArgs:
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
         if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
-            self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"
+            self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.device_name == "N300"
         ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
@@ -633,6 +633,10 @@ class ModelArgs:
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
         self.processor = None if dummy_weights else self.create_processor()
+
+        # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
+        # We currently disable this fusion of ops for vision-capable or multimodal models
+        self.use_qk_fused = not self.is_multimodal
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -721,11 +725,30 @@ class ModelArgs:
             )
 
             # Chunk values based on what works best empirically
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=None: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
-                q_chunk_size=256 if seqlen >= 2048 else 64,
-                k_chunk_size=256 if seqlen >= 2048 else 64,
+                # We want 256 if seqlen >= 2048 else 64. BUT:
+                # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
+                # Here (x & -x) is the highest power of 2 that divides x.
+                # When chunk_start_idx=0, we use default values since 0 is a multiple of any number.
+                q_chunk_size=256
+                if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else 64
+                if seqlen < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else min(256, chunk_start_idx & -chunk_start_idx)
+                if seqlen >= 2048
+                else min(64, chunk_start_idx & -chunk_start_idx),
+                # Original:
+                # k_chunk_size=256 if seqlen >= 2048 else 64,
+                # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225 :
+                k_chunk_size=256
+                if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else 64
+                if seqlen < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else min(256, chunk_start_idx & -chunk_start_idx)
+                if seqlen >= 2048
+                else min(64, chunk_start_idx & -chunk_start_idx),
             )
 
             # nlp_concat_heads_decode will shard the data across this number of cores
@@ -899,13 +922,17 @@ class ModelArgs:
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=max(
-                    1,
-                    8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
+                per_core_M=7
+                if self.device_name == "P100"
+                else (
+                    max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
+                        1,
+                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
+                    )
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
                     self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
@@ -1326,6 +1353,10 @@ class ModelArgs:
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
+        assert (
+            self.capped_warmup_seq_len > 0 and (self.capped_warmup_seq_len & (self.capped_warmup_seq_len - 1)) == 0
+        ), f"capped_warmup_seq_len must be a power of 2, but got {self.capped_warmup_seq_len}"
+
         DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
@@ -1334,6 +1365,10 @@ class ModelArgs:
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+
+        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
+            max_seq_len_to_warmup = self.capped_warmup_seq_len
+
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
             max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
@@ -1829,11 +1864,12 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
-    def can_enable_trace(self, prefill_seq_len):
+    def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
         """
         This function is used to determine if trace should be enabled for the prefill.
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
         # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
+        # TODO: Support prefix caching with tracing
         """
 
         allowed_seq_lens = self.trace_prefill_supported_seq_lens
@@ -1842,6 +1878,7 @@ class ModelArgs:
             prefill_seq_len in allowed_seq_lens
             and prefill_seq_len <= self.max_prefill_chunk_size
             and prefill_seq_len <= self.max_seq_len
+            and num_cached_tokens == 0
         )
 
     def is_llama_vision(self):
@@ -3232,14 +3269,59 @@ class DecodersPrecision:
         return inst
 
 
-def num_to_corerange(x):
-    assert x < 8 or x % 8 == 0
-    num_x = min(x, 8)
+def num_to_corerange(
+    x: int,
+    start_core: ttnn.CoreCoord = ttnn.CoreCoord(0, 0),
+    grid_x: int = 8,
+    grid_y: int = 8,
+) -> ttnn.CoreRange:
+    """
+    Construct a rectangular CoreRange of exactly ``x`` cores starting at
+    ``start_core`` on a ``grid_x × grid_y`` core grid.
+
+    The CoreRange is allocated in row-major order semantics but must form
+    a single contiguous rectangle representable by ``ttnn.CoreRange``.
+
+    Defaults to an 8×8 grid for backward compatibility.
+    """
+
+    # --- basic sanity ---
+    assert x > 0, "x must be positive"
+    assert grid_x > 0 and grid_y > 0
+    assert 0 <= start_core.x < grid_x
+    assert 0 <= start_core.y < grid_y
+
+    sx, sy = start_core.x, start_core.y
+
+    # --- linear availability (row-major correctness) ---
+    remaining_linear_cores = (grid_x - sx) + (grid_y - sy - 1) * grid_x  # remainder of start row  # full rows below
+    assert remaining_linear_cores >= x, (
+        f"Not enough cores from start_core {start_core} "
+        f"to allocate {x} cores (only {remaining_linear_cores} available)"
+    )
+
+    # --- rectangular availability ---
+    remaining_x = grid_x - sx
+    remaining_y = grid_y - sy
+
+    # --- shape rule ---
+    assert x < grid_x or x % grid_x == 0, f"x must be < grid_x ({grid_x}) or a multiple of grid_x"
+
+    # --- choose rectangle dimensions ---
+    num_x = min(x, remaining_x)
     num_y = x // num_x
-    assert num_x * num_y == x
+
+    assert num_x * num_y == x, f"x={x} cannot form a rectangular CoreRange starting at {start_core}"
+
+    # --- bounds check ---
+    assert num_y <= remaining_y, f"CoreRange height {num_y} exceeds available rows {remaining_y}"
+
+    end_x = sx + num_x - 1
+    end_y = sy + num_y - 1
+
     return ttnn.CoreRange(
-        ttnn.CoreCoord(0, 0),
-        ttnn.CoreCoord(num_x - 1, num_y - 1),
+        start_core,
+        ttnn.CoreCoord(end_x, end_y),
     )
 
 
