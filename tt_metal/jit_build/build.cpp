@@ -210,9 +210,14 @@ void JitBuildEnv::init(
         "-Wno-unused-function ";
 
     // Defines
+    // Sort device_kernel_defines to ensure deterministic build_key computation
+    std::vector<std::pair<std::string, std::string>> sorted_defines(
+        device_kernel_defines.begin(), device_kernel_defines.end());
+    std::sort(sorted_defines.begin(), sorted_defines.end());
+
     this->defines_ = "";
-    for (const auto& device_kernel_define : device_kernel_defines) {
-        this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
+    for (const auto& [key, value] : sorted_defines) {
+        this->defines_ += "-D" + key + "=" + value + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
