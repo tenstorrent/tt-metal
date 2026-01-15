@@ -21,7 +21,7 @@ import ml_dtypes
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter, RunMode
+from ttml.modules import AbstractModuleBase, ModuleList, Parameter, RunMode
 from ttml.common.utils import round_up_to_tile, get_tt_metal_home
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
@@ -308,13 +308,15 @@ class PrimitiveNanoGPT(AbstractModuleBase):
         self.wte = PrimitiveEmbedding(config.vocab_size, config.n_embd)
         self.wpe = PrimitiveEmbedding(config.block_size, config.n_embd)
 
-        self.blocks = []
-        for i in range(config.n_layer):
-            block = PrimitiveGPTBlock(
-                config.n_embd, config.n_head, config.dropout, config.bias
-            )
-            self.blocks.append(block)
-            setattr(self, f"block_{i}", block)
+        # Transformer blocks (ModuleList auto-registers all blocks)
+        self.blocks = ModuleList(
+            [
+                PrimitiveGPTBlock(
+                    config.n_embd, config.n_head, config.dropout, config.bias
+                )
+                for _ in range(config.n_layer)
+            ]
+        )
 
         ln_f_shape = (1, 1, 1, config.n_embd)
         gamma_f_np = np.ones(ln_f_shape, dtype=ml_dtypes.bfloat16)

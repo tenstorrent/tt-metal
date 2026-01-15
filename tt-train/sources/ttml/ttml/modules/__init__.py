@@ -5,7 +5,7 @@
 """Python modules package for ttml."""
 
 import sys
-from .module_base import AbstractModuleBase
+from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Buffer, Parameter
 
 # Import C++ bindings
@@ -20,6 +20,8 @@ from .._ttml.modules import RunMode, ModuleBase
 __all__ = [
     "AbstractModuleBase",
     "ModuleBase",
+    "ModuleDict",
+    "ModuleList",
     "Parameter",
     "Buffer",
     "RunMode",

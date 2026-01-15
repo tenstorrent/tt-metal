@@ -16,7 +16,7 @@ import ml_dtypes
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter, RunMode
+from ttml.modules import AbstractModuleBase, ModuleList, Parameter, RunMode
 
 from .embedding import Embedding
 from .gpt_block import GPTBlock
@@ -56,13 +56,13 @@ class NanoGPT(AbstractModuleBase):
         self.wte = Embedding(config.vocab_size, config.n_embd)
         self.wpe = Embedding(config.block_size, config.n_embd)
 
-        # Transformer blocks
-        self.blocks = []
-        for i in range(config.n_layer):
-            block = GPTBlock(config.n_embd, config.n_head, config.dropout, config.bias)
-            self.blocks.append(block)
-            # Register as submodule for parameter tracking
-            setattr(self, f"block_{i}", block)
+        # Transformer blocks (ModuleList auto-registers all blocks)
+        self.blocks = ModuleList(
+            [
+                GPTBlock(config.n_embd, config.n_head, config.dropout, config.bias)
+                for _ in range(config.n_layer)
+            ]
+        )
 
         # Final layer norm (use ml_dtypes.bfloat16)
         # Layer norm parameters must be in TILE layout
@@ -144,12 +144,6 @@ class NanoGPT(AbstractModuleBase):
             logits = ttml.ops.reshape.reshape(logits, new_shape)
 
         return logits
-
-    def __call__(
-        self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
-        """Call the forward method."""
-        return self.forward(idx, mask)
 
 
 def create_nanogpt(config: NanoGPTConfig) -> NanoGPT:

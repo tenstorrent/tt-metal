@@ -225,6 +225,8 @@ def test_all_attribute_handling():
     expected_items = [
         "AbstractModuleBase",
         "ModuleBase",
+        "ModuleDict",
+        "ModuleList",
         "Parameter",
         "Buffer",
         "RunMode",
@@ -571,3 +573,351 @@ class TestCppOptimizersWithPythonModules:
 
         # Should complete without error
         assert True, "Optimizer should work after LR adjustment"
+
+
+class TestModuleList:
+    """Tests for the PyTorch-compatible ModuleList container."""
+
+    def test_module_list_basic(self):
+        """Test basic ModuleList creation and indexing."""
+        from ttml.modules import AbstractModuleBase, ModuleList, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self, idx):
+                super().__init__()
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32) * idx
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return ttml.ops.binary.mul(x, self.weight.tensor)
+
+        # Create ModuleList
+        modules = ModuleList([SimpleModule(i) for i in range(3)])
+
+        # Test length
+        assert len(modules) == 3
+
+        # Test indexing
+        assert modules[0] is not None
+        assert modules[1] is not None
+        assert modules[-1] is modules[2]
+
+    def test_module_list_parameter_tracking(self):
+        """Test that ModuleList properly tracks parameters of contained modules."""
+        from ttml.modules import AbstractModuleBase, ModuleList, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self, idx):
+                super().__init__()
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32) * idx
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return ttml.ops.binary.mul(x, self.weight.tensor)
+
+        class OuterModule(AbstractModuleBase):
+            def __init__(self, n_layers):
+                super().__init__()
+                self.layers = ModuleList([SimpleModule(i) for i in range(n_layers)])
+
+            def forward(self, x):
+                for layer in self.layers:
+                    x = layer(x)
+                return x
+
+        model = OuterModule(n_layers=4)
+        params = model.parameters()
+
+        # Should have 4 parameters (one weight per layer)
+        # Parameter names should include layer indices
+        param_names = list(params.keys())
+        assert (
+            len(param_names) == 4
+        ), f"Should have 4 parameters, got {len(param_names)}: {param_names}"
+
+    def test_module_list_iteration(self):
+        """Test that ModuleList supports iteration."""
+        from ttml.modules import AbstractModuleBase, ModuleList, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self, idx):
+                super().__init__()
+                self.idx = idx
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32)
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return x
+
+        modules = ModuleList([SimpleModule(i) for i in range(5)])
+
+        # Test iteration
+        count = 0
+        for module in modules:
+            assert module is not None
+            count += 1
+        assert count == 5
+
+        # Test list conversion
+        module_list = list(modules)
+        assert len(module_list) == 5
+
+    def test_module_list_append(self):
+        """Test ModuleList append method."""
+        from ttml.modules import AbstractModuleBase, ModuleList, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32)
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return x
+
+        modules = ModuleList()
+        assert len(modules) == 0
+
+        modules.append(SimpleModule())
+        assert len(modules) == 1
+
+        modules.append(SimpleModule())
+        assert len(modules) == 2
+
+        # Parameters should be tracked
+        class OuterModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                self.layers = ModuleList()
+                self.layers.append(SimpleModule())
+                self.layers.append(SimpleModule())
+
+            def forward(self, x):
+                return x
+
+        model = OuterModule()
+        params = model.parameters()
+        param_names = list(params.keys())
+        assert (
+            len(param_names) == 2
+        ), f"Should have 2 parameters after append, got {param_names}"
+
+    def test_module_list_extend(self):
+        """Test ModuleList extend method."""
+        from ttml.modules import AbstractModuleBase, ModuleList, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32)
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return x
+
+        modules = ModuleList([SimpleModule()])
+        assert len(modules) == 1
+
+        modules.extend([SimpleModule(), SimpleModule()])
+        assert len(modules) == 3
+
+    def test_module_list_slicing(self):
+        """Test ModuleList slicing returns a new ModuleList."""
+        from ttml.modules import AbstractModuleBase, ModuleList, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self, idx):
+                super().__init__()
+                self.idx = idx
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32)
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return x
+
+        modules = ModuleList([SimpleModule(i) for i in range(5)])
+        sliced = modules[1:4]
+
+        assert isinstance(sliced, ModuleList)
+        assert len(sliced) == 3
+
+    def test_module_list_with_optimizer(self):
+        """Test that ModuleList parameters work with optimizer."""
+        from ttml.modules import AbstractModuleBase, ModuleList, Parameter
+
+        class SimpleLayer(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                w_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return ttml.ops.binary.mul(x, self.weight.tensor)
+
+        class MultiLayerModel(AbstractModuleBase):
+            def __init__(self, n_layers):
+                super().__init__()
+                self.layers = ModuleList([SimpleLayer() for _ in range(n_layers)])
+
+            def forward(self, x):
+                for layer in self.layers:
+                    x = layer(x)
+                return x
+
+        model = MultiLayerModel(n_layers=3)
+        params = model.parameters()
+
+        # Store initial values
+        initial_weights = {
+            k: params[k].to_numpy(ttnn.DataType.FLOAT32).copy() for k in params.keys()
+        }
+
+        # Create optimizer and train
+        sgd_config = ttml.optimizers.SGDConfig.make(0.1, 0.0, 0.0, 0.0, False)
+        optimizer = ttml.optimizers.SGD(params, sgd_config)
+
+        model.train()
+        optimizer.zero_grad()
+
+        x = ttml.autograd.Tensor.from_numpy(
+            np.random.randn(1, 1, 32, 32).astype(np.float32)
+        )
+        output = model(x)
+        target = ttml.autograd.Tensor.from_numpy(
+            np.zeros((1, 1, 32, 32), dtype=np.float32)
+        )
+        loss = ttml.ops.loss.mse_loss(output, target, ttml.ops.ReduceType.MEAN)
+        loss.backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+        optimizer.step()
+
+        # Verify all weights were updated
+        params_after = model.parameters()
+        for key in initial_weights:
+            weight_after = params_after[key].to_numpy(ttnn.DataType.FLOAT32)
+            assert not np.allclose(
+                initial_weights[key], weight_after, atol=1e-6
+            ), f"Optimizer should have updated parameter {key}"
+
+
+class TestModuleDict:
+    """Tests for the PyTorch-compatible ModuleDict container."""
+
+    def test_module_dict_basic(self):
+        """Test basic ModuleDict creation and access."""
+        from ttml.modules import AbstractModuleBase, ModuleDict, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self, name):
+                super().__init__()
+                self.module_name = name
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32)
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return x
+
+        # Create ModuleDict
+        modules = ModuleDict(
+            {
+                "encoder": SimpleModule("enc"),
+                "decoder": SimpleModule("dec"),
+            }
+        )
+
+        assert len(modules) == 2
+        assert "encoder" in modules
+        assert "decoder" in modules
+        assert modules["encoder"] is not None
+
+    def test_module_dict_parameter_tracking(self):
+        """Test that ModuleDict properly tracks parameters of contained modules."""
+        from ttml.modules import AbstractModuleBase, ModuleDict, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32)
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return x
+
+        class OuterModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                self.layers = ModuleDict(
+                    {
+                        "first": SimpleModule(),
+                        "second": SimpleModule(),
+                        "third": SimpleModule(),
+                    }
+                )
+
+            def forward(self, x, layer_name):
+                return self.layers[layer_name](x)
+
+        model = OuterModule()
+        params = model.parameters()
+
+        # Should have 3 parameters
+        param_names = list(params.keys())
+        assert (
+            len(param_names) == 3
+        ), f"Should have 3 parameters, got {len(param_names)}: {param_names}"
+
+    def test_module_dict_iteration(self):
+        """Test ModuleDict iteration methods."""
+        from ttml.modules import AbstractModuleBase, ModuleDict, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self, name):
+                super().__init__()
+                self.name_tag = name
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32)
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return x
+
+        modules = ModuleDict(
+            {
+                "a": SimpleModule("a"),
+                "b": SimpleModule("b"),
+                "c": SimpleModule("c"),
+            }
+        )
+
+        # Test keys
+        keys = list(modules.keys())
+        assert set(keys) == {"a", "b", "c"}
+
+        # Test values
+        values = list(modules.values())
+        assert len(values) == 3
+
+        # Test items
+        items = list(modules.items())
+        assert len(items) == 3
+        for key, val in items:
+            assert key in {"a", "b", "c"}
+            assert val is not None
+
+    def test_module_dict_update(self):
+        """Test ModuleDict update method."""
+        from ttml.modules import AbstractModuleBase, ModuleDict, Parameter
+
+        class SimpleModule(AbstractModuleBase):
+            def __init__(self):
+                super().__init__()
+                w_np = np.ones((1, 1, 32, 32), dtype=np.float32)
+                self.weight = Parameter(ttml.autograd.Tensor.from_numpy(w_np))
+
+            def forward(self, x):
+                return x
+
+        modules = ModuleDict({"first": SimpleModule()})
+        assert len(modules) == 1
+
+        modules.update({"second": SimpleModule(), "third": SimpleModule()})
+        assert len(modules) == 3
