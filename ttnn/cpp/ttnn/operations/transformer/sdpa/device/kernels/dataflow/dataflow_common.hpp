@@ -806,31 +806,46 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
 
     The source_tile_addr should contain a tile with the attention sink value at position [0,0].
     Each output tile will have this value replicated in the first column (first element of every row).
+
+    IMPORTANT: All non-first-column positions are initialized to -infinity (0xFF80 in bfloat16)
+    to ensure they don't affect the reduce_c<MAX> operation. Without this, stale L1 values
+    could corrupt the max computation.
     */
 
     // Get the first element from the source tile (position [0,0])
     volatile tt_l1_ptr uint16_t* source_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(source_tile_addr);
     uint16_t sink_value = source_ptr[0];  // First element is at offset 0 in bfloat16 tile
 
+    // -infinity in bfloat16 format (sign=1, exp=0xFF, mantissa=0)
+    // This ensures stale L1 values don't affect the max computation
+    constexpr uint16_t neg_inf_bf16 = 0xFF80;
+
     uint32_t write_ptr = get_write_ptr(cb_id);
+
+    // Tile is 32x32 in row-major order within faces
+    // For bfloat16, each element is 2 bytes (uint16_t)
+    // Tile layout: Face0, Face1, Face2, Face3
+    // Face0: rows 0-15, cols 0-15 (top-left)
+    // Face1: rows 0-15, cols 16-31 (top-right)
+    // Face2: rows 16-31, cols 0-15 (bottom-left)
+    // Face3: rows 16-31, cols 16-31 (bottom-right)
+
+    constexpr uint32_t face_height = 16;
+    constexpr uint32_t face_width = 16;
+    constexpr uint32_t elements_per_face = face_height * face_width;
+    constexpr uint32_t elements_per_tile = 4 * elements_per_face;  // 1024 elements
 
     // Fill each tile in the CB
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
         volatile tt_l1_ptr uint16_t* tile_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_ptr);
 
-        // Tile is 32x32 in row-major order within faces
-        // For bfloat16, each element is 2 bytes (uint16_t)
-        // Tile layout: Face0, Face1, Face2, Face3
-        // Face0: rows 0-15, cols 0-15 (top-left)
-        // Face1: rows 0-15, cols 16-31 (top-right)
-        // Face2: rows 16-31, cols 0-15 (bottom-left)
-        // Face3: rows 16-31, cols 16-31 (bottom-right)
+        // First, initialize the ENTIRE tile to -infinity
+        // This prevents stale L1 values from corrupting the max computation
+        for (uint32_t i = 0; i < elements_per_tile; ++i) {
+            tile_ptr[i] = neg_inf_bf16;
+        }
 
-        constexpr uint32_t face_height = 16;
-        constexpr uint32_t face_width = 16;
-        constexpr uint32_t elements_per_face = face_height * face_width;
-
-        // Fill Face 0 and Face 2 (first column of tile is in these faces)
+        // Then fill Face 0 and Face 2 with sink values (first column of tile is in these faces)
         // Face 0: rows 0-15, Face 2: rows 16-31
         for (uint32_t face = 0; face < 4; face += 2) {  // Process Face 0 and Face 2
             uint32_t face_offset = face * elements_per_face;
