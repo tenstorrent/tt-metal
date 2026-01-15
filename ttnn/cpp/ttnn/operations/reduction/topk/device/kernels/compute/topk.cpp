@@ -119,7 +119,10 @@ FORCE_INLINE void cb_reserve_push_back(const uint32_t cb, const uint32_t count) 
 }
 
 void MAIN {
-    // Extract compile-time configuration parameters
+    // Runtime arguments
+    const uint32_t work_per_core = get_arg_val<uint32_t>(0);
+
+    // Compile time args
     constexpr uint32_t input_val_cb_index = get_compile_time_arg_val(0);        // Input values circular buffer
     constexpr uint32_t input_ind_cb_index = get_compile_time_arg_val(1);        // Input indices circular buffer
     constexpr uint32_t transposed_val_cb_index = get_compile_time_arg_val(2);   // Transposed values buffer
@@ -139,7 +142,7 @@ void MAIN {
     transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
 
     constexpr int end_phase = 5;  // The end phase of the local sort, based on topk_local_sort documentation
-    for (uint32_t ht = 0; ht < Ht; ++ht) {
+    for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
         uint32_t ktiles_saved = 0;
         /*
         ================================================================================================

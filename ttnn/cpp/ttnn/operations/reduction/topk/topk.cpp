@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/reduction/topk/topk.hpp"
 
+#include "tt-metalium/work_split.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -175,8 +176,11 @@ std::vector<Tensor> ExecuteTopK::invoke(
 
     // Set up memory and execution configurations with defaults if not provided
     const auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
-    const auto used_sub_core_grids = sub_core_grids.value_or(ttnn::CoreRangeSet(
-        ttnn::CoreRange(ttnn::CoreCoord(0, 0), input_tensor.device()->compute_with_storage_grid_size())));
+    const auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    const uint32_t max_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
+    const auto full_core_grids =
+        tt::tt_metal::num_cores_to_corerangeset(max_number_of_cores, compute_with_storage_grid_size, true);
+    const auto used_sub_core_grids = sub_core_grids.value_or(full_core_grids);
 
     // Hardware constraint: K must be tile-aligned (multiple of 32 elements)
     // Round up to nearest supported value for hardware execution
