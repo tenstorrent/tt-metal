@@ -41,15 +41,19 @@ def create_random_tensor(shape, random_tensor_gen):
     [(1, 32), (16, 32), (32, 32)],
 )
 @pytest.mark.parametrize(
-    "dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    "activation_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
+)
+@pytest.mark.parametrize(
+    "weight_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
 )
 @pytest.mark.parametrize(
     "generation_type",
     ["randn", "uniform"],
 )
-def test_resblock(device, B, K, core_grid, generation_type, tile_size, dtype):
-    if dtype == ttnn.bfloat8_b and tile_size[0] != 32:
+def test_resblock(device, B, K, core_grid, generation_type, tile_size, activation_dtype, weight_dtype):
+    if activation_dtype == ttnn.bfloat8_b and tile_size[0] != 32:
         pytest.skip("bfloat8_b is only supported for tile height 32")
 
     torch.manual_seed(1234)
@@ -87,7 +91,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, dtype):
     # TODO: For now we replicate input across cores by replicating by number_of_matmul_times and then height sharding, but in the future we should have the op itself do the mcast
     ttnn_a = ttnn.from_torch(
         torch_a.repeat(number_of_matmul_cores, 1),
-        dtype=dtype,
+        dtype=activation_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=input_a_mem_config,
@@ -108,7 +112,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, dtype):
         )
         return ttnn.from_torch(
             weight,
-            dtype=dtype,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=weight_mem_config,
@@ -127,7 +131,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, dtype):
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     ttnn_output = ttnn.from_torch(
         torch.zeros((max(B, out_tile.tile_shape[0]), K), dtype=torch.bfloat16),
-        dtype=dtype,
+        dtype=activation_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=output_mem_config,
