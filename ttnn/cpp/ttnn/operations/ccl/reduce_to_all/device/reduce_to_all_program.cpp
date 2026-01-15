@@ -761,6 +761,66 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     auto get_bwd_mux_term_sem = [&](uint32_t link_idx) { return shared_term_sync_sems[link_idx]; };
     auto get_fwd_mux_term_sem = [&](uint32_t link_idx) { return shared_term_sync_sems[link_idx + 2]; };
 
+    std::vector<std::vector<uint32_t>> writer_barrier_sems(num_links);
+    std::vector<std::vector<std::vector<CoreCoord>>> writer_barrier_noc_coords(num_links);
+    for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
+        writer_barrier_sems[link_idx].resize(2);  // 2 directions
+        writer_barrier_noc_coords[link_idx].resize(2);
+        auto& worker_cores_for_link = (link_idx == 0) ? worker_cores_link_1 : worker_cores_link_2;
+
+        for (uint32_t dir = 0; dir < 2; dir++) {
+            uint32_t base_idx = dir * num_worker_cores_per_link_per_dir;
+
+            // Collect all cores for this direction
+            std::vector<CoreCoord> all_dir_cores;
+            for (uint32_t offset = 0; offset < num_worker_cores_per_link_per_dir; offset++) {
+                CoreCoord core = worker_cores_for_link[base_idx + offset];
+                CoreCoord noc_coord = mesh_device->worker_core_from_logical_core(core);
+                writer_barrier_noc_coords[link_idx][dir].push_back(noc_coord);
+                all_dir_cores.push_back(core);
+            }
+
+            CoreRangeSet all_dir_core_set(all_dir_cores);
+            writer_barrier_sems[link_idx][dir] = CreateSemaphore(program, all_dir_core_set, 0);
+        }
+    }
+
+    auto add_writer_barrier_args =
+        [&](uint32_t link_idx, uint32_t dir, uint32_t core_offset, std::vector<uint32_t>& writer_rt_args) {
+            bool is_barrier_leader = (core_offset == 0);
+            writer_rt_args.push_back(is_barrier_leader ? 1 : 0);
+
+            // All cores use the same shared semaphore address for this direction
+            writer_rt_args.push_back(writer_barrier_sems[link_idx][dir]);  // local_barrier_sem_addr
+
+            if (is_barrier_leader) {
+                writer_rt_args.push_back(num_worker_cores_per_link_per_dir - 1);  // num_barrier_dests = 3
+
+                // Compute bounding box of non-leader cores for multicast
+                uint32_t min_x = writer_barrier_noc_coords[link_idx][dir][1].x;
+                uint32_t max_x = writer_barrier_noc_coords[link_idx][dir][1].x;
+                uint32_t min_y = writer_barrier_noc_coords[link_idx][dir][1].y;
+                uint32_t max_y = writer_barrier_noc_coords[link_idx][dir][1].y;
+                for (uint32_t i = 2; i < num_worker_cores_per_link_per_dir; i++) {
+                    min_x = std::min(min_x, (uint32_t)writer_barrier_noc_coords[link_idx][dir][i].x);
+                    max_x = std::max(max_x, (uint32_t)writer_barrier_noc_coords[link_idx][dir][i].x);
+                    min_y = std::min(min_y, (uint32_t)writer_barrier_noc_coords[link_idx][dir][i].y);
+                    max_y = std::max(max_y, (uint32_t)writer_barrier_noc_coords[link_idx][dir][i].y);
+                }
+                writer_rt_args.push_back(min_x);  // mcast_start_x
+                writer_rt_args.push_back(min_y);  // mcast_start_y
+                writer_rt_args.push_back(max_x);  // mcast_end_x
+                writer_rt_args.push_back(max_y);  // mcast_end_y
+            } else {
+                // Non-leader: num_barrier_dests = 0 and dummy mcast coords
+                writer_rt_args.push_back(0);  // num_barrier_dests = 0
+                writer_rt_args.push_back(0);  // mcast_start_x (unused)
+                writer_rt_args.push_back(0);  // mcast_start_y (unused)
+                writer_rt_args.push_back(0);  // mcast_end_x (unused)
+                writer_rt_args.push_back(0);  // mcast_end_y (unused)
+            }
+        };
+
     uint32_t mux_core_offset = 0;
 
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
@@ -837,6 +897,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(bwd_mux_term_master),
                         get_bwd_mux_term_sem(link_idx),
                         reader_runtime_args);
+                    reader_runtime_args.push_back(core_idx == 0 ? 1 : 0);  // is_barrier_leader
                     writer_runtime_args = {
                         fw_intermediate_tensor.buffer()->address(),
                         semaphore_round1_fw.address(),
@@ -860,6 +921,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(fwd_mux_term_master),
                         get_fwd_mux_term_sem(link_idx),
                         writer_runtime_args);
+                    add_writer_barrier_args(link_idx, 0, core_idx, writer_runtime_args);
 
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel1, c, reader_runtime_args);
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel1, c, writer_runtime_args);
@@ -902,6 +964,8 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(fwd_mux_term_master),
                         get_fwd_mux_term_sem(link_idx),
                         reader_runtime_args);
+                    reader_runtime_args.push_back(
+                        core_idx == num_worker_cores_per_link_per_dir ? 1 : 0);  // is_barrier_leader
 
                     writer_runtime_args = {
                         bw_intermediate_tensor.buffer()->address(),
@@ -927,6 +991,9 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(bwd_mux_term_master),
                         get_bwd_mux_term_sem(link_idx),
                         writer_runtime_args);
+                    add_writer_barrier_args(
+                        link_idx, 1, core_idx - num_worker_cores_per_link_per_dir, writer_runtime_args);
+
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel2, c, reader_runtime_args);
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel2, c, writer_runtime_args);
                     cores2.push_back(c);
@@ -969,6 +1036,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(bwd_mux_term_master),
                         get_bwd_mux_term_sem(link_idx),
                         reader_runtime_args);
+                    reader_runtime_args.push_back(core_idx == 0 ? 1 : 0);  // is_barrier_leader
 
                     writer_runtime_args = {
                         fw_intermediate_tensor.buffer()->address(),
@@ -994,6 +1062,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(fwd_mux_term_master),
                         get_fwd_mux_term_sem(link_idx),
                         writer_runtime_args);
+                    add_writer_barrier_args(link_idx, 0, core_idx, writer_runtime_args);
 
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel2, c, reader_runtime_args);
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel2, c, writer_runtime_args);
@@ -1029,6 +1098,8 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(fwd_mux_term_master),
                         get_fwd_mux_term_sem(link_idx),
                         reader_runtime_args);
+                    reader_runtime_args.push_back(
+                        core_idx == num_worker_cores_per_link_per_dir ? 1 : 0);  // is_barrier_leader
                     writer_runtime_args = {
                         bw_intermediate_tensor.buffer()->address(),
                         semaphore_round1_bw.address(),
@@ -1051,6 +1122,8 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(bwd_mux_term_master),
                         get_bwd_mux_term_sem(link_idx),
                         writer_runtime_args);
+                    add_writer_barrier_args(
+                        link_idx, 1, core_idx - num_worker_cores_per_link_per_dir, writer_runtime_args);
 
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel1, c, reader_runtime_args);
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel1, c, writer_runtime_args);

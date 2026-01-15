@@ -100,6 +100,9 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
+    // Barrier optimization: only one core sends the fabric barrier
+    const bool is_barrier_leader = get_arg_val<uint32_t>(arg_idx++);
+
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -126,56 +129,23 @@ void kernel_main() {
     const uint32_t sem_header_addr_2 = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
+    // Only barrier leader sends the fabric semaphore to remote writer
+    // The remote writer will mcast to other local writers
+    if (is_barrier_leader) {
+        const uint64_t sender_sem_noc_addr_2 = get_noc_addr(current_core_x, current_core_y, sender_semaphore_addr);
+        auto* sem_header_ptr_2 = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr_2);
+        fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr_2, sender_num_hops);
+        sem_header_ptr_2->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr_2, 1});
+
+        mux_connection.wait_for_empty_write_slot();
+        mux_connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr_2, packet_header_size_bytes);
+    }
+
     // wait for device semaphore
     auto device_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(device_semaphore);
     noc_semaphore_wait(device_semaphore_ptr, 1);
     noc_semaphore_set(device_semaphore_ptr, 0);
-
-    const uint64_t sender_sem_noc_addr_2 = get_noc_addr(current_core_x, current_core_y, sender_semaphore_addr);
-    auto* sem_header_ptr_2 = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr_2);
-    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr_2, sender_num_hops);
-    sem_header_ptr_2->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr_2, 1});
-
-    mux_connection.wait_for_empty_write_slot();
-    mux_connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr_2, packet_header_size_bytes);
-
-    // read again l, s and m from device 2
-    volatile tt_l1_ptr uint32_t* local_semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
-    noc_semaphore_wait(local_semaphore_ptr, 1);
-    noc_semaphore_set(local_semaphore_ptr, 0);
-
-    cb_reserve_back(packet_cb_id, 1);
-    uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
-
-    cb_reserve_back(receiver_cb_id_l, input_num_tiles);
-    uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
-    uint64_t packet_noc_addr = get_noc_addr(current_core_x, current_core_y, pkt_base_addr);
-
-    noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
-    noc_async_read_barrier();  // Wait for Round 2 data to be read before memmove
-
-    // Write Round 2 received data to data core's intermediate shard
-    uint64_t bw_interm_data_core_addr = get_noc_addr(core_noc_x, core_noc_y, pkt_base_addr);
-    noc_async_write(packet_l1_addr, bw_interm_data_core_addr, new_packet_size_bytes);
-    noc_async_write_barrier();
-
-    tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
-    cb_push_back(receiver_cb_id_l, input_num_tiles);
-
-    cb_reserve_back(receiver_cb_id_s, 1);
-    cb_reserve_back(receiver_cb_id_m, 1);
-    uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
-    uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
-
-    tt_memmove<true, false, false, 0>(
-        dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
-    tt_memmove<true, false, false, 0>(
-        dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
-    cb_push_back(receiver_cb_id_s, 1);
-    cb_push_back(receiver_cb_id_m, 1);
-    cb_push_back(packet_cb_id, 1);
 
     uint32_t round1_l1_write_addr = get_write_ptr(round1_interm_cb_id);
 
@@ -201,6 +171,43 @@ void kernel_main() {
     cb_push_back(compute_cb_l, input_num_tiles);
     cb_push_back(compute_cb_s, 1);
     cb_push_back(compute_cb_m, 1);
+
+    // read again l, s and m from device 2
+    volatile tt_l1_ptr uint32_t* local_semaphore_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
+    noc_semaphore_wait(local_semaphore_ptr, 1);
+    noc_semaphore_set(local_semaphore_ptr, 0);
+
+    cb_reserve_back(packet_cb_id, 1);
+    uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
+
+    cb_reserve_back(receiver_cb_id_l, input_num_tiles);
+    uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
+    uint64_t packet_noc_addr = get_noc_addr(current_core_x, current_core_y, pkt_base_addr);
+
+    noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
+    noc_async_read_barrier();  // Wait for Round 2 data to be read before memmove
+
+    tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    cb_push_back(receiver_cb_id_l, input_num_tiles);
+
+    cb_reserve_back(receiver_cb_id_s, 1);
+    cb_reserve_back(receiver_cb_id_m, 1);
+    uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
+    uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
+
+    tt_memmove<true, false, false, 0>(
+        dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
+    tt_memmove<true, false, false, 0>(
+        dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
+    cb_push_back(receiver_cb_id_s, 1);
+    cb_push_back(receiver_cb_id_m, 1);
+
+    // Write Round 2 received data to data core's intermediate shard
+    uint64_t bw_interm_data_core_addr = get_noc_addr(core_noc_x, core_noc_y, pkt_base_addr);
+    noc_async_write(packet_l1_addr, bw_interm_data_core_addr, new_packet_size_bytes);
+    noc_async_write_barrier();
+    cb_push_back(packet_cb_id, 1);
 
     // Disconnect from mux
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);

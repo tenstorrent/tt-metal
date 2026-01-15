@@ -115,6 +115,17 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
+    // Barrier optimization: only barrier leader receives fabric semaphore and signals other writers
+    const bool is_barrier_leader = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t local_barrier_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_barrier_dests = get_arg_val<uint32_t>(arg_idx++);
+
+    // Multicast destination range (bounding box of non-leader cores)
+    const uint32_t mcast_start_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_start_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_end_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_end_y = get_arg_val<uint32_t>(arg_idx++);
+
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -145,9 +156,25 @@ void kernel_main() {
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
-    //  wait for receiver to signal it is ready
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 0);
+    // Barrier synchronization: wait for signal from remote reader
+    if (is_barrier_leader) {
+        // Barrier leader: wait for fabric semaphore from remote reader, then signal other local writers
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 0);
+
+        // Multicast semaphore to other local writers
+        if (num_barrier_dests > 0) {
+            uint64_t mcast_dest_addr =
+                get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, local_barrier_sem_addr);
+            noc_semaphore_inc(mcast_dest_addr, 1);
+            noc_async_atomic_barrier();
+        }
+    } else {
+        // Non-leader: wait for local semaphore from barrier leader
+        auto* local_barrier_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_barrier_sem_addr);
+        noc_semaphore_wait_min(local_barrier_sem_ptr, 1);
+        noc_semaphore_set(local_barrier_sem_ptr, 0);
+    }
 
     cb_wait_front(packet_cb_id, 1);
 
