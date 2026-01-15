@@ -218,3 +218,243 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
     logger.info(pcc_message)
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
+
+
+@skip_for_blackhole("Deepseek tests target Wormhole")
+def test_batched_mm_wkv_b1(device):
+    """
+    Test batched matmul with L1 width-sharded input0 and DRAM sharded input1.
+    Input0: [1, 16, 32, 128] - L1 width-sharded on [1,8] core grid (K=128/8=16 per core)
+    Input1: [1, 16, 128, 512] - DRAM sharded across 12 banks
+    Batch=16, M=32, K=128, N=512
+    """
+    torch.manual_seed(0)
+
+    # Tensor shapes
+    batch = 16
+    m = 32
+    k = 128
+    n = 512
+    in0_shape = [1, batch, m, k]
+    in1_shape = [1, batch, k, n]
+
+    # Tile configuration
+    tile_h = 32
+    tile_w = 32
+
+    # DRAM configuration - 12 banks
+    # num_dram_banks = 12
+    # n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_dram_banks)
+    # in1_shard_shape = [batch*k, n_padded // num_dram_banks]
+
+    # Core grid configuration - [1,4] so K=128 divides evenly to one tile per core
+    # in0_core_grid = ttnn.CoreGrid(y=8, x=8)
+
+    # Create torch tensors
+    in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
+    in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
+
+    # in0_memory_config = ttnn.create_sharded_memory_config(
+    #     in0_shape,
+    #     core_grid=in0_core_grid,
+    #     strategy=ttnn.ShardStrategy.BLOCK,
+    #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    # )
+
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        # memory_config=in0_memory_config,
+    )
+
+    # Input1: DRAM width-sharded memory config (12 banks)
+    # in1_shard_grid = ttnn.CoreCoord(num_dram_banks - 1, 0)
+    # in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
+    # in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    # in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        # memory_config=in1_memory_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Output: L1 width-sharded memory config
+    # For width sharding, use 2D physical shape (batch * m, n) since shard height must equal full physical height
+    # out_core_grid = ttnn.CoreGrid(y=1, x=4)
+    # out_memory_config = ttnn.create_sharded_memory_config(
+    #     (batch * m, n),
+    #     core_grid=out_core_grid,
+    #     strategy=ttnn.ShardStrategy.WIDTH,
+    #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    # )
+
+    # Program config
+    # num_in0_cores = in0_core_grid.y * in0_core_grid.x
+    # num_out_cores = out_core_grid.y * out_core_grid.x
+    # in0_block_w = k // num_in0_cores // tile_w
+    # per_core_M = m // tile_h  # Per-batch M dimension (program operates per-batch)
+    # per_core_N = n // num_out_cores // tile_w
+
+    # program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    #     in0_block_w=in0_block_w,
+    #     per_core_M=per_core_M,
+    #     per_core_N=per_core_N,
+    #     fused_activation=None,
+    # )
+
+    # Compute kernel config
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Run matmul with DRAM sharded program config
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        # program_config=program_config,
+        # memory_config=out_memory_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
+        output_tile=ttnn.Tile((tile_h, tile_w)),
+    )
+
+    # Convert to torch and validate
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+
+    expected_pcc = 0.999
+    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
+    logger.info(pcc_message)
+    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+
+
+@skip_for_blackhole("Deepseek tests target Wormhole")
+def test_batched_mm_wkv_b2(device):
+    """
+    Test batched matmul with L1 width-sharded input0 and DRAM sharded input1.
+    Input0: [1, 128, 4, 512] - L1 width-sharded on 1x8 core grid, tile layout
+    Input1: [1, 128, 512, 128] - DRAM sharded across 1x12 grid, bf8 dtype
+    Batch=128, M=4, K=512, N=128
+    """
+    torch.manual_seed(0)
+
+    # Tensor shapes
+    batch = 128
+    m = 4
+    k = 512
+    n = 128
+    in0_shape = [1, batch, m, k]
+    in1_shape = [1, batch, k, n]
+
+    # Tile configuration
+    tile_h = 32
+    tile_w = 32
+
+    # DRAM configuration - 12 banks
+    num_dram_banks = 12
+    n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_dram_banks)
+    in1_shard_shape = [batch * k, n_padded // num_dram_banks]
+
+    # Core grid configuration for input0 - 1x8 so K=512 divides to 64 per core (2 tiles)
+    in0_core_grid = ttnn.CoreGrid(y=1, x=8)
+
+    # Create torch tensors
+    in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
+    in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
+
+    # Input0: L1 width-sharded memory config
+    # in0_memory_config = ttnn.create_sharded_memory_config(
+    #     in0_shape,
+    #     core_grid=in0_core_grid,
+    #     strategy=ttnn.ShardStrategy.WIDTH,
+    #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    # )
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        # memory_config=in0_memory_config,
+    )
+
+    # Input1: DRAM width-sharded memory config (12 banks, 1x12 grid)
+    # in1_shard_grid = ttnn.CoreCoord(num_dram_banks - 1, 0)
+    # in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
+    # in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    # in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        # memory_config=in1_memory_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Output: L1 width-sharded memory config
+    # For width sharding, use 2D physical shape (batch * m, n) since shard height must equal full physical height
+    # out_core_grid = ttnn.CoreGrid(y=1, x=4)
+    # num_out_cores = out_core_grid.y * out_core_grid.x
+    # out_memory_config = ttnn.create_sharded_memory_config(
+    #     (batch * m, n),
+    #     core_grid=out_core_grid,
+    #     strategy=ttnn.ShardStrategy.WIDTH,
+    #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    # )
+
+    # Program config
+    # Since input0 is width-sharded, in0_block_w is K per core in tiles
+    # num_in0_cores = in0_core_grid.y * in0_core_grid.x
+    # in0_block_w = k // num_in0_cores // tile_w
+    # per_core_M = 1  # M=4 < tile_h=32, so use 1 tile per core
+    # per_core_N = n // num_out_cores // tile_w
+
+    # program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    #     in0_block_w=in0_block_w,
+    #     per_core_M=per_core_M,
+    #     per_core_N=per_core_N,
+    #     fused_activation=None,
+    # )
+
+    # Compute kernel config
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    # Run matmul with DRAM sharded program config
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        # program_config=program_config,
+        # memory_config=out_memory_config,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
+        output_tile=ttnn.Tile((tile_h, tile_w)),
+    )
+
+    # Convert to torch and validate
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+
+    expected_pcc = 0.999
+    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
+    logger.info(pcc_message)
+    assert_with_pcc(pt_out, output_tensor, expected_pcc)
