@@ -63,7 +63,8 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
+      options: --device /dev/tenstorrent --memory 256g
     defaults:
       run:
         shell: bash
