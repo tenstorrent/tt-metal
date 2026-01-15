@@ -225,10 +225,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
     chip_spec_ = ChipSpec{
         .arch = proto_arch_to_arch.at(mgd.get_arch()),
         .num_eth_ports_per_direction = mgd.get_num_eth_ports_per_direction(),
-        .num_z_ports = (mgd.get_arch() == proto::Architecture::BLACKHOLE)
-                           ? mgd.get_num_eth_ports_per_direction()
-                           : 0,  // Z set to the same number as xy if in black hole
-    };
+        .num_z_ports = mgd.get_num_eth_ports_per_direction()};
 
     // Count total meshes including switches (switches are treated as meshes internally)
     uint32_t total_mesh_count = mgd.all_meshes().size() + mgd.all_switches().size();

@@ -75,50 +75,64 @@ STREAM_REGISTER_INDICES = {
 # These streams are used for fabric flow control and backpressure management
 
 # IMPORTANT: Interpretation of BUF_SPACE_AVAILABLE values:
-# - Streams 13-25 (buffer free slots): HIGH values = good (buffers have space)
-# - Streams 0-12 (ack/completion): LOW/ZERO values = good (remote side consuming immediately)
+# - Streams 14-29 (buffer free slots): HIGH values = good (buffers have space)
+# - Streams 0-13 (ack/completion): LOW/ZERO values = good (remote side consuming immediately)
 #   For ack/completion streams, the register shows remote destination buffer space.
 #   Zero means remote side is processing acks/completions as they arrive (expected when idle).
 
 FABRIC_STREAM_GROUPS = {
     # ========== Buffer Free Slots (Flow Control) ==========
     "sender_free_slots": {
-        "stream_ids": [19, 20, 21, 22, 23, 24, 25],
-        "labels": ["sender_ch0", "sender_ch1", "sender_ch2", "sender_ch3", "sender_ch4", "sender_ch5", "sender_ch6"],
+        "stream_ids": [22, 23, 24, 25, 26, 27, 28, 29],
+        "labels": [
+            "sender_ch0",
+            "sender_ch1",
+            "sender_ch2",
+            "sender_ch3",
+            "sender_ch4",
+            "sender_ch5",
+            "sender_ch6",
+            "sender_ch7",
+        ],
         "title": "SENDER CHANNEL FREE SLOTS",
         "description": "Fabric sender channel buffer space available (free slots) for flow control",
         "register_type": "BUF_SPACE_AVAILABLE",
     },
     "receiver_free_slots": {
-        "stream_ids": [13, 14, 15, 16, 17, 18],
+        "stream_ids": [14, 15, 16, 17, 18, 19, 20, 21],
         "labels": [
             "recv_vc0_edge1",
             "recv_vc0_edge2",
             "recv_vc0_edge3",
+            "recv_vc0_edge4_z",
             "recv_vc1_edge1",
             "recv_vc1_edge2",
             "recv_vc1_edge3",
+            "recv_vc1_edge4_z",
         ],
         "title": "RECEIVER CHANNEL FREE SLOTS",
         "description": "Fabric receiver channel buffer space available (free slots) for flow control",
         "register_type": "BUF_SPACE_AVAILABLE",
     },
     "all_fabric_free_slots": {
-        "stream_ids": [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+        "stream_ids": [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
         "labels": [
-            "recv_vc0_edge1",  # Stream 13: VC0 downstream edge 1
-            "recv_vc0_edge2",  # Stream 14: VC0 downstream edge 2
-            "recv_vc0_edge3",  # Stream 15: VC0 downstream edge 3
-            "recv_vc1_edge1",  # Stream 16: VC1 downstream edge 1
-            "recv_vc1_edge2",  # Stream 17: VC1 downstream edge 2
-            "recv_vc1_edge3",  # Stream 18: VC1 downstream edge 3
-            "sender_ch0",  # Stream 19: Sender channel 0
-            "sender_ch1",  # Stream 20: Sender channel 1
-            "sender_ch2",  # Stream 21: Sender channel 2
-            "sender_ch3",  # Stream 22: Sender channel 3
-            "sender_ch4",  # Stream 23: Sender channel 4
-            "sender_ch5",  # Stream 24: Sender channel 5
-            "sender_ch6",  # Stream 25: Sender channel 6
+            "recv_vc0_edge1",  # Stream 14: VC0 downstream edge 1
+            "recv_vc0_edge2",  # Stream 15: VC0 downstream edge 2
+            "recv_vc0_edge3",  # Stream 16: VC0 downstream edge 3
+            "recv_vc0_edge4_z",  # Stream 17: VC0 downstream edge 4 (Z)
+            "recv_vc1_edge1",  # Stream 18: VC1 downstream edge 1
+            "recv_vc1_edge2",  # Stream 19: VC1 downstream edge 2
+            "recv_vc1_edge3",  # Stream 20: VC1 downstream edge 3
+            "recv_vc1_edge4_z",  # Stream 21: VC1 downstream edge 4 (Z)
+            "sender_ch0",  # Stream 22: Sender channel 0
+            "sender_ch1",  # Stream 23: Sender channel 1
+            "sender_ch2",  # Stream 24: Sender channel 2
+            "sender_ch3",  # Stream 25: Sender channel 3
+            "sender_ch4",  # Stream 26: Sender channel 4
+            "sender_ch5",  # Stream 27: Sender channel 5
+            "sender_ch6",  # Stream 28: Sender channel 6
+            "sender_ch7",  # Stream 29: Sender channel 7 (Z)
         ],
         "title": "ALL FABRIC STREAM FREE SLOTS",
         "description": "Complete view of all fabric EDM sender/receiver buffer space for flow control debugging",
@@ -134,7 +148,7 @@ FABRIC_STREAM_GROUPS = {
     },
     # ========== Packet Completion Streams (Remote Buffer Status) ==========
     "sender_completions": {
-        "stream_ids": [6, 7, 8, 9, 10, 11, 12],
+        "stream_ids": [6, 7, 8, 9, 10, 11, 12, 13],
         "labels": [
             "sender_ch0_comp",
             "sender_ch1_comp",
@@ -143,6 +157,7 @@ FABRIC_STREAM_GROUPS = {
             "sender_ch4_comp",
             "sender_ch5_comp",
             "sender_ch6_comp",
+            "sender_ch7_comp",
         ],
         "title": "SENDER CHANNEL PACKET COMPLETION STREAMS",
         "description": "Remote buffer space for completion streams (to_sender_X_pkts_completed). LOW/ZERO = remote consuming completions",
@@ -158,7 +173,7 @@ FABRIC_STREAM_GROUPS = {
     },
     # ========== Combined Acks and Completions ==========
     "all_acks_and_completions": {
-        "stream_ids": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "stream_ids": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
         "labels": [
             "sender_ch0_ack",  # Stream 2
             "sender_ch1_ack",  # Stream 3
@@ -171,6 +186,7 @@ FABRIC_STREAM_GROUPS = {
             "sender_ch4_comp",  # Stream 10
             "sender_ch5_comp",  # Stream 11
             "sender_ch6_comp",  # Stream 12
+            "sender_ch7_comp",  # Stream 13
         ],
         "title": "ALL SENDER ACK AND COMPLETION STREAMS",
         "description": "Remote buffer space for ack/completion streams. LOW/ZERO = remote side processing normally",
