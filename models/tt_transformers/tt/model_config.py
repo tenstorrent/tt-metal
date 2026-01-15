@@ -634,6 +634,10 @@ class ModelArgs:
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
         self.processor = None if dummy_weights else self.create_processor()
 
+        # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
+        # We currently disable this fusion of ops for vision-capable or multimodal models
+        self.use_qk_fused = not self.is_multimodal
+
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
@@ -3265,14 +3269,59 @@ class DecodersPrecision:
         return inst
 
 
-def num_to_corerange(x):
-    assert x < 8 or x % 8 == 0
-    num_x = min(x, 8)
+def num_to_corerange(
+    x: int,
+    start_core: ttnn.CoreCoord = ttnn.CoreCoord(0, 0),
+    grid_x: int = 8,
+    grid_y: int = 8,
+) -> ttnn.CoreRange:
+    """
+    Construct a rectangular CoreRange of exactly ``x`` cores starting at
+    ``start_core`` on a ``grid_x × grid_y`` core grid.
+
+    The CoreRange is allocated in row-major order semantics but must form
+    a single contiguous rectangle representable by ``ttnn.CoreRange``.
+
+    Defaults to an 8×8 grid for backward compatibility.
+    """
+
+    # --- basic sanity ---
+    assert x > 0, "x must be positive"
+    assert grid_x > 0 and grid_y > 0
+    assert 0 <= start_core.x < grid_x
+    assert 0 <= start_core.y < grid_y
+
+    sx, sy = start_core.x, start_core.y
+
+    # --- linear availability (row-major correctness) ---
+    remaining_linear_cores = (grid_x - sx) + (grid_y - sy - 1) * grid_x  # remainder of start row  # full rows below
+    assert remaining_linear_cores >= x, (
+        f"Not enough cores from start_core {start_core} "
+        f"to allocate {x} cores (only {remaining_linear_cores} available)"
+    )
+
+    # --- rectangular availability ---
+    remaining_x = grid_x - sx
+    remaining_y = grid_y - sy
+
+    # --- shape rule ---
+    assert x < grid_x or x % grid_x == 0, f"x must be < grid_x ({grid_x}) or a multiple of grid_x"
+
+    # --- choose rectangle dimensions ---
+    num_x = min(x, remaining_x)
     num_y = x // num_x
-    assert num_x * num_y == x
+
+    assert num_x * num_y == x, f"x={x} cannot form a rectangular CoreRange starting at {start_core}"
+
+    # --- bounds check ---
+    assert num_y <= remaining_y, f"CoreRange height {num_y} exceeds available rows {remaining_y}"
+
+    end_x = sx + num_x - 1
+    end_y = sy + num_y - 1
+
     return ttnn.CoreRange(
-        ttnn.CoreCoord(0, 0),
-        ttnn.CoreCoord(num_x - 1, num_y - 1),
+        start_core,
+        ttnn.CoreCoord(end_x, end_y),
     )
 
 
