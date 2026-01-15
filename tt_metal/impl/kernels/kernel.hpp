@@ -189,6 +189,7 @@ protected:
     std::map<std::string, std::string>
         defines_;  // preprocessor defines. this is to be able to generate generic instances.
     const bool watcher_assert_enabled_;
+    const uint32_t watcher_count_word_offset_;
     std::set<CoreCoord> logical_cores_;
 
     // Build key -> binaries (moved from KernelImpl)
