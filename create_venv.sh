@@ -16,6 +16,9 @@ OPTIONS:
     --env-dir DIR         Directory where the virtual environment will be created.
                           Parent directories are created automatically if needed.
                           Default: ./python_env
+    --force               Overwrite existing virtual environment without prompting.
+                          By default, warns and prompts for confirmation if the
+                          target directory exists and is not empty.
     --help, -h            Show this help message and exit
 
 ENVIRONMENT VARIABLES:
@@ -53,12 +56,14 @@ EOF
 # Variables to track argument-provided values (take precedence over env vars)
 ARG_PYTHON_VERSION=""
 ARG_ENV_DIR=""
+FORCE_OVERWRITE="false"
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         --python-version)
-            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+            # Check for missing or flag-like argument (--* matches flags, not negative numbers)
+            if [ -z "$2" ] || [[ "$2" == --* ]]; then
                 echo "Error: --python-version requires a version argument (e.g., --python-version 3.10)" >&2
                 echo "Run '$0 --help' for usage information" >&2
                 exit 1
@@ -67,13 +72,18 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --env-dir)
-            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+            # Check for missing or flag-like argument (--* matches flags, not paths like ./dir)
+            if [ -z "$2" ] || [[ "$2" == --* ]]; then
                 echo "Error: --env-dir requires a directory argument (e.g., --env-dir /opt/venv)" >&2
                 echo "Run '$0 --help' for usage information" >&2
                 exit 1
             fi
             ARG_ENV_DIR="$2"
             shift 2
+            ;;
+        --force)
+            FORCE_OVERWRITE="true"
+            shift
             ;;
         --help|-h)
             show_help
@@ -105,8 +115,10 @@ validate_python_version() {
     local minor_with_patch="${version#*.}"
     local minor="${minor_with_patch%%.*}"
 
-    # Explicit integer conversion (strip leading zeros, handle edge cases)
-    # Using arithmetic expansion forces bash to treat as base-10 integers
+    # Force base-10 interpretation to prevent octal parsing issues.
+    # Without 10#, bash treats "08" or "09" as invalid octal (octal digits are 0-7),
+    # causing errors like "value too great for base". The 10# prefix ensures
+    # the string is always parsed as decimal regardless of leading zeros.
     major=$((10#$major))
     minor=$((10#$minor))
 
@@ -142,8 +154,32 @@ validate_env_dir() {
 
         # Warn if not empty (will be overwritten)
         if [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-            echo "Warning: Environment directory already exists and is not empty: $dir" >&2
-            echo "The existing virtual environment will be overwritten." >&2
+            if [[ "$FORCE_OVERWRITE" == "true" ]]; then
+                echo "Warning: Overwriting existing directory (--force specified): $dir" >&2
+            else
+                echo "" >&2
+                echo "WARNING: Environment directory already exists and is not empty:" >&2
+                echo "  $dir" >&2
+                echo "" >&2
+                echo "The existing virtual environment will be OVERWRITTEN." >&2
+                echo "" >&2
+                # Check if we're in an interactive terminal
+                if [ -t 0 ]; then
+                    read -r -p "Continue? [y/N] " response
+                    case "$response" in
+                        [yY][eE][sS]|[yY])
+                            echo "Proceeding with overwrite..."
+                            ;;
+                        *)
+                            echo "Aborted. Use --force to skip this prompt." >&2
+                            exit 1
+                            ;;
+                    esac
+                else
+                    echo "Non-interactive mode: use --force to overwrite without prompting." >&2
+                    exit 1
+                fi
+            fi
         fi
     else
         # Directory doesn't exist - create parent directories if needed

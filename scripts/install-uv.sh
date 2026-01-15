@@ -104,7 +104,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Error: Unknown argument '$1'" >&2
-            echo "Run '$0 --help' for usage information." >&2
+            echo "Run '${BASH_SOURCE[0]}' --help for usage information." >&2
             exit 1
             ;;
     esac
@@ -224,6 +224,8 @@ install_uv_standalone() {
     # Create temp file for the installer script
     temp_script=$(mktemp "${TMPDIR:-/tmp}/uv-install.XXXXXX.sh")
     # shellcheck disable=SC2064
+    # SC2064: We intentionally expand $temp_script at trap-setting time (not signal time)
+    # so the cleanup uses the actual temp file path, not whatever $temp_script might be later.
     trap "rm -f '$temp_script'" EXIT
 
     # Download installer script to temp file
@@ -280,8 +282,15 @@ install_uv_user() {
     echo "Installing uv to user directory (~/.local/bin)..."
 
     if has_pip; then
-        if ! python3 -m pip install --user --no-cache-dir "uv==${UV_VERSION}"; then
-            echo "Error: pip install --user failed" >&2
+        local pip_output
+        local pip_exit_code
+        pip_output=$(python3 -m pip install --user --no-cache-dir "uv==${UV_VERSION}" 2>&1) || pip_exit_code=$?
+        pip_exit_code=${pip_exit_code:-0}
+
+        if [[ $pip_exit_code -ne 0 ]]; then
+            echo "Error: pip install --user failed (exit code: $pip_exit_code)" >&2
+            echo "pip output:" >&2
+            echo "$pip_output" >&2
             echo "Trying standalone installer as fallback..." >&2
             if ! install_uv_standalone; then
                 echo "Error: Both pip and standalone installation failed" >&2
@@ -352,9 +361,12 @@ install_uv_macos_system() {
     # First attempt: standard pip install
     # shellcheck disable=SC2086
     local pip_output
-    pip_output=$(python3 -m pip install ${pip_args} "uv==${UV_VERSION}" 2>&1) || true
+    local pip_exit_code
+    pip_output=$(python3 -m pip install ${pip_args} "uv==${UV_VERSION}" 2>&1) || pip_exit_code=$?
+    pip_exit_code=${pip_exit_code:-0}
 
-    if command -v uv &>/dev/null; then
+    # Check if pip succeeded (exit code 0) AND uv is now available
+    if [[ $pip_exit_code -eq 0 ]] && command -v uv &>/dev/null; then
         return 0
     fi
 
@@ -367,18 +379,21 @@ install_uv_macos_system() {
                 if command -v uv &>/dev/null; then
                     return 0
                 fi
+                echo "Error: pip install succeeded but uv is not available in PATH" >&2
             fi
         fi
         fail_system_install
     fi
 
-    # Other error - check if pip reported an error
-    if echo "$pip_output" | grep -qiE "error:|failed|exception"; then
+    # pip failed with non-PEP-668 error
+    if [[ $pip_exit_code -ne 0 ]]; then
+        echo "Error: pip install failed (exit code: $pip_exit_code)" >&2
+        echo "pip output:" >&2
         echo "$pip_output" >&2
         fail_system_install
     fi
 
-    # Final verification: pip may have succeeded silently but uv still not available
+    # pip exited 0 but uv not available - unusual case
     if ! command -v uv &>/dev/null; then
         echo "Error: pip install appeared to succeed but uv is not available" >&2
         echo "pip output: $pip_output" >&2
