@@ -10,7 +10,8 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::get_num_pages;
 
 static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::Shape& dims, uint32_t ndims) {
     // increment least-significant dim first
@@ -249,4 +250,4 @@ void PadTileMulticoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

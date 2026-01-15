@@ -14,7 +14,9 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::float_to_uint16;
+using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
 uint32_t get_num_stick_per_barrier(const Tensor& input_tensor) {
@@ -318,4 +320,4 @@ void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim
