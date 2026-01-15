@@ -8,7 +8,7 @@ set -euo pipefail
 GOLDEN_DIR="tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden"
 
 # Expected header for all bandwidth CSV files (exact match required)
-EXPECTED_HEADER="test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent"
+EXPECTED_HEADER="test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent,max_packet_size"
 
 # Function to check if header matches expected format
 validate_header() {

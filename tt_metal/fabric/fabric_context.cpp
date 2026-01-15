@@ -218,13 +218,19 @@ size_t FabricContext::compute_packet_header_size_bytes() const {
 }
 
 size_t FabricContext::compute_max_payload_size_bytes() const {
+    // If user provided override, validate and use it
+    if (router_config_.max_packet_payload_size_bytes.has_value()) {
+        return validate_and_apply_packet_size(router_config_.max_packet_payload_size_bytes.value());
+    }
+    // Default behavior
     if (is_2D_routing_enabled_) {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes;
     }
     return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
 }
 
-FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
+FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config) :
+    router_config_(router_config) {
     // === Initialization order critical - dependencies flow downward ===
     // fabric_config_ → topology_ → routing flags → packet specs
 
@@ -417,6 +423,29 @@ void FabricContext::compute_routing_mode() {
         "2D routing mode cannot be combined with LINE or RING or NEIGHBOR_EXCHANGE topology");
 
     routing_mode_ = mode;
+}
+
+size_t FabricContext::validate_and_apply_packet_size(size_t requested_size) const {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    tt::ARCH arch = hal.get_arch();
+
+    // Get architecture-specific limit from single source of truth
+    size_t max_allowed = FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(arch);
+
+    TT_FATAL(
+        requested_size <= max_allowed,
+        "Requested packet size {} exceeds maximum {} for {}",
+        requested_size,
+        max_allowed,
+        tt::arch_to_str(arch));
+
+    TT_FATAL(requested_size > 0, "Packet size must be greater than 0");
+
+    // Validate alignment (must be L1-aligned for NOC transfers)
+    const auto alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    TT_FATAL(requested_size % alignment == 0, "Packet size {} must be {}-byte aligned", requested_size, alignment);
+
+    return requested_size;
 }
 
 }  // namespace tt::tt_fabric
