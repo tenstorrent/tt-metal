@@ -13,7 +13,7 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "api/debug/dprint.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }

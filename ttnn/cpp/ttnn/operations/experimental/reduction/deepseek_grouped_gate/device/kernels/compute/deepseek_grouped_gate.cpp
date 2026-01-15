@@ -13,7 +13,7 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // #include "debug/dprint_tensix.h"
 

@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/transpose_wh.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 constexpr uint32_t ONE_TILE = 1;
 
