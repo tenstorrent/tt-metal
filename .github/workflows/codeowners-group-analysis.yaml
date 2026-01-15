@@ -308,7 +308,7 @@ jobs:
 
           echo "Approving PR #$PR_NUMBER as requested by authorized user: $COMMENT_AUTHOR"
 
-          # Create approval 
+          # Create approval
           REVIEW_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews"
 
           REVIEW_PAYLOAD=$(jq -n \
