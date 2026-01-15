@@ -161,9 +161,11 @@ public:
         DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id_, DEBUG_SANITIZE_NOC_UNICAST);
         RECORD_NOC_EVENT_WITH_ADDR(
             NocEventType::READ_SET_STATE,
+            0,
             src_noc_addr,
             size_bytes,
-            (vc_selection == VcSelection::CUSTOM) ? static_cast<int8_t>(vc) : -1);
+            (vc_selection == VcSelection::CUSTOM) ? static_cast<int8_t>(vc) : -1,
+            false);
 
         WAYPOINT("NASW");
         ncrisc_noc_read_set_state<noc_mode, max_page_size <= NOC_MAX_BURST_SIZE, vc_selection == VcSelection::CUSTOM>(
@@ -249,6 +251,8 @@ public:
         const dst_args_t<Dst>& dst_args,
         uint32_t vc = NOC_UNICAST_WRITE_VC,
         uint32_t trid = INVALID_TXN_ID) const {
+        constexpr bool posted = response_mode == ResponseMode::POSTED;
+
         if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
             // TODO (#31535): Need to add check in ncrisc_noc_fast_write_any_len to ensure outstanding transaction
             // register does not overflow
@@ -257,7 +261,8 @@ public:
             auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
             auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
             if constexpr (enable_noc_tracing) {
-                RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size_bytes, -1);
+                RECORD_NOC_EVENT_WITH_ADDR(
+                    NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted);
             }
             DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, size_bytes);
             constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
@@ -272,11 +277,11 @@ public:
                 false,  // linked
                 1,      // num_dests
                 true,   // multicast_path_reserve
-                response_mode == ResponseMode::POSTED,
+                posted,
                 trid);
             WAYPOINT("NWPD");
         } else {
-            noc_async_write<max_page_size, enable_noc_tracing, response_mode == ResponseMode::POSTED>(
+            noc_async_write<max_page_size, enable_noc_tracing, posted>(
                 get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
                 get_dst_ptr<AddressType::NOC>(dst, dst_args),
                 size_bytes,
@@ -361,10 +366,11 @@ public:
         const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& dst_args, uint8_t vc = NOC_UNICAST_WRITE_VC) const {
         DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id_, DEBUG_SANITIZE_NOC_UNICAST);
         auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, dst_noc_addr, size_bytes, vc);
+        constexpr bool posted = response_mode == ResponseMode::POSTED;
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, 0, dst_noc_addr, size_bytes, vc, posted);
 
         WAYPOINT("NWPW");
-        ncrisc_noc_write_set_state<response_mode == ResponseMode::POSTED, max_page_size <= NOC_MAX_BURST_SIZE>(
+        ncrisc_noc_write_set_state<posted, max_page_size <= NOC_MAX_BURST_SIZE>(
             noc_id_, write_cmd_buf, dst_noc_addr, size_bytes, vc);
         WAYPOINT("NWPD");
     }
@@ -399,21 +405,23 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         uint8_t vc = NOC_UNICAST_WRITE_VC) const {
+        constexpr bool posted = response_mode == ResponseMode::POSTED;
+
         if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-            noc_async_write_one_packet_with_state<response_mode == ResponseMode::POSTED>(
+            noc_async_write_one_packet_with_state<posted>(
                 get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
                 (uint32_t)get_dst_ptr<AddressType::NOC>(dst, dst_args),
                 noc_id_);
         } else {
-            RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
             // In order to sanitize, need to grab full noc addr + xfer size from state.
             auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
             auto dst_addr =
                 get_dst_ptr<AddressType::NOC>(dst, dst_args);  // NoC target was programmed in set_async_write_state
+            RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, src_addr, 0ull, 0, -1, posted);
             DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id_, dst_addr, src_addr);
 
             WAYPOINT("NWPW");
-            ncrisc_noc_write_any_len_with_state<noc_mode, response_mode == ResponseMode::POSTED>(
+            ncrisc_noc_write_any_len_with_state<noc_mode, posted>(
                 noc_id_,
                 write_cmd_buf,
                 get_src_ptr<AddressType::LOCAL_L1>(src, src_args),

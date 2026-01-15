@@ -91,6 +91,13 @@ jobs:
               "model": "motif",
               "timeout": 10,
               "owner_id": "U08TED0JM9D"
+            }, # Samuel Adesoye
+            {
+              "name": "Galaxy Qwen-Image frequent tests",
+              "arch": "wormhole_b0",
+              "model": "qwenimage",
+              "timeout": 10,
+              "owner_id": "U08TED0JM9D"
             } # Samuel Adesoye
           ]' --compact-output)
 

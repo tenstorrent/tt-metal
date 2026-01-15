@@ -14,8 +14,8 @@ namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fu
 using namespace tt::constants;
 
 RotaryEmbeddingLlamaFusedQKProgramFactory::cached_program_t RotaryEmbeddingLlamaFusedQKProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const RotaryEmbeddingLlamaFusedQkParams& operation_attributes,
+    const RotaryEmbeddingLlamaFusedQkInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     Program program{};
 
@@ -223,8 +223,8 @@ RotaryEmbeddingLlamaFusedQKProgramFactory::cached_program_t RotaryEmbeddingLlama
 
 void RotaryEmbeddingLlamaFusedQKProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const RotaryEmbeddingLlamaFusedQkParams& /*operation_attributes*/,
+    const RotaryEmbeddingLlamaFusedQkInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;

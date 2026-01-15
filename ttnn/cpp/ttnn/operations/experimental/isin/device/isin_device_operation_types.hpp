@@ -10,13 +10,13 @@
 
 namespace ttnn::operations::experimental::isin {
 
-struct operation_attributes_t {
+struct IsinParams {
     const bool assume_unique;
     const bool invert;
     const uint32_t single_fetch_subchunk_size;
 };
 
-struct tensor_args_t {
+struct IsinInputs {
     const Tensor elements_tensor;
     const Tensor test_elements_tensor;
     const std::optional<Tensor> optional_out;

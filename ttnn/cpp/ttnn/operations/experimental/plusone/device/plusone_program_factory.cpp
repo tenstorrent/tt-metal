@@ -15,8 +15,8 @@
 namespace ttnn::operations::experimental::plusone::program {
 
 PlusOneProgramFactory::cached_program_t PlusOneProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const PlusoneParams& operation_attributes,
+    const PlusoneInputs& tensor_args,
     tensor_return_value_t& /*tensor_return_value*/) {
     tt::tt_metal::Program program{};
     const auto& input = tensor_args.input;
@@ -77,10 +77,7 @@ PlusOneProgramFactory::cached_program_t PlusOneProgramFactory::create(
 }
 
 void PlusOneProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t&) {
+    cached_program_t& cached_program, const PlusoneParams&, const PlusoneInputs& tensor_args, tensor_return_value_t&) {
     auto* src_buffer = tensor_args.input.buffer();
 
     auto& program = cached_program.program;

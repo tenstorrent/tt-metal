@@ -328,7 +328,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.program_config);
 }
 
-spec_return_value_t LayerNormDeviceOperation::compute_output_specs(
+TensorSpec LayerNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto output_shape = input_tensor.logical_shape();
@@ -388,7 +388,7 @@ spec_return_value_t LayerNormDeviceOperation::compute_output_specs(
         operation_attributes.program_config);
 }
 
-tensor_return_value_t LayerNormDeviceOperation::create_output_tensors(
+Tensor LayerNormDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return std::visit(
         [&](const auto& program_config) -> tensor_return_value_t {

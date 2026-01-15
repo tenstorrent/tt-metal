@@ -22,8 +22,8 @@
 namespace ttnn::operations::data_movement::transpose {
 
 struct TransposeDeviceOperation {
-    using operation_attributes_t = transpose::operation_attributes_t;
-    using tensor_args_t = transpose::tensor_args_t;
+    using operation_attributes_t = TransposeParams;
+    using tensor_args_t = TransposeInputs;
     using spec_return_value_t = transpose::spec_return_value_t;
     using tensor_return_value_t = transpose::tensor_return_value_t;
     using program_factory_t = std::variant<
