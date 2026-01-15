@@ -225,11 +225,9 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
-    // start writing the chunks to noc
-    uint32_t batch_size = input_tensor_B;
     uint32_t chunk_count = 0;
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
-    for (uint32_t b = 0; b < batch_size; b++) {
+    for (uint32_t b = 0; b < input_tensor_B; b++) {
         uint32_t batch_offset = input_batch_num_pages * b;
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
             // each block has a height of mm_block_ht (tiles of matmul block)
@@ -247,7 +245,7 @@ void kernel_main() {
                 // adjust input_worker_tile_offset in the backward case accordingly
                 // TODO: take into account the workers
                 uint32_t num_pages_to_write;  // obtain based on tiles_in_current_chunk and tile_granularity
-                // recall the first iteration does not reduce (only sends)
+                // recall the first iteration does not reduce
                 for (uint32_t i = 0; i < ring_size; ++i) {
                     uint32_t actual_slice_idx;
                     if (direction) {
@@ -264,6 +262,7 @@ void kernel_main() {
                         uint32_t intermediate_tile_id_start =
                             get_intermediate_chunk_start_tile(actual_slice_idx, strided_chunk_idx);
                         // TODO: there is num_tiles_to_write_per_packet
+                        // TODO:for this, need to adapt the writer funtions from all gather
                         write_strided_chunk_from_cb_into_noc(
                             cb_output_id,
                             intermediate_tile_id_start,
@@ -286,7 +285,7 @@ void kernel_main() {
                         unicast_output_ready_semaphore();
                     } else {
                         // Otherwise, on the last slice, write it to output buffer
-                        uint32_t output_tile_id_start = b * output_batch_num_pages;
+                        uint32_t output_tile_id_start = get_output_chunk_start_tile(strided_chunk_idx);
                         write_strided_chunk_from_cb_to_output_buffer(
                             cb_output_id,
                             output_tile_id_start,
