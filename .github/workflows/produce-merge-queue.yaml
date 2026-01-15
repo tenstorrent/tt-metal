@@ -1,5 +1,9 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
+permissions:
+  contents: read
+  pull-requests: read
+
 on:
   workflow_dispatch:
   schedule:

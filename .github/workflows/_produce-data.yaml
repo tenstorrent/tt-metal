@@ -1,5 +1,9 @@
 name: "[internal] Produce data for external analysis"
 
+permissions:
+  contents: read
+  pull-requests: read
+
 on:
   workflow_call:
   workflow_dispatch:
