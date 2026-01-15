@@ -76,23 +76,67 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> get_ethernet_cores_grouped_by
 // Generate fixed ASIC position pinnings for Galaxy topology to ensure QSFP links align with fabric mesh corner nodes.
 // This is a performance optimization to ensure that MGD mapping does not bisect a device.
 //
-// * o o o < Top left corner pinned with *
+// * o o * < Corners pinned with *
 // o o o o
 // o o o o
 // o o o o
 // o o o o
 // o o o o
 // o o o o
-// o o o * < Bottom right corner pinned with *
+// * o o * < Corners pinned with *
 std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings(
-    size_t board_size) {
+    const MeshGraph& mesh_graph) {
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
-    // Top left corner: index 0
-    fixed_asic_position_pinnings.emplace_back(
-        FabricNodeId(MeshId{0}, 0), std::vector<AsicPosition>{AsicPosition{1, 1}});
-    // Bottom right corner: last device index
-    fixed_asic_position_pinnings.emplace_back(
-        FabricNodeId(MeshId{0}, board_size - 1), std::vector<AsicPosition>{AsicPosition{4, 1}});
+
+    // Get all 4 possible corners ASIC positions
+    std::vector<AsicPosition> corner_asic_positions;
+    corner_asic_positions.emplace_back(AsicPosition{1, 1});  // Top left corner
+    corner_asic_positions.emplace_back(AsicPosition{2, 1});  // Top right corner
+    corner_asic_positions.emplace_back(AsicPosition{3, 1});  // Bottom left corner
+    corner_asic_positions.emplace_back(AsicPosition{4, 1});  // Bottom right corner
+
+    std::vector<FabricNodeId> corner_fabric_node_ids;
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * mesh_shape[0] - 1});
+    }
+
+    for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
+        fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
+    }
+
+    return fixed_asic_position_pinnings;
+}
+
+// Generate fixed ASIC position pinnings for T3K topology to ensure QSFP links align with fabric mesh corner nodes.
+// This is a performance optimization to ensure that MGD mapping does not bisect a device.
+//
+// * o o * < Corners pinned with *
+// * o o * < Corners pinned with *
+
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_t3k_fixed_asic_position_pinnings(
+    const MeshGraph& mesh_graph) {
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+
+    std::vector<AsicPosition> corner_asic_positions = {AsicPosition{0, 1}};
+
+    std::vector<FabricNodeId> corner_fabric_node_ids;
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_graph.get_mesh_shape(mesh_id)[1] - 1});
+        corner_fabric_node_ids.emplace_back(
+            FabricNodeId{mesh_id, mesh_graph.get_mesh_shape(mesh_id)[1] * (mesh_graph.get_mesh_shape(mesh_id)[0] - 1)});
+        corner_fabric_node_ids.emplace_back(
+            FabricNodeId{mesh_id, mesh_graph.get_mesh_shape(mesh_id)[1] * mesh_graph.get_mesh_shape(mesh_id)[0] - 1});
+    }
+
+    for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
+        fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
+    }
+
     return fixed_asic_position_pinnings;
 }
 
@@ -456,23 +500,16 @@ void ControlPlane::init_control_plane(
             logical_mesh_chip_id_to_physical_chip_id_mapping->get());
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
-        // FIXME: Change this
-        std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
-
-        // TODO: Remove this when preferred pinnings are supported
-        // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
-        // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
-        // bisect a device.
+        // Generate corner pinning for full host galaxy systems
         const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
                            this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
-        const size_t board_size = cluster.get_unique_chip_ids().size();
-        const size_t distributed_size = *distributed_context->size();
+        std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+        const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
-        // Limiting this for single-host galaxy systems only because the dateline could be placed differently,
-        // multi-host machines should be limited via rank bindings so should be ok
-        if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
-            distributed_size == 1) {  // Using full board size for UBB Galaxy
-            fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);
+        if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
+            fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
+        } else if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::T3K && total_num_chips % 8 == 0 && !is_1d) {
+            fixed_asic_position_pinnings = get_t3k_fixed_asic_position_pinnings(*this->mesh_graph_);
         }
 
         // Add MGD pinnings to the topology mapper
@@ -550,23 +587,20 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
-
-    // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
-    // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
-    // bisect a device.
-    const bool is_1d =
-        this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 || this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
-    const size_t board_size = cluster.get_unique_chip_ids().size();
-    const size_t distributed_size = *distributed_context->size();
-
     // Limiting this for single-host galaxy systems only because the dateline could be placed differently,
     // multi-host machines should be limited via rank bindings so should be ok
     // FIXME: Change this
-    if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
-        distributed_size == 1) {  // Using full board size for UBB Galaxy
-        fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);
+    const bool is_1d =
+        this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 || this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+    const size_t total_num_chips = cluster.get_unique_chip_ids().size();
+
+    if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
+        fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
+    } else if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::T3K && total_num_chips % 8 == 0 && !is_1d) {
+        fixed_asic_position_pinnings = get_t3k_fixed_asic_position_pinnings(*this->mesh_graph_);
     }
+
     this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
         *this->mesh_graph_,
         *this->physical_system_descriptor_,

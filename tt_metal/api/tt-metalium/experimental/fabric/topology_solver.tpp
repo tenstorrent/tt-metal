@@ -338,7 +338,8 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const AdjacencyGraph<TargetNode>& target_graph,
     const AdjacencyGraph<GlobalNode>& global_graph,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
-    ConnectionValidationMode connection_validation_mode) {
+    ConnectionValidationMode connection_validation_mode,
+    bool quiet_mode) {
     using namespace tt::tt_fabric::detail;
 
     auto start_time = std::chrono::steady_clock::now();
@@ -351,7 +352,7 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
 
     // Run DFS search (state is now internal to the engine)
     DFSSearchEngine<TargetNode, GlobalNode> search_engine;
-    search_engine.search(graph_data, constraint_data, constraints, connection_validation_mode);
+    search_engine.search(graph_data, constraint_data, constraints, connection_validation_mode, quiet_mode);
 
     // Calculate elapsed time
     auto end_time = std::chrono::steady_clock::now();
@@ -360,7 +361,7 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     // Get state from engine and build result using validator
     const auto& state = search_engine.get_state();
     auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
-        state.mapping, graph_data, state, constraints, connection_validation_mode);
+        state.mapping, graph_data, state, constraints, connection_validation_mode, quiet_mode);
 
     // Set elapsed time
     result.stats.elapsed_time = elapsed_ms;

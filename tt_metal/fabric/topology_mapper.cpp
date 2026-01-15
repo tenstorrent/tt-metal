@@ -1702,7 +1702,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         constraints.add_required_trait_constraint(node_to_host_rank, asic_to_host_rank);
 
         auto solver_result =
-            solve_topology_mapping(logical_adj, physical_adj, constraints, ConnectionValidationMode::RELAXED);
+            solve_topology_mapping(logical_adj, physical_adj, constraints, ConnectionValidationMode::RELAXED, true);
 
         // Return mesh_graph if mapping is successful
         if (solver_result.success) {
