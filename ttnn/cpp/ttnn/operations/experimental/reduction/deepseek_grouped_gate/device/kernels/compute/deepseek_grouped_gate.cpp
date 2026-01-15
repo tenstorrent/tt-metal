@@ -16,6 +16,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // #include "debug/dprint_tensix.h"
 
