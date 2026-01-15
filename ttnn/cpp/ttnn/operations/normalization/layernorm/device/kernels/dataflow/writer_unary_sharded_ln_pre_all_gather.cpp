@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;

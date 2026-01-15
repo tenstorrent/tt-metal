@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "reshard_writer.hpp"
 

@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/assert.h"
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"

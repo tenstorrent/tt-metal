@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);

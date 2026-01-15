@@ -10,7 +10,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
-#include "cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
+#include "cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "reshard_writer.hpp"
 #include <cstdint>

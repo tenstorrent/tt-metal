@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #ifndef REDUCE_ROW_SUM_VIA_MM
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #else
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
 #endif

@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
