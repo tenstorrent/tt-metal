@@ -11,10 +11,28 @@ void kernel_main() {
     // run-time args
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_input_blocks_to_process = get_arg_val<uint32_t>(1);
-    const uint32_t height_wise_input_block_start_index = get_arg_val<uint32_t>(2);
-    const uint32_t num_unpadded_cols_per_input_block = get_arg_val<uint32_t>(3);
-    const uint32_t width_wise_output_block_start_index = get_arg_val<uint32_t>(4);
-    const uint32_t num_cols_already_processed_in_first_output_block = get_arg_val<uint32_t>(5);
+    // std::vector<uint32_t> height_wise_input_block_start_indices; //= get_arg_val<std::vector<uint32_t>>(2);
+    // std::vector<uint32_t> vector_num_unpadded_cols_per_input_block; //= get_arg_val<std::vector<uint32_t>>(3);
+    // std::vector<uint32_t> width_wise_output_block_start_indices; //= get_arg_val<std::vector<uint32_t>>(4);
+    // std::vector<uint32_t> vector_num_cols_already_processed_in_first_output_block; //=
+    // get_arg_val<std::vector<uint32_t>>(5);
+    const uint32_t rt_arg_index = 2;
+    // for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
+    //     height_wise_input_block_stasrt_indices.push_back(get_arg_val<uint32_t>(rt_arg_index));
+    //     rt_arg_index++;
+    // }
+    // for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
+    //     vector_num_unpadded_cols_per_input_block.push_back(get_arg_val<uint32_t>(rt_arg_index));
+    //     rt_arg_index++;
+    // }
+    // for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
+    //     width_wise_output_block_start_indices.push_back(get_arg_val<uint32_t>(rt_arg_index));
+    //     rt_arg_index++;
+    // }
+    // for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
+    //     vector_num_cols_already_processed_in_first_output_block.push_back(get_arg_val<uint32_t>(rt_arg_index));
+    //     rt_arg_index++;
+    // }
 
     // compile-time args
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
@@ -44,7 +62,10 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
 #endif
 
-    auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
+    auto write_tiles_in_current_block = [&](uint32_t block_height_index,
+                                            uint32_t width_wise_output_block_start_index,
+                                            uint32_t num_unpadded_cols_per_input_block,
+                                            uint32_t num_cols_already_processed_in_first_output_block) {
         cb_wait_front(cb_id_out0, num_tiles_per_input_block);
 
         // Base address of the row of elements we are going to be writing.
@@ -118,12 +139,51 @@ void kernel_main() {
     };
 
     // Each input block processed separately
-    uint32_t height_wise_input_block_index = height_wise_input_block_start_index;
+    // uint32_t height_wise_input_block_index = height_wise_input_block_start_index;
     DPRINT << "num_input_blocks_to_process: " << num_input_blocks_to_process << ENDL();
     for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
+        uint32_t height_wise_input_block_index =
+            get_arg_val<uint32_t>(rt_arg_index + i);  // height_wise_input_block_start_indices[i];
+        uint32_t num_unpadded_cols_per_input_block = get_arg_val<uint32_t>(
+            rt_arg_index + i + num_input_blocks_to_process);  // width_wise_output_block_start_indices[i];
+        uint32_t width_wise_output_block_start_index = get_arg_val<uint32_t>(
+            rt_arg_index + i + num_input_blocks_to_process * 2);  // vector_num_unpadded_cols_per_input_block[i];
+        uint32_t num_cols_already_processed_in_first_output_block = get_arg_val<uint32_t>(
+            rt_arg_index + i +
+            num_input_blocks_to_process * 3);  // vector_num_cols_already_processed_in_first_output_block[i];
         DPRINT << "height_wise_input_block_index: " << height_wise_input_block_index << ENDL();
+        DPRINT << "num_unpadded_cols_per_input_block: " << num_unpadded_cols_per_input_block << ENDL();
+        DPRINT << "width_wise_output_block_start_index: " << width_wise_output_block_start_index << ENDL();
+        DPRINT << "num_cols_already_processed_in_first_output_block: "
+               << num_cols_already_processed_in_first_output_block << ENDL();
         // Process the current block
-        write_tiles_in_current_block(height_wise_input_block_index);
-        height_wise_input_block_index++;  // WAS ++. HARDCODED MUST FIGURE OUT CORRECT LOGIC
+        write_tiles_in_current_block(
+            height_wise_input_block_index,
+            width_wise_output_block_start_index,
+            num_unpadded_cols_per_input_block,
+            num_cols_already_processed_in_first_output_block);
+
+        // auto coord = get_core_coord();
+        //         bool is_core00 = (get_absolute_logical_x() == 0) && (get_absolute_logical_y() == 0);
+        // if (is_core00) {
+        //     DPRINT << "i: " << i << ENDL();
+        //     // DPRINT << "height_wise_input_block_index: " << height_wise_input_block_index << ENDL();
+
+        //     if (i == 0) {
+        //         height_wise_input_block_index = 2;
+        //     }
+        //     if ( i == 1) {
+        //         num_cols_already_processed_in_first_output_block = 32;
+        //         height_wise_input_block_index = 1;
+        //     }
+        //     if ( i == 2) {
+        //         // num_cols_already_processed_in_first_output_block = 32;
+        //         height_wise_input_block_index = 3;
+        //     }
+        //     // DPRINT << "height_wise_input_block_index: " << height_wise_input_block_index << ENDL();
+        // }
+        // else {
+        //         height_wise_input_block_index += 2;  // WAS ++. HARDCODED MUST FIGURE OUT CORRECT LOGIC
+        // }
     }
 }
