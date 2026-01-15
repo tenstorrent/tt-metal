@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::generic {
@@ -17,6 +18,13 @@ namespace ttnn::operations::generic {
 
 struct GenericOp {
     // TODO: #20830 - Split io_tensors into input_tensors and output_tensor properly.
+
+    // Primary entry point for mesh programs
+    static Tensor invoke(
+        const std::vector<Tensor>& io_tensors,
+        const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
+
+    // Convenience entry point for single ProgramDescriptor (SPMD mode)
     static Tensor invoke(
         const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
 };  // struct GenericOp

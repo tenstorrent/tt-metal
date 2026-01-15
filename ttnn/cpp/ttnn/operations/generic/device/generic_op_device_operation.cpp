@@ -2,41 +2,57 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "generic_op_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "generic_op_device_operation.hpp"
+#include "generic_op_device_operation_types.hpp"
 
 #include <tt_stl/reflection.hpp>
+#include <unordered_set>
 
 namespace ttnn::operations::generic {
 
 using namespace tt::tt_metal;
+
+void verify_no_duplicate_mesh_coord_ranges(
+    const tt::tt_metal::experimental::MeshProgramDescriptor::MeshPrograms& mesh_programs) {
+    std::unordered_set<ttnn::MeshCoordinateRange> seen;
+    seen.reserve(mesh_programs.size());
+    for (const auto& [range, _] : mesh_programs) {
+        auto [it, inserted] = seen.insert(range);
+        TT_FATAL(inserted, "Duplicate MeshCoordinateRange found in MeshProgramDescriptor: {}", range);
+    }
+}
+
 GenericOpDeviceOperation::program_factory_t GenericOpDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return GenericProgram{};
+    return program::GenericMeshProgramFactory{};
 }
 
 void GenericOpDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
+    const operation_attributes_t& attributes, const tensor_args_t& /*tensor_args*/) {
+    verify_no_duplicate_mesh_coord_ranges(attributes.mesh_programs);
+}
 
 void GenericOpDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
+    const operation_attributes_t& attributes, const tensor_args_t& /*tensor_args*/) {
+    verify_no_duplicate_mesh_coord_ranges(attributes.mesh_programs);
+}
 
-GenericOpDeviceOperation::spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
+spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // User has to do this. Just referencing last element (preallocated output tensor).
     return tensor_args.output_tensor.tensor_spec();
 }
 
-GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
+tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Don't create anything, user is passing output tensor.
     return tensor_args.output_tensor;
 }
 
-tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    if (operation_attributes.custom_program_hash) {
-        return *operation_attributes.custom_program_hash;
+tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+    if (program_descriptor.custom_program_hash) {
+        return *program_descriptor.custom_program_hash;
     }
 
     auto hash_kernel = [&](const KernelDescriptor& kernel) -> size_t {
@@ -84,14 +100,24 @@ tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
     };
 
     size_t hash = 0;
-    for (const auto& kernel : operation_attributes.kernels) {
+    for (const auto& kernel : program_descriptor.kernels) {
         ttsl::hash::hash_combine(hash, hash_kernel(kernel));
     }
-    for (const auto& cb : operation_attributes.cbs) {
+    for (const auto& cb : program_descriptor.cbs) {
         ttsl::hash::hash_combine(hash, hash_circular_buffer(cb));
     }
-    for (const auto& semaphore : operation_attributes.semaphores) {
+    for (const auto& semaphore : program_descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
+    }
+    return hash;
+}
+
+tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    size_t hash = 0;
+    for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
+        ttsl::hash::hash_combine(hash, mesh_coord_range);
+        ttsl::hash::hash_combine(hash, compute_program_descriptor_hash(program_descriptor));
     }
     return hash;
 }
@@ -99,9 +125,9 @@ tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
 }  // namespace ttnn::operations::generic
 
 namespace ttnn::prim {
-ttnn::operations::generic::GenericOpDeviceOperation::tensor_return_value_t generic_op(
+ttnn::operations::generic::tensor_return_value_t generic_op(
     const std::vector<Tensor>& io_tensors,
-    const ttnn::operations::generic::GenericOpDeviceOperation::operation_attributes_t& operation_attributes) {
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
     using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
     TT_FATAL(
         io_tensors.size() >= 2,
