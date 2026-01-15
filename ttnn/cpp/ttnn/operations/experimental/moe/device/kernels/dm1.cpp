@@ -58,7 +58,7 @@ void kernel_main() {
     constexpr uint32_t num_w2_tiles_h = 64;
 
     const uint32_t num_w0_w1_tiles_w = (core_id < 8) ? 5 : 6;
-    const uint32_t num_w2_tiles_w = (core_id < 8) ? 19 : 18;
+    const uint32_t num_w2_tiles_w = (core_id < 8) ? 18 : 20;
 
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
@@ -73,14 +73,14 @@ void kernel_main() {
 
         // Read to cb_r2c_in2
         for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {
-            cb_reserve_back(cb_r2c_in2, 1);
-            cb_push_back(cb_r2c_in2, 1);
+            // cb_reserve_back(cb_r2c_in2, 1);
+            // cb_push_back(cb_r2c_in2, 1);
         }
 
         // Write from cb_c2w_mm2
-        for (uint32_t i = 0; i < num_mm2_tiles; ++i) {
-            cb_wait_front(cb_c2w_mm2, 1);
-            cb_pop_front(cb_c2w_mm2, 1);
+        for (uint32_t i = 0; i < (num_mm2_tiles / 2); ++i) {
+            cb_wait_front(cb_c2w_mm2, 2);
+            cb_pop_front(cb_c2w_mm2, 2);
         }
     }
 }
