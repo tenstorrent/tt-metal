@@ -44,6 +44,13 @@ def get_mesh_shape(module_name):
     return None
 
 
+def strip_mesh_suffix(module_name):
+    """Remove mesh suffix from module name (e.g., 'op__mesh_2x4' -> 'op')."""
+    if "__mesh_" in module_name:
+        return module_name.split("__mesh_")[0]
+    return module_name
+
+
 def get_lead_models_mesh_runner_config():
     """
     Configuration: Map mesh shapes to runner configurations.
@@ -145,8 +152,12 @@ def compute_lead_models_matrix(modules, batch_size):
         if not runner_modules:
             continue
 
-        # Create batches for this runner
-        runner_batches = chunk_modules(sorted(runner_modules), batch_size)
+        # Strip mesh suffixes to get base module names that sweeps_runner can find
+        # The VectorExportSource will automatically load mesh-variant JSONs
+        base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
+
+        # Create batches for this runner using base module names
+        runner_batches = chunk_modules(base_modules, batch_size)
         batches.extend(runner_batches)
 
         # Create matrix entries
@@ -165,9 +176,15 @@ def compute_lead_models_matrix(modules, batch_size):
             )
 
     # Log summary
-    print(f"Lead models run: {len(modules)} modules, {len(include_entries)} matrix entries", file=sys.stderr)
+    total_base_modules = len(set(strip_mesh_suffix(m) for m in modules))
+    print(
+        f"Lead models run: {len(modules)} vector files ({total_base_modules} unique modules), "
+        f"{len(include_entries)} matrix entries",
+        file=sys.stderr,
+    )
     for mesh_shape, mods in sorted(mesh_shape_modules.items()):
-        print(f"  mesh {mesh_shape}: {len(mods)} modules", file=sys.stderr)
+        unique_base = len(set(strip_mesh_suffix(m) for m in mods))
+        print(f"  mesh {mesh_shape}: {len(mods)} vectors ({unique_base} unique modules)", file=sys.stderr)
 
     return include_entries, batches, []  # No CCL batches for lead models
 
