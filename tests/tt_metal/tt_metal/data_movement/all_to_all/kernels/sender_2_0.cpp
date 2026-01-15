@@ -12,7 +12,7 @@ void kernel_main() {
     const uint32_t mst_l1_base_address = get_compile_time_arg_val(1);
     const uint32_t sub_l1_base_address = get_compile_time_arg_val(2);
     const uint32_t num_of_transactions = get_compile_time_arg_val(3);
-    const uint32_t bytes_per_transaction_per_subordinate = get_compile_time_arg_val(4);
+    const uint32_t bytes_per_transaction_per_master = get_compile_time_arg_val(4);
     const uint32_t num_subordinates = get_compile_time_arg_val(5);
     const uint32_t num_virtual_channels = get_compile_time_arg_val(6);
 
@@ -20,16 +20,16 @@ void kernel_main() {
     uint32_t master_l1_local_address = mst_l1_base_address;
     uint32_t subordinate_l1_local_address = sub_l1_base_address;
 
-    uint32_t subordinate_x_coord;
-    uint32_t subordinate_y_coord;
-
     experimental::Noc noc(noc_index);
     experimental::UnicastEndpoint unicast_endpoint;
 
+    uint32_t subordinate_x_coord;
+    uint32_t subordinate_y_coord;
+
     {
-        DeviceZoneScopedN("RISCV1");
+        DeviceZoneScopedN("RISCV0");
         for (uint32_t j = 0; j < num_subordinates; j++) {
-            // Subordinate coordiantes are stored in the runtime arguments starting at index 1
+            // Subordinate coordinates are stored in the runtime arguments starting at index 1
             // Each x coordinate is stores in an odd index
             // Each y coordinate is stored in the next even index
             // The first subordinate's coordinates are at indices 1 and 2, the second at indices 3 and 4, etc.
@@ -40,29 +40,27 @@ void kernel_main() {
                 // Cycle through virtual channels 0 to (num_virtual_channels - 1)
                 uint32_t current_virtual_channel = i % num_virtual_channels;
 
-                noc.async_read(
+                noc.async_write(
                     unicast_endpoint,
                     unicast_endpoint,
-                    bytes_per_transaction_per_subordinate,
+                    bytes_per_transaction_per_master,
+                    {
+                        .addr = master_l1_local_address,
+                    },
                     {
                         .noc_x = subordinate_x_coord,
                         .noc_y = subordinate_y_coord,
                         .addr = subordinate_l1_local_address,
                     },
-                    {
-                        .addr = master_l1_local_address,
-                    },
                     current_virtual_channel);
             }
         }
-        noc.async_read_barrier();
+        noc.async_write_barrier();
     }
 
     DeviceTimestampedData("Test id", test_id);
-
-    DeviceTimestampedData("Number of transactions", num_of_transactions * num_subordinates);
-    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction_per_subordinate);
-
     DeviceTimestampedData("NoC Index", noc_index);
+    DeviceTimestampedData("Number of transactions", num_of_transactions * num_subordinates);
+    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction_per_master);
     DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
 }
