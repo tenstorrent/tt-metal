@@ -7,7 +7,7 @@
 #include "plusone_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::plusone::program {
+namespace ttnn::experimental::prim {
 
 struct PlusOneSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
@@ -19,15 +19,13 @@ struct PlusOneProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const PlusoneParams& operation_attributes,
-        const PlusoneInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PlusoneParams& operation_attributes, const Tensor& input, Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const PlusoneParams& operation_attributes,
-        const PlusoneInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const Tensor& input,
+        Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::plusone::program
+}  // namespace ttnn::experimental::prim
