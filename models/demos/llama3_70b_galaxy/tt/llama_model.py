@@ -5,6 +5,7 @@
 import ttnn
 import torch
 from tqdm import tqdm
+from loguru import logger
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 import ttnn
@@ -221,11 +222,26 @@ class TtTransformer(LightweightModule):
         # Note: tt_rot_mats_prefill are in TILE_LAYOUT and may not support direct slicing.
         # Instead, we use self.rope_setup.cos_matrix/sin_matrix.
         if start_pos > 0:
+            # DEBUG: Rotary embedding slicing for prefix caching
+            logger.info(
+                f"[PREFIX_CACHING] Rotary embedding slicing: "
+                f"start_pos={start_pos}, "
+                f"seq_len={S}, "
+                f"required_end={start_pos + S}"
+            )
             # Slice from rope_setup matrices
             mat_len = self.rope_setup.cos_matrix.shape[2]
             required_end = start_pos + S
             slice_start = start_pos
             slice_end = min(mat_len, required_end)
+
+            logger.info(
+                f"[PREFIX_CACHING] Rotary embedding slice: "
+                f"mat_len={mat_len}, "
+                f"slice_start={slice_start}, "
+                f"slice_end={slice_end}, "
+                f"needs_padding={required_end > mat_len}"
+            )
 
             cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]
             sin_slice = self.rope_setup.sin_matrix[:, :, slice_start:slice_end, :]
@@ -321,7 +337,7 @@ class TtTransformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        return tokens, user_id, tt_page_table, tt_chunk_page_table
+        return tokens, user_id, tt_page_table, tt_chunk_page_table, tt_rot_mats_prefill
 
     def transform_prefill_inputs_device(
         self,
@@ -354,9 +370,23 @@ class TtTransformer(LightweightModule):
         host_inputs = self.prepare_prefill_inputs_host(
             tokens, user_id, page_table, chunk_page_table, tt_rot_mats_prefill, batch_size, start_pos
         )
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
+        # host_inputs is: (tokens, user_id, tt_page_table, tt_chunk_page_table, tt_rot_mats_prefill)
+        # The first 4 are host tensors, the last (rotary matrices) is already on device
+        (
+            tokens_host,
+            user_id_host,
+            tt_page_table_host,
+            tt_chunk_page_table_host,
+            tt_rot_mats_prefill_device,
+        ) = host_inputs
+
+        # Copy first 4 host tensors to device
+        device_inputs = copy_host_to_device(
+            (tokens_host, user_id_host, tt_page_table_host, tt_chunk_page_table_host), mesh_device=self.mesh_device
+        )
         transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
-        return transformed_device_inputs
+        # Return transformed inputs plus the rotary matrices (already on device)
+        return (*transformed_device_inputs, tt_rot_mats_prefill_device)
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded):
         """
