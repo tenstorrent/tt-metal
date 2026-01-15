@@ -39,7 +39,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/dataflow/custom_tiles.h"
@@ -126,8 +126,8 @@ void kernel_main() {
     if constexpr (!use_welford) {
         // Scaler(s) for reduce
         uint32_t scaler = get_arg_val<uint32_t>(4);
-        generate_reduce_scaler(cb_scaler, scaler);
-        const auto partial_last_tile_cols = W % tile_width;
+        dataflow_kernel_lib::generate_reduce_scaler(cb_scaler, scaler);
+        const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
         if (partial_last_tile_cols > 0 && !use_welford) {
             norm::kernel_util::dataflow::generate_partial_reduce_scaler(
                 cb_scaler, scaler, partial_last_tile_cols, tile_height, tile_width);

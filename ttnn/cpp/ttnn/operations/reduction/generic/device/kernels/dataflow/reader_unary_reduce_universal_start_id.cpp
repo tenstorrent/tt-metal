@@ -8,7 +8,7 @@
 #include "experimental/circular_buffer.h"
 #include "experimental/tensor.h"
 #ifndef REDUCE_ROW_SUM_VIA_MM
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #else
 #include "ttnn/kernel/dataflow/generate_mm_scaler.hpp"
 #endif
@@ -22,7 +22,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in2 = 2;
 #ifndef REDUCE_ROW_SUM_VIA_MM
-    generate_reduce_scaler(cb_id_in2, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_id_in2, scaler);
 #else
     generate_mm_scaler(cb_id_in2, scaler);
 #endif

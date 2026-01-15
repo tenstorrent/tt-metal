@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
@@ -64,12 +64,12 @@ void kernel_main() {
             cb_attn_obj.push_back(block_wt);
 
             if (f == 0 && h == 0) {
-                generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+                dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
             }
         }
     }
 #elif defined(CAUSAL_MASK) && defined(SHARDED_CAUSAL_MASK)
-    generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
 #else
     cb_attn_obj.reserve_back(block_wt);
     uint32_t write_offset = 0;
@@ -81,10 +81,10 @@ void kernel_main() {
     noc.async_read_barrier();
     cb_attn_obj.push_back(block_wt);
 
-    generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
 #endif
 
 #else
-    generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
 #endif
 }
