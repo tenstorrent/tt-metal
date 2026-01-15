@@ -569,6 +569,15 @@ void calculate_exponential_polynomial_init() {
     init_clamp_loadmacro<SCALE>();
 }
 
+/**
+ * Inserts an SFPNOP instruction if not on Blackhole. From the documentation:
+ * Wormhole:
+ *     If SFPMAD is used, software must ensure that on the next cycle, the Vector Unit (SFPU)
+ *     does not execute an instruction which reads from any location written to by the SFPMAD.
+ * Blackhole:
+ *     If SFPMAD is used, hardware will ensure that on the next cycle, the Vector Unit (SFPU)
+ *     does not execute an instruction which reads from any location written to by the SFPMAD.
+ */
 ALWI void INSERT_SFPNOP() {
 #ifndef ARCH_BLACKHOLE
     TTI_SFPNOP;
