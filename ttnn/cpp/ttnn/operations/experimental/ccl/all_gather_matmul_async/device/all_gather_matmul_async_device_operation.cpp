@@ -44,7 +44,7 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
         // Matmul validate
-        operations::matmul::MatmulDeviceOperation::validate_on_program_cache_miss(
+        ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.matmul,
             {.input_tensors = {all_gather_output_tensor, weight_tensor},
              .optional_input_tensors = {tensor_args.bias},
@@ -94,7 +94,7 @@ AllGatherMatmulAsyncDeviceOperation::spec_return_value_t AllGatherMatmulAsyncDev
         operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
     // Matmul shape
-    auto matmul_output_specs = operations::matmul::MatmulDeviceOperation::compute_output_specs(
+    auto matmul_output_specs = ttnn::prim::MatmulDeviceOperation::compute_output_specs(
         operation_attributes.matmul,
         {.input_tensors = {tensor_args.input_tensor, tensor_args.weight_tensor},
          .optional_input_tensors = {},
@@ -111,7 +111,7 @@ AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t AllGatherMatmulAsyncD
         operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
     // Matmul output tensor
-    auto matmul_output_tensor = operations::matmul::MatmulDeviceOperation::create_output_tensors(
+    auto matmul_output_tensor = ttnn::prim::MatmulDeviceOperation::create_output_tensors(
         operation_attributes.matmul,
         {.input_tensors = {all_gather_output_tensor, tensor_args.weight_tensor},
          .optional_input_tensors = {},
@@ -218,11 +218,11 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
-    auto matmul_struct = operations::matmul::create_matmul_attributes(
+    auto matmul_struct = ttnn::prim::create_matmul_attributes(
         all_gather_out_tensor,
         weight_tensor,
         /*parameters=*/
-        operations::matmul::operation_attributes_t{
+        ttnn::prim::MatmulParams{
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config_mm.value_or(input_tensor.memory_config()),

@@ -25,7 +25,7 @@ struct AllGatherMatmulAsyncParams {
     AllGatherAsyncInputs all_gather_async_tensor_args;
 
     /* Matmul Params */
-    operations::matmul::operation_attributes_t matmul{};
+    ttnn::prim::MatmulParams matmul{};
     /* Fusion params */
     CoreCoord all_gather_core_grid_offset;
 

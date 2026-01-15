@@ -20,7 +20,7 @@
 namespace ttnn::experimental::prim {
 
 struct LlamaAllGatherMatmulAsyncParams {
-    ttnn::operations::matmul::operation_attributes_t matmul_struct;
+    ttnn::prim::MatmulParams matmul_struct;
     std::vector<IDevice*> devices;
     uint32_t dim{};
     uint32_t num_links{};
@@ -33,7 +33,7 @@ struct LlamaAllGatherMatmulAsyncParams {
 
     // Constructor required because GlobalSemaphore is not default constructible
     LlamaAllGatherMatmulAsyncParams(
-        ttnn::operations::matmul::operation_attributes_t matmul_struct,
+        ttnn::prim::MatmulParams matmul_struct,
         std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t num_links,

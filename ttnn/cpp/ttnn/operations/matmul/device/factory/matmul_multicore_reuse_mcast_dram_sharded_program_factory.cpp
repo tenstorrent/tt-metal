@@ -905,9 +905,9 @@ create_program_dram_sharded(
 std::pair<tt::tt_metal::Program, MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::shared_variables_t>
 matmul_multi_core_reuse_dram_sharded_optimized_(
     const ttnn::MeshCoordinate& mesh_coord,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const operation_attributes_t& operation_attributes) {
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const ttnn::prim::MatmulParams& operation_attributes) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;
@@ -1069,10 +1069,10 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
 
 MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::cached_mesh_workload_t
 MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -1089,9 +1089,9 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload(
 
 void MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& /*operation_attributes*/,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;

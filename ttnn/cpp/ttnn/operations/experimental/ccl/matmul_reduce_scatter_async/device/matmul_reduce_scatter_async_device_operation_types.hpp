@@ -18,14 +18,14 @@ using ReduceScatterMinimalAsyncParams = ttnn::experimental::prim::ReduceScatterM
 
 struct MatmulReduceScatterAsyncParams {
     ReduceScatterMinimalAsyncParams reduce_scatter_params;
-    ttnn::operations::matmul::operation_attributes_t matmul_struct;
+    ttnn::prim::MatmulParams matmul_struct;
     CoreCoord reduce_scatter_core_grid_offset;
     std::vector<IDevice*> devices;
 
     // Constructor required because operation structs are not default constructible.
     MatmulReduceScatterAsyncParams(
         ReduceScatterMinimalAsyncParams reduce_scatter_params,
-        ttnn::operations::matmul::operation_attributes_t matmul_struct,
+        ttnn::prim::MatmulParams matmul_struct,
         CoreCoord reduce_scatter_core_grid_offset,
         std::vector<IDevice*> devices) :
         reduce_scatter_params(std::move(reduce_scatter_params)),

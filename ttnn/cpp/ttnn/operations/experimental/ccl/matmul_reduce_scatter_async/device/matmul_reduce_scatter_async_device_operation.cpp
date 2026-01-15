@@ -35,7 +35,7 @@ void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_hit(
 void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Matmul validate
-    ttnn::operations::matmul::MatmulDeviceOperation::validate_on_program_cache_miss(
+    ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(
         args.matmul_struct,
         {.input_tensors = {tensor_args.input, tensor_args.weight},
          .optional_input_tensors = {tensor_args.bias},
@@ -67,7 +67,7 @@ MatmulReduceScatterAsyncDeviceOperation::compute_output_specs(
     std::vector<Tensor> input_tensors = {tensor_args.input, tensor_args.weight};
 
     // Matmul shape
-    ttnn::TensorSpec matmul_output_specs = ttnn::operations::matmul::MatmulDeviceOperation::compute_output_specs(
+    ttnn::TensorSpec matmul_output_specs = ttnn::prim::MatmulDeviceOperation::compute_output_specs(
         args.matmul_struct, {.input_tensors = input_tensors})[0];
 
     // Reduce Scatter shape - use the device operation's compute_output_specs
@@ -85,7 +85,7 @@ MatmulReduceScatterAsyncDeviceOperation::tensor_return_value_t
 MatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Matmul output tensor
-    ttnn::Tensor matmul_output_tensor = ttnn::operations::matmul::MatmulDeviceOperation::create_output_tensors(
+    ttnn::Tensor matmul_output_tensor = ttnn::prim::MatmulDeviceOperation::create_output_tensors(
         args.matmul_struct, {.input_tensors = {tensor_args.input, tensor_args.weight}})[0];
 
     return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
@@ -161,11 +161,11 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
-    auto matmul_struct = operations::matmul::create_matmul_attributes(
+    auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input_tensor,
         weight_tensor,
         /*parameters=*/
-        ttnn::operations::matmul::operation_attributes_t{
+        ttnn::prim::MatmulParams{
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config_mm.value_or(input_tensor.memory_config()),

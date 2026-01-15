@@ -649,7 +649,7 @@ process_agmm_fusion_program_and_create_override_variables(
         CoreCoord{0, 0},
         all_cores_vec,
         0,
-        ttnn::operations::matmul::Matmul1DType::GATHER_IN0};
+        ttnn::prim::Matmul1DType::GATHER_IN0};
 }  // end of process_agmm_fusion_program_and_create_override_variables
 }  // namespace ttnn::operations::llama_agmm_fusion_helpers
 
@@ -657,7 +657,7 @@ namespace ttnn::operations::llama_matmul {
 
 void override_agmm_fusion_program_parameters(
     const ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t& override_variables,
-    const matmul::operation_attributes_t& operation,
+    const ttnn::prim::MatmulParams& operation,
     tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& /*optional_input_tensors*/,

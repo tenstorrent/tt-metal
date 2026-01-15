@@ -278,7 +278,7 @@ SparseMatmulDeviceOperation::operation_attributes_t create_sparse_matmul_attribu
     const Tensor& /*sparsity*/,
     const SparseMatmulDeviceOperation::operation_attributes_t& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
-    auto matmul_attributes = ttnn::operations::matmul::operation_attributes_t{
+    auto matmul_attributes = ttnn::prim::MatmulParams{
         parameters.program_config,
         /*bcast_batch=*/std::nullopt,
         parameters.output_mem_config,
@@ -294,7 +294,7 @@ SparseMatmulDeviceOperation::operation_attributes_t create_sparse_matmul_attribu
         parameters.global_cb,
         parameters.sub_device_id};
 
-    auto matmul_struct = matmul::create_matmul_attributes(
+    auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input_tensor_a, input_tensor_b, matmul_attributes, {optional_output_tensors.at(0)});
     return {
         parameters.nnz,

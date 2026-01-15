@@ -30,7 +30,7 @@ matmul::program::matmul_mcast_1d_common_override_variables_t matmul_multi_core_a
 
 void override_agmm_fusion_program_parameters(
     const ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t& override_variables,
-    const matmul::operation_attributes_t& operation,
+    const ttnn::prim::MatmulParams& operation,
     tt::tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,

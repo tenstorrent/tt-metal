@@ -76,8 +76,8 @@ LlamaAllGatherMatmulAsyncDeviceOperation::compute_output_specs(
         aggregated_shape, TensorLayout(input0.dtype(), input0.tensor_spec().page_config(), aggregated_mem_config));
 
     // Matmul output spec - using aggregated tensor as input to matmul
-    ttnn::TensorSpec matmul_output_specs = ttnn::operations::matmul::MatmulDeviceOperation::compute_output_specs(
-        args.matmul_struct, {{input0, input1}, {}})[0];
+    ttnn::TensorSpec matmul_output_specs =
+        ttnn::prim::MatmulDeviceOperation::compute_output_specs(args.matmul_struct, {{input0, input1}, {}})[0];
 
     return LlamaAllGatherMatmulAsyncResultSpec{.mm = matmul_output_specs, .aggregated = aggregated_tensor_spec};
 }
@@ -93,7 +93,7 @@ LlamaAllGatherMatmulAsyncDeviceOperation::create_output_tensors(
     ttnn::Tensor aggregated_tensor = create_device_tensor(specs.aggregated, input0.device());
 
     // Matmul output tensor
-    ttnn::Tensor matmul_output_tensor = ttnn::operations::matmul::MatmulDeviceOperation::create_output_tensors(
+    ttnn::Tensor matmul_output_tensor = ttnn::prim::MatmulDeviceOperation::create_output_tensors(
         args.matmul_struct, {{aggregated_tensor, input1}, {}})[0];
 
     return LlamaAllGatherMatmulAsyncResult{.mm = matmul_output_tensor, .aggregated = aggregated_tensor};
@@ -182,11 +182,11 @@ ttnn::experimental::prim::LlamaAllGatherMatmulAsyncDeviceOperation::tensor_retur
 
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input0);
 
-    auto matmul_struct = ttnn::operations::matmul::create_matmul_attributes(
+    auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input0,
         input1,
         /*parameters=*/
-        ttnn::operations::matmul::operation_attributes_t{
+        ttnn::prim::MatmulParams{
             program_config,
             /*bcast_batch=*/std::nullopt,
             mm_memory_config.value_or(input0.memory_config()),

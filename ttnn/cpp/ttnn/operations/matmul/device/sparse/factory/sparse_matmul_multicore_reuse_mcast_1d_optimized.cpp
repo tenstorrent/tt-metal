@@ -24,7 +24,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     using namespace matmul::utilities;
 
     // from create_mesh-workload
-    auto matmul_attributes = ttnn::operations::matmul::operation_attributes_t{
+    auto matmul_attributes = ttnn::prim::MatmulParams{
         operation_attributes.program_config,
         /*bcast_batch=*/std::nullopt,
         operation_attributes.output_mem_config,
@@ -40,7 +40,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         operation_attributes.global_cb,
         operation_attributes.sub_device_id};
 
-    auto chosen_program_config = get_program_config(
+    auto chosen_program_config = operations::matmul::get_program_config(
         tensor_args.input_tensors.at(0),
         tensor_args.input_tensors.at(1),
         /*transpose_a=*/false,
@@ -758,7 +758,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         start_core,
         cores,
         num_cores_with_work,
-        ttnn::operations::matmul::Matmul1DType::MCAST_IN0};
+        ttnn::prim::Matmul1DType::MCAST_IN0};
 
     return {std::move(program), std::move(shared_vars)};
 }

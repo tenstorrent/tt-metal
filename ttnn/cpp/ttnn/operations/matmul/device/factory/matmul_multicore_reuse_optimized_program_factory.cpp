@@ -620,9 +620,9 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_
 // TODO: Get rid of no-op reshapes when we generalize
 // matmul_multi_core_reuse_optimized_bert_large not used
 MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReuseOptimizedProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -659,9 +659,9 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
 
 void MatmulMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& /*operation_attributes*/,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
     auto mm_kernel_in0_reader_id = shared_variables.mm_kernel_in0_reader_id;
@@ -720,10 +720,10 @@ void MatmulMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
 
 MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory::cached_mesh_workload_t
 MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory::create_mesh_workload(
-    const operation_attributes_t& attributes,
+    const ttnn::prim::MatmulParams& attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -740,9 +740,9 @@ MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory::create_mesh_workload(
 
 void MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
         auto cached_program_proxy = MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t::proxy(
             program, cached_workload.shared_variables.at(mesh_coord_range));
