@@ -6,7 +6,7 @@ on:
       device-type:
         required: true
         type: string
-        description: "Device type: n150, n300, p100, p150, wh-qb, bh-qb2, wh-6u, bh-6u"
+        description: "Device type: n150, n300, p100, p150, p300, wh-loudbox, bh-qb, bh-qb2, bh-loudbox, wh-6u, bh-6u"
       runner-label:
         required: true
         type: string
