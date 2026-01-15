@@ -736,27 +736,55 @@ class TtLlamaAttention(LightweightModule):
             # Ring attention splits seqlen into 8 chunks and computes chunk i and chunk ring_size - i - 1 per device
             # where i (device id on a mesh column) ranges from 0 to ring_size-1 (0 to 3), so ring_size - i - 1 ranges from 3 to 0
             # This ensures each device processes two complementary chunks of the attention matrix
+            # When using paged KV cache (page_table provided), pass KV cache tensors instead of linear tensors
+            if page_table is not None:
+                # Use KV cache tensors for paged attention
+                k_tensor = keys_BKSD
+                v_tensor = values_BKSD
+            else:
+                # Use linear tensors for non-paged attention
+                k_tensor = k_heads_1KSD_8b
+                v_tensor = v_heads_1VSD_8b
+
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
-                k_heads_1KSD_8b,
-                v_heads_1VSD_8b,
+                k_tensor,
+                v_tensor,
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.model_config["SDPA_PROGCFG"](
+                    seq_len, chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0
+                ),
+                page_table=page_table,
+                chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
             )
         else:
-            attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
-                q_heads_1QSD_8b,
-                k_heads_1KSD_8b,
-                v_heads_1VSD_8b,
-                is_causal=True,
-                scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](
-                    seq_len // batch_size if seq_len // batch_size == 128 else seq_len
-                ),
-            )
+            # When using prefix caching (chunk_start_idx provided), use chunked SDPA with KV cache tensors
+            if chunk_start_idx is not None:
+                attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_1QSD_8b,
+                    input_tensor_k=keys_BKSD,
+                    input_tensor_v=values_BKSD,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                    program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=chunk_start_idx),
+                )
+                # Reshape from [1, 1, seq_len, head_dim] to [1, n_local_heads, seq_len, head_dim]
+                attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+            else:
+                attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
+                    q_heads_1QSD_8b,
+                    k_heads_1KSD_8b,
+                    v_heads_1VSD_8b,
+                    is_causal=True,
+                    scale=self.scale,
+                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                    program_config=self.model_config["SDPA_PROGCFG"](
+                        seq_len // batch_size if seq_len // batch_size == 128 else seq_len
+                    ),
+                )
 
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)
