@@ -140,6 +140,7 @@ UntilizeMultiCoreParallelizeColumnProgramFactory::create(
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (a.dtype() == DataType::FLOAT32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
+        std::cout << "Using slow untilize in untilize_multi_core_parallelize_column_program_factory.cpp" << std::endl;
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
         unpack_to_dest_mode[src0_cb_index] =

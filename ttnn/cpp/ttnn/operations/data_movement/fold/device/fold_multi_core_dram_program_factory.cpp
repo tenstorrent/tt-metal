@@ -147,6 +147,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     std::string compute_kernel_name =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
     if (tiles_per_channel_dim > MAX_PACK_UNTILIZE_WIDTH) {
+        std::cout << "Using slow untilize in fold_multi_core_dram_program_factory.cpp" << std::endl;
         compute_kernel_name = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
