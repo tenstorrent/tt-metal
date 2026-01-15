@@ -113,12 +113,20 @@ void test_raw_host_memory_pointer() {
 
     Tensor c_dev = ttnn::sqrt(a_dev);
 
-    auto dst_host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor_for_printing);
-    std::vector<tt::tt_metal::distributed::ShardDataTransfer> read_transfers_1 = {
-        tt::tt_metal::distributed::ShardDataTransfer{
-            *tt::tt_metal::distributed::MeshCoordinateRange(c_dev.device()->shape()).begin()}
-            .host_data(dst_host_buffer.view_bytes().data())};
-    c_dev.device()->mesh_command_queue().enqueue_read_shards(read_transfers_1, c_dev.mesh_buffer(), true);
+    auto copy_tensor_to_host_memory_buffer = [](void* dst, const Tensor& a_dev) {
+        std::vector<tt::tt_metal::distributed::ShardDataTransfer> read_transfers = {
+            tt::tt_metal::distributed::ShardDataTransfer{
+                *tt::tt_metal::distributed::MeshCoordinateRange(a_dev.device()->shape()).begin()}
+                .host_data(dst)};
+        a_dev.device()->mesh_command_queue().enqueue_read_shards(read_transfers, a_dev.mesh_buffer(), true);
+    };
+    auto copy_tensor_to_host_tensor_buffer = [&copy_tensor_to_host_memory_buffer](
+                                                 Tensor& a_cpu_dst, const Tensor& a_dev) {
+        auto dst_host_buffer = tt::tt_metal::host_buffer::get_host_buffer(a_cpu_dst);
+        copy_tensor_to_host_memory_buffer(dst_host_buffer.view_bytes().data(), a_dev);
+    };
+
+    copy_tensor_to_host_tensor_buffer(tensor_for_printing, c_dev);
 
     // Check that cpu tensor has correct data
     bfloat16 output_value = 2.0f;
@@ -133,11 +141,8 @@ void test_raw_host_memory_pointer() {
     // Alternatively, we could allocate memory manually and create Tensors with borrowed storage on the fly to print the
     // data
     void* storage_of_alternative_tensor_for_printing = malloc(shape.volume() * sizeof(bfloat16));
-    std::vector<tt::tt_metal::distributed::ShardDataTransfer> read_transfers_2 = {
-        tt::tt_metal::distributed::ShardDataTransfer{
-            *tt::tt_metal::distributed::MeshCoordinateRange(c_dev.device()->shape()).begin()}
-            .host_data(storage_of_alternative_tensor_for_printing)};
-    c_dev.device()->mesh_command_queue().enqueue_read_shards(read_transfers_2, c_dev.mesh_buffer(), true);
+
+    copy_tensor_to_host_memory_buffer(storage_of_alternative_tensor_for_printing, c_dev);
 
     HostBuffer alternative_tensor_for_printing_buffer(
         tt::stl::Span<bfloat16>(static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing), shape.volume()),
@@ -176,12 +181,7 @@ void test_raw_host_memory_pointer() {
 
     Tensor e_dev = ttnn::add(c_dev, d_dev);
 
-    auto dst_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor_for_printing);
-    std::vector<tt::tt_metal::distributed::ShardDataTransfer> read_transfers_3 = {
-        tt::tt_metal::distributed::ShardDataTransfer{
-            *tt::tt_metal::distributed::MeshCoordinateRange(e_dev.device()->shape()).begin()}
-            .host_data(dst_buffer.view_bytes().data())};
-    e_dev.device()->mesh_command_queue().enqueue_read_shards(read_transfers_3, e_dev.mesh_buffer(), true);
+    copy_tensor_to_host_tensor_buffer(tensor_for_printing, e_dev);
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_FATAL(element == bfloat16(10.0f), "Element does not match expected bfloat16(10.0f)");
