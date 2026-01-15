@@ -105,11 +105,10 @@ ALWI void mm_init(
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));  // transpose not yet implemented
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY, false /*EN_DI*/, false /*EN_X2*/>()));
-    MATH((
-        llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE, false /*int32 dest*/>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>()));
+    MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_hw_configure_disaggregated<p_pacr::PACK0>(out_cb_id)));
+    PACK((llk_pack_hw_configure<p_pacr::PACK0>(out_cb_id)));
     PACK((llk_pack_init<p_pacr::PACK0>(out_cb_id)));
 #endif
 }
@@ -138,7 +137,7 @@ ALWI void matmul_tiles(
 #ifndef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
 #else
-    MATH((llk_math_matmul(idst)));
+    MATH((llk_math_matmul_tile(idst)));
 #endif
 }
 
