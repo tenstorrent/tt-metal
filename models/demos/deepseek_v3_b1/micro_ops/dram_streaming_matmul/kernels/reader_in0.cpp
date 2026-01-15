@@ -13,10 +13,9 @@
  * This kernel just signals that tiles are ready for compute - no data movement needed.
  */
 void kernel_main() {
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
-
-    constexpr uint32_t cb_id_in0 = 0;  // Backed by input tensor
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
 
     // CB0 is backed by the input tensor - data is already there.
     // Just signal that tiles are ready for each block.
