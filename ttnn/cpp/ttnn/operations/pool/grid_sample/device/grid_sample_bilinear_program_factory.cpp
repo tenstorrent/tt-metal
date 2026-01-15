@@ -16,7 +16,7 @@
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_program_factory.hpp"
 
-namespace ttnn::operations::pool::grid_sample::program {
+namespace ttnn::prim {
 
 GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFactory::create(
     const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor) {
@@ -256,7 +256,7 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = compute_compile_time_args,
-                .defines = get_defines(pool::Pool2DType::AVG_POOL2D)});
+                .defines = ttnn::operations::pool::get_defines(ttnn::operations::pool::Pool2DType::AVG_POOL2D)});
     };
 
     if (is_sharded || core_group_1.num_cores() > 0) {
@@ -391,4 +391,4 @@ void GridSampleBilinearProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::pool::grid_sample::program
+}  // namespace ttnn::prim

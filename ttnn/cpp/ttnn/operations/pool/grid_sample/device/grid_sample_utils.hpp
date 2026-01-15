@@ -8,7 +8,7 @@
 #include <string>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::pool::grid_sample {
+namespace ttnn::prim {
 
 // Constants
 constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -27,4 +27,4 @@ uint32_t get_grid_batching_factor(
 
 uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor);
 
-}  // namespace ttnn::operations::pool::grid_sample
+}  // namespace ttnn::prim
