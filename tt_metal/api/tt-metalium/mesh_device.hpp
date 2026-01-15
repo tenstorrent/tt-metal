@@ -293,6 +293,7 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
+    // Only for internal and testing purposes
     const MeshDeviceImpl& impl() const { return *pimpl_; }
     MeshDeviceImpl& impl() { return *pimpl_; }
 };
