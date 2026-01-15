@@ -16,8 +16,8 @@
 namespace ttnn::operations::dram_prefetcher {
 
 struct DramPrefetcherOperation {
-    using operation_attributes_t = dram_prefetcher::operation_attributes_t;
-    using tensor_args_t = dram_prefetcher::tensor_args_t;
+    using operation_attributes_t = DramPrefetcherParams;
+    using tensor_args_t = DramPrefetcherInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::DramPrefetcherProgramFactory>;

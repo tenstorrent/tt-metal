@@ -9,14 +9,14 @@
 #include <optional>
 
 namespace ttnn::operations::reduction::manual_seed {
-struct operation_attributes_t {
+struct ManualSeedParams {
     tt::tt_metal::distributed::MeshDevice* device = nullptr;
     std::optional<uint32_t> seeds = std::nullopt;
     std::optional<uint32_t> user_ids = std::nullopt;
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
-struct tensor_args_t {
+struct ManualSeedInputs {
     std::optional<Tensor> seeds = std::nullopt;
     std::optional<Tensor> user_ids = std::nullopt;
 };

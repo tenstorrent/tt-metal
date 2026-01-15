@@ -14,8 +14,8 @@
 namespace ttnn::operations::data_movement::reshape_on_device {
 
 ReshapeTileProgramFactory::cached_program_t ReshapeTileProgramFactory::create(
-    const reshape_on_device::operation_attributes_t& /*operation_attributes*/,
-    const reshape_on_device::tensor_args_t& tensor_args,
+    const reshape_on_device::ReshapeOnDeviceParams& /*operation_attributes*/,
+    const reshape_on_device::ReshapeOnDeviceInputs& tensor_args,
     reshape_on_device::tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -89,8 +89,8 @@ ReshapeTileProgramFactory::cached_program_t ReshapeTileProgramFactory::create(
 
 void ReshapeTileProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshape_on_device::operation_attributes_t& /*operation_attributes*/,
-    const reshape_on_device::tensor_args_t& tensor_args,
+    const reshape_on_device::ReshapeOnDeviceParams& /*operation_attributes*/,
+    const reshape_on_device::ReshapeOnDeviceInputs& tensor_args,
     reshape_on_device::tensor_return_value_t& output_tensor) {
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* dst_buffer = output_tensor.buffer();

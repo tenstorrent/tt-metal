@@ -49,7 +49,7 @@ static KernelHandle create_kernel(
 }
 
 IsInProgramFactory::cached_program_t IsInProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    const IsinParams& args, const IsinInputs& tensor_args, tensor_return_value_t& output_tensor) {
     Program program{};
 
     const auto& elements_tensor = tensor_args.elements_tensor;
@@ -160,8 +160,8 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
 
 void IsInProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&  /*args*/,
-    const tensor_args_t& tensor_args,
+    const IsinParams& /*args*/,
+    const IsinInputs& tensor_args,
     tensor_return_value_t& output_tensor) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;

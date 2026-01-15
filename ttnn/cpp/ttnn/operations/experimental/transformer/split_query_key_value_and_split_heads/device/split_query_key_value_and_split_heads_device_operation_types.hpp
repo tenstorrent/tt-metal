@@ -11,13 +11,13 @@
 
 namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads {
 
-struct operation_attributes_t {
+struct SplitQueryKeyValueAndSplitHeadsParams {
     CoreCoord compute_with_storage_grid_size;
     tt::tt_metal::MemoryConfig output_mem_config;
     uint32_t num_heads{};
 };
 
-struct tensor_args_t {
+struct SplitQueryKeyValueAndSplitHeadsInputs {
     Tensor input_tensor;
     std::vector<std::optional<Tensor>> output_tensors;
 };

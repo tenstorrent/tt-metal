@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::gelu_backward::program {
 using namespace tt::constants;
 
 GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, Tensor& output) {
+    const GeluBackwardParams& args, const GeluBackwardInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;              // src0
     const auto& grad_output = tensor_args.grad_output;  // src1
 
@@ -132,8 +132,8 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
 
 void GeluBackwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const GeluBackwardParams& /*operation_attributes*/,
+    const GeluBackwardInputs& tensor_args,
     Tensor& output) {
     using namespace tt::tt_metal;
 

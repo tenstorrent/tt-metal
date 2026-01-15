@@ -8,13 +8,13 @@
 
 namespace ttnn::operations::data_movement::split {
 
-struct operation_attributes_t {
+struct SplitParams {
     int num_splits{};
     int dim{};
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct SplitInputs {
     Tensor input;
 };
 

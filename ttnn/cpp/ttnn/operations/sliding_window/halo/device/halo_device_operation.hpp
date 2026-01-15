@@ -18,8 +18,8 @@ namespace ttnn::operations::sliding_window::halo {
 
 struct HaloDeviceOperation {
     thread_local static std::unordered_map<std::size_t, std::uint32_t> sliding_window_max_out_nsticks_per_core;
-    using operation_attributes_t = halo::operation_attributes_t;
-    using tensor_args_t = halo::tensor_args_t;
+    using operation_attributes_t = HaloParams;
+    using tensor_args_t = HaloInputs;
     using spec_return_value_t = halo::spec_return_value_t;
     using tensor_return_value_t = halo::tensor_return_value_t;
     using program_factory_t = std::variant<data_movement::program::UntilizeWithHaloProgramFactory>;

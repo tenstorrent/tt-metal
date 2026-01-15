@@ -26,14 +26,14 @@ struct UntilizeWithHaloProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const sliding_window::halo::operation_attributes_t& operation_attributes,
-        const sliding_window::halo::tensor_args_t& tensor_args,
+        const sliding_window::halo::HaloParams& operation_attributes,
+        const sliding_window::halo::HaloInputs& tensor_args,
         sliding_window::halo::tensor_return_value_t& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const sliding_window::halo::operation_attributes_t& operation_attributes,
-        const sliding_window::halo::tensor_args_t& tensor_args,
+        const sliding_window::halo::HaloParams& operation_attributes,
+        const sliding_window::halo::HaloInputs& tensor_args,
         sliding_window::halo::tensor_return_value_t& output_tensor);
 };
 

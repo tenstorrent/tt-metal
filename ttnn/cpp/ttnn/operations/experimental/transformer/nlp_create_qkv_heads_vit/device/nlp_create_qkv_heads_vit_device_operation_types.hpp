@@ -8,11 +8,11 @@
 
 namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit {
 
-struct operation_attributes_t {
+struct NlpCreateQkvHeadsVitParams {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct NlpCreateQkvHeadsVitInputs {
     Tensor input_tensor;
     std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors;
 };

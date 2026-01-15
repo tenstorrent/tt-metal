@@ -26,8 +26,8 @@ using namespace tt::tt_metal;
 using namespace tt::stl;
 
 struct IntImgDeviceOperation {
-    using operation_attributes_t = reduction::operation_attributes_t;
-    using tensor_args_t = reduction::tensor_args_t;
+    using operation_attributes_t = ReductionParams;
+    using tensor_args_t = ReductionInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<reduction::IntImgProgramFactory>;

@@ -17,8 +17,8 @@
 namespace ttnn::operations::reduction::topk {
 
 struct TopKDeviceOperation {
-    using operation_attributes_t = topk::operation_attributes_t;
-    using tensor_args_t = topk::tensor_args_t;
+    using operation_attributes_t = TopkParams;
+    using tensor_args_t = TopkInputs;
     using spec_return_value_t = topk::spec_return_value_t;
     using tensor_return_value_t = topk::tensor_return_value_t;
     using program_factory_t = std::variant<program::TopKSingleCoreProgramFactory, program::TopKMultiCoreProgramFactory>;

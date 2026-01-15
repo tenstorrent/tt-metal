@@ -16,8 +16,8 @@
 namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather {
 
 struct FusedRMSNormPreAllGatherDeviceOperation {
-    using operation_attributes_t = fused_rmsnorm_pre_all_gather::operation_attributes_t;
-    using tensor_args_t = fused_rmsnorm_pre_all_gather::tensor_args_t;
+    using operation_attributes_t = FusedRmsnormPreAllGatherParams;
+    using tensor_args_t = FusedRmsnormPreAllGatherInputs;
     using spec_return_value_t = fused_rmsnorm_pre_all_gather::spec_return_value_t;
     using tensor_return_value_t = fused_rmsnorm_pre_all_gather::tensor_return_value_t;
     using program_factory_t = std::variant<program::FusedRMSNormPreAllGatherProgramFactory>;

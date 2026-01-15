@@ -8,11 +8,11 @@
 
 namespace ttnn::operations::experimental::transformer::rotate_half {
 
-struct operation_attributes_t {
+struct RotateHalfParams {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct RotateHalfInputs {
     Tensor input;
 };
 

@@ -22,8 +22,8 @@
 namespace ttnn::operations::ccl::all_broadcast {
 
 struct AllBroadcastDeviceOperation {
-    using operation_attributes_t = all_broadcast::operation_attributes_t;
-    using tensor_args_t = all_broadcast::tensor_args_t;
+    using operation_attributes_t = AllBroadcastParams;
+    using tensor_args_t = AllBroadcastInputs;
     using spec_return_value_t = all_broadcast::spec_return_value_t;
     using tensor_return_value_t = all_broadcast::tensor_return_value_t;
     using program_factory_t = std::variant<program::AllBroadcastProgramFactory>;

@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::data_movement::pad {
 
-struct operation_attributes_t {
+struct PadParams {
     ttnn::Shape output_logical_shape;
     ttnn::Shape output_padded_shape;
     ttnn::Shape input_tensor_start;
@@ -20,7 +20,7 @@ struct operation_attributes_t {
     bool use_multicore{};
 };
 
-struct tensor_args_t {
+struct PadInputs {
     Tensor input;
     std::optional<Tensor> preallocated_output;
 };

@@ -9,11 +9,11 @@
 
 namespace ttnn::operations::experimental::nlp_concat_heads {
 
-struct operation_attributes_t {
+struct NlpConcatHeadsParams {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct NlpConcatHeadsInputs {
     Tensor input;
 };
 

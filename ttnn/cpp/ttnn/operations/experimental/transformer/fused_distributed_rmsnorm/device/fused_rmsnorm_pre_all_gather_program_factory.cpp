@@ -45,8 +45,8 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 }  // namespace
 
 FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGatherProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const FusedRmsnormPreAllGatherParams& operation_attributes,
+    const FusedRmsnormPreAllGatherInputs& tensor_args,
     tensor_return_value_t& output_tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using namespace tt::constants;
@@ -243,8 +243,8 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
 
 void FusedRMSNormPreAllGatherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const FusedRmsnormPreAllGatherParams& /*operation_attributes*/,
+    const FusedRmsnormPreAllGatherInputs& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;

@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather {
 
-struct operation_attributes_t {
+struct FusedRmsnormPostAllGatherParams {
     float eps;
     uint32_t num_heads;
     tt::tt_metal::MemoryConfig memory_config;
@@ -19,7 +19,7 @@ struct operation_attributes_t {
     std::optional<tt::tt_metal::DataType> dtype;
 };
 
-struct tensor_args_t {
+struct FusedRmsnormPostAllGatherInputs {
     Tensor input_tensor;
     Tensor stats_tensor;
     std::optional<Tensor> weight;

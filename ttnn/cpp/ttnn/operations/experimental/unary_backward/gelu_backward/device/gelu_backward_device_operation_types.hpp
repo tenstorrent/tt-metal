@@ -9,13 +9,13 @@
 
 namespace ttnn::operations::experimental::gelu_backward {
 
-struct operation_attributes_t {
+struct GeluBackwardParams {
     const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
     const tt::tt_metal::MemoryConfig output_memory_config;
     const std::string approximate = "none";
 };
 
-struct tensor_args_t {
+struct GeluBackwardInputs {
     const Tensor& grad_output;
     const Tensor& input;
     std::optional<Tensor> preallocated_input_grad;
