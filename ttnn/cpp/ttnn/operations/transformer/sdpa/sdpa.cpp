@@ -235,7 +235,9 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& page_table,
+    std::optional<int64_t> chunk_start_idx) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -251,7 +253,9 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
         scale,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         program_config,
-        kernel_config_val);
+        kernel_config_val,
+        page_table,
+        chunk_start_idx);
 }
 
 }  // namespace ttnn::operations::transformer
