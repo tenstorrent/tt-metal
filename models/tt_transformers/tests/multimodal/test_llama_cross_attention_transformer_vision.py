@@ -23,10 +23,10 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_visi
 )
 
 
-# Meta's lib crossattention vision transformer branch does not exist indepedently as a subclass in HF,
-# instead it is implemented directly in the whole mLlama model graph.
-# Thus the following custom class is adapted from mLlama model of HF to
-# create the same computational graph as in meta lib for this comparison with tt_model.
+# Meta's lib crossattention vision transformer branch found in :https://github.com/meta-llama/llama-models/blob/0e0b8c519242d5833d8c11bffc1232b77ad7f301/models/llama3/multimodal/model.py#L1027
+# does not exist indepedently as a subclass in HF, instead it is implemented directly in the whole mLlama model graph.
+# Thus the following custom class is adapted from mLlama model of HF https://github.com/huggingface/transformers/blob/d12672fc50c1393ef3bb0964aaebd4290d93e364/src/transformers/models/mllama/modeling_mllama.py#L1445
+# to create the same computational graph as in meta lib for this comparison with tt_model containing the vision model and the mutlimodal projector.
 class CrossAttentionTransformerVisionModel(MllamaPreTrainedModel):
     def __init__(self, config: MllamaConfig):
         super().__init__(config)
