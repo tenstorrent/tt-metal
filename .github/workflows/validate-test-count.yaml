@@ -45,7 +45,7 @@ jobs:
           done
 
           # Checkout base branch
-          git fetch origin main
+          git fetch --depth=1 origin main
           git checkout origin/main
 
           # Count tests in base branch
