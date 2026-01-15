@@ -113,14 +113,6 @@ void test_raw_host_memory_pointer() {
 
     Tensor c_dev = ttnn::sqrt(a_dev);
 
-    auto copy_tensor_to_host_memory_buffer = [](void* dst, const Tensor& a_dev) {
-        std::vector<tt::tt_metal::distributed::ShardDataTransfer> read_transfers = {
-            tt::tt_metal::distributed::ShardDataTransfer{
-                *tt::tt_metal::distributed::MeshCoordinateRange(a_dev.device()->shape()).begin()}
-                .host_data(dst)};
-        a_dev.device()->mesh_command_queue().enqueue_read_shards(read_transfers, a_dev.mesh_buffer(), true);
-    };
-
     tt::tt_metal::tensor_impl::copy_to_host(c_dev, tensor_for_printing);
 
     // Check that cpu tensor has correct data
@@ -136,7 +128,11 @@ void test_raw_host_memory_pointer() {
     // Alternatively, we could allocate memory manually and create Tensors with borrowed storage on the fly to print the
     // data
     void* storage_of_alternative_tensor_for_printing = malloc(shape.volume() * sizeof(bfloat16));
-    copy_tensor_to_host_memory_buffer(storage_of_alternative_tensor_for_printing, c_dev);
+    std::vector<tt::tt_metal::distributed::ShardDataTransfer> read_transfers = {
+        tt::tt_metal::distributed::ShardDataTransfer{
+            *tt::tt_metal::distributed::MeshCoordinateRange(c_dev.device()->shape()).begin()}
+            .host_data(storage_of_alternative_tensor_for_printing)};
+    c_dev.device()->mesh_command_queue().enqueue_read_shards(read_transfers, c_dev.mesh_buffer(), true);
 
     HostBuffer alternative_tensor_for_printing_buffer(
         tt::stl::Span<bfloat16>(static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing), shape.volume()),
