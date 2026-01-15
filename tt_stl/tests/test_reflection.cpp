@@ -40,7 +40,6 @@ enum class Color { Red, Green, Blue };
 namespace ttsl::reflection {
 namespace {
 
-using test_types::Color;
 using test_types::ContainerWithReflectable;
 using test_types::ReflectablePoint;
 using test_types::ReflectableRect;
