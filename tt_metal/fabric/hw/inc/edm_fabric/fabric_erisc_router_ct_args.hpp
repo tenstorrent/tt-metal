@@ -120,7 +120,7 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 41,
+    wait_for_host_signal_IDX == 42,
     "wait_for_host_signal_IDX must be 41 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
     "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
     "num_downstream_senders_vc1, wait_for_host_signal)");
@@ -128,7 +128,7 @@ static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 42,
+    MAIN_CT_ARGS_START_IDX == 43,
     "MAIN_CT_ARGS_START_IDX must be 42 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
     "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
     "num_downstream_senders_vc1, wait_for_host_signal)");
