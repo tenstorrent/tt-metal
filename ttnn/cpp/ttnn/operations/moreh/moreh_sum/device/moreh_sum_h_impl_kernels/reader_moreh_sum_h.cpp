@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = 2;
     constexpr auto src_args = TensorAccessorArgs<3>();
     constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    generate_reduce_scaler(cb_id_in2, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_id_in2, scaler);
 #endif
 
     constexpr uint32_t cb_id_mask_h = 3;
