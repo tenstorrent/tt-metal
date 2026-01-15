@@ -8,12 +8,12 @@
 
 namespace ttnn::operations::experimental::cnn {
 
-struct operation_attributes_t {
+struct CnnParams {
     const tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
 };
 
-struct tensor_args_t {
+struct CnnInputs {
     const Tensor& input;
 };
 

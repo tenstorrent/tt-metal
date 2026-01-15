@@ -15,8 +15,8 @@
 namespace ttnn::operations::data_movement::nonzero {
 
 struct NonZeroIndicesDeviceOperation {
-    using operation_attributes_t = nonzero::operation_attributes_t;
-    using tensor_args_t = nonzero::tensor_args_t;
+    using operation_attributes_t = NonzeroParams;
+    using tensor_args_t = NonzeroInputs;
     using spec_return_value_t = nonzero::spec_return_value_t;
     using tensor_return_value_t = nonzero::tensor_return_value_t;
     using program_factory_t = std::variant<program::NonZeroIndicesProgramFactory>;

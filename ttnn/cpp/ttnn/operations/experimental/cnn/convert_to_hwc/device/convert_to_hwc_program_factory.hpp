@@ -29,14 +29,12 @@ struct ConvertToHWCProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        Tensor& tensor_return_value);
+        const CnnParams& operation_attributes, const CnnInputs& tensor_args, Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const CnnParams& operation_attributes,
+        const CnnInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 

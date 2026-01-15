@@ -9,12 +9,12 @@
 
 namespace ttnn::operations::reduction::moe {
 
-struct operation_attributes_t {
+struct MoeParams {
     uint16_t k{};
     tt::tt_metal::MemoryConfig output_memory_config;
 };
 
-struct tensor_args_t {
+struct MoeInputs {
     Tensor input;
     Tensor expert_mask;
     Tensor topk_mask;

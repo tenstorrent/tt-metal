@@ -100,7 +100,7 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 }  // namespace
 
 LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
@@ -1410,8 +1410,8 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
 
 void LayerNormShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const LayerNormParams& /*operation_attributes*/,
+    const LayerNormInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto* const src_buffer_a = tensor_args.input.buffer();
     const auto& b_tensor = tensor_args.residual_input_tensor;
