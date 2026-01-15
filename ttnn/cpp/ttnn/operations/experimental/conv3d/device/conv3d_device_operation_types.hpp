@@ -63,6 +63,11 @@ struct Conv3dConfig {
     }
 };
 
+// Returns a default Conv3dConfig with hardware-optimized blocking parameters
+// based on input channel count. The blocking values are specific to
+// the Mochi model architecture to prevent L1 memory overflow.
+Conv3dConfig get_conv3d_config_for_channels(uint32_t in_channels, const CoreCoord& compute_with_storage_grid_size);
+
 struct Conv3dParams {
     Conv3dConfig config;
     tt::tt_metal::MemoryConfig output_mem_config;

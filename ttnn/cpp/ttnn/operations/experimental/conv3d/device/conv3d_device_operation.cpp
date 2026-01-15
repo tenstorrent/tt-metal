@@ -33,6 +33,62 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 }
 }  // namespace detail
 
+// Returns a default Conv3dConfig with hardware-optimized blocking parameters
+// for the Mochi video generation model architecture
+Conv3dConfig get_conv3d_config_for_channels(uint32_t in_channels, const CoreCoord& compute_with_storage_grid_size) {
+    Conv3dConfig config;
+    config.compute_with_storage_grid_size = compute_with_storage_grid_size;
+
+    switch (in_channels) {
+        case 768:
+            config.C_in_block = 128;
+            config.C_out_block = 96;
+            config.T_out_block = 1;
+            config.H_out_block = 2;
+            config.W_out_block = 16;
+            break;
+        case 512:
+            config.C_in_block = 128;
+            config.C_out_block = 128;
+            config.T_out_block = 1;
+            config.H_out_block = 8;
+            config.W_out_block = 4;
+            break;
+        case 256:
+            config.C_in_block = 128;
+            config.C_out_block = 128;
+            config.T_out_block = 4;
+            config.H_out_block = 4;
+            config.W_out_block = 2;
+            break;
+        case 128:
+            config.C_in_block = 128;
+            config.C_out_block = 128;
+            config.T_out_block = 1;
+            config.H_out_block = 2;
+            config.W_out_block = 16;
+            break;
+        case 12:
+            config.C_in_block = 12;
+            config.C_out_block = 0;
+            config.T_out_block = 1;
+            config.H_out_block = 1;
+            config.W_out_block = 1;
+            break;
+        default:
+            // Return zeros to signal "use full size"
+            // Program factory will use full channels when block size is 0
+            config.C_in_block = 0;
+            config.C_out_block = 0;
+            config.T_out_block = 1;
+            config.H_out_block = 1;
+            config.W_out_block = 1;
+            break;
+    }
+
+    return config;
+}
+
 Conv3dDeviceOperation::program_factory_t Conv3dDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return program::Conv3dProgramFactory{};
