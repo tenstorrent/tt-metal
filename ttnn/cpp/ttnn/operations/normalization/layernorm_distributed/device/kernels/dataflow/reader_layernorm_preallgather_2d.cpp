@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 
@@ -49,9 +49,9 @@ void kernel_main() {
     // Generate constant tiles for reduce scalar
     uint32_t scaler = get_arg_val<uint32_t>(8);
 
-    generate_reduce_scaler(cb_reduce, scaler);
+    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_reduce, scaler);
     if (is_merge_core) {
-        generate_reduce_scaler(cb_zero, 0);
+        ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_zero, 0);
     }
 
     uint32_t inp_tile_idx = tile_offset;

@@ -6,8 +6,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
 Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of
@@ -245,7 +246,7 @@ void kernel_main() {
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
     constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
+    ttnn::kernel_lib::dataflow::generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
     // read k, p, temp
 
     const auto addrg_k = TensorAccessor(k_args, k_addr, 128);

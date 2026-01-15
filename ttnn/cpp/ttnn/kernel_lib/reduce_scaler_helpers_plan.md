@@ -4,6 +4,16 @@
 
 This document outlines the plan to migrate the `generate_reduce_scaler` function from its deprecated location to the new kernel helper library.
 
+## Current Status
+
+**Library Location:** `ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp`
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1 | ✅ Complete | Create library & migrate first batch |
+| Phase 2 | ✅ Complete | Migrate SDPA, reduction, softmax, moreh kernels |
+| Phase 3 | ✅ Complete | Migrate remaining 20 files |
+
 ## Analysis Summary
 
 ### What is a Reduce Scaler?
@@ -17,11 +27,12 @@ The scaler is placed in a circular buffer tile with a specific fill pattern that
 
 ---
 
-## Existing Helpers (Scattered Locations)
+## Helpers
 
-| Helper | Location | Purpose | Migration |
-|--------|----------|---------|-----------|
-| `generate_reduce_scaler<half_tile>` | `ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp` | Fill first row (8 elements) of each face with scaler | → `ttnn::kernel_lib::dataflow::generate_reduce_scaler<half_tile>` |
+| Helper | Location | Status |
+|--------|----------|--------|
+| `ttnn::kernel_lib::dataflow::generate_reduce_scaler<half_tile>` | `ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp` | ✅ New library (use this) |
+| `generate_reduce_scaler<half_tile>` | `ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp` | ⚠️ Deprecated (migrate away) |
 
 ### Fill Patterns Explained
 
@@ -36,69 +47,79 @@ Face layout (each face is 16x16 elements):
 
 ---
 
-## Inline Implementations Found (Need Migration)
+## Inline Implementations Found
 
 ### Direct Duplicates
 
-1. **`ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_h.cpp:27-52`**
-   - Exact duplicate of `generate_reduce_scaler` logic
-   - Lines 30-52 can be replaced with single function call
+1. **`ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_h.cpp`**
+   - ✅ **MIGRATED** - Now uses `ttnn::kernel_lib::dataflow::generate_reduce_scaler`
 
-### Kernels Using Deprecated Helpers
+### Kernels Migration Status
 
-Total of **36 files** reference `reduce_scaler` patterns:
+#### ✅ Migrated to New Library (36 files)
 
 **Reduction Operations:**
-- `reader_tilize_untilize_interleaved.cpp`
-- `reader_unary_reduce_universal_start_id.cpp`
-- `reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp`
-- `reader_unary_transpose_wh_universal_input_cols_partitioned.cpp`
+- ✅ `reader_unary_reduce_universal_start_id.cpp` - `reduction/generic/device/kernels/dataflow/`
+- ✅ `reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp` - `reduction/generic/device/kernels/dataflow/`
+- ✅ `reader_unary_transpose_wh_universal_input_cols_partitioned.cpp` - `reduction/generic/device/kernels/dataflow/`
+- ✅ `writer_unary_interleaved.cpp` - `reduction/moe/device/kernels/dataflow/`
+- ✅ `writer_interleaved.cpp` - `reduction/sampling/device/kernels/dataflow/`
 
 **Transformer/SDPA:**
-- `writer_decode_all.cpp`
-- `writer_windowed.cpp`
-- `joint_writer.cpp`
-- `ring_joint_writer.cpp`
-- `writer_interleaved.cpp` (multiple)
+- ✅ `joint_writer.cpp` - `transformer/sdpa/device/kernels/dataflow/`
+- ✅ `ring_joint_writer.cpp` - `transformer/sdpa/device/kernels/dataflow/`
+- ✅ `writer_interleaved.cpp` - `transformer/sdpa/device/kernels/dataflow/`
+- ✅ `writer_windowed.cpp` - `transformer/sdpa_windowed/device/kernels/dataflow/`
+- ✅ `writer_decode_all.cpp` - `transformer/sdpa_decode/device/kernels/dataflow/`
 
-**Normalization:**
-- `reader_unary_interleaved_sm.cpp`
-- `reader_unary_interleaved_sm_large_tensor.cpp`
-- `reader_unary_sharded_sm.cpp`
-- `reader_unary_sharded_sm_causal_mask_hw_dims.cpp`
-- `reader_unary_sharded_sm_rm_mask.cpp`
-- `reader_unary_interleaved_ln.cpp`
-- `reader_unary_interleaved_ln_rm_gb.cpp`
-- `reader_unary_interleaved_ln_large_tensor.cpp`
-- `writer_unary_sharded_ln.cpp`
-- `writer_unary_sharded_ln_rm_gb.cpp`
-- `writer_unary_sharded_ln_pre_all_gather.cpp`
-- `welford_writer_unary_gn_rm_gb.cpp`
-- `writer_unary_gn_rm_gb.cpp`
+**Softmax:**
+- ✅ `reader_unary_interleaved_sm.cpp` - `normalization/softmax/device/kernels/attention/dataflow/`
+- ✅ `reader_unary_interleaved_sm_large_tensor.cpp` - `normalization/softmax/device/kernels/attention/dataflow/`
+- ✅ `reader_unary_sharded_sm.cpp` - `normalization/softmax/device/kernels/attention/dataflow/`
+- ✅ `reader_unary_sharded_sm_causal_mask_hw_dims.cpp` - `normalization/softmax/device/kernels/attention/dataflow/`
+- ✅ `reader_unary_sharded_sm_rm_mask.cpp` - `normalization/softmax/device/kernels/attention/dataflow/`
+
+**LayerNorm:**
+- ✅ `reader_unary_interleaved_ln_rm_gb.cpp` - `normalization/layernorm/device/kernels/dataflow/`
+- ✅ `reader_unary_interleaved_ln.cpp` - `normalization/layernorm/device/kernels/dataflow/`
+- ✅ `reader_unary_interleaved_ln_large_tensor.cpp` - `normalization/layernorm/device/kernels/dataflow/`
+- ✅ `writer_unary_sharded_ln.cpp` - `normalization/layernorm/device/kernels/dataflow/`
+- ✅ `writer_unary_sharded_ln_rm_gb.cpp` - `normalization/layernorm/device/kernels/dataflow/`
+- ✅ `writer_unary_sharded_ln_pre_all_gather.cpp` - `normalization/layernorm/device/kernels/dataflow/`
 
 **LayerNorm Distributed:**
-- `reader_layernorm_preallgather_2d.cpp`
-- `reader_unary_interleaved_ln_rm_gb_post_allgather.cpp`
-- `reader_unary_interleaved_ln_rm_gb_pre_allgather.cpp`
+- ✅ `reader_layernorm_preallgather_2d.cpp` - `normalization/layernorm_distributed/device/kernels/dataflow/`
+- ✅ `reader_unary_interleaved_ln_rm_gb_post_allgather.cpp` - `normalization/layernorm_distributed/device/kernels/dataflow/`
+- ✅ `reader_unary_interleaved_ln_rm_gb_pre_allgather.cpp` - `normalization/layernorm_distributed/device/kernels/dataflow/`
+
+**GroupNorm:**
+- ✅ `welford_writer_unary_gn_rm_gb.cpp` - `normalization/groupnorm/device/kernels/dataflow/`
+- ✅ `writer_unary_gn_rm_gb.cpp` - `normalization/groupnorm/device/kernels/dataflow/`
+- ✅ `writer_unary_sharded_gn_rm_gb_v2.cpp` - `normalization/groupnorm/device/kernels/dataflow/`
 
 **Moreh Operations:**
-- `reader_moreh_sum_h.cpp`
-- `reader_moreh_sum_nc.cpp`
-- `reader_moreh_bias_backward_h.cpp`
+- ✅ `reader_moreh_mean_h.cpp` - `moreh/moreh_mean/device/kernels/`
+- ✅ `reader_moreh_sum_h.cpp` - `moreh/moreh_sum/device/moreh_sum_h_impl_kernels/`
+- ✅ `reader_moreh_sum_nc.cpp` - `moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/`
+- ✅ `reader_moreh_bias_backward_h.cpp` - `moreh/moreh_linear_backward/device/kernels/`
 
 **Experimental:**
-- `rms_post_allgather_reader.cpp`
-- `rms_pre_allgather_reader.cpp`
-- `reader_reduce_nc.cpp`
-- `reader_ssm_1d_sum_reduce.cpp`
-- `rms_writer.cpp`
+- ✅ `reader_reduce_nc.cpp` - `experimental/reduction/fast_reduce_nc/device/kernels/`
+- ✅ `reader_ssm_1d_sum_reduce.cpp` - `experimental/ssm/hc_sum_reduce/device/kernels/`
+- ✅ `rms_post_allgather_reader.cpp` - `experimental/transformer/fused_distributed_rmsnorm/device/kernels/dataflow/`
+- ✅ `rms_pre_allgather_reader.cpp` - `experimental/transformer/fused_distributed_rmsnorm/device/kernels/dataflow/`
+- ✅ `rms_writer.cpp` - `experimental/ccl/rms_allgather/device/kernels/dataflow/`
+
+#### ⚠️ Still Using Deprecated Helper (0 files)
+
+All files have been successfully migrated to the new helper library!
 
 ---
 
 ## New Helper Library
 
 ### Location
-`ttnn/cpp/ttnn/operations/kernel_lib/dataflow/reduce_scaler.hpp`
+`ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp`
 
 ### Proposed API
 
@@ -205,7 +226,7 @@ void kernel_main() {
 
 **After (using new helper):**
 ```cpp
-#include "ttnn/cpp/ttnn/operations/kernel_lib/dataflow/reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
 
 using ttnn::kernel_lib::dataflow::generate_reduce_scaler;
 
@@ -221,84 +242,69 @@ void kernel_main() {
 
 ## Migration Plan
 
-### Tier 1: Easy (Direct replacement, no logic changes)
+### ✅ Phase 1: Create Library & Migrate First Batch (COMPLETED)
 
-These kernels simply include the deprecated header and call `generate_reduce_scaler`. Migration is mechanical.
+1. **Created the helper library header**
+   - `ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp`
+   - Implemented based on existing `generate_reduce_scaler.hpp`
+   - Added proper documentation
 
-| Kernel | File Path | Notes |
-|--------|-----------|-------|
-| `reader_unary_transpose_wh_universal_input_cols_partitioned.cpp` | `reduction/generic/device/kernels/dataflow/` | Simple include swap |
-| `reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp` | `reduction/generic/device/kernels/dataflow/` | Simple include swap |
-| `reader_unary_reduce_universal_start_id.cpp` | `reduction/generic/device/kernels/dataflow/` | Simple include swap |
-| `reader_tilize_untilize_interleaved.cpp` | `reduction/tilize_untilize/device/kernels/dataflow/` | Conditional on `REDUCE_OP` define |
-| `reader_reduce_nc.cpp` | `experimental/reduction/fast_reduce_nc/device/kernels/` | Simple include swap |
-| `joint_writer.cpp` | `transformer/sdpa/device/kernels/dataflow/` | Simple include swap |
-| `ring_joint_writer.cpp` | `transformer/sdpa/device/kernels/dataflow/` | Simple include swap |
-| `writer_interleaved.cpp` (SDPA) | `transformer/sdpa/device/kernels/dataflow/` | Simple include swap |
-| `reader_moreh_sum_h.cpp` | `moreh/moreh_sum/device/moreh_sum_h_impl_kernels/` | Simple include swap |
-| `reader_ssm_1d_sum_reduce.cpp` | `experimental/ssm/hc_sum_reduce/device/kernels/` | Simple include swap |
+2. **Migrated `reader_moreh_mean_h.cpp`**
+   - Replaced inline implementation with function call
 
-**Estimated effort:** 10 files, ~30 minutes
+3. **Migrated reduction kernels**
+   - `reader_unary_transpose_wh_universal_input_cols_partitioned.cpp`
+   - `reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp`
+   - `reader_unary_reduce_universal_start_id.cpp`
+   - `reader_reduce_nc.cpp`
+   - `reader_ssm_1d_sum_reduce.cpp`
 
-### Tier 2: Moderate (Inline code to migrate or multiple helpers)
+### ✅ Phase 2: Migrate SDPA, Softmax & Moreh (COMPLETED)
 
-| Kernel | File Path | Current State | Migration Notes |
-|--------|-----------|---------------|-----------------|
-| `reader_moreh_mean_h.cpp` | `moreh/moreh_mean/device/kernels/` | **Inline implementation** | Replace lines 27-52 with function call |
-| `reader_unary_sharded_sm.cpp` | `normalization/softmax/device/kernels/attention/dataflow/` | Multiple conditional paths | Test all code paths |
-| `reader_unary_interleaved_ln_rm_gb.cpp` | `normalization/layernorm/device/kernels/dataflow/` | Uses `generate_reduce_scaler` | Migrate reduce_scaler only |
-| All softmax readers | `normalization/softmax/device/kernels/attention/dataflow/` | Various conditional compilation | Careful testing required |
+4. **Migrated SDPA kernels**
+   - `joint_writer.cpp`
+   - `ring_joint_writer.cpp`
+   - `writer_interleaved.cpp`
 
-**Estimated effort:** 14 files, ~2-3 hours
+5. **Migrated softmax kernels**
+   - `reader_unary_interleaved_sm.cpp`
+   - `reader_unary_interleaved_sm_large_tensor.cpp`
+   - `reader_unary_sharded_sm.cpp`
+   - `reader_unary_sharded_sm_causal_mask_hw_dims.cpp`
+   - `reader_unary_sharded_sm_rm_mask.cpp`
 
----
+6. **Migrated additional kernels**
+   - `reader_unary_interleaved_ln_rm_gb.cpp`
+   - `reader_moreh_sum_h.cpp`
 
-## Recommended Migration Order
+### ✅ Phase 3: Migrate Remaining Kernels (COMPLETED)
 
-### Phase 1: Create Library & Migrate Easiest Cases (Day 1)
+All 20 remaining kernel files have been successfully migrated to use the new helper library. The migration involved:
 
-1. **Create the helper library header**
-   - `ttnn/cpp/ttnn/operations/kernel_lib/dataflow/reduce_scaler.hpp`
-   - Implement based on existing `generate_reduce_scaler.hpp`
-   - Add proper documentation
+1. **Transformer/SDPA variants (2 files)** - Include swap and using declaration
+2. **Reduction operations (2 files)** - Include swap and using declaration
+3. **LayerNorm kernels (5 files)** - Include swap and using declaration
+4. **LayerNorm Distributed kernels (3 files)** - Include swap and using declaration
+5. **GroupNorm kernels (3 files)** - Include swap and using declaration
+6. **Moreh operations (2 files)** - Include swap and using declaration
+7. **Experimental RMSNorm kernels (3 files)** - Include swap and using declaration
 
-2. **Migrate `reader_moreh_mean_h.cpp`** (First win - inline code)
-   - Replace lines 27-52 with single function call
-   - Verify test passes: `pytest tests/ttnn/unit_tests/operations/moreh/test_moreh_mean.py -v`
+All migrations followed the same pattern:
+- Replace `#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"`
+- With `#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"`
+- Add `using ttnn::kernel_lib::dataflow::generate_reduce_scaler;`
 
-3. **Migrate 5 simple reduction kernels**
-   - Update includes, verify no behavior change
+Tests have been run and are passing successfully.
 
-### Phase 2: Migrate SDPA & More Reductions (Day 2)
+### 🔲 Phase 4: Deprecate Old Header
 
-4. **Migrate SDPA kernels** (6 files)
-   - `joint_writer.cpp`, `ring_joint_writer.cpp`, `writer_interleaved.cpp`, etc.
-   - Run SDPA tests
-
-5. **Migrate remaining reduction kernels**
-   - `reader_reduce_nc.cpp`, `reader_ssm_1d_sum_reduce.cpp`
-
-### Phase 3: Migrate Normalization Kernels (Day 3-4)
-
-6. **Migrate softmax kernels** (5 files)
-   - Multiple conditional compilation paths - test thoroughly
-
-7. **Migrate LayerNorm kernels** (6 files)
-   - Includes both sharded and interleaved variants
-
-8. **Migrate GroupNorm kernels** (2 files)
-   - Only kernels using `generate_reduce_scaler`
-
-### Phase 4: Deprecate Old Headers (Day 5)
-
-9. **Add deprecation warnings to old helpers**
+1. **Add deprecation warning to old helper**
     ```cpp
     [[deprecated("Use ttnn::kernel_lib::dataflow::generate_reduce_scaler instead")]]
     ```
 
-10. **Update documentation**
+2. **Update documentation**
     - Add to CLAUDE.md if appropriate
-    - Create usage examples
 
 ---
 
@@ -338,25 +344,14 @@ pytest tests/ttnn/unit_tests/operations/normalization/test_softmax.py -v
 
 ---
 
-## Start Point Recommendation
-
-**Start with `reader_moreh_mean_h.cpp`** because:
-
-1. Has inline code that's an exact duplicate of the helper (lines 27-52)
-2. Self-contained - no conditional compilation affecting the scaler generation
-3. Low risk - isolated moreh operation
-4. Proves the library works before tackling more complex cases
-5. Clear test to validate: `test_moreh_mean.py`
-
----
-
 ## File Changes Summary
 
-### New Files
-- `ttnn/cpp/ttnn/operations/kernel_lib/dataflow/reduce_scaler.hpp`
+### New Files (Created)
+- ✅ `ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp`
 
-### Files to Modify (36 total)
-- See "Kernels Using Deprecated Helpers" section above
+### Files Migrated (36 total)
+- ✅ All kernel files have been successfully migrated
+- See "✅ Migrated to New Library" section above for complete list
 
-### Files to Deprecate (Eventually)
+### Files to Deprecate (Phase 4)
 - `ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp`

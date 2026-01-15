@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 #include <tt-metalium/constants.hpp>
@@ -72,7 +72,7 @@ void kernel_main() {
     constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
 
     // Generate constant tiles for layernorm compute
-    generate_reduce_scaler(reduce_scalar_cb, scalar_value);
+    ttnn::kernel_lib::dataflow::generate_reduce_scaler(reduce_scalar_cb, scalar_value);
     generate_bcast_col_scalar(epsilon_cb, epsilon_value);
 
     if constexpr (fuse_rope) {

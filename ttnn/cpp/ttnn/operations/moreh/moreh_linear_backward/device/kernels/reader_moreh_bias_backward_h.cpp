@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+
 void kernel_main() {
     ArgFetcher arg_fetcher;
     const uint32_t src0_addr = arg_fetcher.get_next_arg_val<uint32_t>();
@@ -22,7 +23,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_scaler = 1;
     constexpr uint32_t cb_id_mask_h_w = 2;
 
-    generate_reduce_scaler(cb_id_scaler, scaler);
+    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_id_scaler, scaler);
 
     if (do_mask_h || do_mask_w) {
         generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);
