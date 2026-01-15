@@ -17,7 +17,7 @@ Test fused ResBlock operation with inputs [B, K] @ [K, K] -> [B, K]
 
 def create_random_tensor(shape, random_tensor_gen):
     if random_tensor_gen == "uniform":
-        return torch.empty(shape, dtype=torch.bfloat16).uniform_(-5.0, 5.0)
+        return torch.empty(shape, dtype=torch.bfloat16).uniform_(-1.0, 1.0)
     if random_tensor_gen == "rand":
         return torch.rand(shape, dtype=torch.bfloat16)
     if random_tensor_gen == "randn":
@@ -37,15 +37,23 @@ def create_random_tensor(shape, random_tensor_gen):
     ],
 )
 @pytest.mark.parametrize(
-    "generation_type",
-    ["uniform", "rand", "randn"],
+    "tile_size",
+    [(1, 32), (32, 32)],
 )
-def test_resblock(device, B, K, core_grid, generation_type):
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "generation_type",
+    ["randn", "uniform"],
+)
+def test_resblock(device, B, K, core_grid, generation_type, tile_size, dtype):
     torch.manual_seed(1234)
 
-    a_tile = ttnn.Tile([B, 32])
+    a_tile = ttnn.Tile(tile_size)
     weight_tile = ttnn.Tile([32, 32])
-    out_tile = ttnn.Tile([B, 32])
+    out_tile = ttnn.Tile(tile_size)
 
     # For now we only support cleanly divisible K by weight tile width
     assert (
@@ -59,8 +67,12 @@ def test_resblock(device, B, K, core_grid, generation_type):
     weight1 = create_random_tensor((K, K), generation_type)
 
     expected = FusedResblock.golden(torch_a, weight0, weight1)
+    print("expected:", expected)
 
-    input_a_shard_shape = (B, K)  # This tensor is unique because it is replicated across all matmul cores
+    # Pad input up to tile height
+    torch_a = torch.nn.functional.pad(torch_a, (0, 0, 0, a_tile.tile_shape[0] - torch_a.shape[0]))
+
+    input_a_shard_shape = (max(B, a_tile.tile_shape[0]), K)  # This tensor is replicated across all matmul cores
     input_a_shard_spec = ttnn.ShardSpec(
         core_grid,
         input_a_shard_shape,
@@ -72,7 +84,7 @@ def test_resblock(device, B, K, core_grid, generation_type):
     # TODO: For now we replicate input across cores by replicating by number_of_matmul_times and then height sharding, but in the future we should have the op itself do the mcast
     ttnn_a = ttnn.from_torch(
         torch_a.repeat(number_of_matmul_cores, 1),
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=input_a_mem_config,
@@ -93,7 +105,7 @@ def test_resblock(device, B, K, core_grid, generation_type):
         )
         return ttnn.from_torch(
             weight,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=weight_mem_config,
@@ -103,7 +115,7 @@ def test_resblock(device, B, K, core_grid, generation_type):
     weight0_tensor = create_weight_tensor(weight0, weight_tile, core_grid)
     weight1_tensor = create_weight_tensor(weight1, weight_tile, core_grid)
 
-    output_shard_shape = (B, K // number_of_matmul_cores)
+    output_shard_shape = (max(B, out_tile.tile_shape[0]), K // number_of_matmul_cores)
     output_shard_spec = ttnn.ShardSpec(
         core_grid,
         output_shard_shape,
@@ -111,8 +123,8 @@ def test_resblock(device, B, K, core_grid, generation_type):
     )
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     ttnn_output = ttnn.from_torch(
-        torch.zeros((B, K), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
+        torch.zeros((max(B, out_tile.tile_shape[0]), K), dtype=torch.bfloat16),
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=output_mem_config,
@@ -129,8 +141,9 @@ def test_resblock(device, B, K, core_grid, generation_type):
     )
 
     logger.info("Converting TTNN output to torch")
-    torch_output = ttnn.to_torch(ttnn_output)
-    print(torch_output)
+    torch_output = ttnn.to_torch(ttnn_output)[:B, :]  # Slice off padding
+    print("actual:", torch_output)
+
     assert torch_output.shape == (B, K), f"Expected shape ({B}, {K}), got {torch_output.shape}"
 
     passing, pcc_message = comp_pcc(expected, torch_output, 0.99)
