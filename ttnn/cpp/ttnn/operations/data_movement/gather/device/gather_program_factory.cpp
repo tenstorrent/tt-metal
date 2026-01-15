@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::data_movement::gather::program {
+namespace ttnn::prim {
 // Single row - single core
 GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySingleRowSingleCore::create(
     const GatherParams& attributes, const GatherInputs& tensor_args, tensor_return_value_t& output_tensor) {
@@ -347,4 +347,4 @@ void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
         gather_writer_runtime_args[1] = output_tensor_buffer->address();
     }
 }
-}  // namespace ttnn::operations::data_movement::gather::program
+}  // namespace ttnn::prim

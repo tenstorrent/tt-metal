@@ -8,7 +8,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::gather {
+namespace ttnn::prim {
 
 constexpr uint32_t WT_THRESHOLD = 60;
 
@@ -23,9 +23,9 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
 
     if (Wt_input > WT_THRESHOLD || Wt_index > WT_THRESHOLD) {
         // Use GatherProgramFactorySingleRowMultiCore for larger Wt
-        return gather::program::GatherProgramFactorySingleRowMultiCore{};
+        return GatherProgramFactorySingleRowMultiCore{};
     }
-    return gather::program::GatherProgramFactorySingleRowSingleCore{};
+    return GatherProgramFactorySingleRowSingleCore{};
 }
 
 void GatherDeviceOperation::validate_on_program_cache_hit(
@@ -130,17 +130,13 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<GatherDeviceOperation::tensor
 GatherDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*op_attr*/, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input_tensor = inputs.input_tensor;
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
+    int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
 }
 
-}  // namespace ttnn::operations::data_movement::gather
-
-namespace ttnn::prim {
-
-ttnn::operations::data_movement::gather::tensor_return_value_t gather(
+ttnn::prim::tensor_return_value_t gather(
     const Tensor& input_tensor,
     const int8_t dim,
     const Tensor& input_index_tensor,
@@ -148,7 +144,7 @@ ttnn::operations::data_movement::gather::tensor_return_value_t gather(
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& output_tensors,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::operations::data_movement::gather::GatherDeviceOperation;
+    using OperationType = ttnn::prim::GatherDeviceOperation;
 
     auto operation_attributes =
         OperationType::operation_attributes_t{dim, sparse_grad, output_memory_config, sub_core_grids};
