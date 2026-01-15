@@ -501,10 +501,6 @@ if __name__ == "__main__":
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
 
-    if args.tag == "ci-main":
-        logger.error("The ci-main tag is reserved for CI only.")
-        exit(1)
-
     logger.info(f"Running current generation with tag: {SWEEPS_TAG}.")
     logger.info("Vectors will be exported to: tests/sweep_framework/vectors_export/")
 
