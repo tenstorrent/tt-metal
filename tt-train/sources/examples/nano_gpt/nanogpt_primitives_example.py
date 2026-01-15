@@ -879,14 +879,16 @@ def main():
         print(f"Using TT_METAL_RUNTIME_ROOT={os.environ.get('TT_METAL_RUNTIME_ROOT')}")
     print()
 
-    configs_root = f"{get_tt_metal_home()}/tt-train/configs"
+    tt_train_root = f"{get_tt_metal_home()}/tt-train"
+    configs_root = f"{tt_train_root}/configs"
     try:
         print(f"Loading training config from: {args.config}")
         yaml_config = load_config(args.config, f"{configs_root}/training_configs")
         training_config = TrainingConfig(yaml_config)
+        # Use tt_train_root as base since C++ uses paths like "configs/model_configs/..."
         if training_config.model_config:
             print(f"Loading model config from: {training_config.model_config}")
-            model_yaml = load_config(training_config.model_config, configs_root)
+            model_yaml = load_config(training_config.model_config, tt_train_root)
             model_config = parse_model_config(model_yaml)
         else:
             print("Warning: No model_config specified in training config")
