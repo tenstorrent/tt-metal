@@ -18,7 +18,7 @@ struct MeshProgramDescriptor {
 
     // ProgramDescriptor too large for reflection inline storage.
     static constexpr auto attribute_names = std::forward_as_tuple("num_mesh_programs");
-    auto attribute_values() const { return std::forward_as_tuple(mesh_programs.size()); }
+    auto attribute_values() const { return std::make_tuple(mesh_programs.size()); }
 };
 
 }  // namespace tt::tt_metal::experimental
