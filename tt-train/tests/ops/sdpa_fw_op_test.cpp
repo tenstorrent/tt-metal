@@ -39,6 +39,75 @@ protected:
     }
 };
 
+// Error analysis utility function (static to avoid multiple definition with sdpa_bw_op_test.cpp)
+static void print_error_analysis(
+    const xt::xarray<float>& result,
+    const xt::xarray<float>& groundtruth,
+    const std::pair<float, float> threshold,  // {atol, rtol}
+    const size_t num_elements_to_print,
+    const std::string& name) {
+    assert(result.shape() == groundtruth.shape() && "Tensors must have the same shape");
+
+    const double atol = static_cast<double>(threshold.first);
+    const double rtol = static_cast<double>(threshold.second);
+    const size_t total_elements = result.size();
+    const auto shape = result.shape();
+
+    // Compute statistics using vectorized operations
+    const xt::xarray<float> abs_diff = xt::abs(result - groundtruth);
+    const float mean_error = xt::mean(abs_diff)();
+    const float mse = xt::mean(xt::square(abs_diff))();
+    const float max_diff = xt::amax(abs_diff)();
+
+    // Print statistics
+    fmt::print("=== Error Analysis: {} ===\n", name);
+    fmt::print("Shape: {}\n", shape);
+    fmt::print("Total elements: {}\n", total_elements);
+    fmt::print("Mean Absolute Error: {:.6e}\n", mean_error);
+    fmt::print("Mean Squared Error (MSE): {:.6e}\n", mse);
+    fmt::print("Max absolute difference: {:.6e}\n", max_diff);
+    fmt::print("Threshold: atol={:.6e}, rtol={:.6e}\n\n", atol, rtol);
+
+    // Find and print first k elements where error exceeds threshold
+    fmt::print("First {} elements where error exceeds threshold:\n", num_elements_to_print);
+    fmt::print("(index: result_val, groundtruth_val, abs_diff, threshold)\n");
+
+    size_t error_count = 0;
+
+    for (size_t b = 0; b < shape[0]; ++b) {
+        for (size_t h = 0; h < shape[1]; ++h) {
+            for (size_t s = 0; s < shape[2]; ++s) {
+                for (size_t d = 0; d < shape[3]; ++d) {
+                    const double result_val = static_cast<double>(result(b, h, s, d));
+                    const double gt_val = static_cast<double>(groundtruth(b, h, s, d));
+                    const double diff = std::abs(result_val - gt_val);
+                    const double tolerance = std::max(atol, rtol * std::abs(gt_val));
+                    const bool is_close =
+                        (diff <= atol || diff <= rtol * std::max(std::abs(result_val), std::abs(gt_val)));
+                    if (!is_close) {
+                        if (error_count <= num_elements_to_print) {
+                            fmt::print(
+                                "[{},{},{},{}]: {:.3e}, {:.3e}, {:.3e}, {:.3e}\n",
+                                b,
+                                h,
+                                s,
+                                d,
+                                result_val,
+                                gt_val,
+                                diff,
+                                tolerance);
+                        }
+                        error_count++;
+                    }
+                }
+            }
+        }
+    }
+
+    fmt::print(" Total elements exceeding threshold: {}\n", error_count);
+    fmt::print("=== End Error Analysis ===\n\n");
+}
+
 xt::xarray<float> generate_mask(const xt::xarray<float>& query) {
     auto shape = query.shape();
     size_t S = shape[2];
@@ -468,6 +537,7 @@ struct SDPATestConfig {
     uint32_t key_value_dim;
     uint32_t num_query_heads;
     uint32_t num_key_heads;
+    bool is_mask_causal = false;  // true = generate causal mask on-the-fly, false = use attn_mask tensor
     float dropout_prob = 0.0F;
     float result_atol = 2e-2F;
     float result_rtol = 2e-2F;
@@ -515,16 +585,25 @@ void run_sdpa_test(const SDPATestConfig& config) {
     auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
     auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
     auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-    auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
     const bool return_intermediates = true;
 
+    // For is_mask_causal=true: kernel generates mask on-the-fly, we pass std::nullopt
+    // For is_mask_causal=false: we pass attn_mask tensor to kernel
+    std::optional<ttnn::Tensor> kernel_mask = std::nullopt;
+    if (!config.is_mask_causal) {
+        kernel_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
+    }
+
     // Run SDPA kernel with new interface - this is our reference implementation
-    auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, config.dropout_prob, return_intermediates);
+    auto result = ttml::metal::sdpa_fw(
+        query, key, value, kernel_mask, config.is_mask_causal, config.dropout_prob, return_intermediates);
     xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());  // Kernel returns (B, H, S, D) - heads NOT fused
     xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
 
     // Run composite SDPA implementation with split tensors - output is (B, H, S, D)
-    auto composite_result_split = composite_sdpa_fw(query, key, value, attn_mask);
+    // Composite always needs the mask tensor for comparison (even when kernel generates it on-the-fly)
+    auto attn_mask_device = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
+    auto composite_result_split = composite_sdpa_fw(query, key, value, attn_mask_device);
     xt::xarray<float> composite_result_xtensor = core::to_xtensor(composite_result_split[0]);  // Already (B, H, S, D)
     xt::xarray<float> composite_interm_xtensor = core::to_xtensor(composite_result_split[1]);
 
@@ -545,6 +624,12 @@ void run_sdpa_test(const SDPATestConfig& config) {
     float mse_kernel_vs_float = compute_mse(result_xtensor, float_result);
     float mse_composite_vs_float = compute_mse(composite_result_xtensor, float_result);
     float mse_kernel_vs_composite_interm = compute_mse(interm_xtensor, composite_interm_xtensor);
+
+    // Print error analysis for debugging
+    const auto threshold = std::make_pair(config.result_atol, config.result_rtol);
+    print_error_analysis(result_xtensor, float_result, threshold, 50, config.test_name + " Kernel vs Float");
+    print_error_analysis(
+        result_xtensor, composite_result_xtensor, threshold, 50, config.test_name + " Kernel vs Composite");
 
     // Primary validation: Kernel vs Composite (most reliable - both use same implementation approach)
     EXPECT_TRUE(xt::allclose(result_xtensor, composite_result_xtensor, config.result_atol, config.result_rtol))
@@ -598,6 +683,51 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SingleHead) {
         .num_query_heads = 1U,
         .num_key_heads = 1U,
         .test_name = "SingleHead_1H_1KV"};
+    run_sdpa_test(config);
+}
+
+// =============================================================================
+// CAUSAL MASK TESTS - Testing on-the-fly causal mask generation
+// =============================================================================
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_Small) {
+    // Simple causal mask test with small shapes
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 64U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .is_mask_causal = true,
+        .test_name = "CausalMask_Small_2H"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleHead) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 64U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .is_mask_causal = true,
+        .test_name = "CausalMask_SingleHead"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
+    // Single tile test (32 seq len = 1 tile row) - everything on one core, simplest case
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 32U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .is_mask_causal = true,
+        .test_name = "CausalMask_SingleTile"};
     run_sdpa_test(config);
 }
 
@@ -751,7 +881,7 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
         auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
 
-        auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, 0.0F, false);
+        auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, false, 0.0F, false);
 
         EXPECT_TRUE(result[0].has_value()) << "Main result should always be present";
         EXPECT_FALSE(result[1].has_value()) << "Intermediate should be null when return_intermediates=false";
@@ -769,7 +899,7 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
         auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
 
-        auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, 0.0F, true);
+        auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, false, 0.0F, true);
 
         EXPECT_TRUE(result[0].has_value()) << "Main result should be present";
         EXPECT_TRUE(result[1].has_value()) << "Intermediate should be present when return_intermediates=true";

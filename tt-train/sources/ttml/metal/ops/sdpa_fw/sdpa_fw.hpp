@@ -14,7 +14,8 @@ struct SDPAForwardOperation {
         const ttnn::Tensor& key,
         const ttnn::Tensor& value,
         const std::optional<ttnn::Tensor>& mask,  // attention mask
-        const float dropout_probability = 0.0F,   // default value
+        const bool is_mask_causal = true,
+        const float dropout_probability = 0.0F,  // default value
         const bool return_intermediates = false);
 };
 

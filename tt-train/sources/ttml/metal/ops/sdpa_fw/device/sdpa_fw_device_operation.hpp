@@ -39,6 +39,7 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
     const std::optional<ttnn::Tensor>& mask,
+    const bool is_mask_causal = true,
     const float dropout_probability = 0.0F,
     const bool return_intermediates = false,
     const std::optional<ttnn::Tensor>& preallocated_intermediate = std::nullopt,

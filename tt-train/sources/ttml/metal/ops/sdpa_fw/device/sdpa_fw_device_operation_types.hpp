@@ -10,6 +10,7 @@ namespace ttml::metal::ops::sdpa_fw::device {
 
 struct operation_attributes_t {
     bool return_intermediates{false};
+    bool is_mask_causal{true};
     float dropout_probability{0.0F};  // default value
 };
 

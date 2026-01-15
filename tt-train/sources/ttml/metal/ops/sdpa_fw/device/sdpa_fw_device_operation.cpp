@@ -268,6 +268,7 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
     const std::optional<ttnn::Tensor>& mask,
+    const bool is_mask_causal,
     const float dropout_probability,
     const bool return_intermediates,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
@@ -275,7 +276,9 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     using OperationType = ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .return_intermediates = return_intermediates, .dropout_probability = dropout_probability};
+        .return_intermediates = return_intermediates,
+        .is_mask_causal = is_mask_causal,
+        .dropout_probability = dropout_probability};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query_tensor,
         .key = key_tensor,

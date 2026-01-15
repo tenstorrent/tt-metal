@@ -574,6 +574,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         key,
         value,
         attn_mask,
+        /* is_mask_causal */ false,
         dropout_probability,
         /*return_intermediates=*/true);
 

@@ -262,6 +262,7 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
         key->get_value(),
         value->get_value(),
         mask_tensor,
+        /* is_mask_causal */ false,
         dropout_probability,
         /*return_intermediates=*/true);  // Need intermediates for backward pass
 

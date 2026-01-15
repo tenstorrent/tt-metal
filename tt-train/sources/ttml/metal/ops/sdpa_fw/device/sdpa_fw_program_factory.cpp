@@ -60,6 +60,7 @@ constexpr uint32_t kIntermediateTiles = 2U;  // max_val at col 0, recip_sum_exp 
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
+const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 
 }  // namespace
 
@@ -130,6 +131,10 @@ void assign_per_core_runtime_args(
              num_rows_per_core,
              num_rows_written});
 
+        // Compute kernel: (start_row) - needed for causal mask to know global position
+        auto compute_kernel = core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2;
+        SetRuntimeArgs(program, compute_kernel, core, {num_rows_written});
+
         num_rows_written += num_rows_per_core;
     }
 }
@@ -143,6 +148,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
     const auto& attn_mask = tensor_args.mask;
+    const bool is_mask_causal = args.is_mask_causal;
     /*
     Shape note:
     Q: B x qNH x S x qE
@@ -228,8 +234,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_value = create_circular_buffer(
         program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
 
-    // create mask buffer only if it's going to be used
-    if (use_attn_mask) {
+    // create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
+    if (use_attn_mask || is_mask_causal) {
         [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
             program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
     }
@@ -331,7 +337,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         defines[kReturnIntermediates] = "1";
     }
 
-    if (use_attn_mask) {
+    // CAUSAL_MASK and USE_ATTN_MASK are mutually exclusive:
+    // - CAUSAL_MASK: generate triangular mask on-the-fly (no DRAM read)
+    // - USE_ATTN_MASK: read mask from DRAM tensor
+    if (is_mask_causal) {
+        defines[kCausalMaskDefKey] = "1";
+    } else if (use_attn_mask) {
         defines[kUseAttnMaskDefKey] = "1";
     }
 
@@ -348,7 +359,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         qB,               // num of batches
         scaler,           // sqrt(Et) - sdpa scale factor
         minus_one,        // used to transform mask from 1/0 to 0/-1
-        custom_inf        // used to transform mask from 0/-1 to 0/-1e9F
+        custom_inf,       // used to transform mask from 0/-1 to 0/-1e9F
     };
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
@@ -363,11 +374,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        qWt,             // num tile in inner dim in query(d/TILE_W)
-        St,              // num tile in seq len dim (S/TILE_H)
-        block_size,      // block size (dst_reg_count)
-        qNH,             // number of heads in query
-        heads_per_group  // number of heads per group
+        qWt,              // num tile in inner dim in query(d/TILE_W)
+        St,               // num tile in seq len dim (S/TILE_H)
+        block_size,       // block size (dst_reg_count)
+        qNH,              // number of heads in query
+        heads_per_group,  // number of heads per group
     };
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
@@ -389,7 +400,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         heads_per_group,            // number of heads per group
         scaler,                     // sqrt(Et) - sdpa scaler factor
         minus_one,                  // used to transform mask from 1/0 to 0/-1
-        custom_inf                  // used to transform mask from 0/-1 to 0/-1e9F
+        custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
     };
 
     kernels.compute_group_1 = create_compute_kernel(
@@ -407,7 +418,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             heads_per_group,            // number of heads per group
             scaler,                     // sqrt(Et) - sdpa scaler factor
             minus_one,                  // used to transform mask from 1/0 to 0/-1
-            custom_inf                  // used to transform mask from 0/-1 to 0/-1e9F
+            custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
         };
 
         kernels.compute_group_2 = create_compute_kernel(
