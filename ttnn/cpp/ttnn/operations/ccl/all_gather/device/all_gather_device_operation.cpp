@@ -143,28 +143,30 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
 
 ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input_tensor = tensor_args.input_tensor;
+    log_trace(tt::LogOp, "AllGatherDeviceOperation::compute_program_hash is called");
+
     auto subdevice_id = operation_attributes.subdevice_id;
-    auto* mesh_device = input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     if (operation_attributes.sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
     }
-    TT_FATAL(
-        subdevice_core_range_set.num_cores() != 0,
-        "There are no cores available to run ALL Gather after considering sub device and sub core grid");
+
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
         operation_attributes.cluster_axis,
         operation_attributes.memory_config,
-        subdevice_core_range_set,
         operation_attributes.topology,
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
-        input_tensor);
+        subdevice_core_range_set,
+        tensor_args,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::ccl

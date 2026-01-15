@@ -65,21 +65,29 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
 
 tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "StridedAllGatherMinimalMatmulAsync::compute_program_hash is called");
+
+    auto program_factory = select_program_factory(attributes, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<StridedAllGatherMinimalMatmulAsync>(
-        select_program_factory(attributes, tensor_args).index(),
         attributes.strided_all_gather_async_struct.dim,
         attributes.strided_all_gather_async_struct.num_links,
         attributes.strided_all_gather_async_struct.ring_size,
         attributes.strided_all_gather_async_struct.output_mem_config,
         attributes.strided_all_gather_async_struct.topology,
         attributes.strided_all_gather_async_struct.cluster_axis,
+        attributes.strided_all_gather_async_struct.tiles_per_chunk,
         attributes.strided_all_gather_async_struct.num_workers_per_link,
         attributes.strided_all_gather_async_struct.num_buffers_per_channel,
+        attributes.strided_all_gather_async_struct.mm_cores_y,
+        attributes.strided_all_gather_async_struct.mm_block_ht,
+        attributes.strided_all_gather_async_struct.mm_block_wt,
+        attributes.matmul_struct,
         attributes.all_gather_core_grid_offset,
-        tensor_args.input_tensor.logical_shape(),
-        tensor_args.input_tensor.layout(),
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.memory_config());
+        attributes.read_local_slice_from_input,
+        attributes.ag_op,
+        tensor_args,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async
