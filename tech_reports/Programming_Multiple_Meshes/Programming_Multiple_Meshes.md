@@ -1,4 +1,4 @@
-# Multi-Mesh Programming Model
+# Programming Multiple Meshes
 
 ## Contents
 
@@ -38,11 +38,11 @@
 
 ## 1. Overview
 
-The Multi-Mesh programming model enables splitting a Tenstorrent system into multiple independent logical meshes. Each mesh is managed by a separate process, potentially running on a different host. This works well for workloads that partition computation across distinct stages or models.
+Programming multiple meshes enables splitting a Tenstorrent system into multiple independent logical meshes. Each mesh is managed by a separate process, potentially running on a different host. This works well for workloads that partition computation across distinct stages or models.
 
 A mesh is a uniformly connected grid of Tenstorrent devices that work together on computations. Each device on the same mesh has identical memory and runtime state, which allows you to virtualize an arbitrarily sized mesh as a single device. For details on single-mesh programming, tensor distribution, and collective operations (CCL), see [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md).
 
-Conversely, the Multi-Mesh programming model allows each mesh to operate independently. Meshes can have non-uniform runtime state and are managed by independent processes. Meshes communicate through sockets. There's no implicit data sharing. Each process is completely isolated with its own memory space, compiled kernels, and execution state.
+Conversely, programming multiple meshes allows each mesh to operate independently. Meshes can have non-uniform runtime state and are managed by independent processes. Meshes communicate through sockets. There's no implicit data sharing. Each process is completely isolated with its own memory space, compiled kernels, and execution state.
 
 ### 1.1 When to Use Multi-Mesh
 
@@ -553,7 +553,7 @@ The receiver must pre-allocate the output tensor before calling `recv_async`. Th
 
 ### 7.4 Intra-Process Sockets
 
-For sockets between two MeshDevices in the same process (e.g., local pipeline stages), use `create_socket_pair`. This bypasses the distributed context since both endpoints are local. Useful for testing multi-mesh logic without launching multiple processes.
+For sockets between two MeshDevices in the same process (e.g., local pipeline stages), use `create_socket_pair`. This bypasses the distributed context since both endpoints are local. Useful for testing Multi-Mesh logic without launching multiple processes.
 
 ```python
 # For intra-process, create SocketConfig without sender_rank/receiver_rank
