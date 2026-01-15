@@ -120,13 +120,8 @@ void test_raw_host_memory_pointer() {
                 .host_data(dst)};
         a_dev.device()->mesh_command_queue().enqueue_read_shards(read_transfers, a_dev.mesh_buffer(), true);
     };
-    auto copy_tensor_to_host_tensor_buffer = [&copy_tensor_to_host_memory_buffer](
-                                                 Tensor& a_cpu_dst, const Tensor& a_dev) {
-        auto dst_host_buffer = tt::tt_metal::host_buffer::get_host_buffer(a_cpu_dst);
-        copy_tensor_to_host_memory_buffer(dst_host_buffer.view_bytes().data(), a_dev);
-    };
 
-    copy_tensor_to_host_tensor_buffer(tensor_for_printing, c_dev);
+    tt::tt_metal::tensor_impl::copy_to_host(c_dev, tensor_for_printing);
 
     // Check that cpu tensor has correct data
     bfloat16 output_value = 2.0f;
@@ -171,16 +166,11 @@ void test_raw_host_memory_pointer() {
     }
 
     Tensor d_dev = a_dev;
-    auto d_cpu_buffer = tt::tt_metal::host_buffer::get_host_buffer(d_cpu);
-    std::vector<tt::tt_metal::distributed::ShardDataTransfer> write_transfers = {
-        tt::tt_metal::distributed::ShardDataTransfer{
-            *tt::tt_metal::distributed::MeshCoordinateRange(d_dev.device()->shape()).begin()}
-            .host_data(const_cast<void*>(static_cast<const void*>(d_cpu_buffer.view_bytes().data())))};
-    d_dev.device()->mesh_command_queue().enqueue_write_shards(d_dev.mesh_buffer(), write_transfers, false);
+    tt::tt_metal::tensor_impl::copy_to_device(d_cpu, d_dev);
 
     Tensor e_dev = ttnn::add(c_dev, d_dev);
 
-    copy_tensor_to_host_tensor_buffer(tensor_for_printing, e_dev);
+    tt::tt_metal::tensor_impl::copy_to_host(e_dev, tensor_for_printing);
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_FATAL(element == bfloat16(10.0f), "Element does not match expected bfloat16(10.0f)");
