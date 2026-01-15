@@ -78,7 +78,7 @@ jobs:
           cd tests/python_tests/
 
           echo "Compiling Quasar..."
-          pytest --compile-producer -n 10 \
+          pytest -q --compile-producer -n 40 \
                 -m "${{ inputs.pytest_markers }}" \
                 --splits $TEST_SPLITS --group ${{ matrix.test_group }} \
                 --override-ini="addopts=-v" --tb=short --timeout=60 \

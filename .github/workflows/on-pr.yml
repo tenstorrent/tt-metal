@@ -177,8 +177,8 @@ jobs:
             needs.detect-changes.outputs.quasar == 'true' }}
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
-      runs_on: ubuntu-latest
-      test_splits: 8
+      runs_on: tt-ubuntu-2204-xlarge-stable
+      test_splits: 1
       pytest_markers: "quasar"
 
   perf-tests:
