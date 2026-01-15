@@ -17,9 +17,12 @@ from models.common.utility_functions import torch_random
 @pytest.mark.parametrize(
     "input_shape, block_id, transformer_block_id, pcc",
     [
+        # 1024x1024 image resolution
         ((1024, 1280), 2, 0, 0.997),
         ((4096, 640), 1, 0, 0.999),
-        ((4096, 640), 1, 1, 0.998),
+        # 512x512 image resolution
+        ((256, 1280), 2, 0, 0.997),
+        ((1024, 640), 1, 0, 0.999),
     ],
 )
 def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, is_ci_env, reset_seeds):
