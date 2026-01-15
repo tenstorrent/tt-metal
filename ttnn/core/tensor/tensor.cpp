@@ -749,9 +749,14 @@ Tensor create_tt_tensor_from_host_data(
         TensorLayout src_tensor_layout(src_dtype, PageConfig(layout, optional_tile), memory_config);
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(dst_layout, optional_tile), memory_config);
 
-        const bool pydata_borrowable = src_dtype == convert_to_data_type<T>();
+        const bool pydata_type_borrowable = src_dtype == convert_to_data_type<T>();
 
-        if (exec_on_device && construct_on_device && pydata_borrowable) {
+        if (exec_on_device && construct_on_device && pydata_type_borrowable) {
+            return Tensor::from_borrowed_data(
+                host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
+        }
+
+        if (layout == Layout::ROW_MAJOR && pydata_type_borrowable && src_dtype == dst_dtype) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
