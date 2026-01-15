@@ -145,10 +145,10 @@ void FabricContext::compute_packet_specifications() {
         }
 
         // Validate 1D topology against memory map limits
-        // ROUTING_PATH_SIZE_1D = 256 bytes / 8 bytes per entry = 32 chips max
+        // ROUTING_PATH_SIZE_1D = 1024 bytes / 16 bytes per entry = 64 chips max (63 hops)
         TT_FATAL(
             max_1d_hops_ <= Limits::MAX_1D_HOPS,
-            "1D routing with {} hops exceeds maximum {} hops (ROUTING_PATH_SIZE_1D = 256 bytes limit).",
+            "1D routing with {} hops exceeds maximum {} hops (ROUTING_PATH_SIZE_1D = 1024 bytes limit).",
             max_1d_hops_,
             Limits::MAX_1D_HOPS);
 
@@ -182,16 +182,20 @@ size_t FabricContext::get_1d_header_size(uint32_t extension_words) const {
     switch (extension_words) {
         case 0: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<0>);
         case 1: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<1>);
+        case 2: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<2>);
+        case 3: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<3>);
         default: TT_THROW("Unsupported extension words: {}", extension_words);
     }
 }
 
 size_t FabricContext::get_2d_header_size(uint32_t route_buffer_size) const {
     // Use explicit template instantiation for compile-time type safety
-    // Only max-capacity tiers per header size (19, 35) to avoid switch bloat
+    // Only max-capacity tiers per header size (19, 35, 51, 67) to avoid switch bloat
     switch (route_buffer_size) {
-        case 19: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<19>);  // 80B header max
-        case 35: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<35>);  // 96B header max
+        case 19: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<19>);  // 80B header, max capacity
+        case 35: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<35>);  // 96B header, max capacity
+        case 51: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<51>);  // 112B header, max capacity
+        case 67: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<67>);  // 128B header, max capacity
         default: TT_THROW("Unsupported 2D route buffer size: {}", route_buffer_size);
     }
 }
