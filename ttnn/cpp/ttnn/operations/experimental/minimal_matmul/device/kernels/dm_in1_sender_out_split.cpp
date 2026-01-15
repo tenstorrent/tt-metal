@@ -125,16 +125,18 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        write_block_sync_granular_split_variadic<M_block_tiles, N_block_tiles>(
+                        cb_wait_front(cb_id_out, out_block_num_tiles);
+                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                        write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
                             outputs_tuple,
                             out0_shape,
-                            N_tiles_per_chunk,
-                            cb_id_out,
+                            out_read_ptr,
                             out_tile_size,
                             defer_write_m_tile,
                             defer_write_m_tile_end,
                             defer_write_n_tile,
                             defer_write_n_tile_end);
+                        cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
                 }
 
@@ -211,16 +213,8 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    write_block_sync_granular_split_variadic<M_block_tiles, N_block_tiles>(
-                        outputs_tuple,
-                        out0_shape,
-                        N_tiles_per_chunk,
-                        cb_id_out,
-                        out_tile_size,
-                        m_tile,
-                        m_tile_end,
-                        n_tile,
-                        n_tile_end);
+                    write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                        outputs_tuple, out0_shape, cb_id_out, out_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
                 }
             }
         }
