@@ -3,10 +3,11 @@ name: "[internal] Produce GitHub Merge Queue data"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes (safe for now)
+    - cron: "*/5 * * * *"   # every 5 minutes
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   produce-merge-queue:
@@ -16,45 +17,27 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Fetch merge queue snapshot from GitHub GraphQL API
+      - name: Fetch open PRs (merge-queue inference)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p generated/merge_queue
 
-          gh api graphql -f query='
-          query {
-            repository(owner: "tenstorrent", name: "tt-metal") {
-              mergeQueue {
-                entries(first: 50) {
-                  nodes {
-                    position
-                    state
-                    enqueuedAt
-                    pullRequest {
-                      number
-                      title
-                      headRefOid
-                      author {
-                        login
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }' > generated/merge_queue/merge_queue.json
+          gh api repos/tenstorrent/tt-metal/pulls \
+            -f state=open \
+            -f per_page=100 \
+            > generated/merge_queue/open_prs.json
 
-          echo "Raw merge queue payload:"
-          cat generated/merge_queue/merge_queue.json
+          echo "Fetched PR snapshot:"
+          jq 'length' generated/merge_queue/open_prs.json
 
       - name: Add timestamp to filename
         run: |
           ts=$(date -u +"%Y%m%dT%H%M%SZ")
-          mv generated/merge_queue/merge_queue.json \
-             generated/merge_queue/${ts}_merge_queue.json
+          mv generated/merge_queue/open_prs.json \
+             generated/merge_queue/${ts}_merge_queue_pr_snapshot.json
 
-          echo "Created file:"
+          echo "Files:"
           ls -lh generated/merge_queue
 
       - name: Upload merge queue data via SFTP
