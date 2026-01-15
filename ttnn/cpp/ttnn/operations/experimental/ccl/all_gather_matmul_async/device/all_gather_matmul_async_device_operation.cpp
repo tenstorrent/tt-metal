@@ -123,11 +123,13 @@ tensor_return_value_t AllGatherMatmulAsyncDeviceOperation::create_output_tensors
 tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherMatmulAsyncDeviceOperation::compute_program_hash is called");
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
+
+    auto subdevice_id = operation_attributes.all_gather_async_attributes.sub_device_id;
+    auto* mesh_device = tensor_args.input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsyncDeviceOperation>(
         operation_attributes.all_gather_async_attributes.dim,
@@ -135,23 +137,17 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
         operation_attributes.all_gather_async_attributes.ring_size,
         operation_attributes.all_gather_async_attributes.output_mem_config,
         operation_attributes.all_gather_async_attributes.topology,
-        operation_attributes.all_gather_async_attributes.sub_device_id.has_value(),
-        operation_attributes.all_gather_async_attributes.sub_device_id.has_value()
-            ? input_tensor.device()->worker_cores(
-                  tt::tt_metal::HalProgrammableCoreType::TENSIX,
-                  operation_attributes.all_gather_async_attributes.sub_device_id.value())
-            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         operation_attributes.all_gather_async_attributes.cluster_axis,
         operation_attributes.all_gather_async_attributes.barrier_semaphore.has_value(),
         operation_attributes.all_gather_async_attributes.using_persistent_buffers,
         operation_attributes.all_gather_async_attributes.chunks_per_sync,
         operation_attributes.all_gather_async_attributes.num_workers_per_link,
         operation_attributes.all_gather_async_attributes.num_buffers_per_channel,
+        operation_attributes.matmul,
         operation_attributes.all_gather_core_grid_offset,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        subdevice_core_range_set,
+        tensor_args,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async
