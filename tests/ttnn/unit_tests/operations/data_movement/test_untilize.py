@@ -843,113 +843,49 @@ def test_untilize_multi_core_nd_sharded_to_interleaved(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True])
+@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize(
-    "tensor_shape",
-    [[3, 128, 160]],
+    "tensor_shape, shard_shape",
+    [
+        ([3, 128, 160], ttnn.Shape([2, 64, 64])),
+    ],
 )
 @pytest.mark.parametrize(
     "input_shard_orientation",
     [
         ttnn.ShardOrientation.ROW_MAJOR,
-        # ttnn.ShardOrientation.COL_MAJOR,
+        ttnn.ShardOrientation.COL_MAJOR,
     ],
 )
 @pytest.mark.parametrize(
-    "num_shard_cores, shard_core_grid",
+    "shard_core_grid",
     [
-        [
-            4,
-            ttnn.CoreRangeSet(
-                {
-                    # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))
-                    # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-                }
-            ),
-        ],
-        # [
-        #     16,
-        #     ttnn.CoreRangeSet(
-        #         {
-        #             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
-        #             ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(7, 2)),
-        #         }
-        #     ),
-        # ],
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))}),
     ],
 )
-def test_dummy_nd_shard_to_interleaved(
+def test_untilize_multi_core_nd_shard_to_interleaved_uneven_input_shard_spec(
     device,
     dtype,
     use_pack_untilize,
     tensor_shape,
+    shard_shape,
     input_shard_orientation,
-    num_shard_cores,
     shard_core_grid,
 ):
     torch.manual_seed(0)
-    # Build an ND shard spec by sharding the last two dimensions across the grid
-    # shard_dims = list(range(len(tensor_shape) - 2, len(tensor_shape)))
-    # tensor_spec = ttnn.TensorSpec(
-    #     shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
-    # ).sharded_across_dims(shard_dims, shard_core_grid, input_shard_orientation)
-    # nd_shard_spec = tensor_spec.memory_config.nd_shard_spec
-    # assert nd_shard_spec is not None
-    # Explicit shard shape instead of inferring dims
-    shard_shape = ttnn.Shape([2, 64, 64])
-    # nd_shard_spec = ttnn.NdShardSpec(
-    #         shard_shape=nd_shard_shape, grid=shard_core_grid, orientation=input_shard_orientation
-    #     )
     tensor_spec = ttnn.TensorSpec(
         shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
     ).sharded(shard_shape, shard_core_grid, orientation=input_shard_orientation)
 
-    input_memory_config = tensor_spec.memory_config
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    nd_shard_spec = tensor_spec.memory_config.nd_shard_spec
-    # if nd_shard_spec is not None:
-    #     num_shards = 1
-    #     for d in nd_shard_spec.grid.shape:
-    #         num_shards *= d
-    #     print(
-    #         f"nd_shard_spec num_shards={num_shards} shard_shape={list(nd_shard_spec.shard_shape)} grid={nd_shard_spec.grid}"
-    #     )
     input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, spec=tensor_spec, device=device)
 
     ttnn_output_tensor = ttnn.untilize(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
-
-    # torch_np = input_torch_tensor.to(torch.float32).cpu().numpy().reshape(-1)
-    # ttnn_np = ttnn.to_torch(ttnn_output_tensor).to(torch.float32).cpu().numpy().reshape(-1)
-    # np.savetxt("torch.txt", torch_np, fmt="%.8f")
-    # np.savetxt("ttnn.txt", ttnn_np, fmt="%.8f")
-
-    #    def dump_faces(tensor: torch.Tensor, path: str):
-    #        arr = tensor.to(torch.float32).cpu().numpy()
-    #        if arr.ndim >= 3 and arr.shape[0] >= 2 and arr.shape[-2] == 64 and arr.shape[-1] == 64:
-    #            with open(path, "w") as f:
-    #             # np.savetxt(f, arr[0].reshape(64, 64), fmt="%.8f")
-    #             #    f.write("\nSECOND FACE\n")
-    #             #    np.savetxt(f, arr[1].reshape(64, 64), fmt="%.8f")
-    #                for face_idx, face in enumerate([arr[0], arr[1]]):
-    #                    mat = face.reshape(64, 64)
-    #                    for row in mat:
-    #                        formatted = [f"{v:.8f}" for v in row]
-    #                        left = " ".join(formatted[:32])
-    #                        right = " ".join(formatted[32:])
-    #                        f.write(f"{left}   {right}\n")
-    #                    if face_idx == 0:
-    #                        f.write("\nSECOND FACE\n")
-    #        else:
-    #            np.savetxt(path, arr.reshape(-1), fmt="%.8f")
-
-    #    dump_faces(input_torch_tensor, "torch_2.txt")
-    #    dump_faces(ttnn.to_torch(ttnn_output_tensor), "ttnn_2.txt")
-
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
 
 
