@@ -8,7 +8,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction::ema {
+namespace ttnn::prim {
 
 struct EmaParams {
     float alpha{};
@@ -22,4 +22,4 @@ struct EmaInputs {
     std::optional<Tensor> optional_output_tensor;
 };
 
-}  // namespace ttnn::operations::reduction::ema
+}  // namespace ttnn::prim
