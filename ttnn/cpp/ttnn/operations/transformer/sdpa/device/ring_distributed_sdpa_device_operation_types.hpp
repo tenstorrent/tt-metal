@@ -19,12 +19,14 @@ struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
     std::optional<SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    std::optional<int64_t> chunk_start_idx;
 };
 
 struct tensor_args_t {
     ttnn::Tensor q;
     ttnn::Tensor k;
     ttnn::Tensor v;
+    std::optional<ttnn::Tensor> page_table;
 };
 
 using spec_return_value_t = ttnn::TensorSpec;
