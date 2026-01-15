@@ -15,13 +15,13 @@ namespace ttnn::operations::sparse_matmul::program {
 
 SparseMatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t
 SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::SparseMatmulParams& operation_attributes,
+    const ttnn::prim::SparseMatmulInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
     using namespace tt;
-    using namespace matmul::utilities;
+    using namespace operations::matmul::utilities;
 
     // from create_mesh-workload
     auto matmul_attributes = ttnn::prim::MatmulParams{
@@ -52,7 +52,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto& b = tensor_args.input_tensors.at(1);
     const auto& sparsity = tensor_args.input_tensors.at(2);
     const auto& output_tensor = tensor_return_value.at(0);
-    auto program_config = std::get<matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
+    auto program_config =
+        std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
     auto compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
     auto in0_block_w = program_config.in0_block_w;
     auto out_subblock_h = program_config.out_subblock_h;
@@ -765,9 +766,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
 void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::SparseMatmulParams& /*operation_attributes*/,
+    const ttnn::prim::SparseMatmulInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 
@@ -802,10 +803,10 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
 
 SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::cached_mesh_workload_t
 SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::create_mesh_workload(
-    const operation_attributes_t& attributes,
+    const ttnn::prim::SparseMatmulParams& attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const ttnn::prim::SparseMatmulInputs& tensor_args,
+    std::vector<Tensor>& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -822,9 +823,9 @@ SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::create_mesh_workload(
 
 void SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::SparseMatmulParams& attributes,
+    const ttnn::prim::SparseMatmulInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
         auto cached_program_proxy = SparseMatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t::proxy(
             program, cached_workload.shared_variables.at(mesh_coord_range));

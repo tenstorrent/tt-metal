@@ -24,15 +24,15 @@ struct SparseMatmulMultiCoreReuseMcast1DProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const ttnn::prim::SparseMatmulParams& operation_attributes,
+        const ttnn::prim::SparseMatmulInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const ttnn::prim::SparseMatmulParams& operation_attributes,
+        const ttnn::prim::SparseMatmulInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 };
 
 struct SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory {
@@ -40,16 +40,16 @@ struct SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& attributes,
+        const ttnn::prim::SparseMatmulParams& attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+        const ttnn::prim::SparseMatmulInputs& tensor_args,
+        std::vector<Tensor>& output);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const ttnn::prim::SparseMatmulParams& operation_attributes,
+        const ttnn::prim::SparseMatmulInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 };
 
 }  // namespace ttnn::operations::sparse_matmul::program
