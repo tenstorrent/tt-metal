@@ -862,7 +862,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
     ttnn::PyDType src_data_type,
-    const std::function<HostBuffer(DataType)>& get_host_data,
+    const std::function<HostBuffer(DataType)>& get_host_tensor,
     std::optional<tt::tt_metal::distributed::MeshDevice*> device,
     std::optional<ttnn::QueueId> cq_id,
     const ttnn::distributed::TensorToMesh* mesh_mapper,
@@ -881,7 +881,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
         pad_value);
 
     auto host_dtype = compute_host_dtype(src_data_type, dst_dtype, memory_config.is_sharded());
-    auto host_buffer = get_host_data(host_dtype);
+    auto host_buffer = get_host_tensor(host_dtype);
     Tensor output = create_tt_tensor_from_host_data(
         host_buffer,
         host_dtype,
