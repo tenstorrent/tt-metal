@@ -26,9 +26,15 @@ Prints JSON matrix to stdout in format required by GitHub Actions.
 
 import os
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+
+# Regex pattern to match mesh suffix: __mesh_<rows>x<cols> at end of string
+# Examples: __mesh_1x1, __mesh_2x4, __mesh_16x2
+# Pattern ensures mesh shape is at the END of the module name
+MESH_SUFFIX_PATTERN = re.compile(r"__mesh_(\d+x\d+)$")
 
 
 def chunk_modules(items, size):
@@ -37,17 +43,46 @@ def chunk_modules(items, size):
 
 
 def get_mesh_shape(module_name):
-    """Extract mesh shape from module name (e.g., 'op__mesh_2x4' -> '2x4')."""
-    if "__mesh_" in module_name:
-        return module_name.split("__mesh_")[1]
+    """
+    Extract mesh shape from module name.
+
+    Args:
+        module_name: Module name possibly containing mesh suffix (e.g., 'op__mesh_2x4')
+
+    Returns:
+        Mesh shape string (e.g., '2x4') or None if no valid mesh suffix found.
+
+    Examples:
+        'op__mesh_2x4' -> '2x4'
+        'op__mesh_1x1' -> '1x1'
+        'op' -> None
+        'op__mesh_invalid' -> None (invalid format)
+        'op__mesh_2x4__mesh_1x1' -> '1x1' (takes last valid suffix)
+    """
+    match = MESH_SUFFIX_PATTERN.search(module_name)
+    if match:
+        return match.group(1)
     return None
 
 
 def strip_mesh_suffix(module_name):
-    """Remove mesh suffix from module name (e.g., 'op__mesh_2x4' -> 'op')."""
-    if "__mesh_" in module_name:
-        return module_name.split("__mesh_")[0]
-    return module_name
+    """
+    Remove mesh suffix from module name.
+
+    Args:
+        module_name: Module name possibly containing mesh suffix (e.g., 'op__mesh_2x4')
+
+    Returns:
+        Module name with mesh suffix removed.
+
+    Examples:
+        'op__mesh_2x4' -> 'op'
+        'op__mesh_1x1' -> 'op'
+        'op' -> 'op'
+        'op__mesh_invalid' -> 'op__mesh_invalid' (invalid format, unchanged)
+        'op__mesh_2x4__mesh_1x1' -> 'op__mesh_2x4' (removes last valid suffix only)
+    """
+    return MESH_SUFFIX_PATTERN.sub("", module_name)
 
 
 def get_lead_models_mesh_runner_config():
