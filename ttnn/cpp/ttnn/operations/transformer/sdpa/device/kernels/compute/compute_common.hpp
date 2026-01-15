@@ -350,14 +350,16 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 }
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile<true>(j, reduce_cb, i);
-                }
-                if (u == 0 && j == 0) {
-                    // If this was the first tile of a row, start accumulating
-                    PACK((llk_pack_reconfig_l1_acc(1)));
+                    if (u == 0 && j == 0) {
+                        // If this was the first tile of a row, start accumulating
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                    }
                 }
             }
             tile_regs_release();
-            PACK((llk_pack_reconfig_l1_acc(0)));
+            if constexpr (do_reduce) {
+                PACK((llk_pack_reconfig_l1_acc(0)));
+            }
         }
         if constexpr (write_result_inplace) {
             // Granular write output to enable following matmul unpack to start early.
