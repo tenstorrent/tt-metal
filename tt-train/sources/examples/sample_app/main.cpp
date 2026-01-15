@@ -21,7 +21,7 @@ void print_tensor(const tt::tt_metal::Tensor& tensor) {
 
     // prepare a buffer to copy the tensor data to the host
     std::vector<bfloat16> data(size);
-    tt::tt_metal::memcpy(device->mesh_command_queue(), data.data(), tensor);
+    tt::tt_metal::copy_tensor_to_host_buffer(device->mesh_command_queue(), data.data(), tensor);
 
     // print the data
     for (size_t dim0 = 0; dim0 < shape[0]; dim0++) {
