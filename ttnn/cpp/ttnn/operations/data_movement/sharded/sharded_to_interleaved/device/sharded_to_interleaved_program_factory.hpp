@@ -7,7 +7,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 
 struct ShardedToInterleavedSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id{};
@@ -34,4 +34,4 @@ struct ShardedToInterleavedProgramFactory {
         sharded_to_interleaved_tensor_return_value_t& output);
 };
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

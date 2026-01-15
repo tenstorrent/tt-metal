@@ -12,7 +12,7 @@ namespace ttnn::prim {
 
 // Adapter factory that wraps the shared factory
 struct ShardedToInterleavedPartialProgramFactory {
-    using shared_variables_t = ttnn::operations::data_movement::program::ShardedToInterleavedSharedVariables;
+    using shared_variables_t = ttnn::prim::ShardedToInterleavedSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(

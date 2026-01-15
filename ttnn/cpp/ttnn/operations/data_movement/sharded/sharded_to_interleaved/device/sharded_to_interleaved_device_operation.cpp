@@ -9,11 +9,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 
 ShardedToInterleavedDeviceOperation::program_factory_t ShardedToInterleavedDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::ShardedToInterleavedProgramFactory{};
+    return ShardedToInterleavedProgramFactory{};
 }
 
 void ShardedToInterleavedDeviceOperation::validate_on_program_cache_miss(
@@ -90,23 +90,22 @@ ShardedToInterleavedDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) const {
-    int ideal_dev_clock_cycles = common_tm_bw_model(tensor_args.input_tensor, output_tensor);
+    int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(tensor_args.input_tensor, output_tensor);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {tensor_args.input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
     return result;
 }
-}  // namespace ttnn::operations::data_movement
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation::tensor_return_value_t sharded_to_interleaved(
+ttnn::prim::ShardedToInterleavedDeviceOperation::tensor_return_value_t sharded_to_interleaved(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation;
+    using OperationType = ttnn::prim::ShardedToInterleavedDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_mem_config = output_mem_config, .output_dtype = output_dtype, .num_slices = 1, .slice_index = 0},
         OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = preallocated_output});
 }
+
 }  // namespace ttnn::prim

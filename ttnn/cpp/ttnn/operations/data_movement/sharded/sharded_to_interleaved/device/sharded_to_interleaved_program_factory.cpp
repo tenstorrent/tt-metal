@@ -16,7 +16,7 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 
 ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgramFactory::create(
     const sharded_to_interleaved_operation_attributes_t& operation_attributes,
@@ -157,7 +157,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
 
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, used_cores, {num_units_per_shard});
 
-    uint32_t starting_idx_h = detail::calculate_starting_idx_h(output, num_slices, slice_index);
+    uint32_t starting_idx_h = operations::data_movement::detail::calculate_starting_idx_h(output, num_slices, slice_index);
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
@@ -289,7 +289,7 @@ void ShardedToInterleavedProgramFactory::override_runtime_arguments(
     auto* dst_buffer = output.buffer();
 
     // Calculate starting_idx_h if partial operation
-    uint32_t starting_idx_h = detail::calculate_starting_idx_h(output, num_slices, operation_attributes.slice_index);
+    uint32_t starting_idx_h = operations::data_movement::detail::calculate_starting_idx_h(output, num_slices, operation_attributes.slice_index);
 
     auto& runtime_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
     for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
@@ -303,4 +303,4 @@ void ShardedToInterleavedProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
 }
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

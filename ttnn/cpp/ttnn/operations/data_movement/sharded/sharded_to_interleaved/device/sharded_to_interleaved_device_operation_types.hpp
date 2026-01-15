@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 
 struct sharded_to_interleaved_operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -24,4 +24,4 @@ struct sharded_to_interleaved_tensor_args_t {
 using sharded_to_interleaved_spec_return_value_t = TensorSpec;
 using sharded_to_interleaved_tensor_return_value_t = Tensor;
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

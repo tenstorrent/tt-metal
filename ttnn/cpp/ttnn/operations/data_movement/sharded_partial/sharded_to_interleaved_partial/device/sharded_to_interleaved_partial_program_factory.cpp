@@ -11,21 +11,20 @@ ShardedToInterleavedPartialProgramFactory::cached_program_t ShardedToInterleaved
     const sharded_to_interleaved_partial_tensor_args_t& tensor_args,
     partial_tensor_return_value_t& output) {
     // Convert partial types to shared types
-    ttnn::operations::data_movement::sharded_to_interleaved_operation_attributes_t shared_attrs{
+    ttnn::prim::sharded_to_interleaved_operation_attributes_t shared_attrs{
         .output_mem_config = operation_attributes.output_mem_config,
         .output_dtype = operation_attributes.output_dtype,
         .num_slices = operation_attributes.num_slices,
         .slice_index = operation_attributes.slice_index,
     };
 
-    ttnn::operations::data_movement::sharded_to_interleaved_tensor_args_t shared_tensor_args{
+    ttnn::prim::sharded_to_interleaved_tensor_args_t shared_tensor_args{
         .input_tensor = tensor_args.input_tensor,
         .preallocated_output = tensor_args.cache_tensor,
     };
 
     // Delegates to shared to interleaved factory
-    return ttnn::operations::data_movement::program::ShardedToInterleavedProgramFactory::create(
-        shared_attrs, shared_tensor_args, output);
+    return ttnn::prim::ShardedToInterleavedProgramFactory::create(shared_attrs, shared_tensor_args, output);
 }
 
 void ShardedToInterleavedPartialProgramFactory::override_runtime_arguments(
@@ -34,20 +33,20 @@ void ShardedToInterleavedPartialProgramFactory::override_runtime_arguments(
     const sharded_to_interleaved_partial_tensor_args_t& tensor_args,
     partial_tensor_return_value_t& output) {
     // Convert partial types to shared types
-    ttnn::operations::data_movement::sharded_to_interleaved_operation_attributes_t shared_attrs{
+    ttnn::prim::sharded_to_interleaved_operation_attributes_t shared_attrs{
         .output_mem_config = operation_attributes.output_mem_config,
         .output_dtype = operation_attributes.output_dtype,
         .num_slices = operation_attributes.num_slices,
         .slice_index = operation_attributes.slice_index,
     };
 
-    ttnn::operations::data_movement::sharded_to_interleaved_tensor_args_t shared_tensor_args{
+    ttnn::prim::sharded_to_interleaved_tensor_args_t shared_tensor_args{
         .input_tensor = tensor_args.input_tensor,
         .preallocated_output = tensor_args.cache_tensor,
     };
 
     // Delegates to shared to interleaved factory
-    ttnn::operations::data_movement::program::ShardedToInterleavedProgramFactory::override_runtime_arguments(
+    ttnn::prim::ShardedToInterleavedProgramFactory::override_runtime_arguments(
         cached_program, shared_attrs, shared_tensor_args, output);
 }
 
