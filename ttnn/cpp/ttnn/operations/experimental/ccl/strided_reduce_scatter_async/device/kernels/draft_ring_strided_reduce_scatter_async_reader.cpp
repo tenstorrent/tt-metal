@@ -111,7 +111,7 @@ void kernel_main() {
     uint32_t M_blocks_per_core = div_up(M_tiles_per_core, mm_block_ht);
     unit32_t M_tiles_per_block = mm_block_ht;
     uint32_t stride_size = M_tiles_per_core;
-    uint32_t num_batches = input_tensor_B;
+    uint32_t batch_size = input_tensor_B;
 
     // TODO: direction --> should the backward direction handle the second half of the chunk?
     // or every other half of the block?
@@ -123,13 +123,13 @@ void kernel_main() {
 
     // the following will need to be defined
     // assume constant
-    // hunk_counts_per_slice (device_block_counts elsewhere) is the number of chunks per slice
+    // chunk_counts_per_slice (device_block_counts elsewhere) is the number of chunks per slice
     const uint32_t chunk_counts_per_slice;
     // device_chunk_width should be equal to, or be a multiple of,
     // the width (in tiles) in a matmul block (mm_block_wt)
     const uint32_t chunk_width;
 
-    for (uint32_t b = 0; b < num_batches; b++) {
+    for (uint32_t b = 0; b < batch_size; b++) {
         if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
         }
@@ -138,7 +138,7 @@ void kernel_main() {
 
         // chunk_counts_per_slice is the total number of chunks that are sent (in all rounds)
         // in strided all gather this is device_k_block_counts[my_chip_id]
-        // but here the chunks must be the same on all devices by definition
+        // but here the chunks must be the same sizes and number on all devices by definition
         // chunk_counts_per_slice will be one if a single chunk is a full strided block row
 
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
@@ -173,36 +173,67 @@ void kernel_main() {
                     uint32_t intermediate_tile_id_start =
                         get_intermediate_chunk_start_tile(actual_slice_idx, strided_chunk_idx);
 
+                    // TODO: compute input_worker_tile_offset and intermediate_worker_tile_offset
+
                     uint32_t actual_chunk_w = device_chunk_width;
                     uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                         input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
                     uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
 
+                    // TODO: compute tiles_in_current_chunk for this direction
+                    // (forward takes the first half, backward takes the second half)
+                    // adjust input_worker_tile_offset in the backward case accordingly
+
+                    // read a chunk from this device's slice into the input CB
                     read_strided_chunk_from_noc_and_put_into_cb(
                         input_chunk_start_tile,
+                        input_worker_tile_offset,
                         cb_in0,
                         tiles_in_current_chunk,
                         actual_chunk_w,
                         actual_chunk_h,
                         stride_size,
-                        tile_granularity,
+                        tile_granularity,  // max_tiles_per_packet?
+                        worker_id,
+                        worker_cores,
+                        input_tensor_addrgen,
                         page_size,
-                        direction);
+                        intermediate_tensor_addrgen,
+                        input_tensor_Wt,
+                        input_tensor_Ht,
+                        output_tensor_Wt,
+                        my_chip_id,
+                        false);
 
                     if (do_reduce) {
-                        // wait for the chunk to be ready in noc
+                        // wait for the chunk from the other device in the direction to be ready in noc
                         wait_for_semaphore(out_ready_sem, sem_target + 1);
                         sem_target++;
+                        // read a chunk from the other device in the direction into the intermediate CB
                         read_strided_chunk_from_noc_and_put_into_cb(
-                            input_chunk_start_tile,
-                            batch_input_tile_offset,
+                            intermediate_chunk_start_tile,
+                            intermediate_worker_tile_offset,
                             cb_intermediate_id,
                             tiles_in_current_chunk,
                             actual_chunk_w,
                             actual_chunk_h,
-                            M_tiles_per_core,
-                            tile_granularity,
-                            direction);
+                            stride_size,
+                            tile_granularity,  // max_tiles_per_packet?
+                            worker_id,
+                            worker_cores,
+                            intermediate_tensor_addrgen,
+                            page_size,
+                            intermediate_tensor_addrgen,
+                            input_tensor_Wt,
+                            input_tensor_Ht,
+                            output_tensor_Wt,
+                            my_chip_id,
+                            false);
+                    }
+                    if (direction) {
+                        slice_idx--;
+                    } else {
+                        slice_idx++;
                     }
                 }
 
