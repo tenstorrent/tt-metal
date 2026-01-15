@@ -68,8 +68,6 @@ class PatchEmbedding:
         Returns:
             (batch_size, num_patches, hidden_size)
         """
-        batch_size = pixel_values.shape[0]
-
         # Apply convolution (ensure dtype compatibility)
         conv_weight = self.conv_weight.to(pixel_values.dtype)
         conv_bias = self.conv_bias.to(pixel_values.dtype) if self.conv_bias is not None else None

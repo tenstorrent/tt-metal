@@ -330,7 +330,7 @@ class PI0ModelTTNN:
 
         # Step 3: Sample initial noise (small tensor - host generation is fine)
         # Note: Using torch.randn ensures PCC compatibility with PyTorch reference
-        # The tensor is tiny (batch * 50 * 7 = 350 floats), so transfer is negligible
+        # The tensor is small (batch * 50 * 32 = 1600 floats), so transfer is negligible
         x_t_torch = torch.randn(batch_size, self.config.action_horizon, self.config.action_dim)
         x_t_ttnn = ttnn.from_torch(
             x_t_torch,

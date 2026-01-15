@@ -64,7 +64,6 @@ class SuffixEmbeddingTTNN:
         # Pad to tile-aligned size (suffix_len typically ~51 -> 64)
         suffix_len = len(att_mask_pattern)
         pad_len = ((suffix_len + 31) // 32) * 32
-        att_mask_padded = att_mask_pattern + [0] * (pad_len - suffix_len)
 
         # Create attention mask using ttnn (avoid torch.tensor)
         # Use ttnn.zeros and fill with ones at specific positions

@@ -24,7 +24,7 @@ from typing import Dict
 
 import torch
 import ttnn
-import tt_lib.fallback_ops as fallback_ops  # Implemented tt_lib.fallback_ops.interpolate to replace torch.nn.functional.interpolate (Native TTNN interpolate does not exist)
+import tt_lib.fallback_ops as fallback_ops  # For position embedding interpolation (native TTNN interpolate not available)
 
 from models.experimental.pi0.common.configs import SigLIPConfig
 from models.experimental.pi0.tt.ttnn_common import tensor_1d_to_2d_ttnn
@@ -184,8 +184,6 @@ class PatchEmbeddingTTNN:
         # Convert to PyTorch if needed (shouldn't happen in normal flow)
         if isinstance(pixel_values, ttnn.Tensor):
             pixel_values = ttnn.to_torch(pixel_values)
-
-        batch_size = pixel_values.shape[0]
 
         # Step 1: Transfer to device in TILE layout directly (B, C, H, W)
         x = ttnn.from_torch(

@@ -237,7 +237,7 @@ def main():
     print(f"✅ Device opened (grid: {grid.x}x{grid.y})")
 
     try:
-        results = run_pi0_inference(
+        _ = run_pi0_inference(
             device,
             batch_size=BATCH_SIZE,
             inference_iterations=NUM_INFERENCE_ITERATIONS,
