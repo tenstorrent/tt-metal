@@ -152,7 +152,7 @@ class PrimitiveEmbedding(AbstractModuleBase):
         self.weight = Parameter(weight_tensor)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        return ttml.ops.embedding.embedding_op(x, self.weight.tensor)
+        return ttml.ops.embedding.embedding(x, self.weight.tensor)
 
     def __call__(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         return self.forward(x)

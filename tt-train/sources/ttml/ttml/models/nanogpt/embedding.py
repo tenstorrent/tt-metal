@@ -26,7 +26,7 @@ class Embedding(AbstractModuleBase):
 
         # Initialize weight tensor: shape [1, 1, num_embeddings, embedding_dim]
         # Embedding weights must be BFLOAT16 - use ml_dtypes.bfloat16 on NumPy side
-        # Weight must be in TILE layout because embedding_op calls untilize on it
+        # Weight must be in TILE layout because embedding calls untilize on it
         weight_shape = (1, 1, num_embeddings, embedding_dim)
         weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(
             ml_dtypes.bfloat16
@@ -45,7 +45,7 @@ class Embedding(AbstractModuleBase):
         Returns:
             Output tensor of embeddings
         """
-        return ttml.ops.embedding.embedding_op(x, self.weight.tensor)
+        return ttml.ops.embedding.embedding(x, self.weight.tensor)
 
     def __call__(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Call the forward method."""

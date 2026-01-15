@@ -124,7 +124,7 @@ void py_module(nb::module_& m) {
 
     {
         auto py_embedding = static_cast<nb::module_>(m.attr("embedding"));
-        py_embedding.def("embedding_op", &ttml::ops::embedding_op, nb::arg("tensor"), nb::arg("weight"));
+        py_embedding.def("embedding", &ttml::ops::embedding_op, nb::arg("tensor"), nb::arg("weight"));
     }
 
     {
