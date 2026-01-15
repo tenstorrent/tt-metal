@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::conv3d::program {
+namespace ttnn::experimental::prim {
 
 Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args, Tensor& tensor_return_value) {
@@ -38,7 +38,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t H_in = input_tensor_shape[2];
     uint32_t W_in = input_tensor_shape[3];
     uint32_t C_in = input_tensor_shape[4];
-    auto [T_out, H_out, W_out] = ttnn::operations::experimental::conv3d::detail::compute_output_dims(
+    auto [T_out, H_out, W_out] = detail::compute_output_dims(
         T_in, H_in, W_in, operation_attributes.padding, operation_attributes.stride, operation_attributes.kernel_size);
     uint32_t C_out = operation_attributes.output_channels;
 
@@ -692,4 +692,4 @@ void Conv3dProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::conv3d::program
+}  // namespace ttnn::experimental::prim
