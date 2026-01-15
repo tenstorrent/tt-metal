@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--json-output=<path>] [--json-pretty]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -23,6 +23,8 @@ Options:
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
     --disable-colors                 Disable colored output. [default: False]
     --disable-progress               Disable progress bars. [default: False]
+    --json-output=<path>             Write structured results to JSON file at the specified path.
+    --json-pretty                    Pretty-print JSON output with indentation. [default: True]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -486,6 +488,11 @@ def parse_arguments(
 FAILURE_CHECKS_LOCK = threading.Lock()
 FAILURE_CHECKS: list[str] = []
 
+# Global JSON output collector (initialized if --json-output is specified)
+JSON_OUTPUT_ENABLED: bool = False
+JSON_SCRIPTS: list[dict] = []
+JSON_START_TIME: float | None = None
+
 
 def log_check(success: bool, message: str) -> None:
     global FAILURE_CHECKS, FAILURE_CHECKS_LOCK
@@ -512,7 +519,9 @@ def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, me
     log_check_location(location, success, formatted_message)
 
 
-def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
+def serialize_result(
+    script: TriageScript | None, result, execution_time: str = "", execution_time_seconds: float = 0.0
+):
     from dataclasses import fields, is_dataclass
 
     if script is not None:
@@ -523,6 +532,11 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
     with FAILURE_CHECKS_LOCK:
         failures = FAILURE_CHECKS
         FAILURE_CHECKS = []
+
+    # Collect JSON result (if enabled)
+    if script is not None:
+        collect_json_result(script, result, execution_time_seconds, failures)
+
     if result is None:
         if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
@@ -599,6 +613,56 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
             generate_row(row, item, fields(item))
             table.add_row(*row)
         console.print(table)
+
+
+def collect_json_result(script: TriageScript, result: Any, execution_time: float, failures: list[str]) -> None:
+    """
+    Collect script result for JSON output.
+
+    Args:
+        script: The script that was executed
+        result: The result returned by script.run()
+        execution_time: Time taken to execute script in seconds
+        failures: List of failure messages from log_check()
+    """
+    global JSON_OUTPUT_ENABLED, JSON_SCRIPTS
+
+    if not JSON_OUTPUT_ENABLED:
+        return
+
+    # Import JSON serializer
+    from json_serializer import serialize_result_to_json
+
+    # Determine script status
+    if script.failed:
+        status = "failed"
+    elif not all(not dep.failed for dep in script.depends):
+        status = "skipped"
+    else:
+        status = "success"
+
+    # Convert failures to check results
+    checks = [{"success": False, "message": msg} for msg in failures]
+
+    # Get verbose level for serialization
+    verbose_level = get_verbose_level()
+
+    # Serialize the result
+    serialized_result = serialize_result_to_json(result, verbose_level) if result is not None else None
+
+    # Create script result dictionary
+    script_result = {
+        "name": script.name,
+        "execution_time_seconds": execution_time,
+        "status": status,
+        "failure_message": script.failure_message,
+        "dependency_failed": not all(not dep.failed for dep in script.depends),
+        "is_data_provider": script.config.data_provider,
+        "checks": checks,
+        "result": serialized_result,
+    }
+
+    JSON_SCRIPTS.append(script_result)
 
 
 def _enforce_dependencies(args: ScriptArguments) -> None:
@@ -735,7 +799,10 @@ class TTTriageError(Exception):
 
 
 def main():
+    from datetime import datetime
+
     triage_start = time()
+    triage_start_datetime = datetime.now()
 
     # Parse only tt-triage script arguments first to initialize logging and console
     parse_arguments(only_triage_script_args=True)
@@ -781,6 +848,13 @@ def main():
     # Parse common command line arguments
     args = parse_arguments(scripts)
 
+    # Initialize JSON output if requested
+    global JSON_OUTPUT_ENABLED, JSON_SCRIPTS, JSON_START_TIME
+    if args["--json-output"] is not None:
+        JSON_OUTPUT_ENABLED = True
+        JSON_SCRIPTS = []
+        JSON_START_TIME = triage_start
+
     # Enforce debugger dependencies, then initialize
     _enforce_dependencies(args)
     context = _init_ttexalens(args)
@@ -817,6 +891,8 @@ def main():
                     total_time += end_time - start_time
                     execution_time = f" [{end_time - start_time:.2f}s]" if args["--print-script-times"] else ""
                     if script.config.data_provider:
+                        # Collect JSON for data provider scripts
+                        collect_json_result(script, result, end_time - start_time, [])
                         if result is None:
                             print()
                             utils.INFO(f"{script.name}{execution_time}:")
@@ -829,17 +905,55 @@ def main():
                             utils.INFO(f"{script.name}{execution_time}:")
                             utils.INFO("  pass")
                     else:
-                        start_time = time()
-                        serialize_result(script, result, execution_time)
-                        end_time = time()
-                        total_time += end_time - start_time
-                        serialization_time += end_time - start_time
+                        serialization_start = time()
+                        serialize_result(script, result, execution_time, end_time - start_time)
+                        serialization_end = time()
+                        total_time += serialization_end - serialization_start
+                        serialization_time += serialization_end - serialization_start
                 progress.advance(scripts_task)
             if args["--print-script-times"]:
                 print()
                 utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
+
+    # Write JSON output if requested
+    if JSON_OUTPUT_ENABLED and args["--json-output"] is not None:
+        try:
+            from json_serializer import write_json_output, create_triage_metadata, create_summary, TriageRunResult
+
+            triage_end = time()
+            execution_duration = triage_end - triage_start
+
+            # Build command string
+            command = " ".join(sys.argv)
+
+            # Create metadata
+            metadata = create_triage_metadata(
+                timestamp=triage_start_datetime, command=command, execution_duration_seconds=execution_duration
+            )
+
+            # Create summary
+            summary = create_summary(JSON_SCRIPTS)
+
+            # Create complete result structure
+            output_data = TriageRunResult(metadata=metadata, scripts=JSON_SCRIPTS, summary=summary)
+
+            # Write to file
+            pretty = args.get("--json-pretty", True)
+            if isinstance(pretty, str):
+                pretty = pretty.lower() not in ("false", "0", "no")
+
+            write_json_output(output_data, args["--json-output"], pretty)
+
+            print()
+            utils.INFO(f"JSON output written to: {args['--json-output']}")
+        except Exception as e:
+            print()
+            utils.ERROR(f"Failed to write JSON output: {e}")
+            import traceback
+
+            utils.DEBUG(traceback.format_exc())
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)
