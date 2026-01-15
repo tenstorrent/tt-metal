@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs
+from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 from models.tt_transformers.tt.rope import RotarySetup
 
@@ -402,13 +402,14 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     # Convert HF QKV weights to Meta format for RoPE compatibility
     reference_state_swizzled = convert_hf_qkv_to_meta_format(reference_state, config.head_dim)
     max_seq_len = getattr(config, "max_position_embeddings", 131072)
+    rope_scaling = rope_scaling_model_factory(hf_config.rope_scaling)
     rope_setup = RotarySetup(
         device=setup["mesh_device"],
         batch_size=1,
         head_dim=config.head_dim,
         max_seq_len=max_seq_len,
         rope_theta=getattr(config, "rope_theta", 10000.0),
-        rope_scaling=None,
+        rope_scaling=rope_scaling,
         datatype=ttnn.bfloat16,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
