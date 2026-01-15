@@ -155,7 +155,9 @@ void kernel_main() {
             static_cast<uint32_t>(1),  // increment 1
             false});                   // flush = false
 
-    // init barrier - multicast to entire ring of workers going in the same direction
+    // pre op barrier
+    // unicast to the opposite core in the direction you're sending
+    // you need the device you're writing to, to have sent you and inc
     uint64_t pre_op_barrier_semaphore_noc_addr_in_pkt = safe_get_noc_addr(
         pre_op_barrier_semaphore_noc0_x, pre_op_barrier_semaphore_noc0_y, pre_op_barrier_semaphore, 0);
     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
