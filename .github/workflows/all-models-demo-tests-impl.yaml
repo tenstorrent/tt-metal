@@ -46,31 +46,37 @@ jobs:
           # Define device-compatible TT-Transformers models
           case "${{ inputs.device-type }}" in
             n150)
-              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "mistral-7b", "phi-3-mini-128k"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "mistral-7b", "qwen2.5-7b", "phi-3-mini-128k"]'
               ;;
             n300)
-              tt_transformers_models='["llama3.2-11b-vision", "qwen2.5-7b", "phi-3-mini-128k"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "phi-3-mini-128k"]'
               ;;
             p100)
-              tt_transformers_models='["llama3.1-8b"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "phi-3-mini-128k"]'
               ;;
             p150)
-              tt_transformers_models='["llama3.1-8b"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "phi-3-mini-128k"]'
               ;;
             p300)
-              tt_transformers_models='["llama3.2-11b-vision", "qwen2.5-7b", "phi-3-mini-128k"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
-            WH-QB)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.2-90b-vision", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b"]'
+            WH-LOUDBOX)
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
+              ;;
+            BH-QB)
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             BH-QB2)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.3-70b", "llama3.2-90b-vision", "qwen3-32b"]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
+              ;;
+            BH-LOUDBOX)
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             WH-6U)
-              tt_transformers_models='[]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             BH-6U)
-              tt_transformers_models='[]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
           esac
 
@@ -101,14 +107,28 @@ jobs:
                 {"name":"mobilenet-v2","test_path":"models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
                 {"name":"unet-vgg19","test_path":"models/demos/wormhole/vgg_unet/demo/demo.py::test_demo","test_args":"","timeout":20},
                 {"name":"ufld-v2","test_path":"models/demos/wormhole/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"mamba-2.8b","test_path":"models/demos/wormhole/mamba/demo/demo.py","test_args":"--input-method=json --input-path=models/demos/wormhole/mamba/demo/prompts.json","timeout":30},
                 {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
                 {"name":"unet-vanilla","test_path":"models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
+                {"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
+                {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
+                {"name":"falcon-7b","test_path":"models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo","test_args":"-k default_mode_1024_stochastic --input-method=json --input-path=models/demos/falcon7b_common/demo/input_data.json","timeout":30}
               ]')
               ;;
             p100)
               standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30}
+                {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
+                {"name":"resnet-50","test_path":"models/demos/blackhole/resnet50/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
+                {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20},
+                {"name":"ufld-v2","test_path":"models/demos/blackhole/ufld_v2/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
+                {"name":"unet-vgg19","test_path":"models/demos/blackhole/vgg_unet/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"vit","test_path":"models/demos/blackhole/vit/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20},
+                {"name":"resnet-50","test_path":"models/demos/blackhole/resnet50/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
+                {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20},
+                {"name":"ufld-v2","test_path":"models/demos/blackhole/ufld_v2/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
+                {"name":"unet-vgg19","test_path":"models/demos/blackhole/vgg_unet/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"vit","test_path":"models/demos/blackhole/vit/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20}
               ]')
               ;;
             p150)
@@ -133,13 +153,44 @@ jobs:
                 {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
                 {"name":"unet-vanilla","test_path":"models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
                 {"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
+                {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30}
               ]')
               ;;
-            WH-QB)
+            WH-LOUDBOX)
               standalone_models=$(jq -nc '[
                 {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
                 {"name":"falcon-40b","test_path":"models/demos/t3000/falcon40b/tests/test_demo.py::test_demo","test_args":"","timeout":45},
                 {"name":"resnet-50","test_path":"models/demos/ttnn_resnet/tests/test_demo.py::test_demo_sample","test_args":"","timeout":20},
+                {"name":"vit","test_path":"models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference","test_args":"","timeout":20},
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"llama3.3-70b","test_path":"models/demos/llama3_70b_galaxy/demo/text_demo.py","test_args":"-k \"performance-batch-32\"","timeout":60},
+                {"name":"mamba-2.8b","test_path":"models/demos/wormhole/mamba/demo/demo.py","test_args":"--input-method=json --input-path=models/demos/wormhole/mamba/demo/prompts.json","timeout":30},
+                {"name":"mobilenet-v2","test_path":"models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
+                {"name":"stable-diffusion","test_path":"models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo","test_args":"--input-path=models/demos/wormhole/stable_diffusion/demo/input_data.json","timeout":30},
+                {"name":"unet-vanilla","test_path":"models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
+                {"name":"falcon-7b","test_path":"models/demos/tg/falcon7b/demo_tg.py::test_demo_multichip","test_args":"-k default_mode_1024_stochastic --input-method=json --input-path=models/demos/tg/falcon7b/input_data_tg.json","timeout":30},
+                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
+                {"name":"ufld-v2","test_path":"models/demos/wormhole/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
+                {"name":"unet-vgg19","test_path":"models/demos/wormhole/vgg_unet/demo/demo.py::test_demo","test_args":"","timeout":20}
+              ]')
+              ;;
+            BH-QB)
+              standalone_models=$(jq -nc '[
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"falcon-40b","test_path":"models/demos/t3000/falcon40b/tests/test_demo.py::test_demo","test_args":"","timeout":45},
+                {"name":"llama3.3-70b","test_path":"models/demos/llama3_70b_galaxy/demo/text_demo.py","test_args":"-k \"performance-batch-32\"","timeout":60},
+                {"name":"mamba-2.8b","test_path":"models/demos/wormhole/mamba/demo/demo.py","test_args":"--input-method=json --input-path=models/demos/wormhole/mamba/demo/prompts.json","timeout":30},
+                {"name":"mobilenet-v2","test_path":"models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
+                {"name":"stable-diffusion","test_path":"models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo","test_args":"--input-path=models/demos/wormhole/stable_diffusion/demo/input_data.json","timeout":30},
+                {"name":"unet-vanilla","test_path":"models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
+                {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
+                {"name":"falcon-7b","test_path":"models/demos/tg/falcon7b/demo_tg.py::test_demo_multichip","test_args":"-k default_mode_1024_stochastic --input-method=json --input-path=models/demos/tg/falcon7b/input_data_tg.json","timeout":30},
+                {"name":"resnet-50","test_path":"models/demos/ttnn_resnet/tests/test_demo.py::test_demo_sample","test_args":"","timeout":20},
+                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
+                {"name":"ufld-v2","test_path":"models/demos/wormhole/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
+                {"name":"unet-vgg19","test_path":"models/demos/wormhole/vgg_unet/demo/demo.py::test_demo","test_args":"","timeout":20},
                 {"name":"vit","test_path":"models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference","test_args":"","timeout":20}
               ]')
               ;;
@@ -147,18 +198,53 @@ jobs:
               standalone_models=$(jq -nc '[
                 {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
                 {"name":"flux.1-dev","test_path":"models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py::test_flux1_pipeline","test_args":"-k \"2x2sp0tp1 and dev and encoder_device and not_traced and yes_use_cache\"","timeout":60},
-                {"name":"wan2.2-t2v-a14b","test_path":"models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py::test_pipeline_inference","test_args":"-k \"1x4sp0tp1 and resolution_480p\"","timeout":60}
+                {"name":"wan2.2-t2v-a14b","test_path":"models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py::test_pipeline_inference","test_args":"-k \"1x4sp0tp1 and resolution_480p\"","timeout":60},
+                {"name":"llama3.3-70b","test_path":"models/demos/llama3_70b_galaxy/demo/text_demo.py","test_args":"-k \"performance-batch-32\"","timeout":60}
+              ]')
+              ;;
+            BH-LOUDBOX)
+              standalone_models=$(jq -nc '[
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"falcon-40b","test_path":"models/demos/t3000/falcon40b/tests/test_demo.py::test_demo","test_args":"","timeout":45},
+                {"name":"llama3.3-70b","test_path":"models/demos/llama3_70b_galaxy/demo/text_demo.py","test_args":"-k \"performance-batch-32\"","timeout":60},
+                {"name":"mamba-2.8b","test_path":"models/demos/wormhole/mamba/demo/demo.py","test_args":"--input-method=json --input-path=models/demos/wormhole/mamba/demo/prompts.json","timeout":30},
+                {"name":"mobilenet-v2","test_path":"models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
+                {"name":"stable-diffusion","test_path":"models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo","test_args":"--input-path=models/demos/wormhole/stable_diffusion/demo/input_data.json","timeout":30},
+                {"name":"unet-vanilla","test_path":"models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
+                {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
+                {"name":"resnet-50","test_path":"models/demos/blackhole/resnet50/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
+                {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20},
+                {"name":"ufld-v2","test_path":"models/demos/blackhole/ufld_v2/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
+                {"name":"unet-vgg19","test_path":"models/demos/blackhole/vgg_unet/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"vit","test_path":"models/demos/blackhole/vit/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20}
               ]')
               ;;
             WH-6U)
               standalone_models=$(jq -nc '[
                 {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
                 {"name":"falcon-7b","test_path":"models/demos/tg/falcon7b/demo_tg.py::test_demo_multichip","test_args":"-k default_mode_1024_stochastic --input-method=json --input-path=models/demos/tg/falcon7b/input_data_tg.json","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/ttnn_resnet/tests/test_demo.py::test_demo_sample","test_args":"","timeout":20}
+                {"name":"resnet-50","test_path":"models/demos/ttnn_resnet/tests/test_demo.py::test_demo_sample","test_args":"","timeout":20},
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"falcon-40b","test_path":"models/demos/t3000/falcon40b/tests/test_demo.py::test_demo","test_args":"","timeout":45},
+                {"name":"llama3.3-70b","test_path":"models/demos/llama3_70b_galaxy/demo_galaxy.py::test_demo","test_args":"","timeout":60},
+                {"name":"mamba-2.8b","test_path":"models/demos/wormhole/mamba/demo/demo.py","test_args":"--input-method=json --input-path=models/demos/wormhole/mamba/demo/prompts.json","timeout":30},
+                {"name":"mobilenet-v2","test_path":"models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
+                {"name":"stable-diffusion","test_path":"models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo","test_args":"--input-path=models/demos/wormhole/stable_diffusion/demo/input_data.json","timeout":30},
+                {"name":"unet-vanilla","test_path":"models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20}
               ]')
               ;;
             BH-6U)
               standalone_models=$(jq -nc '[
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"falcon-40b","test_path":"models/demos/t3000/falcon40b/tests/test_demo.py::test_demo","test_args":"","timeout":45},
+                {"name":"llama3.3-70b","test_path":"models/demos/llama3_70b_galaxy/demo_galaxy.py::test_demo","test_args":"","timeout":60},
+                {"name":"mamba-2.8b","test_path":"models/demos/wormhole/mamba/demo/demo.py","test_args":"--input-method=json --input-path=models/demos/wormhole/mamba/demo/prompts.json","timeout":30},
+                {"name":"mobilenet-v2","test_path":"models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
+                {"name":"stable-diffusion","test_path":"models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo","test_args":"--input-path=models/demos/wormhole/stable_diffusion/demo/input_data.json","timeout":30},
+                {"name":"unet-vanilla","test_path":"models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
                 {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30}
               ]')
               ;;

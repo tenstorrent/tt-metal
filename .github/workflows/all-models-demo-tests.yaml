@@ -15,8 +15,10 @@ on:
           - p100
           - p150
           - p300
-          - wh-qb
+          - wh-loudbox
+          - bh-qb
           - bh-qb2
+          - bh-loudbox
           - wh-6u
           - bh-6u
       regenerate-ttnn-cache:
@@ -123,20 +125,36 @@ jobs:
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
       extra-tag: 'in-service'
 
-  # WH QuietBox Tests (4xN300)
-  wh-quietbox-tests:
-    if: ${{ inputs.device == 'all' || inputs.device == 'wh-qb' }}
+  # WH LoudBox Tests (4xN300)
+  wh-loudbox-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'wh-loudbox' }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
-      device-type: 'WH-QB'
+      device-type: 'WH-LOUDBOX'
       runner-label: 'config-t3000'
       arch: 'wormhole_b0'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # BH QuietBox Tests (4xP300)
+  bh-qb-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'bh-qb' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'BH-QB'
+      runner-label: 'BH-LLMBox'
+      arch: 'blackhole'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+      extra-tag: 'in-service'
 
   # BH QuietBox Tests (2xP300)
   bh-quietbox-tests:
@@ -152,6 +170,22 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # BH LoudBox Tests
+  bh-loudbox-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'bh-loudbox' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'BH-LOUDBOX'
+      runner-label: 'BH-loudbox'
+      arch: 'blackhole'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+      extra-tag: 'in-service'
 
   # WH Galaxy Tests (Wormhole Galaxy 32 chips)
   wh-galaxy-tests:
