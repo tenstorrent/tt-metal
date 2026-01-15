@@ -452,6 +452,33 @@ std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V>& map) 
 }
 
 template <typename T>
+typename std::enable_if_t<std::is_enum_v<T>, std::ostream>& operator<<(std::ostream& os, const T& value) {
+    os << enchantum::scoped::to_string(value);
+    return os;
+}
+
+template <typename T>
+    requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array_v<T>))
+std::ostream& operator<<(std::ostream& os, const T& object) {
+    os << reflect::type_name(object);
+    os << "(";
+
+    reflect::for_each(
+        [&os, &object](auto I) {
+            os << reflect::member_name<I>(object) << "=" << reflect::get<I>(object);
+            if (I < reflect::size(object) - 1) {
+                os << ",";
+            }
+        },
+        object);
+
+    os << ")";
+    return os;
+}
+
+// This template must be placed after the Reflectable operator<< to ensure proper
+// name lookup when printing objects that contain Reflectable fields.
+template <typename T>
 typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostream>& operator<<(
     std::ostream& os, const T& object) {
     if constexpr (detail::supports_to_string_v<T>) {
@@ -485,31 +512,6 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
     } else {
         static_assert(ttsl::concepts::always_false_v<T>, "Type cannot be converted to string");
     }
-    return os;
-}
-
-template <typename T>
-typename std::enable_if_t<std::is_enum_v<T>, std::ostream>& operator<<(std::ostream& os, const T& value) {
-    os << enchantum::scoped::to_string(value);
-    return os;
-}
-
-template <typename T>
-    requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array_v<T>))
-std::ostream& operator<<(std::ostream& os, const T& object) {
-    os << reflect::type_name(object);
-    os << "(";
-
-    reflect::for_each(
-        [&os, &object](auto I) {
-            os << reflect::member_name<I>(object) << "=" << reflect::get<I>(object);
-            if (I < reflect::size(object) - 1) {
-                os << ",";
-            }
-        },
-        object);
-
-    os << ")";
     return os;
 }
 
