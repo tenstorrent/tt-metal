@@ -20,11 +20,11 @@ constexpr const char* SOFTMAX_KERNEL_PATH_ATTENTION =
 
 namespace ttnn::operations::normalization::softmax::program {
 
-// Helper function to add TT_METAL_RECIP_LEGACY_COMPAT define based on program_config
+// Helper function to add RECIP_LEGACY_COMPAT define based on program_config
 inline void add_recip_legacy_compat_define(
     std::map<std::string, std::string>& defines, const SoftmaxProgramConfig& program_config) {
     if (std::visit([](const auto& config) { return config.recip_legacy_compat; }, program_config)) {
-        defines["TT_METAL_RECIP_LEGACY_COMPAT"] = "1";
+        defines["RECIP_LEGACY_COMPAT"] = "true";
     }
 }
 
