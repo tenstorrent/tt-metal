@@ -65,11 +65,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set up virtual environment using uv with centralized Python version
-# Ubuntu 24.04 has Python 3.12 by default, so use that version for compatibility
+# Set up virtual environment using uv
+# Uses the system Python version (3.10 on Ubuntu 22.04, 3.12 on Ubuntu 24.04)
 
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
+RUN umask 000 && uv venv $PYTHON_ENV_DIR
 
 # Make venv writable by all users (allows uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
