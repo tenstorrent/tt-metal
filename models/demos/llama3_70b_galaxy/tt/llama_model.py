@@ -191,11 +191,19 @@ class TtTransformer(LightweightModule):
             self.tt_ccl = self.tt_ccl_decode
 
     def prepare_prefill_inputs_host(
-        self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None, batch_size=1
+        self,
+        tokens,
+        user_id=0,
+        page_table=None,
+        chunk_page_table=None,
+        tt_rot_mats_prefill=None,
+        batch_size=1,
+        start_pos=0,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
+        start_pos: Absolute position in sequence (for prefix caching, indicates where cached tokens end)
         """
 
         tokens = tokens.reshape(1, 1, 1, -1)
@@ -208,27 +216,55 @@ class TtTransformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        # Slice the rot mats to the prefill seqlen
-        if tt_rot_mats_prefill is None and self.tt_rot_mats_prefill is None:
-            if self.args.is_qwen:
-                tt_rot_mats_prefill = get_rot_mats(
-                    head_dim=self.args.head_dim,
-                    device=self.mesh_device,
-                    seq_len=self.args.max_seq_len,
-                    theta=self.args.rope_theta,
-                    rope_scaling=self.args.rope_scaling_factor,
-                )
-            else:
-                tt_rot_mats_prefill = get_prefill_rot_mat(
-                    self.args.head_dim,
-                    self.args.max_seq_len,
-                    self.mesh_device,
-                    seq_len=self.args.max_seq_len,
-                    scale_factor=self.args.rope_scaling_factor,
-                )
-            self.tt_rot_mats_prefill = tt_rot_mats_prefill
+        # Slice rot mats from cached ones if start_pos > 0 (prefix caching)
+        #
+        # Note: tt_rot_mats_prefill are in TILE_LAYOUT and may not support direct slicing.
+        # Instead, we use self.rope_setup.cos_matrix/sin_matrix.
+        if start_pos > 0:
+            # Slice from rope_setup matrices
+            mat_len = self.rope_setup.cos_matrix.shape[2]
+            required_end = start_pos + S
+            slice_start = start_pos
+            slice_end = min(mat_len, required_end)
+
+            cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]
+            sin_slice = self.rope_setup.sin_matrix[:, :, slice_start:slice_end, :]
+
+            # Pad if needed
+            if required_end > mat_len:
+                pad_len = required_end - mat_len
+                padding = [(0, 0)] * 4
+                padding[2] = (0, pad_len)
+                cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
+                sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
+
+            # Convert to TILE_LAYOUT to match expected format
+            cos_slice = ttnn.to_layout(cos_slice, ttnn.TILE_LAYOUT)
+            sin_slice = ttnn.to_layout(sin_slice, ttnn.TILE_LAYOUT)
+
+            tt_rot_mats_prefill = [cos_slice, sin_slice]
         else:
-            tt_rot_mats_prefill = self.tt_rot_mats_prefill
+            # Initialize or get cached rot mats in the TILE_LAYOUT
+            if tt_rot_mats_prefill is None and self.tt_rot_mats_prefill is None:
+                if self.args.is_qwen:
+                    tt_rot_mats_prefill = get_rot_mats(
+                        head_dim=self.args.head_dim,
+                        device=self.mesh_device,
+                        seq_len=self.args.max_seq_len,
+                        theta=self.args.rope_theta,
+                        rope_scaling=self.args.rope_scaling_factor,
+                    )
+                else:
+                    tt_rot_mats_prefill = get_prefill_rot_mat(
+                        self.args.head_dim,
+                        self.args.max_seq_len,
+                        self.mesh_device,
+                        seq_len=self.args.max_seq_len,
+                        scale_factor=self.args.rope_scaling_factor,
+                    )
+                self.tt_rot_mats_prefill = tt_rot_mats_prefill
+            else:
+                tt_rot_mats_prefill = self.tt_rot_mats_prefill
 
         if page_table is not None:
             if batch_size > 1:
@@ -299,16 +335,24 @@ class TtTransformer(LightweightModule):
         return tt_tokens, user_id, page_table, chunk_page_table
 
     def prepare_inputs_prefill(
-        self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None, batch_size=1
+        self,
+        tokens,
+        user_id=0,
+        page_table=None,
+        chunk_page_table=None,
+        tt_rot_mats_prefill=None,
+        batch_size=1,
+        start_pos=0,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
         Its implementation can take advantage of a few other functions which the
         model must implement.
+        start_pos: Absolute position in sequence (for prefix caching, indicates where cached tokens end)
         """
         host_inputs = self.prepare_prefill_inputs_host(
-            tokens, user_id, page_table, chunk_page_table, tt_rot_mats_prefill, batch_size
+            tokens, user_id, page_table, chunk_page_table, tt_rot_mats_prefill, batch_size, start_pos
         )
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
         transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
