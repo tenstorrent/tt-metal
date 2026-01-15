@@ -91,6 +91,7 @@ class QwenImagePipeline:
         self._height = height
         self._width = width
         self._is_fsdp = is_fsdp
+        self._checkpoint_name = checkpoint_name
 
         # Create submeshes based on CFG parallel configuration
         submesh_shape = list(mesh_device.shape)
@@ -183,7 +184,7 @@ class QwenImagePipeline:
         with self.mesh_reshape(self.encoder_device, self.encoder_mesh_shape, synchronize=True):
             logger.info("creating TT-NN text encoder (loading before transformers for memory efficiency)...")
             self._text_encoder = Qwen25VlTokenizerEncoderPair(
-                checkpoint_name,
+                self._checkpoint_name,
                 tokenizer_subfolder="tokenizer",
                 encoder_subfolder="text_encoder",
                 device=self._submesh_devices[self.encoder_submesh_idx],
@@ -239,7 +240,7 @@ class QwenImagePipeline:
         if not cache.initialize_from_cache(
             tt_model=self.transformers[idx],
             torch_state_dict=self._transformer_state_dict,
-            model_name="qwen-image",
+            model_name=self._checkpoint_name,
             subfolder="transformer",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._submesh_devices[idx].shape),
