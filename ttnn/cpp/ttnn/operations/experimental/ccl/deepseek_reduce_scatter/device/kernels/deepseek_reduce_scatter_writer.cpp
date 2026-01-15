@@ -151,8 +151,9 @@ void kernel_main() {
         unicast_sem_inc_route_id,
         unicast_num_hops,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            0,                           // ignore
-            static_cast<uint32_t>(1)});  // increment 1
+            0,                         // ignore
+            static_cast<uint32_t>(1),  // increment 1
+            false});                   // flush = false
 
     // init barrier - multicast to entire ring of workers going in the same direction
     uint64_t pre_op_barrier_semaphore_noc_addr_in_pkt = safe_get_noc_addr(
@@ -160,7 +161,7 @@ void kernel_main() {
     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection,
         unicast_sem_inc_route_id,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_addr_in_pkt, 0});
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_addr_in_pkt, 0, false});
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
 
@@ -251,7 +252,7 @@ void kernel_main() {
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     fabric_connection,
                     unicast_sem_inc_route_id,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_addr_in_pkt, 0});
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_addr_in_pkt, 0, false});
             }
 
             noc_async_writes_flushed();
