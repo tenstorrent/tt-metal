@@ -13,9 +13,8 @@ installs all required dependencies including dev dependencies and tt-metal itsel
 OPTIONS:
     --python-version VER  Python version for the virtual environment (e.g., 3.10, 3.11)
                           Default: 3.10
-    --python-cmd CMD      Python command to use for initial uv installation
-                          Default: python3
-    --env-dir DIR         Directory where the virtual environment will be created
+    --env-dir DIR         Directory where the virtual environment will be created.
+                          Parent directories are created automatically if needed.
                           Default: ./python_env
     --help, -h            Show this help message and exit
 
@@ -24,7 +23,6 @@ ENVIRONMENT VARIABLES:
     arguments. Arguments always take precedence over environment variables.
 
     VENV_PYTHON_VERSION   Python version (overridden by --python-version)
-    PYTHON_CMD            Python command (overridden by --python-cmd)
     PYTHON_ENV_DIR        Virtual environment directory (overridden by --env-dir)
 
 EXAMPLES:
@@ -36,6 +34,9 @@ EXAMPLES:
 
     # Custom environment directory
     ./create_venv.sh --env-dir /opt/venv
+
+    # Nested directory (parent directories created automatically)
+    ./create_venv.sh --env-dir /opt/myproject/envs/dev
 
     # Using environment variables
     PYTHON_ENV_DIR=/opt/venv VENV_PYTHON_VERSION=3.11 ./create_venv.sh
@@ -51,7 +52,6 @@ EOF
 
 # Variables to track argument-provided values (take precedence over env vars)
 ARG_PYTHON_VERSION=""
-ARG_PYTHON_CMD=""
 ARG_ENV_DIR=""
 
 # Parse command-line arguments
@@ -64,15 +64,6 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ARG_PYTHON_VERSION="$2"
-            shift 2
-            ;;
-        --python-cmd)
-            if [ -z "$2" ] || [[ "$2" == -* ]]; then
-                echo "Error: --python-cmd requires a command argument (e.g., --python-cmd python3.11)" >&2
-                echo "Run '$0 --help' for usage information" >&2
-                exit 1
-            fi
-            ARG_PYTHON_CMD="$2"
             shift 2
             ;;
         --env-dir)
@@ -114,6 +105,11 @@ validate_python_version() {
     local minor_with_patch="${version#*.}"
     local minor="${minor_with_patch%%.*}"
 
+    # Explicit integer conversion (strip leading zeros, handle edge cases)
+    # Using arithmetic expansion forces bash to treat as base-10 integers
+    major=$((10#$major))
+    minor=$((10#$minor))
+
     # Require Python 3.8+
     if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 8 ]]; }; then
         echo "Error: Python version must be 3.8 or higher (got: $version)" >&2
@@ -122,23 +118,8 @@ validate_python_version() {
     fi
 }
 
-# Validate Python command exists and is executable
-validate_python_cmd() {
-    local cmd="$1"
-    if ! command -v "$cmd" &>/dev/null; then
-        echo "Error: Python command not found: '$cmd'" >&2
-        echo "Please ensure Python is installed and the command is in your PATH." >&2
-        exit 1
-    fi
-
-    # Verify it's actually Python
-    if ! "$cmd" --version 2>&1 | grep -qi "python"; then
-        echo "Error: '$cmd' does not appear to be a Python interpreter" >&2
-        exit 1
-    fi
-}
-
-# Validate environment directory path
+# Validate and prepare environment directory path
+# Creates parent directories if they don't exist (mkdir -p semantics)
 validate_env_dir() {
     local dir="$1"
     local parent_dir
@@ -150,24 +131,37 @@ validate_env_dir() {
         exit 1
     fi
 
-    # Check if directory already exists and is not empty
-    if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-        echo "Warning: Environment directory already exists and is not empty: $dir" >&2
-        echo "The existing virtual environment will be overwritten." >&2
-    fi
+    # Check if directory already exists
+    if [ -d "$dir" ]; then
+        # Check if existing directory is writable (needed to overwrite)
+        if [ ! -w "$dir" ]; then
+            echo "Error: Environment directory exists but is not writable: $dir" >&2
+            echo "Please check permissions or specify a different path." >&2
+            exit 1
+        fi
 
-    # Check if parent directory exists or can be created
-    if [ ! -d "$parent_dir" ]; then
-        echo "Error: Parent directory does not exist: $parent_dir" >&2
-        echo "Please create the parent directory first or specify a different path." >&2
-        exit 1
-    fi
+        # Warn if not empty (will be overwritten)
+        if [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+            echo "Warning: Environment directory already exists and is not empty: $dir" >&2
+            echo "The existing virtual environment will be overwritten." >&2
+        fi
+    else
+        # Directory doesn't exist - create parent directories if needed
+        if [ ! -d "$parent_dir" ]; then
+            echo "Creating parent directories: $parent_dir"
+            if ! mkdir -p "$parent_dir"; then
+                echo "Error: Failed to create parent directory: $parent_dir" >&2
+                echo "Please check permissions or specify a different path." >&2
+                exit 1
+            fi
+        fi
 
-    # Check if parent directory is writable
-    if [ ! -w "$parent_dir" ]; then
-        echo "Error: Parent directory is not writable: $parent_dir" >&2
-        echo "Please check permissions or specify a different path." >&2
-        exit 1
+        # Check if parent directory is writable (needed to create env dir)
+        if [ ! -w "$parent_dir" ]; then
+            echo "Error: Parent directory is not writable: $parent_dir" >&2
+            echo "Please check permissions or specify a different path." >&2
+            exit 1
+        fi
     fi
 }
 
@@ -179,21 +173,14 @@ validate_env_dir() {
 # Python version
 if [ -n "$ARG_PYTHON_VERSION" ]; then
     VENV_PYTHON_VERSION="$ARG_PYTHON_VERSION"
-elif [ -z "$VENV_PYTHON_VERSION" ]; then
+elif [ -z "${VENV_PYTHON_VERSION:-}" ]; then
     VENV_PYTHON_VERSION="3.10"
-fi
-
-# Python command
-if [ -n "$ARG_PYTHON_CMD" ]; then
-    PYTHON_CMD="$ARG_PYTHON_CMD"
-elif [ -z "$PYTHON_CMD" ]; then
-    PYTHON_CMD="python3"
 fi
 
 # Environment directory
 if [ -n "$ARG_ENV_DIR" ]; then
     PYTHON_ENV_DIR="$ARG_ENV_DIR"
-elif [ -z "$PYTHON_ENV_DIR" ]; then
+elif [ -z "${PYTHON_ENV_DIR:-}" ]; then
     PYTHON_ENV_DIR="$(pwd)/python_env"
 fi
 
@@ -202,12 +189,13 @@ fi
 # ============================================================================
 
 validate_python_version "$VENV_PYTHON_VERSION"
-validate_python_cmd "$PYTHON_CMD"
 validate_env_dir "$PYTHON_ENV_DIR"
+
+# Determine script directory (used for locating sibling scripts)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Install uv if not already available
 if ! command -v uv &>/dev/null; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [ -f "$SCRIPT_DIR/scripts/install-uv.sh" ]; then
         # install-uv.sh handles: version pinning, pip/standalone fallback, PATH updates
         bash "$SCRIPT_DIR/scripts/install-uv.sh"
@@ -235,7 +223,6 @@ fi
 # Create virtual environment
 echo "Creating virtual env in: $PYTHON_ENV_DIR"
 echo "  Python version: ${VENV_PYTHON_VERSION}"
-echo "  Python command: ${PYTHON_CMD}"
 
 # Install Python via uv and create virtual environment
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
@@ -243,8 +230,8 @@ uv python install "${VENV_PYTHON_VERSION}"
 uv venv "$PYTHON_ENV_DIR" --python "${VENV_PYTHON_VERSION}"
 source "$PYTHON_ENV_DIR/bin/activate"
 
-# Import functions for detecting OS
-. ./install_dependencies.sh --source-only
+# Import functions for detecting OS (use absolute path from SCRIPT_DIR)
+. "$SCRIPT_DIR/install_dependencies.sh" --source-only
 detect_os
 
 # PyTorch CPU index URL for all uv pip commands

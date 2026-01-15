@@ -12,10 +12,18 @@ set -euo pipefail
 # Update this version when upgrading uv across all Dockerfiles
 UV_VERSION="0.7.12"
 
+# SHA256 hash of the install script for UV_VERSION (for security verification)
+# To update: curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sha256sum
+# IMPORTANT: Update this hash whenever UV_VERSION changes!
+UV_INSTALLER_SHA256="8a348686376016950a5f90a26c8dd7ee35355197b35cf085bdaf96bf8d94bd47"
+
 # Installation mode: "system" or "user"
 # - system: Install at system level, fail if not possible
 # - user: Install to ~/.local/bin with pip --user or standalone installer (default)
 INSTALL_MODE="user"
+
+# Force reinstall even if uv is already installed
+FORCE_INSTALL="false"
 
 # ============================================================================
 # Help
@@ -37,6 +45,8 @@ OPTIONS:
                 Uses system package manager or pip without --user.
                 Requires appropriate permissions (use sudo if needed).
                 Does NOT modify PATH.
+    --force     Reinstall uv even if already installed.
+                Useful for upgrading or ensuring a specific version.
     --help, -h  Show this help message and exit.
 
 SUPPORTED PLATFORMS:
@@ -84,6 +94,10 @@ while [[ $# -gt 0 ]]; do
             INSTALL_MODE="user"
             shift
             ;;
+        --force)
+            FORCE_INSTALL="true"
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -97,16 +111,28 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ============================================================================
-# Early Exit if Already Installed
+# Early Exit if Already Installed (unless --force)
 # ============================================================================
 
+# Note: We don't require the installed version to match UV_VERSION.
+# The pinned version is primarily for reproducibility and security (known-good version),
+# not for specific feature requirements. Any working version of uv is acceptable.
+# Use --force to reinstall/upgrade to the pinned version.
 if command -v uv &>/dev/null; then
     uv_path=$(command -v uv)
     uv_version=$(uv --version)
-    echo "uv is already installed:"
-    echo "  Path: ${uv_path}"
-    echo "  Version: ${uv_version}"
-    exit 0
+    if [[ "$FORCE_INSTALL" == "true" ]]; then
+        echo "uv is already installed but --force specified, reinstalling..."
+        echo "  Current path: ${uv_path}"
+        echo "  Current version: ${uv_version}"
+        echo "  Target version: ${UV_VERSION}"
+    else
+        echo "uv is already installed:"
+        echo "  Path: ${uv_path}"
+        echo "  Version: ${uv_version}"
+        echo "Use --force to reinstall/upgrade to version ${UV_VERSION}."
+        exit 0
+    fi
 fi
 
 # ============================================================================
@@ -157,20 +183,81 @@ requires_break_system_packages() {
 # https://docs.astral.sh/uv/getting-started/installation/
 # ============================================================================
 
+# Verify SHA256 hash of a file
+# Arguments: $1 = file path, $2 = expected hash
+verify_sha256() {
+    local file="$1"
+    local expected_hash="$2"
+    local actual_hash
+
+    if command -v sha256sum &>/dev/null; then
+        actual_hash=$(sha256sum "$file" | cut -d' ' -f1)
+    elif command -v shasum &>/dev/null; then
+        actual_hash=$(shasum -a 256 "$file" | cut -d' ' -f1)
+    else
+        echo "Warning: No SHA256 tool available, skipping hash verification" >&2
+        return 0
+    fi
+
+    if [[ "$actual_hash" != "$expected_hash" ]]; then
+        echo "Error: Hash verification failed for installer script" >&2
+        echo "  Expected: ${expected_hash}" >&2
+        echo "  Actual:   ${actual_hash}" >&2
+        echo "This could indicate a compromised download or an outdated hash." >&2
+        echo "If UV_VERSION was updated, update UV_INSTALLER_SHA256 as well." >&2
+        return 1
+    fi
+
+    echo "Hash verification passed"
+    return 0
+}
+
 # Install uv using the official standalone installer
 # Supports version pinning via URL: https://astral.sh/uv/{version}/install.sh
+# Security: Downloads to temp file and verifies SHA256 hash before execution
 install_uv_standalone() {
     local installer_url="https://astral.sh/uv/${UV_VERSION}/install.sh"
+    local temp_script
 
     echo "Installing uv ${UV_VERSION} using standalone installer..."
 
+    # Create temp file for the installer script
+    temp_script=$(mktemp "${TMPDIR:-/tmp}/uv-install.XXXXXX.sh")
+    # shellcheck disable=SC2064
+    trap "rm -f '$temp_script'" EXIT
+
+    # Download installer script to temp file
     if command -v curl &>/dev/null; then
-        curl -LsSf "$installer_url" | sh
+        if ! curl -LsSf "$installer_url" -o "$temp_script"; then
+            echo "Error: Failed to download uv installer script" >&2
+            return 1
+        fi
     elif command -v wget &>/dev/null; then
-        wget -qO- "$installer_url" | sh
+        if ! wget -q "$installer_url" -O "$temp_script"; then
+            echo "Error: Failed to download uv installer script" >&2
+            return 1
+        fi
     else
         echo "Error: Neither curl nor wget is available." >&2
         echo "Please install curl or wget, or install pip to use pip-based installation." >&2
+        return 1
+    fi
+
+    # Verify the hash before executing
+    if ! verify_sha256 "$temp_script" "$UV_INSTALLER_SHA256"; then
+        rm -f "$temp_script"
+        return 1
+    fi
+
+    # Execute the verified installer
+    sh "$temp_script"
+    local install_result=$?
+
+    rm -f "$temp_script"
+    trap - EXIT
+
+    if [[ $install_result -ne 0 ]]; then
+        echo "Error: uv installer script failed" >&2
         return 1
     fi
 
@@ -193,11 +280,21 @@ install_uv_user() {
     echo "Installing uv to user directory (~/.local/bin)..."
 
     if has_pip; then
-        python3 -m pip install --user --no-cache-dir "uv==${UV_VERSION}"
+        if ! python3 -m pip install --user --no-cache-dir "uv==${UV_VERSION}"; then
+            echo "Error: pip install --user failed" >&2
+            echo "Trying standalone installer as fallback..." >&2
+            if ! install_uv_standalone; then
+                echo "Error: Both pip and standalone installation failed" >&2
+                return 1
+            fi
+        fi
         ensure_local_bin_in_path
     else
         echo "pip not available, using standalone installer..."
-        install_uv_standalone
+        if ! install_uv_standalone; then
+            echo "Error: Standalone installation failed" >&2
+            return 1
+        fi
     fi
 }
 
@@ -267,15 +364,24 @@ install_uv_macos_system() {
         if pip_supports_break_system_packages; then
             # shellcheck disable=SC2086
             if python3 -m pip install ${pip_args} --break-system-packages "uv==${UV_VERSION}"; then
-                return 0
+                if command -v uv &>/dev/null; then
+                    return 0
+                fi
             fi
         fi
         fail_system_install
     fi
 
-    # Other error
+    # Other error - check if pip reported an error
     if echo "$pip_output" | grep -qiE "error:|failed|exception"; then
         echo "$pip_output" >&2
+        fail_system_install
+    fi
+
+    # Final verification: pip may have succeeded silently but uv still not available
+    if ! command -v uv &>/dev/null; then
+        echo "Error: pip install appeared to succeed but uv is not available" >&2
+        echo "pip output: $pip_output" >&2
         fail_system_install
     fi
 }

@@ -72,6 +72,9 @@ ENV PYTHON_ENV_DIR=/opt/venv
 RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
 
 # Make venv writable by all users (allows uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+# This is acceptable for single-user containers but should be reconsidered for multi-tenant
+# or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN chmod -R a+rwX $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
@@ -200,6 +203,9 @@ ENV PYTHON_ENV_DIR=/opt/venv
 RUN uv venv $PYTHON_ENV_DIR
 
 # Make venv writable by all users (allows uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+# This is acceptable for single-user containers but should be reconsidered for multi-tenant
+# or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN chmod -R a+rwX $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
@@ -244,6 +250,9 @@ RUN /bin/bash -c "./build_metal.sh \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
 # Make venv writable by all users (allows uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+# This is acceptable for single-user containers but should be reconsidered for multi-tenant
+# or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN chmod -R a+rwX $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
