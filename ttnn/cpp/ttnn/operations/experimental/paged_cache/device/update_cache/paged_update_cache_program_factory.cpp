@@ -28,9 +28,7 @@ static bool enable_fp32_dest(
 }
 
 PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/) {
+    const UpdateParams& operation_attributes, const UpdateInputs& tensor_args, Tensor& /*tensor_return_value*/) {
     Program program{};
 
     const auto& cache_tensor = tensor_args.cache_tensor;
@@ -309,10 +307,10 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
 }
 
 PagedUpdateCacheMeshWorkloadFactory::cached_mesh_workload_t PagedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const UpdateParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const UpdateInputs& tensor_args,
+    Tensor& tensor_return_value) {
     log_debug(tt::LogOp, "PagedUpdateCacheMeshWorkloadFactory::create_mesh_workload called");
     log_debug(tt::LogOp, "tensor_coords has {} ranges", tensor_coords.ranges().size());
 
@@ -357,9 +355,9 @@ PagedUpdateCacheMeshWorkloadFactory::cached_mesh_workload_t PagedUpdateCacheMesh
 
 void PagedUpdateCacheProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/) {
+    const UpdateParams& operation_attributes,
+    const UpdateInputs& tensor_args,
+    Tensor& /*tensor_return_value*/) {
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
@@ -406,9 +404,9 @@ void PagedUpdateCacheProgramFactory::override_runtime_arguments(
 
 void PagedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const UpdateParams& operation_attributes,
+    const UpdateInputs& tensor_args,
+    Tensor& tensor_return_value) {
     PagedUpdateCacheProgramFactory program_factory;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {

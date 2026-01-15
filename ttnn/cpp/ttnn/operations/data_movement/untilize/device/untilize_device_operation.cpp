@@ -5,7 +5,7 @@
 #include "untilize_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "factories/untilize_single_core_program_factory.hpp"

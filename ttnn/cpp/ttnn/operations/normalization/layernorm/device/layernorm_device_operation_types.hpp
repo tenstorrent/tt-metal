@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::normalization::layer_norm {
 
-struct operation_attributes_t {
+struct LayerNormParams {
     LayerNormType norm_type = LayerNormType::LAYERNORM;
     DistributedLayerNormStage distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED;
     float eps = 0.0f;
@@ -23,16 +23,12 @@ struct operation_attributes_t {
     std::optional<DataType> dtype;
 };
 
-struct tensor_args_t {
+struct LayerNormInputs {
     Tensor input;
     std::optional<Tensor> residual_input_tensor;  // b
     std::optional<Tensor> weight;                 // gamma
     std::optional<Tensor> bias;                   // beta
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
 };
-
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
 
 }  // namespace ttnn::operations::normalization::layer_norm

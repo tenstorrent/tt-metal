@@ -9,14 +9,14 @@
 
 namespace ttnn::operations::experimental::transformer::rotary_embedding {
 
-struct operation_attributes_t {
+struct RotaryEmbeddingParams {
     uint32_t seq_len = 0;
     std::optional<uint32_t> token_idx;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct RotaryEmbeddingInputs {
     Tensor input;
     Tensor cos;
     Tensor sin;
