@@ -254,6 +254,125 @@ void print_e_t_buffer(uint32_t cb_id) {
     DPRINT << "======================================" << ENDL();
 }
 
+// ============================================================================
+// OPTIMIZED VERSION: Unrolled loop for experts_per_device=2, selected_experts_k=8
+// Kept here for reference / potential SFPU port. Improves performance but hardcoded.
+// ============================================================================
+template <
+    uint32_t linearized_mesh_coord,
+    uint32_t tokens_per_device,
+    uint32_t mesh_rows,
+    uint32_t mesh_cols,
+    ReplicateGroup axis,
+    uint32_t tokens,
+    uint32_t selected_experts_k,
+    uint32_t experts_per_device,
+    uint32_t aligned_mapping_page_size,
+    uint32_t aligned_indices_page_size,
+    uint32_t aligned_scores_page_size,
+    uint32_t aligned_activation_row_bytes>
+void process_tokens_optimized_2experts_8k(
+    uint32_t mapping_base,
+    uint32_t indices_base,
+    uint32_t scores_base,
+    uint32_t expert_activation_base,
+    uint32_t e_t_buffer_base,
+    const uint16_t* local_expert_ids,
+    uint32_t local_expert_count,
+    uint32_t& num_activated_tokens,
+    uint32_t* num_activated_tokens_per_expert) {
+    // Pre-compute constants
+    constexpr uint32_t score_offset = 1 + experts_per_device;
+
+    // Pre-compute e_t buffer base pointers per expert
+    uint32_t e_t_expert_base[experts_per_device];
+    for (uint32_t e = 0; e < experts_per_device; e++) {
+        e_t_expert_base[e] = e_t_buffer_base + e * tokens * sizeof(uint32_t);
+    }
+
+    // Cache local expert IDs in registers
+    const uint16_t local_id_0 = local_expert_ids[0];
+    const uint16_t local_id_1 = (local_expert_count > 1) ? local_expert_ids[1] : 0xFFFF;
+
+    // Use counter instead of division for device tracking
+    uint32_t tokens_until_device_change = tokens_per_device;
+    const uint16_t* source_device_mapping = reinterpret_cast<const uint16_t*>(mapping_base);
+
+    // Strength reduction: pointer increments instead of multiply
+    uint32_t indices_ptr = indices_base;
+    uint32_t scores_ptr = scores_base;
+
+    for (uint32_t t = 0; t < tokens; t++) {
+        if (--tokens_until_device_change == 0) {
+            tokens_until_device_change = tokens_per_device;
+            const uint32_t source_device = get_device_idx_from_global_token_idx<
+                linearized_mesh_coord,
+                tokens_per_device,
+                mesh_rows,
+                mesh_cols,
+                axis>(t);
+            source_device_mapping =
+                reinterpret_cast<const uint16_t*>(mapping_base + source_device * aligned_mapping_page_size);
+        }
+
+        const uint16_t* token_indices = reinterpret_cast<const uint16_t*>(indices_ptr);
+        const uint16_t* token_scores = reinterpret_cast<const uint16_t*>(scores_ptr);
+        indices_ptr += aligned_indices_page_size;
+        scores_ptr += aligned_scores_page_size;
+
+        uint32_t* expert_activation_l1_ptr = nullptr;
+        bool activated = false;
+
+// Unrolled k loop with manual expert check (hardcoded for experts_per_device=2)
+#define CHECK_EXPERT_K(k_val)                                                                            \
+    {                                                                                                    \
+        const uint16_t selected_expert = token_indices[k_val];                                           \
+        if (source_device_mapping[selected_expert] == linearized_mesh_coord) {                           \
+            if (selected_expert == local_id_0) {                                                         \
+                if (!activated) {                                                                        \
+                    expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(                              \
+                        expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);   \
+                    expert_activation_l1_ptr[0] = t;                                                     \
+                    activated = true;                                                                    \
+                }                                                                                        \
+                expert_activation_l1_ptr[1] = k_val;                                                     \
+                expert_activation_l1_ptr[score_offset] = static_cast<uint32_t>(token_scores[k_val]);     \
+                *reinterpret_cast<uint32_t*>(                                                            \
+                    e_t_expert_base[0] + num_activated_tokens_per_expert[0] * sizeof(uint32_t)) = t;     \
+                num_activated_tokens_per_expert[0]++;                                                    \
+            } else if (selected_expert == local_id_1) {                                                  \
+                if (!activated) {                                                                        \
+                    expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(                              \
+                        expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);   \
+                    expert_activation_l1_ptr[0] = t;                                                     \
+                    activated = true;                                                                    \
+                }                                                                                        \
+                expert_activation_l1_ptr[2] = k_val;                                                     \
+                expert_activation_l1_ptr[score_offset + 1] = static_cast<uint32_t>(token_scores[k_val]); \
+                *reinterpret_cast<uint32_t*>(                                                            \
+                    e_t_expert_base[1] + num_activated_tokens_per_expert[1] * sizeof(uint32_t)) = t;     \
+                num_activated_tokens_per_expert[1]++;                                                    \
+            }                                                                                            \
+        }                                                                                                \
+    }
+
+        CHECK_EXPERT_K(0);
+        CHECK_EXPERT_K(1);
+        CHECK_EXPERT_K(2);
+        CHECK_EXPERT_K(3);
+        CHECK_EXPERT_K(4);
+        CHECK_EXPERT_K(5);
+        CHECK_EXPERT_K(6);
+        CHECK_EXPERT_K(7);
+
+#undef CHECK_EXPERT_K
+
+        if (activated) {
+            num_activated_tokens++;
+        }
+    }
+}
+
 // Tile indexing helpers for 32x32 tiles with 4 faces (16x16 each)
 // Face layout in memory: top-left, top-right, bottom-left, bottom-right
 template <typename DataType>
@@ -295,6 +414,7 @@ void kernel_main() {
     constexpr uint32_t e_t_buffer_id = get_named_compile_time_arg_val("e_t_buffer_id");
     constexpr uint32_t expert_activation_cb_id = get_named_compile_time_arg_val("expert_activation_cb_id");
     constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
+    constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
 
     constexpr uint32_t input_pages = get_named_compile_time_arg_val("input_pages");
     constexpr uint32_t indices_pages = get_named_compile_time_arg_val("indices_pages");
@@ -496,10 +616,36 @@ void kernel_main() {
         e_t_buffer_ptr[num_activated_tokens_per_expert[e]] = -1;
     }
 
+    cb_reserve_back(total_chunks_cb_id, 1);
+    uint32_t total_chunks = 0;
+    for (uint32_t e = 0; e < experts_per_device; e++) {
+        total_chunks += (num_activated_tokens_per_expert[e] + tokens_per_chunk - 1) / tokens_per_chunk;
+    }
+    *reinterpret_cast<uint32_t*>(get_write_ptr(total_chunks_cb_id)) = total_chunks;
+    cb_push_back(total_chunks_cb_id, 1);
+
     // print_e_t_buffer<experts_per_device, tokens>(e_t_buffer_id);
 
-    // TODO: Implement selective tilize logic
-    // 1. Read through all indices to determine which tokens belong to this device's experts
-    // 2. For each chunk of tokens_per_chunk, read the matching tokens from sparse buffer
-    // 3. Pack into tilizer input CB for compute kernel to tilize
+    // Read activated tokens from sparse buffer and pack into tilizer input CB
+    // The e_t buffer contains sparse token IDs for each expert, terminated by -1
+    for (uint32_t e = 0; e < experts_per_device; e++) {
+        uint32_t num_tokens = num_activated_tokens_per_expert[e];
+        uint32_t* e_t_ptr = reinterpret_cast<uint32_t*>(e_t_buffer_base + e * tokens * sizeof(uint32_t));
+
+        // Process tokens in chunks of tokens_per_chunk
+        for (uint32_t chunk_start = 0; chunk_start < num_tokens; chunk_start += tokens_per_chunk) {
+            uint32_t tokens_in_chunk = std::min(tokens_per_chunk, num_tokens - chunk_start);
+
+            cb_reserve_back(tilizer_input_cb_id, tokens_per_chunk);
+
+            // Read each activated token from the sparse input buffer
+            for (uint32_t i = 0; i < tokens_in_chunk; i++) {
+                uint32_t token_id = e_t_ptr[chunk_start + i];  // Get sparse token ID from e_t buffer
+                noc_async_read_page(
+                    token_id, input_tensor_addr_gen, get_write_ptr(tilizer_input_cb_id) + i * input_page_size);
+            }
+            noc_async_read_barrier();
+            cb_push_back(tilizer_input_cb_id, tokens_per_chunk);  // Push full chunk (padding is garbage, that's OK)
+        }
+    }
 }

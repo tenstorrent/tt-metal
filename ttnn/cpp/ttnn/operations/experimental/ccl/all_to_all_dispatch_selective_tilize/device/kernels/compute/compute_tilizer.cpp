@@ -79,7 +79,7 @@ void MAIN {
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
     constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
 
-    // compute_kernel_hw_startup(tilizer_input_cb_id, tilizer_output_cb_id);
+    compute_kernel_hw_startup(tilizer_input_cb_id, tilizer_output_cb_id);
 
     // // Wait for writer to push total_chunks via CB
     // cb_wait_front(total_chunks_cb_id, 1);
