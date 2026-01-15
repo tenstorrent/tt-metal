@@ -651,9 +651,6 @@ void issue_buffer_dispatch_command_sequence(
     }
 
     if (dispatch_params.issue_wait) {
-        if (use_pinned_memory) {
-            calculator.add_prefetch_stall();
-        }
         for (int i = 0; i < num_worker_counters; ++i) {
             calculator.add_dispatch_wait();
         }
@@ -666,22 +663,10 @@ void issue_buffer_dispatch_command_sequence(
 
     if (dispatch_params.issue_wait) {
         uint32_t last_index = num_worker_counters;
-        if (use_pinned_memory) {
-            --last_index;
-        }
         for (auto i = 0; i < last_index; ++i) {
             auto offset_index = *sub_device_ids[i];
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
-                0,
-                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                dispatch_params.expected_num_workers_completed[offset_index]);
-        }
-        if (use_pinned_memory) {
-            // We only need the write barrier + prefetch stall for the last wait cmd
-            auto offset_index = *sub_device_ids[last_index];
-            command_sequence.add_dispatch_wait_with_prefetch_stall(
-                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
                 0,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
                 dispatch_params.expected_num_workers_completed[offset_index]);
