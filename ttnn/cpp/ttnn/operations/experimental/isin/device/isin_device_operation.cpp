@@ -9,7 +9,7 @@
 #include <enchantum/enchantum.hpp>
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::isin {
+namespace ttnn::experimental::prim {
 IsInDeviceOperation::program_factory_t IsInDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return IsInProgramFactory{};
@@ -47,7 +47,7 @@ IsInDeviceOperation::spec_return_value_t IsInDeviceOperation::compute_output_spe
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return {
         Shape{tensor_args.elements_tensor.logical_volume()},
-        {common::OUTPUT_TENSOR_DATA_TYPE, {common::OUTPUT_TENSOR_LAYOUT}, tensor_args.elements_tensor.memory_config()},
+        {OUTPUT_TENSOR_DATA_TYPE, {OUTPUT_TENSOR_LAYOUT}, tensor_args.elements_tensor.memory_config()},
     };
 }
 
@@ -55,7 +55,7 @@ IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_te
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_out) {
         TT_FATAL(
-            tensor_args.optional_out->dtype() == common::OUTPUT_TENSOR_DATA_TYPE,
+            tensor_args.optional_out->dtype() == OUTPUT_TENSOR_DATA_TYPE,
             "Preallocated output should be of uint32 dtype");
         return *tensor_args.optional_out;
     }
@@ -81,29 +81,25 @@ tt::stl::hash::hash_t IsInDeviceOperation::compute_program_hash(
         test_elements_memory_layout,
         test_elements_logical_volume);
 }
-}  // namespace ttnn::operations::experimental::isin
 
-namespace ttnn::prim {
-ttnn::operations::experimental::isin::tensor_return_value_t isin(
+Tensor isin(
     const Tensor& elements,
     const Tensor& test_elements,
     uint32_t single_fetch_subchunk_size,
     bool assume_unique,
     bool invert,
     const std::optional<Tensor>& optional_out) {
-    using OperationType = ttnn::operations::experimental::isin::IsInDeviceOperation;
-
-    auto operation_attributes = OperationType::operation_attributes_t{
+    auto operation_attributes = IsinParams{
         .assume_unique = assume_unique,
         .invert = invert,
         .single_fetch_subchunk_size = single_fetch_subchunk_size,
     };
-    auto tensor_args = OperationType::tensor_args_t{
+    auto tensor_args = IsinInputs{
         .elements_tensor = elements,
         .test_elements_tensor = test_elements,
         .optional_out = optional_out,
     };
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<IsInDeviceOperation>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::prim
+}  // namespace ttnn::experimental::prim
