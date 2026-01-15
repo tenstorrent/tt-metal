@@ -112,7 +112,7 @@ def test_sfpu_reduce(
         formats.output_format,
         dest_acc,
         formats.input_format,
-        input_dimensions,
+        dst_dim,
         reduce_pool=reduce_pool,
     )
 

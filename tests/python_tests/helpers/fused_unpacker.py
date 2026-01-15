@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
 
 from .chip_architecture import ChipArchitecture
+from .fused_math import ReduceFpu
 from .golden_generators import TransposeGolden, get_golden_generator
 from .llk_params import Transpose
 from .tilize_untilize import tilize_block
@@ -229,8 +230,21 @@ class UnpackerAB(Unpacker):
                 "UnpackerAB does not support different values for transpose_faces and transpose_within_face"
             )
 
-        code = (
-            f"    _llk_unpack_AB_init_<{broadcast_type}>({face_r_dim}, {num_faces}, false, {transpose_faces});\n"
+        if isinstance(operation_config.math.fpu, ReduceFpu):
+            reduce_dim = operation_config.math.fpu.reduce_dim()
+            within_face_16x16_transpose = (
+                1 if reduce_dim == "ReduceDim::REDUCE_ROW" else 0
+            )
+            code = (
+                f"    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>({within_face_16x16_transpose});\n"
+                f"    constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;\n"
+                f"    config_unpacker_x_end<UNP_SEL>({face_r_dim});\n"
+                f"    _llk_unpack_AB_mop_config_<BroadcastType::NONE>(false, 4, false);\n"
+            )
+        else:
+            code = f"    _llk_unpack_AB_init_<{broadcast_type}>({face_r_dim}, {num_faces}, false, {transpose_faces});\n"
+
+        code += (
             f"    for (int i = 0; i < {tile_cnt}; i++)\n"
             f"    {{\n"
             f"        _llk_unpack_AB_<>(L1_ADDRESS(buffer_A{stage}[i]), L1_ADDRESS(buffer_B{stage}[i]));\n"

@@ -11,6 +11,7 @@ from .golden_generators import (  # TilizeGolden,
     DataCopyGolden,
     EltwiseBinaryGolden,
     MatmulGolden,
+    ReduceGolden,
     UnarySFPUGolden,
     get_golden_generator,
 )
@@ -19,7 +20,8 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
 
 from .chip_architecture import ChipArchitecture
-from .llk_params import ApproximationMode, MathOperation
+from .llk_params import ApproximationMode, MathOperation, ReduceDimension, ReducePool
+from .tilize_untilize import tilize_block, untilize_block
 
 
 class Fpu:
@@ -144,6 +146,96 @@ class EltwiseFpu(Fpu):
         return f"EltwiseFpu({self.operation})"
 
 
+class ReduceFpu(Fpu):
+    def __init__(self, operation: MathOperation, pool: ReducePool = ReducePool.Max):
+        if operation not in MathOperation.get_reduce_operations():
+            raise ValueError(f"Operation {operation} is not a valid REDUCE operation.")
+        self.operation = operation
+        self.pool = pool
+
+    def get_headers(self) -> List[str]:
+        return [
+            "llk_math_common.h",
+            "llk_math_reduce.h",
+        ]
+
+    def reduce_dim(self) -> str:
+        return f"ReduceDim::{self.operation.cpp_enum_value}"
+
+    def reduce_dim_golden(self) -> ReduceDimension:
+        if self.operation == MathOperation.ReduceColumn:
+            return ReduceDimension.Column
+        elif self.operation == MathOperation.ReduceRow:
+            return ReduceDimension.Row
+        elif self.operation == MathOperation.ReduceScalar:
+            return ReduceDimension.Scalar
+        else:
+            raise ValueError(f"Unsupported reduce operation: {self.operation}")
+
+    def golden(
+        self,
+        tensor_a: torch.Tensor,
+        tensor_b: torch.Tensor,
+        operation_config: "FusedOperation",
+    ) -> torch.Tensor:
+        output_format = operation_config.output.data_format
+        tile_cnt = operation_config.output.tile_count
+        dimensions = operation_config.output.dimensions
+        num_faces = operation_config.num_faces
+
+        reduce_dim = self.reduce_dim_golden()
+        pool_type = self.pool
+
+        tensor_a = tilize_block(
+            tensor_a, dimensions, output_format, num_faces
+        ).flatten()
+
+        generate_golden = get_golden_generator(ReduceGolden)
+        golden_tensor = generate_golden(
+            tensor_a,
+            reduce_dim,
+            pool_type,
+            output_format,
+            tile_cnt=tile_cnt,
+        ).flatten()
+
+        golden_tensor = untilize_block(golden_tensor, output_format, dimensions)
+
+        return golden_tensor.flatten()
+
+    def exec(self, operation_config: "FusedOperation") -> str:
+        stage = operation_config.stage_id
+        math_fidelity = operation_config.math_fidelity.value
+        dest_acc = operation_config.dest_acc.value
+        tile_cnt = operation_config.output.tile_count
+        num_faces = operation_config.num_faces
+
+        pool_type_cpp = f"PoolType::{self.pool.value}"
+        reduce_dim_cpp = self.reduce_dim()
+
+        unp_a_src_format = f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{operation_config.src_a.data_format})"
+
+        code = (
+            f"    // Operation {stage}: Reduce {self.operation.cpp_enum_value} FPU\n"
+            f"    _llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, false>();\n"
+            f"    _llk_math_wait_for_dest_available_<dest_sync{stage}>();\n"
+            f"    for (int i = 0; i < {tile_cnt}; ++i)\n"
+            f"    {{\n"
+            f"        _llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, false, false>(\n"
+            f"            i, false, {num_faces}\n"
+            f"        );\n"
+            f"    }}\n"
+        )
+
+        if operation_config.architecture == ChipArchitecture.WORMHOLE:
+            code += f"    _llk_math_reduce_uninit_({unp_a_src_format});\n"
+
+        return code
+
+    def __str__(self) -> str:
+        return f"ReduceFpu({self.operation}, {self.pool})"
+
+
 class DatacopyFpu(Fpu):
     def get_headers(self) -> List[str]:
         return [
@@ -222,20 +314,6 @@ class DatacopyFpu(Fpu):
 
 
 class Sfpu:
-    operation: MathOperation
-    approx_mode: ApproximationMode
-    iterations: int = 32
-
-    def __init__(
-        self,
-        operation: str,
-        approx_mode: ApproximationMode = ApproximationMode.No,
-        iterations: int = 32,
-    ):
-        self.operation = operation
-        self.approx_mode = approx_mode
-        self.iterations = iterations
-
     def exec(self, operation_config: "FusedOperation") -> str:
         return ""
 
@@ -248,7 +326,7 @@ class Sfpu:
         return []
 
     def __str__(self) -> str:
-        return f"{self.__name__}({self.operation})"
+        return f"{self.__name__}"
 
 
 class UnarySfpu(Sfpu):
@@ -262,7 +340,9 @@ class UnarySfpu(Sfpu):
             raise ValueError(
                 f"Operation {operation} is not a valid SFPU unary operation."
             )
-        super().__init__(operation, approx_mode, iterations)
+        self.iterations = iterations
+        self.approx_mode = approx_mode
+        self.operation = operation
 
     def get_headers(self) -> List[str]:
         return [
@@ -326,7 +406,9 @@ class BinarySfpu(Sfpu):
             raise ValueError(
                 f"Operation {operation} is not a valid SFPU binary operation."
             )
-        super().__init__(operation, approx_mode, iterations)
+        self.operation = operation
+        self.approx_mode = approx_mode
+        self.iterations = iterations
         self.dst_index_in0 = dst_index_in0
         self.dst_index_in1 = dst_index_in1
         self.dst_index_out = dst_index_out
@@ -370,11 +452,16 @@ class BinarySfpu(Sfpu):
         src2 = self.dst_index_in1
         dst = self.dst_index_out
 
+        if self.operation == MathOperation.SfpuAddTopRow:
+            format = "0"
+        else:
+            format = f"math_format{stage}"
+
         code = (
             f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
             f"    _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();\n"
             f"    _llk_math_eltwise_binary_sfpu_start_<dest_sync{stage}>(0);\n"
-            f"    test_utils::call_binary_sfpu_operation<{approx_mode}, {op}, {iterations}, math_format{stage}>({src1}, {src2}, {dst});\n"
+            f"    test_utils::call_binary_sfpu_operation<{approx_mode}, {op}, {iterations}, {format}>({src1}, {src2}, {dst});\n"
             f"    _llk_math_eltwise_binary_sfpu_done_();\n"
         )
 
@@ -385,11 +472,6 @@ class BinarySfpu(Sfpu):
 
 
 class SfpuWhere(Sfpu):
-    dst_index_in0: int = 0
-    dst_index_in1: int = 1
-    dst_index_in2: int = 2
-    dst_index_out: int = 0
-
     def __init__(
         self,
         approx_mode: ApproximationMode = ApproximationMode.No,
@@ -399,7 +481,9 @@ class SfpuWhere(Sfpu):
         dst_index_in2: int = 2,
         dst_index_out: int = 0,
     ):
-        super().__init__("where", approx_mode, iterations)
+        self.operation = MathOperation.SfpuWhere
+        self.approx_mode = approx_mode
+        self.iterations = iterations
         self.dst_index_in0 = dst_index_in0
         self.dst_index_in1 = dst_index_in1
         self.dst_index_in2 = dst_index_in2

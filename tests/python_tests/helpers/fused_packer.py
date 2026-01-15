@@ -11,6 +11,8 @@ from .chip_architecture import ChipArchitecture
 if TYPE_CHECKING:
     from .fused_operation import FusedOperation
 
+from .fused_math import ReduceFpu
+
 
 class Packer:
     def get_headers(self) -> List[str]:
@@ -67,6 +69,7 @@ class Packer:
         bh_tilize = "true" if operation_config.bh_tilize.value else "false"
         face_r_dim = operation_config.face_r_dim
         num_faces = operation_config.num_faces
+        dest_sync = f"DstSync::Sync{operation_config.dest_sync.name}"
 
         code = (
             f"    // Operation {stage}: Packer\n"
@@ -82,17 +85,21 @@ class Packer:
                 f"    _llk_pack_init_<false, false, {bh_tilize}>(\n"
                 f"        pack_dst_format{stage}, pack_dst_format{stage}, {face_r_dim}, TILE_C_DIM, {num_faces}, false, false"
                 f"    );\n"
-                f"    _llk_pack_dest_init_<DstSync::SyncHalf, {dest_acc_value}>();\n"
+                f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc_value}>();\n"
             )
         elif operation_config.architecture == ChipArchitecture.WORMHOLE:
             code += (
                 f"    _llk_pack_init_<false, false>(\n"
                 f"        pack_dst_format{stage}\n"
                 f"    );\n"
-                f"    _llk_pack_dest_init_<DstSync::SyncHalf, {dest_acc_value}, false>();\n"
+                f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc_value}, false>();\n"
             )
         else:
             raise ValueError("Unsupported architecture for packer")
+
+        if isinstance(operation_config.math.fpu, ReduceFpu):
+            reduce_dim = operation_config.math.fpu.reduce_dim()
+            code += f"    _llk_pack_reduce_mask_config_<false, {reduce_dim}>();\n"
 
         code += (
             f"    _llk_packer_wait_for_math_done_();\n"
@@ -103,7 +110,10 @@ class Packer:
             f"    _llk_pack_dest_section_done_<DstSync::SyncHalf, {dest_acc_value}>();\n"
         )
 
+        if isinstance(operation_config.math.fpu, ReduceFpu):
+            code += "    _llk_pack_reduce_mask_clear_();\n"
+
         if stage < num_stages - 1:
-            code += f"    t6_semaphore_post<>(semaphore::PACK_DONE);\n\n"
+            code += "    t6_semaphore_post<>(semaphore::PACK_DONE);\n\n"
 
         return code

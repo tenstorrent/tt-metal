@@ -63,7 +63,7 @@ operations:
 
 ## Operation Fields
 
-### Required Fields
+### Operand Name
 
 #### `src_a` (string, required)
 The name of the first input operand. This can be either an input operand (e.g., `"input_A"`, `"input_B"`) or an output from a previous operation (e.g., `"result1"`).
@@ -80,7 +80,7 @@ The name of the output operand where results will be stored. This output can be 
 
 ---
 
-### Dimension Fields
+### Operand Dimensions
 
 #### `src_a_dims` (array of 2 integers, required)
 Dimensions of the src_a operand in format `[height, width]`. Values must be multiples of 32 (tile size is 32x32). For example, `[64, 64]` represents a 2x2 tile matrix, while `[32, 128]` represents a 1x4 tile matrix.
@@ -92,7 +92,7 @@ Dimensions of the src_b operand in format `[height, width]`. Same rules as `src_
 
 ---
 
-### Format Fields
+### Operand Format
 
 #### `input_format` (string, required)
 The data format of input operands. Available options: `"Float16_b"`, `"Float16"`, `"Float32"`, and `"Bfp8_b"`.
@@ -103,6 +103,16 @@ The data format of input operands. Available options: `"Float16_b"`, `"Float16"`
 The data format for the output operand. Options are the same as `input_format`.
 
 **Important:** Can be different from `input_format` (allows format conversion within an operation). When this output is used in subsequent operations, their `input_format` must match this value. See [Format Handling in Chains](#format-handling-in-chains) for details.
+
+### Operand Const Values
+
+#### `src_a_const_value` (float, optional)
+A constant value used to initialize the src_a operand. When specified, no random tensor is generated for src_a and the operand is fully initialized with this constant value. This field should not be set when src_a refers to the output of a previous operation.
+
+#### `src_b_const_value` (float, optional)
+A constant value used to initialize the src_b operand. Follows the same rules as `src_a`.
+
+**Important:** When using the ReduceFpu operation, `src_b_const_value` must be set to 1.0.
 
 ---
 
@@ -121,12 +131,12 @@ Specifies which unpacker to use. Options:
 
 **Compatibility Matrix:**
 
-| Unpacker        | Datacopy | Elwadd/Elwmul/Elwsub | Matmul | SFPU |
-|-----------------|----------|----------------------|--------|------|
-| UnpackerA       | ✓        | ✗ (needs 2 inputs)   | ✗      | ✓    |
-| UnpackerAB      | ✓        | ✓                    | ✗      | ✓    |
-| UnpackerTilizeA | ✓        | ✗ (needs 2 inputs)   | ✗      | ✓    |
-| MatmulUnpacker  | ✗        | ✗                    | ✓      | ✓    |
+| Unpacker        | Datacopy | Elwadd/Elwmul/Elwsub | Matmul | Reduce(Scalar/Row/Column) | SFPU |
+|-----------------|----------|----------------------|--------|---------------------------|------|
+| UnpackerA       | ✓        | ✗ (needs 2 inputs)   | ✗      | ✗                         | ✓    |
+| UnpackerAB      | ✓        | ✓                    | ✗      | ✓                         | ✓    |
+| UnpackerTilizeA | ✓        | ✗ (needs 2 inputs)   | ✗      | ✗                         | ✓    |
+| MatmulUnpacker  | ✗        | ✗                    | ✓      | ✗                         | ✓    |
 
 ---
 
@@ -136,7 +146,7 @@ Specifies which unpacker to use. Options:
 Defines the mathematical operations to perform. Contains:
 
 ##### `fpu` (string, required)
-The Floating Point Unit operation. Options:
+Available FPU operations:
 
 - **`"Datacopy"`** - Simple data copy without transformation that copies data from input to output. This is useful for testing unpacker/packer combinations.
 
@@ -147,6 +157,15 @@ The Floating Point Unit operation. Options:
 - **`"Elwsub"`** - Element-wise subtraction (A - B) that requires `UnpackerAB`. This operation subtracts src_b from src_a element-wise, producing Output[i] = src_a[i] - src_b[i].
 
 - **`"Matmul"`** - Matrix multiplication (A × B) that requires `MatmulUnpacker`. This performs standard matrix multiplication where src_a dimensions must be [M, K], src_b must be [K, N], and output dimensions will be [M, N].
+
+- **`"ReduceScalar"`** - Reduces all elements of src_a within each tile into a single scalar value. The result for each tile is written to output coordinate (0, 0) of that tile, while all other output elements are set to zero by the packer.
+
+- **`"ReduceRow"`** - Performs a row-wise reduction of src_a within each tile, producing one reduced value per row. Each result is written to the first column of the corresponding row in that tile, while all other output elements are set to zero by the packer.
+
+- **`"ReduceColumn"`** - Performs a column-wise reduction of src_a within each tile, producing one reduced value per column. Each result is written to the first row of the corresponding column in that tile, while all other output elements are set to zero by the packer.
+
+#### `reduce_pool` (string, required for Reduce operations)
+Specifies the reduction method to use for the Reduce operation. Available options are: `"Sum"`, `"Average"` and `"Max"`
 
 ##### `sfpu` (array of objects, optional)
 A list of Special Function Unit operations to execute after the FPU operation. SFPU operations execute **in the order specified** in the array.
@@ -240,6 +259,8 @@ math:
       src2_dest_tile_index: 1
       dst_dest_tile_index: 1
 ```
+
+**Important:** When using SFPU operations after a Reduce operation, ensure iteration counts do not access elements outside the reduced region, as they may contain residual values before the packer zeroes them.
 
 ---
 

@@ -13,6 +13,7 @@ from helpers.fused_math import (
     EltwiseFpu,
     Math,
     MatmulFpu,
+    ReduceFpu,
     UnarySfpu,
 )
 from helpers.fused_operand import OperandRegistry
@@ -29,6 +30,7 @@ from helpers.llk_params import (
     ApproximationMode,
     DestSync,
     MathOperation,
+    ReducePool,
     Transpose,
 )
 
@@ -128,6 +130,13 @@ REDUCE_OPERATION_MAP: Dict[str, MathOperation] = {
     "ReduceScalar": MathOperation.ReduceScalar,
 }
 
+REDUCE_POOL_MAP: Dict[str, ReducePool] = {
+    "Sum": ReducePool.Sum,
+    "Min": ReducePool.Min,
+    "Max": ReducePool.Max,
+    "Average": ReducePool.Average,
+}
+
 APPROXIMATION_MODE_MAP: Dict[str, ApproximationMode] = {
     "Yes": ApproximationMode.Yes,
     "No": ApproximationMode.No,
@@ -142,6 +151,17 @@ def parse_math_operation(
     if fpu_type in FPU_OPERATION_MAP:
         math_op = FPU_OPERATION_MAP[fpu_type]
         fpu = EltwiseFpu(math_op)
+    elif fpu_type in REDUCE_OPERATION_MAP:
+        math_op = REDUCE_OPERATION_MAP[fpu_type]
+
+        pool_str = math_config.get("reduce_pool", "Max")
+        try:
+            pool = REDUCE_POOL_MAP[pool_str]
+        except KeyError:
+            raise ValueError(f"Unsupported reduce pool: {pool_str}")
+
+        fpu = ReduceFpu(math_op, pool=pool)
+
     elif fpu_type == "Datacopy":
         fpu = DatacopyFpu()
     elif fpu_type == "Matmul":
@@ -214,6 +234,8 @@ def parse_operation(
         src_b_dims=op_config.get("src_b_dims", [32, 32]),
         input_format=input_format,
         output_format=output_format,
+        src_a_const_value=op_config.get("src_a_const_value"),
+        src_b_const_value=op_config.get("src_b_const_value"),
     )
 
     unpacker_name = op_config.get("unpacker", "UnpackerA")

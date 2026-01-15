@@ -34,7 +34,7 @@ class Operand:
     def is_input(self) -> bool:
         return not self.is_output
 
-    def generate_data(self, num=1):
+    def generate_data(self, const_value=None):
         if self._data is not None:
             return
 
@@ -52,8 +52,8 @@ class Operand:
         for _ in range(faces_needed):
             face = generate_random_face(
                 stimuli_format=self.data_format,
-                const_value=1,
-                const_face=False,
+                const_value=const_value,
+                const_face=const_value is not None,
                 sfpu=self.sfpu,
                 face_r_dim=16,
                 negative_values=False,
@@ -244,6 +244,8 @@ class OperandRegistry:
         output_format: DataFormat = DataFormat.Float16_b,
         src_a_tensor: torch.Tensor = None,
         src_b_tensor: torch.Tensor = None,
+        src_a_const_value: Optional[float] = None,
+        src_b_const_value: Optional[float] = None,
     ) -> OperandMapping:
         if src_a not in self.operands:
             self.add_input(src_a, dimensions=src_a_dims, data_format=input_format)
@@ -252,10 +254,14 @@ class OperandRegistry:
             self.add_input(src_b, dimensions=src_b_dims, data_format=input_format)
 
         if src_a_tensor is not None:
-            self.operands.get(src_a).set_data(src_a_tensor)
+            self.operands[src_a].set_data(src_a_tensor)
+        else:
+            self.operands[src_a].generate_data(const_value=src_a_const_value)
 
         if src_b_tensor is not None:
-            self.operands.get(src_b).set_data(src_b_tensor)
+            self.operands[src_b].set_data(src_b_tensor)
+        else:
+            self.operands[src_b].generate_data(const_value=src_b_const_value)
 
         mapping = OperandMapping(
             src_a=src_a,
