@@ -357,16 +357,22 @@ def format_sampling_params(sampling_params, max_batch_size):
 
 class SeedManager:
     def __init__(self, tt_sampling):
-        self.rngs = [random.Random(secrets.randbits(64)) for _ in range(32)]
+        self.seeds = [secrets.randbits(64) for _ in range(32)]
+        self.rngs = [random.Random(seed) for seed in self.seeds]
         self.tt_sampling = tt_sampling
 
     def reset_seed(self, seeds, user_ids):
         for i, user in enumerate(user_ids):
             self.rngs[user].seed(seeds[i])
+            self.seeds[user] = seeds[i]
 
-    def get_new_values(self, empty_slots=range(32)):
+    def get_new_values(self, empty_slots=range(32), replicate_seeds=False):
         # get new seeds for each user in empty_slots otherwise 0
         new_seeds = [rng.randint(0, 1000000) if i in empty_slots else 0 for i, rng in enumerate(self.rngs)]
+
+        if replicate_seeds:
+            assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
+            new_seeds = 32 * [new_seeds[empty_slots[0]]]
         # send new seeds to sampling module
         new_seed_tt = ttnn.from_torch(torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
