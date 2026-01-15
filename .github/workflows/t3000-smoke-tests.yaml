@@ -2,6 +2,9 @@ name: "(T3K) T3000 smoke tests"
 # Temporary commit to trigger workflow run
 
 on:
+  push:
+    branches:
+      - roseli/0-shift-apc-t3k-tests
   workflow_call:
     inputs:
       docker-image:
@@ -28,7 +31,27 @@ permissions:
   contents: write
 
 jobs:
+  build-artifact:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
   t3000-smoke-tests:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-smoke-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.model || 'all' }}
+  t3000-smoke-tests-call:
+    if: github.event_name == 'workflow_call'
     secrets: inherit
     uses: ./.github/workflows/t3000-smoke-tests-impl.yaml
     with:
