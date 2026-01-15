@@ -1,6 +1,0 @@
-{
-  "enabledPlugins": {
-    "clangd-lsp@claude-plugins-official": true,
-    "ralph-wiggum@claude-plugins-official": true
-  }
-}
