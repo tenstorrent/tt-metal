@@ -510,12 +510,11 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
     if (!cluster_axis.has_value()) {
         return shard_tensor_to_mesh_mapper(mesh_device, dim);
     }
-    TT_FATAL(mesh_device.shape().dims() == 2, "Mesh device shape must be 2D");
     TT_FATAL(
-        dim >= 0 && cluster_axis >= 0 && cluster_axis < mesh_device.shape().dims(),
-        "Dimension {} or {} is out of range",
-        dim,
-        cluster_axis);
+        cluster_axis.value() >= 0 && cluster_axis.value() < mesh_device.shape().dims(),
+        "Cluster axis {} is out of range for mesh device with {} dimensions",
+        cluster_axis.value(),
+        mesh_device.shape().dims());
     tt::stl::SmallVector<MeshMapperConfig::Placement> placements(
         mesh_device.shape().dims(), MeshMapperConfig::Replicate{});
     placements[cluster_axis.value()] = MeshMapperConfig::Shard{dim};
