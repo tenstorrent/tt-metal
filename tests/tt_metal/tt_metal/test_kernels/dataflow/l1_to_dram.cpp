@@ -19,29 +19,14 @@ void kernel_main() {
     experimental::CoreLocalMem<std::uint32_t> l1_buffer(l1_src_address);
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dst_dram;
 
-    // print out all arguments with names
-    DPRINT << "dram_dst_address: " << dram_dst_address << ENDL();
-    DPRINT << "l1_src_address: " << l1_src_address << ENDL();
-    DPRINT << "dram_buffer_size: " << dram_buffer_size << ENDL();
-    DPRINT << "dram_dst_bank_id: " << dram_dst_bank_id << ENDL();
-    DPRINT << "signal_value: " << signal_value << ENDL();
-
     volatile tt_l1_ptr std::uint32_t* signal_addr = (tt_l1_ptr uint32_t*)(MEM_L1_UNCACHED_BASE);
-    while (*signal_addr != signal_value) {
-        DPRINT << "signal_addr: " << *signal_addr << ENDL();
-    }
+    while (*signal_addr != signal_value);
 
-    DPRINT << "before write" << ENDL();
+    DPRINT << "Reading " << dram_buffer_size << " bytes from L1 address " << l1_src_address
+           << " and writing it to DRAM address " << dram_dst_address << " in bank " << dram_dst_bank_id << ENDL();
 
-    noc.async_write(
-        l1_buffer, dst_dram, dram_buffer_size, {}, {.bank_id = dram_dst_bank_id, .addr = dram_dst_address});
-    DPRINT << "after write" << ENDL();
+    noc.async_write(l1_buffer, dst_dram, dram_buffer_size, {}, {.bank_id = dram_dst_bank_id, .addr = dram_dst_address});
     noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>();
-    DPRINT << "after write barrier" << ENDL();
 
-    DPRINT << "signal_addr before update: " << *signal_addr << ENDL();
     *signal_addr = signal_value + 1;
-    DPRINT << "signal_addr after update: " << *signal_addr << ENDL();
-
-    DPRINT << 77777 << ENDL();
 }
