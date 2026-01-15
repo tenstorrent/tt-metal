@@ -210,8 +210,6 @@ class Model:
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
-            # if is_decode:
-            #     print(f"layer {i} hidden_states shape: {hidden_states.shape}")
 
             hidden_states = decoder_layer(
                 hidden_states,
@@ -231,8 +229,6 @@ class Model:
             logits_sliced = ttnn.slice(logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1]))
             logits.deallocate(True)
             logits = logits_sliced
-            # if len(logits.shape) == 4 and logits.shape[1] == 1:
-            #     logits = ttnn.squeeze(logits, dim=1)
             hidden_states = logits
 
         # Final norm and lm_head
@@ -247,11 +243,7 @@ class Model:
             )
             logits.deallocate(True)
             logits = logits_gathered
-        # if get_last_token == -1:
-        #     # i.e decode, we need to collect all the users
-        #     logits_gathered = self.mesh_config.allgather(logits, self.ccl_manager, axis=0, dim=-2)
-        #     logits.deallocate(True)
-        #     logits = logits_gathered
+
         return logits
 
     def ttnn_decode_forward(
@@ -271,13 +263,6 @@ class Model:
         # Embed tokens
         input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         input_embeds = ttnn.unsqueeze(input_embeds, 0)
-
-        # Ensure proper shape for decoder layers
-        # if len(input_embeds.shape) == 4:
-        #     hidden_states = ttnn.squeeze(input_embeds, dim=1)
-        # else:
-        #     hidden_states = input_embeds
-
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
         rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
 
@@ -307,12 +292,6 @@ class Model:
         kv_cache=None,
     ):
         """Prefill forward pass - processes full sequences"""
-        # Ensure proper shape for decoder layers
-        # if len(x.shape) == 4:
-        #     hidden_states = ttnn.squeeze(x, dim=1)
-        # else:
-        #     hidden_states = x
-
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
         seq_len = x.shape[-2]
         if rot_mats_global is not None:
@@ -403,8 +382,6 @@ class Model:
         assert current_pos.shape[0] == B, "Batch size mismatch"
 
         # Convert tokens to TTNN format
-        # batch_tiles = math.ceil(len(tokens) / 32)
-        # tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 * batch_tiles - len(tokens)), "constant", 0)
         if self.users_row_sharded:
             mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
         else:
