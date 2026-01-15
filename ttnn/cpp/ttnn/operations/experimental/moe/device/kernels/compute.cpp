@@ -35,125 +35,115 @@ void MAIN {
     constexpr uint32_t num_w2_tiles_h = 64;
 
     const uint32_t num_w0_w1_tiles_w = (core_id < 8) ? 5 : 6;
-    const uint32_t num_w2_tiles_w = (core_id < 8) ? 19 : 18;
+    const uint32_t num_w2_tiles_w = (core_id < 8) ? 18 : 20;
 
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
+    // W0 and W1 reading constants
+    constexpr uint32_t w0_w1_tiles_per_txn = 14;
+    const uint32_t w0_w1_txns = (core_id < 8) ? 2 * 80 : 2 * 96;
+    // num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_txn;  // (5|6 * 224) / 14 = 80|96
+
+    // W2 reading constants
+    // Total tiles of w2 does not divide evenly by w2_tiles_per_txn (14), so we do it in two steps
+    constexpr uint32_t w2_tiles_per_txn = 14;
+    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
+    const uint32_t w2_txns = w2_txns_h * num_w2_tiles_w;
+
+    constexpr uint32_t w0_w1_txns_per_elt_tile = 2 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn);
+
+    //-------------------------------------------------------------------------
+    // Compute
+    //-------------------------------------------------------------------------
     // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_c2c_mm0);
 
     // Unpacker B is for input/activation and eltiwse inputs, so Float16_b
     reconfig_data_format_srcb(cb_s2c_in);
 
-    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        // Unpacker A is for W0,W1 and W2, so Bf4_b
-        reconfig_data_format_srca(cb_r2c_w0);
-        mm_init(cb_s2c_in, cb_r2c_w0, cb_c2c_mm0);
+    // Unpacker A is for W0,W1 and W2, so Bf4_b
+    reconfig_data_format_srca(cb_r2c_w0);
 
+    // Initialize matmul for W0
+    mm_block_init(cb_s2c_in, cb_r2c_w0, cb_c2c_mm0, /*transpose=*/false, /*ct_dim=*/2, /*rt_dim=*/1, /*kt_dim=*/1);
+
+    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         //---------------------------------------------------------------------
         // Compute in @ W0
         //---------------------------------------------------------------------
-        tile_regs_acquire();
-        for (uint32_t k_idx = 0; k_idx < num_w0_w1_tiles_h; ++k_idx) {
-            for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
-                cb_wait_front(cb_r2c_w0, 1);
-                matmul_tiles(cb_s2c_in, cb_r2c_w0, k_idx, 0, dst_idx);
-                cb_pop_front(cb_r2c_w0, 1);
+        for (uint32_t i = 0; i < num_elt_tiles; ++i) {
+            uint32_t in0_index = 0;
+            tile_regs_acquire();
+            for (uint32_t txn = 0; txn < w0_w1_txns_per_elt_tile; ++txn) {
+                cb_wait_front(cb_r2c_w0, w0_w1_tiles_per_txn);
+
+                for (uint32_t k = 0; k < w0_w1_tiles_per_txn; k += 2) {
+                    matmul_block(
+                        cb_s2c_in,
+                        cb_r2c_w0,
+                        in0_index++,
+                        /*in1_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/2,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                }
+                cb_pop_front(cb_r2c_w0, w0_w1_tiles_per_txn);
             }
+
+            //---------------------------------------------------------------------
+            // Apply SILU activation and then eltwise multiply
+            //---------------------------------------------------------------------
+            // TODO: Eltwise multiply output of SILU in dst0 with dst1 and store in dst2
+            // silu_tile_init();
+            // silu_tile(0);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            cb_reserve_back(cb_c2w_elt, 1);
+            pack_tile(0, cb_c2w_elt);
+            cb_push_back(cb_c2w_elt, 1);
+            tile_regs_release();
         }
-
-        //---------------------------------------------------------------------
-        // Apply SILU activation
-        //---------------------------------------------------------------------
-        silu_tile_init();
-        for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
-            silu_tile(dst_idx);
-        }
-        tile_regs_commit();
-
-        // cb_reserve_back(cb_c2c_mm0, num_w0_w1_tiles_w);
-        tile_regs_wait();
-
-        for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
-            pack_tile(dst_idx, cb_c2c_mm0);
-        }
-
-        tile_regs_release();
-        // cb_push_back(cb_c2c_mm0, num_w0_w1_tiles_w);
-
-        //---------------------------------------------------------------------
-        // Compute in @ W1
-        //---------------------------------------------------------------------
-        tile_regs_acquire();
-        for (uint32_t k_idx = 0; k_idx < num_w0_w1_tiles_h; ++k_idx) {
-            for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
-                cb_wait_front(cb_r2c_w1, 1);
-                matmul_tiles(cb_s2c_in, cb_r2c_w1, k_idx, 0, dst_idx);
-                cb_pop_front(cb_r2c_w1, 1);
-            }
-        }
-
-        //---------------------------------------------------------------------
-        // Eltwise multiply each dst with its corresponding tile from mm0
-        //---------------------------------------------------------------------
-        reconfig_data_format_srca(cb_c2c_mm0);
-        binary_op_init_common(cb_c2c_mm0, cb_c2c_mm0, cb_c2w_elt);
-        mul_tiles_init(cb_c2c_mm0, cb_c2c_mm0);
-        // cb_wait_front(cb_c2c_mm0, num_w0_w1_tiles_w);
-
-        for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
-            // TODO: Reuse dst for operand B and write in place
-            mul_tiles(cb_c2c_mm0, cb_c2c_mm0, dst_idx, dst_idx, dst_idx);
-        }
-        tile_regs_commit();
-        // cb_pop_front(cb_c2c_mm0, num_w0_w1_tiles_w);
-
-        tile_regs_wait();
-        cb_reserve_back(cb_c2w_elt, num_w0_w1_tiles_w);
-        for (uint32_t dst_idx = 0; dst_idx < num_w0_w1_tiles_w; ++dst_idx) {
-            pack_tile(dst_idx, cb_c2w_elt);
-        }
-        cb_push_back(cb_c2w_elt, num_w0_w1_tiles_w);
-        tile_regs_release();
 
         //---------------------------------------------------------------------
         // Compute in @ W2
         //---------------------------------------------------------------------
-        // TODO: Implement W2 computation
-        //---------------------------------------------------------------------
-        reconfig_data_format_srca(cb_r2c_w2);
-        mm_init(cb_s2c_in, cb_r2c_w2, cb_c2w_mm2);
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {
-            cb_wait_front(cb_r2c_in2, 1);
-            for (uint32_t j = 0; j < num_w2_tiles_w; ++j) {
-                cb_wait_front(cb_r2c_w2, 1);
-                // TODO: Need to pack existing partial sum and put it back
-                // to accumulate here.
-                matmul_tiles(cb_s2c_in, cb_r2c_w2, 0, 0, 0);
-                cb_pop_front(cb_r2c_w2, 1);
+        for (uint32_t i = 0; i < (num_mm2_tiles / 2); ++i) {
+            // cb_wait_front(cb_r2c_in2, 1);
+            // cb_pop_front(cb_r2c_in2, 1);
+            uint32_t in0_index = 0;
+
+            tile_regs_acquire();
+
+            for (uint32_t j = 0; j < (2 * w2_txns_h); ++j) {
+                cb_wait_front(cb_r2c_w2, w2_tiles_per_txn);
+                for (uint32_t k = 0; k < w2_tiles_per_txn; k += 2) {
+                    matmul_block(
+                        cb_r2c_in2,
+                        cb_r2c_w2,
+                        in0_index++,
+                        /*in1_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/2,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                }
+                cb_pop_front(cb_r2c_w2, w2_tiles_per_txn);
             }
-            cb_pop_front(cb_r2c_in2, 1);
-        }
-        tile_regs_commit();
 
-        // Pop out excess tiles
-        const uint32_t excess_tiles = 14 - ((num_w2_tiles_h * num_w2_tiles_w) % 14);
-        for (uint32_t i = 0; i < excess_tiles; ++i) {
-            cb_wait_front(cb_r2c_w2, 1);
-            cb_pop_front(cb_r2c_w2, 1);
-        }
+            tile_regs_commit();
 
-        tile_regs_wait();
-        for (uint32_t idx = 0; idx < num_mm2_tiles; ++idx) {
-            cb_reserve_back(cb_c2w_mm2, 1);
-            pack_tile(0, cb_c2w_mm2);
-            cb_push_back(cb_c2w_mm2, 1);
+            tile_regs_wait();
+            cb_reserve_back(cb_c2w_mm2, 2);
+            pack_tile_block(0, cb_c2w_mm2, 2);
+            cb_push_back(cb_c2w_mm2, 2);
+            tile_regs_release();
         }
-        tile_regs_release();
-
     }  // end for (expert_id)
 }
 }  // namespace NAMESPACE

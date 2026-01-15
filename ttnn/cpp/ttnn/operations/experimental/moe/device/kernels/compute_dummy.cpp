@@ -33,53 +33,54 @@ void MAIN {
     constexpr uint32_t num_w2_tiles_h = 64;
 
     const uint32_t num_w0_w1_tiles_w = (core_id < 8) ? 5 : 6;
-    const uint32_t num_w2_tiles_w = (core_id < 8) ? 19 : 18;
+    const uint32_t num_w2_tiles_w = (core_id < 8) ? 18 : 20;
 
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
+    // W0 and W1 reading constants
+    constexpr uint32_t w0_w1_tiles_per_txn = 14;
+    const uint32_t w0_w1_txns = (core_id < 8) ? 2 * 80 : 2 * 96;
+    // num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_txn;  // (5|6 * 224) / 14 = 80|96
+
+    // W2 reading constants
+    // Total tiles of w2 does not divide evenly by w2_tiles_per_txn (14), so we do it in two steps
+    constexpr uint32_t w2_tiles_per_txn = 14;
+    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
+    const uint32_t w2_txns = w2_txns_h * num_w2_tiles_w;
+
+    constexpr uint32_t w0_w1_txns_per_elt_tile = 2 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn);
+
+    //-------------------------------------------------------------------------
+    // Dummy compute
+    //-------------------------------------------------------------------------
+
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        // Read W0 and W1 from CB into registers
-        for (uint32_t i = 0; i < num_w0_w1_tiles_h; ++i) {
-            for (uint32_t j = 0; j < num_w0_w1_tiles_w; ++j) {
-                cb_wait_front(cb_r2c_w0, 1);
-                cb_pop_front(cb_r2c_w0, 1);
-
-                cb_wait_front(cb_r2c_w1, 1);
-                cb_pop_front(cb_r2c_w1, 1);
-            }
-        }
-
-        // Write to cb_c2w_elt
+        // Read W0 and W1 from cb_r2c_w0 and write final output to cb_c2w_elt
         for (uint32_t i = 0; i < num_elt_tiles; ++i) {
+            for (uint32_t txn = 0; txn < w0_w1_txns_per_elt_tile; ++txn) {
+                cb_wait_front(cb_r2c_w0, w0_w1_tiles_per_txn);
+                cb_pop_front(cb_r2c_w0, w0_w1_tiles_per_txn);
+            }
+
             cb_reserve_back(cb_c2w_elt, 1);
             cb_push_back(cb_c2w_elt, 1);
         }
 
         // Read W2 from DRAM into CB
-        for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {
-            cb_wait_front(cb_r2c_in2, 1);
-            cb_pop_front(cb_r2c_in2, 1);
+        for (uint32_t i = 0; i < (num_mm2_tiles / 2); ++i) {
+            // cb_wait_front(cb_r2c_in2, 1);
+            // cb_pop_front(cb_r2c_in2, 1);
 
-            for (uint32_t j = 0; j < num_w2_tiles_w; ++j) {
-                cb_wait_front(cb_r2c_w2, 1);
-                cb_pop_front(cb_r2c_w2, 1);
+            for (uint32_t j = 0; j < (2 * w2_txns_h); ++j) {
+                cb_wait_front(cb_r2c_w2, w2_tiles_per_txn);
+                cb_pop_front(cb_r2c_w2, w2_tiles_per_txn);
             }
-        }
 
-        // Pop out excess tiles
-        const uint32_t excess_tiles = 14 - ((num_w2_tiles_h * num_w2_tiles_w) % 14);
-        for (uint32_t i = 0; i < excess_tiles; ++i) {
-            cb_wait_front(cb_r2c_w2, 1);
-            cb_pop_front(cb_r2c_w2, 1);
+            cb_reserve_back(cb_c2w_mm2, 2);
+            cb_push_back(cb_c2w_mm2, 2);
         }
-
-        // Write to cb_c2w_mm2
-        for (uint32_t i = 0; i < num_mm2_tiles; ++i) {
-            cb_reserve_back(cb_c2w_mm2, 1);
-            cb_push_back(cb_c2w_mm2, 1);
-        }
-    }
+    }  // end for (expert_id)
 }
 }  // namespace NAMESPACE
