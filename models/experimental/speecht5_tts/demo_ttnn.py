@@ -176,6 +176,13 @@ def generate_speech_ttnn(
     # For KV cache mode, track the current input frame
     current_input_ttnn = output_sequence_ttnn
 
+    # 2CQ: Events for overlapping position updates with CPU work
+    # After postnet, we async update position for next iteration on CQ1
+    # while CPU does stop check and mel extraction
+    use_2cq = enable_trace and generator is not None
+    op_event = None  # Signals CQ0 work (postnet) is done
+    pos_event = None  # Signals CQ1 work (position update) is done
+
     # Autoregressive generation loop
     decoder_loop_start = time.time()
     for step in range(max_steps):
@@ -196,8 +203,13 @@ def generate_speech_ttnn(
                 # 1. Call preprocess_decoder_inputs with position (PE + dropout)
                 # 2. Pass preprocessed hidden states to decoder (traced)
 
-                # Update decode position for trace
-                generator._reset_decode_pos(step, batch_size)
+                # 2CQ: Wait for async position update from previous iteration
+                if use_2cq and pos_event is not None:
+                    ttnn.wait_for_event(0, pos_event)  # CQ0 waits for CQ1
+                    pos_event = None
+                else:
+                    # Step 0 or non-2CQ: update position synchronously
+                    generator._reset_decode_pos(step, batch_size)
 
                 # Preprocess: run prenet + PE addition OUTSIDE trace
                 preprocessed_hidden_states = ttnn_decoder.preprocess_decoder_inputs(
@@ -226,8 +238,14 @@ def generate_speech_ttnn(
                     if not generator.trace_compiled:
                         generator._capture_decoder_trace(preprocessed_hidden_states)
                 else:
-                    # Step 1+: Execute trace (trace was captured at step 0)
-                    decoder_hidden_states = generator._execute_decoder_trace(preprocessed_hidden_states)
+                    # Step 1+: Execute trace (non-blocking for 2CQ overlap)
+                    decoder_hidden_states = generator._execute_decoder_trace(preprocessed_hidden_states, blocking=False)
+                    # Sync: create a copy to ensure trace output is ready for postnet
+                    # This is required because postnet needs valid data from the trace
+                    decoder_hidden_states = ttnn.to_memory_config(
+                        decoder_hidden_states,
+                        ttnn.L1_MEMORY_CONFIG,
+                    )
             else:
                 # KV cache without trace
                 current_pos = ttnn.from_torch(
@@ -260,23 +278,56 @@ def generate_speech_ttnn(
         total_decoder_time += decoder_time
 
         # Postnet (not traced - runs only once per step, less benefit from tracing)
+        # Note: In 2CQ mode, postnet naturally waits for trace since both are on CQ0
         postnet_start = time.time()
         mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
 
         postnet_time = time.time() - postnet_start
         total_postnet_time += postnet_time
 
+        # 2CQ: Start async position update for next iteration on CQ1
+        # This overlaps with the CPU-bound stop check and mel extraction below
+        if use_2cq and step < max_steps - 1:
+            op_event = ttnn.record_event(device, 0)  # Record on CQ0
+            ttnn.wait_for_event(1, op_event)  # CQ1 waits for CQ0
+            generator._reset_decode_pos(step + 1, batch_size, cq_id=1)  # Async on CQ1
+            pos_event = ttnn.record_event(device, 1)  # Record on CQ1
+
         # Capture TTFT after step 0's postnet (first mel frame produced)
         if step == 0 and ttft is None:
             ttft = time.time() - generation_start
 
-        # Check stopping condition (fully device-side comparison)
-        sigmoid_logits = ttnn.sigmoid(stop_logits, memory_config=ttnn.L1_MEMORY_CONFIG)
-        sum_prob = ttnn.sum(sigmoid_logits, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        should_stop = ttnn.ge(sum_prob, 0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
-        any_stop_scalar = ttnn.sum(should_stop)
-        if ttnn.to_torch(any_stop_scalar).item() > 0:
-            break
+        # Check stopping condition
+        # In KV cache mode: stop_logits is [batch, reduction_factor] (e.g., [1, 2])
+        # In standard mode: stop_logits is [batch, total_mel_frames], need last reduction_factor
+        # Reference uses: sigmoid(prob_out(hidden)).sum(dim=-1) >= threshold
+        min_steps = 10  # Don't stop too early (following HF's minlen pattern)
+        stop_threshold = 0.5  # Per-frame threshold (sum of 2 probs >= 0.5 means average >= 0.25)
+
+        if step >= min_steps:
+            # For KV cache mode (seq_len=1), stop_logits is already [batch, 2]
+            # For standard mode, we need to slice the last reduction_factor frames
+            stop_logits_shape = stop_logits.shape
+            if use_kv_cache and kv_cache is not None:
+                # KV cache mode: stop_logits is [batch, reduction_factor]
+                current_stop_logits = stop_logits
+            else:
+                # Standard mode: slice last reduction_factor frames
+                reduction_factor = 2
+                total_mel_frames = stop_logits_shape[-1]
+                current_stop_logits = ttnn.slice(
+                    stop_logits,
+                    [0, total_mel_frames - reduction_factor],
+                    [batch_size, total_mel_frames],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+
+            sigmoid_logits = ttnn.sigmoid(current_stop_logits, memory_config=ttnn.L1_MEMORY_CONFIG)
+            sum_prob = ttnn.sum(sigmoid_logits, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            should_stop = ttnn.ge(sum_prob, stop_threshold, memory_config=ttnn.L1_MEMORY_CONFIG)
+            any_stop_scalar = ttnn.sum(should_stop)
+            if ttnn.to_torch(any_stop_scalar).item() > 0:
+                break
 
         # Extract new mel frames
         if use_kv_cache and kv_cache is not None:
@@ -439,8 +490,10 @@ def run_demo(
             else:
                 actual_device = mesh_device
         else:
-            # Default single device initialization
-            device = ttnn.open_device(device_id=0, l1_small_size=300000, trace_region_size=10000000)
+            # Default single device initialization with 2 command queues
+            device = ttnn.open_device(
+                device_id=0, l1_small_size=300000, trace_region_size=10000000, num_command_queues=2
+            )
             actual_device = device
 
         # Enable program cache for faster inference
@@ -747,7 +800,7 @@ def run_demo(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 300000, "trace_region_size": 10000000}],
+    [{"l1_small_size": 300000, "trace_region_size": 10000000, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(

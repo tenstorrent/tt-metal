@@ -73,7 +73,7 @@ def test_end_to_end_pcc():
     print("=" * 80)
 
     # Test input
-    text = "Hello, my dog is cute."
+    text = "Hello, my dog is cute." * 15
     print(f"\n📝 Input Text: '{text}'")
 
     # ========================================
@@ -141,7 +141,7 @@ def test_end_to_end_pcc():
         ffn_dim=3072,
         dropout=0.0,
         layer_norm_eps=1e-5,
-        max_position_embeddings=600,
+        max_position_embeddings=700,
         max_relative_distance=160,
     )
     encoder_params = preprocess_encoder_parameters(hf_model.speecht5.encoder, ttnn_encoder_config, device)
@@ -230,7 +230,7 @@ def test_end_to_end_pcc():
 
     # Create decoder inputs using PyTorch encoder output
     batch_size, seq_len, hidden_size = pytorch_encoder_output.shape
-    decoder_seq_len = 10  # Same as in other tests
+    decoder_seq_len = 332  # Same as in other tests
 
     # Create mel input (random but deterministic)
     torch.manual_seed(123)  # Use different seed to avoid interference with speaker_embeddings

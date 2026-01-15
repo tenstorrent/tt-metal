@@ -431,6 +431,8 @@ class TTNNSpeechT5FeedForward:
         self.parameters = parameters
         self.config = config
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
+        # Cache compute config to avoid repeated creation during inference
+        self.compute_config = get_high_perf_compute_config()
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -445,7 +447,7 @@ class TTNNSpeechT5FeedForward:
             self.parameters["intermediate_dense"]["weight"],
             bias=self.parameters["intermediate_dense"]["bias"],
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            compute_kernel_config=self.compute_config,
         )
 
         # GELU activation (L1 output)
@@ -457,7 +459,7 @@ class TTNNSpeechT5FeedForward:
             self.parameters["output_dense"]["weight"],
             bias=self.parameters["output_dense"]["bias"],
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            compute_kernel_config=self.compute_config,
         )
 
         # PHASE 2: Final output must be in L1
@@ -474,17 +476,24 @@ class TTNNSpeechT5Attention:
     Cross-Attention: Q from hidden_states, K/V from encoder_hidden_states, no causal mask
     """
 
-    def __init__(self, device, parameters, config: TTNNDecoderConfig, max_seq_len: int = 256):
+    def __init__(self, device, parameters, config: TTNNDecoderConfig, max_seq_len: int = 256, max_batch_size: int = 1):
         self.device = device
         self.parameters = parameters
         self.config = config
         self.max_seq_len = max_seq_len
+        self.max_batch_size = max_batch_size
 
         self.num_heads = config.num_heads
         self.hidden_size = config.hidden_size
         self.head_dim = config.hidden_size // config.num_heads
         self.scaling = 1.0 / math.sqrt(self.head_dim)
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
+
+        # Cache compute config to avoid repeated creation during inference
+        self.compute_config = get_high_perf_compute_config()
+
+        # Cache SDPA decode configs (for decode mode with fixed batch size)
+        self.sdpa_configs = get_decode_sdpa_configs(config, max_batch_size, device, max_seq_len)
 
     def _reshape_for_multihead(self, tensor: ttnn.Tensor, batch: int, seq_len: int) -> ttnn.Tensor:
         """
@@ -580,7 +589,7 @@ class TTNNSpeechT5Attention:
                 self.parameters["qkv_proj"]["weight"],
                 bias=self.parameters["qkv_proj"]["bias"],
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=get_high_perf_compute_config(),
+                compute_kernel_config=self.compute_config,
             )
             # Only unsqueeze if 3D (from decode mode output might already be 4D)
             if len(qkv_states.shape) == 3:
@@ -603,10 +612,8 @@ class TTNNSpeechT5Attention:
                 # Decode mode: update KV cache and use SDPA decode
                 k_cache, v_cache = kv_cache
 
-                # Get sharded config for SDPA decode
-                sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_cfg = get_decode_sdpa_configs(
-                    self.config, batch, self.device, self.max_seq_len
-                )
+                # Use cached SDPA decode configs
+                sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_cfg = self.sdpa_configs
 
                 # CRITICAL: Transpose from [B, H, S, d] to [S, B, H, d] for SDPA decode
                 query = ttnn.transpose(query, 0, 2)  # [B, H, S, d] -> [S, H, B, d]
@@ -659,7 +666,7 @@ class TTNNSpeechT5Attention:
                     query,
                     key,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=get_high_perf_compute_config(),
+                    compute_kernel_config=self.compute_config,
                 )
 
                 # Apply attention mask if provided
@@ -673,7 +680,7 @@ class TTNNSpeechT5Attention:
                 attn_output = ttnn.matmul(
                     attn_weights,
                     value,
-                    compute_kernel_config=get_high_perf_compute_config(),
+                    compute_kernel_config=self.compute_config,
                 )
 
                 attn_output = ttnn.transformer.concatenate_heads(
@@ -695,7 +702,7 @@ class TTNNSpeechT5Attention:
                     self.parameters["q_proj"]["weight"],
                     bias=self.parameters["q_proj"]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=get_high_perf_compute_config(),
+                    compute_kernel_config=self.compute_config,
                 )
                 # Only unsqueeze if 3D (from decode mode it might be 4D)
                 if len(query.shape) == 3:
@@ -714,7 +721,7 @@ class TTNNSpeechT5Attention:
                     self.parameters["q_proj"]["weight"],
                     bias=self.parameters["q_proj"]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=get_high_perf_compute_config(),
+                    compute_kernel_config=self.compute_config,
                 )
 
                 # Compute K, V from encoder
@@ -723,7 +730,7 @@ class TTNNSpeechT5Attention:
                     self.parameters["kv_proj"]["weight"],
                     bias=self.parameters["kv_proj"]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=get_high_perf_compute_config(),
+                    compute_kernel_config=self.compute_config,
                 )
                 # Only unsqueeze if 3D (encoder output is usually 3D)
                 if len(kv_states.shape) == 3:
@@ -771,7 +778,7 @@ class TTNNSpeechT5Attention:
             query = ttnn.multiply(query, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
 
             attn_weights = ttnn.matmul(
-                query, key, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=get_high_perf_compute_config()
+                query, key, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self.compute_config
             )
 
             # Apply encoder attention mask if provided (for padding)
@@ -786,7 +793,7 @@ class TTNNSpeechT5Attention:
             attn_output = ttnn.matmul(
                 attn_weights,
                 value,
-                compute_kernel_config=get_high_perf_compute_config(),
+                compute_kernel_config=self.compute_config,
             )
 
             attn_output = ttnn.transformer.concatenate_heads(
@@ -800,7 +807,7 @@ class TTNNSpeechT5Attention:
             self.parameters["out_proj"]["weight"],
             bias=self.parameters["out_proj"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            compute_kernel_config=self.compute_config,
         )
         # PHASE 11: Final output must be in L1
         return output

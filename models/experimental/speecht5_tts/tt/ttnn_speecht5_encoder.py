@@ -29,6 +29,45 @@ import ttnn
 from models.experimental.speecht5_tts.reference.speecht5_encoder import create_sinusoidal_positions
 
 
+# ============================================================================
+# Memory Management Utilities - Width Sharding for Layer Norm
+# ============================================================================
+
+
+def l1_width_sharded_memory(hidden_states):
+    """
+    Convert tensor to L1 width sharded memory config.
+    Matches decoder implementation for consistent sharding.
+    """
+    # Calculate shard dimensions for width sharding
+    if len(hidden_states.shape) == 4:
+        batch_size, __, seq_len, hidden_size = hidden_states.padded_shape
+    elif len(hidden_states.shape) == 3:
+        batch_size, seq_len, hidden_size = hidden_states.padded_shape
+    else:
+        raise ValueError(f"Unsupported shape: {hidden_states.shape}")
+
+    num_cores = hidden_size // ttnn.TILE_SIZE
+
+    if num_cores % 8 == 0:
+        core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)
+    else:
+        core_grid = ttnn.CoreGrid(y=1, x=num_cores)
+    num_cores = core_grid.x * core_grid.y
+    shard_width = (hidden_size + num_cores - 1) // num_cores  # Divide width across cores
+
+    # Create width sharded memory config for tensor
+    width_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=[batch_size * seq_len, shard_width],  # Height is batch*seq_len, width is sharded
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    # Apply width sharding to hidden_states
+    return ttnn.to_memory_config(hidden_states, width_sharded_mem_config)
+
+
 @dataclass
 class TTNNEncoderConfig:
     """Configuration for TTNN SpeechT5 Encoder."""
@@ -74,27 +113,41 @@ class TTNNSpeechT5FeedForward:
     Specialized configs based on tensor shapes:
     - Intermediate: [seq_len, 768] @ [768, 3072] -> [seq_len, 3072]
     - Output: [seq_len, 3072] @ [3072, 768] -> [seq_len, 768]
+
+    Sharding strategy:
+    - seq_len <= 384: Width sharding (1D multicast)
+    - seq_len > 384: Block sharding (2D multicast)
     """
 
-    def __init__(self, device, parameters, config: TTNNEncoderConfig):
+    def __init__(self, device, parameters, config: TTNNEncoderConfig, seq_len: int = 128):
         self.device = device
         self.parameters = parameters
         self.config = config
         self.training = False  # Inference mode
+        self.seq_len = seq_len
 
         # Memory configs for operations
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
         # Pre-compute specialized configs
         self.core_grid = get_encoder_core_grid(device)
-
-        # FFN intermediate: [seq_len, 768] @ [768, 3072]
-        # FFN output: [seq_len, 3072] @ [3072, 768]
         self.ffn_compute_config = get_high_perf_compute_config(device)
+
+        # Select memory config based on seq_len
+        # Width sharding for seq_len <= 384 (fits in L1)
+        # Block sharding for seq_len > 384 (needs 2D distribution)
+        if seq_len <= SHARDING_THRESHOLD:
+            self.ffn_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        else:
+            self.ffn_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Feed-forward network with comprehensive L1 memory management.
+        Feed-forward network with sharded matmuls for performance.
+
+        Sharding strategy:
+        - seq_len <= 384: Width sharding (1D multicast)
+        - seq_len > 384: Block sharding (2D multicast)
 
         Args:
             hidden_states: [batch, seq_len, hidden_size]
@@ -102,30 +155,28 @@ class TTNNSpeechT5FeedForward:
         Returns:
             output: [batch, seq_len, hidden_size]
         """
-        # Op 1: Intermediate dense (768 -> 3072) with specialized config
+        # Op 1: Intermediate dense (768 -> 3072) with sharding
         hidden_states = ttnn.linear(
             hidden_states,
             self.parameters["intermediate_dense"]["weight"],
             bias=self.parameters["intermediate_dense"]["bias"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.core_grid,
+            memory_config=self.ffn_memory_config,
             compute_kernel_config=self.ffn_compute_config,
         )
 
-        # Op 2: GELU activation (L1 output)
-        hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Op 2: GELU activation
+        hidden_states = ttnn.gelu(hidden_states)
 
         # Op 3: Dropout (skip in inference)
         # if self.training:
         #     hidden_states = ttnn.dropout(hidden_states, p=self.config.dropout)
 
-        # Op 4: Output dense (3072 -> 768) with specialized config
+        # Op 4: Output dense (3072 -> 768) with sharding
         hidden_states = ttnn.linear(
             hidden_states,
             self.parameters["output_dense"]["weight"],
             bias=self.parameters["output_dense"]["bias"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.core_grid,
+            memory_config=self.ffn_memory_config,
             compute_kernel_config=self.ffn_compute_config,
         )
 
@@ -155,9 +206,13 @@ class TTNNSpeechT5Attention:
     14. Apply attention to values
     15-16. Reshape back
     17. Output projection
+
+    Sharding strategy:
+    - seq_len <= 384: Width sharding (1D multicast)
+    - seq_len > 384: Block sharding (2D multicast)
     """
 
-    def __init__(self, device, parameters, config: TTNNEncoderConfig):
+    def __init__(self, device, parameters, config: TTNNEncoderConfig, seq_len: int = 128):
         self.device = device
         self.parameters = parameters
         self.config = config
@@ -165,6 +220,7 @@ class TTNNSpeechT5Attention:
         self.head_dim = config.head_dim
         self.hidden_size = config.hidden_size
         self.scaling = 1.0 / math.sqrt(self.head_dim)
+        self.seq_len = seq_len
 
         # Memory configs for operations
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
@@ -195,62 +251,49 @@ class TTNNSpeechT5Attention:
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
 
-        # Ops 1-3: Project to Q, K, V with query scaling (specialized configs)
-        query_states = ttnn.linear(
+        # Fused QKV projection: single matmul instead of 3 separate ones
+        # Output shape: [batch, seq_len, 3 * hidden_size]
+        qkv_states = ttnn.linear(
             hidden_states,
-            self.parameters["q_proj"]["weight"],
-            bias=self.parameters["q_proj"]["bias"],
+            self.parameters["qkv_proj"]["weight"],
+            bias=self.parameters["qkv_proj"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=self.core_grid,
             compute_kernel_config=self.linear_compute_config,
         )
+
+        # Add batch dimension for nlp_create_qkv_heads: [batch, 1, seq_len, 3*hidden_size]
+        if len(qkv_states.shape) == 3:
+            qkv_states = ttnn.unsqueeze(qkv_states, dim=1)
+
+        # Use optimized head splitting: replaces 6 reshape/transpose ops with 1
+        # Output shapes:
+        #   query_states: [batch, num_heads, seq_len, head_dim]
+        #   key_states: [batch, num_heads, head_dim, seq_len] (transposed for attention)
+        #   value_states: [batch, num_heads, seq_len, head_dim]
+        (
+            query_states,
+            key_states_t,
+            value_states,
+        ) = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_states,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_heads,
+            transpose_k_heads=True,  # K is already transposed for Q @ K^T
+        )
+        ttnn.deallocate(qkv_states)
 
         # Scale query
         query_states = ttnn.multiply(query_states, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        key_states = ttnn.linear(
-            hidden_states,
-            self.parameters["k_proj"]["weight"],
-            bias=self.parameters["k_proj"]["bias"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.core_grid,
-            compute_kernel_config=self.linear_compute_config,
-        )
-
-        value_states = ttnn.linear(
-            hidden_states,
-            self.parameters["v_proj"]["weight"],
-            bias=self.parameters["v_proj"]["bias"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.core_grid,
-            compute_kernel_config=self.linear_compute_config,
-        )
-
-        # PHASE 2: Reshape for multi-head attention (L1 outputs)
-        # [batch, seq_len, hidden] -> [batch*num_heads, seq_len, head_dim]
-
-        # Reshape to [batch, seq, num_heads, head_dim] (L1)
-        query_states = ttnn.reshape(
-            query_states, [batch_size, seq_len, self.num_heads, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        key_states = ttnn.reshape(
-            key_states, [batch_size, seq_len, self.num_heads, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        value_states = ttnn.reshape(
-            value_states, [batch_size, seq_len, self.num_heads, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-
-        # Transpose to [batch, num_heads, seq, head_dim] (L1)
-        query_states = ttnn.permute(query_states, [0, 2, 1, 3], memory_config=ttnn.L1_MEMORY_CONFIG)
-        key_states = ttnn.permute(key_states, [0, 2, 1, 3], memory_config=ttnn.L1_MEMORY_CONFIG)
-        value_states = ttnn.permute(value_states, [0, 2, 1, 3], memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # Reshape to [batch*num_heads, seq, head_dim] (L1)
+        # Reshape for batched attention: [batch, num_heads, seq, head_dim] -> [batch*num_heads, seq, head_dim]
         query_states = ttnn.reshape(
             query_states, [batch_size * self.num_heads, seq_len, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
         )
-        key_states = ttnn.reshape(
-            key_states, [batch_size * self.num_heads, seq_len, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
+        # key_states_t is [batch, num_heads, head_dim, seq] -> [batch*num_heads, head_dim, seq]
+        key_states_t = ttnn.reshape(
+            key_states_t, [batch_size * self.num_heads, self.head_dim, seq_len], memory_config=ttnn.L1_MEMORY_CONFIG
         )
         value_states = ttnn.reshape(
             value_states, [batch_size * self.num_heads, seq_len, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
@@ -258,8 +301,7 @@ class TTNNSpeechT5Attention:
 
         # PHASE 3: Attention computation with specialized configs
         # Op 7: Compute attention scores: Q @ K^T
-        # Need to transpose key_states: [batch*heads, seq, head_dim] -> [batch*heads, head_dim, seq]
-        key_states_t = ttnn.permute(key_states, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+        # key_states_t is already transposed: [batch*heads, head_dim, seq]
         attn_weights = ttnn.matmul(
             query_states,
             key_states_t,
@@ -315,13 +357,12 @@ class TTNNSpeechT5Attention:
             attn_output, [batch_size, self.num_heads, seq_len, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-        # [batch, heads, seq, head_dim] -> [batch, seq, heads, head_dim]
-        attn_output = ttnn.permute(attn_output, [0, 2, 1, 3], memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Use optimized head concatenation: replaces permute + reshape with single op
+        # [batch, heads, seq, head_dim] -> [batch, 1, seq, hidden]
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # [batch, seq, heads, head_dim] -> [batch, seq, hidden]
-        attn_output = ttnn.reshape(
-            attn_output, [batch_size, seq_len, self.hidden_size], memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        # Remove the extra dimension: [batch, 1, seq, hidden] -> [batch, seq, hidden]
+        attn_output = ttnn.squeeze(attn_output, dim=1)
 
         # Op 17: Final linear projection with specialized configs
         output = ttnn.linear(
@@ -343,28 +384,68 @@ class TTNNSpeechT5EncoderBlock:
     Pattern: POST-NORM
     1. Attention + Dropout + Residual + LayerNorm
     2. FFN + Residual + LayerNorm
+
+    Sharding strategy (passed to sub-modules):
+    - seq_len <= 384: Width sharding (1D multicast)
+    - seq_len > 384: Block sharding (2D multicast)
     """
 
-    def __init__(self, device, parameters, config: TTNNEncoderConfig):
+    def __init__(self, device, parameters, config: TTNNEncoderConfig, seq_len: int = 128):
         self.device = device
         self.config = config
         self.training = False  # Inference mode
 
-        # Sub-modules
+        # Sub-modules with seq_len for sharding config
         self.attention = TTNNSpeechT5Attention(
             device,
             parameters["attention"],
             config,
+            seq_len=seq_len,
         )
         self.feed_forward = TTNNSpeechT5FeedForward(
             device,
             parameters["feed_forward"],
             config,
+            seq_len=seq_len,
         )
 
         # Layer norm parameters
         self.layer_norm_params = parameters["layer_norm"]
         self.final_layer_norm_params = parameters["final_layer_norm"]
+
+    def _get_layernorm_program_config(self, hidden_states):
+        """
+        Create LayerNorm program config for sharded execution.
+        Matches decoder implementation for consistent sharding.
+        """
+        # Handle both 3D [B, S, H] and 4D [B, 1, S, H] tensors
+        shape = hidden_states.shape
+        if len(shape) == 4:
+            batch_size, _, seq_len, hidden_size = shape
+        else:
+            batch_size, seq_len, hidden_size = shape
+
+        num_cores = hidden_size // ttnn.TILE_SIZE  # 24 cores for 768
+        if num_cores % 8 == 0:
+            core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)  # (3, 8) for 768
+        else:
+            core_grid = ttnn.CoreGrid(y=1, x=num_cores)
+
+        actual_seq_len = seq_len * batch_size
+        per_core_M = math.ceil(actual_seq_len / ttnn.TILE_SIZE)
+
+        # For width sharding, each core gets a portion of the width
+        K_tiles = hidden_size // ttnn.TILE_SIZE
+        total_cores = core_grid.x * core_grid.y
+        block_w = K_tiles // total_cores  # 24 / 24 = 1
+
+        return ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            subblock_w=1,
+            block_h=per_core_M,
+            block_w=block_w,
+            inplace=False,
+        )
 
     def __call__(self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -389,13 +470,20 @@ class TTNNSpeechT5EncoderBlock:
         # Residual connection
         hidden_states = ttnn.add(residual, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Layer norm
+        # Convert to width sharded for layer norm
+        hidden_states = l1_width_sharded_memory(hidden_states)
+
+        # Get LayerNorm program config for sharded execution
+        layernorm_program_config = self._get_layernorm_program_config(hidden_states)
+
+        # Layer norm with sharding
         hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.layer_norm_params["weight"],
             bias=self.layer_norm_params["bias"],
             epsilon=self.config.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=layernorm_program_config,
         )
 
         # PHASE 2: Feed-forward sub-layer
@@ -404,16 +492,24 @@ class TTNNSpeechT5EncoderBlock:
         # Feed-forward - rely on internal L1 memory configs
         ffn_output = self.feed_forward(hidden_states)
 
-        # Residual connection
-        hidden_states = ttnn.add(residual_ffn, ffn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Ensure both tensors are in L1 before add
+        hidden_states = ttnn.to_memory_config(ffn_output, ttnn.L1_MEMORY_CONFIG)
+        residual_ffn = ttnn.to_memory_config(residual_ffn, ttnn.L1_MEMORY_CONFIG)
 
-        # Final layer norm
+        # Residual connection
+        hidden_states = ttnn.add(residual_ffn, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # Convert to width sharded for final layer norm
+        hidden_states = l1_width_sharded_memory(hidden_states)
+
+        # Final layer norm with sharding
         hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.final_layer_norm_params["weight"],
             bias=self.final_layer_norm_params["bias"],
             epsilon=self.config.layer_norm_eps,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=layernorm_program_config,
         )
 
         return hidden_states
@@ -431,13 +527,18 @@ class TTNNSpeechT5Encoder:
     5. Compute relative position bias (once)
     6. Pass through N encoder blocks
     7. Return hidden states
+
+    Sharding strategy:
+    - seq_len <= 384: Width sharding (1D multicast)
+    - seq_len > 384: Block sharding (2D multicast)
     """
 
-    def __init__(self, device, parameters, config: TTNNEncoderConfig):
+    def __init__(self, device, parameters, config: TTNNEncoderConfig, seq_len: int = 128):
         self.device = device
         self.parameters = parameters
         self.config = config
         self.training = False  # Inference mode
+        self.seq_len = seq_len
         self.max_relative_distance = getattr(
             config, "max_relative_distance", getattr(config, "encoder_max_relative_position", 160)
         )  # Use config value (160 for HF)
@@ -445,12 +546,13 @@ class TTNNSpeechT5Encoder:
         # Memory configs for operations
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
-        # Encoder blocks
+        # Encoder blocks with seq_len for sharding config
         self.layers = [
             TTNNSpeechT5EncoderBlock(
                 device,
                 parameters["layers"][i],
                 config,
+                seq_len=seq_len,
             )
             for i in range(config.num_layers)
         ]
@@ -459,6 +561,40 @@ class TTNNSpeechT5Encoder:
         # This avoids dynamic tensor creation during forward pass (required for trace)
         self.position_bias_cache = {}
         self._precompute_position_bias_for_common_lengths()
+
+    def _get_layernorm_program_config(self, hidden_states):
+        """
+        Create LayerNorm program config for sharded execution.
+        Matches decoder implementation for consistent sharding.
+        """
+        # Handle both 3D [B, S, H] and 4D [B, 1, S, H] tensors
+        shape = hidden_states.shape
+        if len(shape) == 4:
+            batch_size, _, seq_len, hidden_size = shape
+        else:
+            batch_size, seq_len, hidden_size = shape
+
+        num_cores = hidden_size // ttnn.TILE_SIZE  # 24 cores for 768
+        if num_cores % 8 == 0:
+            core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)  # (3, 8) for 768
+        else:
+            core_grid = ttnn.CoreGrid(y=1, x=num_cores)
+
+        actual_seq_len = seq_len * batch_size
+        per_core_M = math.ceil(actual_seq_len / ttnn.TILE_SIZE)
+
+        # For width sharding, each core gets a portion of the width
+        K_tiles = hidden_size // ttnn.TILE_SIZE
+        total_cores = core_grid.x * core_grid.y
+        block_w = K_tiles // total_cores  # 24 / 24 = 1
+
+        return ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            subblock_w=1,
+            block_h=per_core_M,
+            block_w=block_w,
+            inplace=False,
+        )
 
     def __call__(self, input_ids: ttnn.Tensor) -> Tuple[ttnn.Tensor]:
         """
@@ -484,13 +620,20 @@ class TTNNSpeechT5Encoder:
 
         hidden_states = hidden_states + self.parameters["encode_positions_alpha"] * pe_slice
 
-        # Op 2: Pre-encoder layer norm
+        # Convert to width sharded for pre-encoder layer norm
+        hidden_states = l1_width_sharded_memory(hidden_states)
+
+        # Get LayerNorm program config for sharded execution
+        layernorm_program_config = self._get_layernorm_program_config(hidden_states)
+
+        # Op 2: Pre-encoder layer norm with sharding
         hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.parameters["layer_norm"]["weight"],
             bias=self.parameters["layer_norm"]["bias"],
             epsilon=self.config.layer_norm_eps,
-            memory_config=self.L1_MEMCFG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=layernorm_program_config,
         )
 
         # Op 4: Pre-encoder dropout is omitted in this TTNN implementation (inference-focused).
@@ -623,6 +766,9 @@ class TTNNSpeechT5Encoder:
 # Memory Management Utilities - Comprehensive L1 Optimization
 # ============================================================================
 
+# Sharding threshold: width sharding for seq_len <= 384, block for > 384
+SHARDING_THRESHOLD = 384
+
 
 def get_encoder_core_grid(device):
     """
@@ -631,6 +777,138 @@ def get_encoder_core_grid(device):
     """
     compute_grid = device.compute_with_storage_grid_size()
     return ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+
+
+def create_sharded_mem_config_width(device, seq_len, hidden_dim):
+    """
+    Create width-sharded memory config for seq_len <= 384.
+    Shards along the hidden dimension (width).
+
+    Args:
+        device: TTNN device
+        seq_len: Sequence length (M dimension)
+        hidden_dim: Hidden dimension to shard (N dimension)
+
+    Returns:
+        ShardedMemoryConfig for width sharding
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    num_cores = compute_grid.x * compute_grid.y  # 8x7 = 56 for N150
+
+    # For width sharding, we shard the output tensor along N dimension
+    # Each core gets hidden_dim / num_cores_x columns
+    shard_width = hidden_dim // compute_grid.x
+    shard_height = seq_len  # Full sequence per core
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, 0))}),
+        [shard_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+
+def create_sharded_mem_config_block(device, seq_len, hidden_dim):
+    """
+    Create block-sharded memory config for seq_len > 384.
+    Shards along both sequence and hidden dimensions.
+
+    Args:
+        device: TTNN device
+        seq_len: Sequence length (M dimension)
+        hidden_dim: Hidden dimension (N dimension)
+
+    Returns:
+        ShardedMemoryConfig for block sharding
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+
+    # For block sharding, we shard along both dimensions
+    # Typically use a grid that balances both dimensions
+    grid_x = compute_grid.x  # 8
+    grid_y = min(compute_grid.y, (seq_len + 31) // 32)  # Scale with seq_len
+
+    shard_height = (seq_len + grid_y - 1) // grid_y
+    shard_width = (hidden_dim + grid_x - 1) // grid_x
+
+    # Round up to tile size (32)
+    shard_height = ((shard_height + 31) // 32) * 32
+    shard_width = ((shard_width + 31) // 32) * 32
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
+        [shard_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+
+def get_encoder_ffn_program_config(device, seq_len, in_dim, out_dim):
+    """
+    Get program config for FFN linear operations with sharding.
+
+    For seq_len <= 384: Use width sharding (1D multicast)
+    For seq_len > 384: Use block sharding (2D multicast)
+
+    Args:
+        device: TTNN device
+        seq_len: Sequence length
+        in_dim: Input dimension (K)
+        out_dim: Output dimension (N)
+
+    Returns:
+        MatmulProgramConfig for the operation
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+
+    # Limit in0_block_w to prevent L1 overflow
+    # For large K dimensions (e.g., 3072), we need small block sizes
+    # Typical safe values: 2-4 tiles for K dimension
+    k_tiles = in_dim // 32
+    in0_block_w = min(4, k_tiles)  # Limit to 4 tiles (128 elements) max
+
+    if seq_len <= SHARDING_THRESHOLD:
+        # Width sharding - 1D multicast along N dimension
+        # Use all cores in x-direction for width sharding
+        per_core_N = (out_dim + compute_grid.x * 32 - 1) // (compute_grid.x * 32)
+        per_core_M = (seq_len + 31) // 32
+
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(compute_grid.x, 1),
+            in0_block_w=in0_block_w,  # K dimension in tiles, limited for L1
+            out_subblock_h=1,
+            out_subblock_w=min(4, per_core_N),  # Limit subblock width
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            mcast_in0=True,
+        )
+    else:
+        # Block sharding - 2D multicast
+        grid_y = min(compute_grid.y, (seq_len + 31) // 32)
+        per_core_M = (seq_len + grid_y * 32 - 1) // (grid_y * 32)
+        per_core_N = (out_dim + compute_grid.x * 32 - 1) // (compute_grid.x * 32)
+
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(compute_grid.x, grid_y),
+            in0_block_w=in0_block_w,  # K dimension in tiles, limited for L1
+            out_subblock_h=1,
+            out_subblock_w=min(4, per_core_N),
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
 
 
 def get_encoder_linear_config(device, M, K, N):
@@ -795,18 +1073,18 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
         memory_config=DRAM_MEMCFG,
     )
 
-    # 5. Pre-encoder layer norm
+    # 5. Pre-encoder layer norm (bfloat8_b for optimization)
     parameters["layer_norm"] = {
         "weight": ttnn.from_torch(
             core_encoder.layer_norm.weight.data,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=DRAM_MEMCFG,
         ),
         "bias": ttnn.from_torch(
             core_encoder.layer_norm.bias.data,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=DRAM_MEMCFG,
@@ -818,50 +1096,30 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
     for i, torch_block in enumerate(core_encoder.layers):
         block_params = {}
 
-        # Attention parameters
+        # Attention parameters - fused QKV projection for better performance
+        # Concatenate Q, K, V weights: [768, 768] each -> [768, 2304] fused
+        q_weight = torch_block.attention.q_proj.weight.data.T  # [768, 768]
+        k_weight = torch_block.attention.k_proj.weight.data.T  # [768, 768]
+        v_weight = torch_block.attention.v_proj.weight.data.T  # [768, 768]
+        qkv_weight = torch.cat([q_weight, k_weight, v_weight], dim=1)  # [768, 2304]
+
+        # Concatenate Q, K, V biases: [768] each -> [2304] fused
+        q_bias = torch_block.attention.q_proj.bias.data
+        k_bias = torch_block.attention.k_proj.bias.data
+        v_bias = torch_block.attention.v_proj.bias.data
+        qkv_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)  # [2304]
+
         block_params["attention"] = {
-            "q_proj": {
+            "qkv_proj": {
                 "weight": ttnn.from_torch(
-                    torch_block.attention.q_proj.weight.data.T,  # Transpose!
-                    dtype=ttnn.bfloat16,
+                    qkv_weight,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=DRAM_MEMCFG,
                 ),
                 "bias": ttnn.from_torch(
-                    torch_block.attention.q_proj.bias.data,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=DRAM_MEMCFG,
-                ),
-            },
-            "k_proj": {
-                "weight": ttnn.from_torch(
-                    torch_block.attention.k_proj.weight.data.T,  # Transpose!
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=DRAM_MEMCFG,
-                ),
-                "bias": ttnn.from_torch(
-                    torch_block.attention.k_proj.bias.data,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=DRAM_MEMCFG,
-                ),
-            },
-            "v_proj": {
-                "weight": ttnn.from_torch(
-                    torch_block.attention.v_proj.weight.data.T,  # Transpose!
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=DRAM_MEMCFG,
-                ),
-                "bias": ttnn.from_torch(
-                    torch_block.attention.v_proj.bias.data,
+                    qkv_bias,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
@@ -871,7 +1129,7 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
             "out_proj": {
                 "weight": ttnn.from_torch(
                     torch_block.attention.out_proj.weight.data.T,  # Transpose!
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=DRAM_MEMCFG,
@@ -886,12 +1144,12 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
             },
         }
 
-        # Feed-forward parameters
+        # Feed-forward parameters (bfloat8_b for matmul weights, bfloat16 for biases)
         block_params["feed_forward"] = {
             "intermediate_dense": {
                 "weight": ttnn.from_torch(
                     torch_block.feed_forward.intermediate_dense.weight.data.T,  # Transpose!
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=DRAM_MEMCFG,
@@ -907,7 +1165,7 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
             "output_dense": {
                 "weight": ttnn.from_torch(
                     torch_block.feed_forward.output_dense.weight.data.T,  # Transpose!
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=DRAM_MEMCFG,
@@ -922,18 +1180,18 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
             },
         }
 
-        # Layer norm parameters
+        # Layer norm parameters (bfloat8_b for optimization)
         block_params["layer_norm"] = {
             "weight": ttnn.from_torch(
                 torch_block.layer_norm.weight.data,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
             ),
             "bias": ttnn.from_torch(
                 torch_block.layer_norm.bias.data,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
@@ -943,14 +1201,14 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
         block_params["final_layer_norm"] = {
             "weight": ttnn.from_torch(
                 torch_block.final_layer_norm.weight.data,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
             ),
             "bias": ttnn.from_torch(
                 torch_block.final_layer_norm.bias.data,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
