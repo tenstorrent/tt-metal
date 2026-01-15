@@ -840,9 +840,8 @@ void write_to_device_buffer(
     if (has_pinned_inputs && is_unpadded && !is_sharded(buffer.buffer_layout())) {
         auto device_id = buffer.device()->id();
         const auto& cluster = MetalContext::instance().get_cluster();
-        const ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
         auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
-        if (noc_addr_pair_opt.has_value() and noc_addr_pair_opt->device_id == mmio_device_id) {
+        if (noc_addr_pair_opt.has_value() and noc_addr_pair_opt->device_id == device_id) {
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
             const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
