@@ -1,0 +1,4 @@
+TORCH_PROFILER_RAW_DATA/
+profiling/
+reports/
+kernel_meta/

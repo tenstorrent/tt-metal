@@ -1,0 +1,10 @@
+{
+    "cases": [
+        {
+            "arg_type": ["default"],
+            "dtype": ["int8"],
+            "batch_size": [2097152],
+            "dim_size": [1024]
+        }
+    ]
+}
