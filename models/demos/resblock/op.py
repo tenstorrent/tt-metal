@@ -16,7 +16,7 @@ class FusedResblock:
     class McastCoreCBIndex:
         MCAST_CORE_GATHER_CB = 6
 
-    MCAST_CORE = ttnn.CoreCoord(8, 8)
+    MCAST_CORE = ttnn.CoreCoord(7, 4)
 
     @staticmethod
     def golden(input_a, weight0, weight1):
@@ -120,7 +120,6 @@ class FusedResblock:
         logger.info(
             f"Running ResBlock operation with shape {input_tensor.shape} x {weight0.shape} x {weight1.shape} -> {output_tensor.shape}"
         )
-
         logger.debug(f"Input tensor sharding: {input_tensor.memory_config().shard_spec}")
         logger.debug(f"Weight0 tensor sharding: {weight0.memory_config().shard_spec}")
         logger.debug(f"Weight1 tensor sharding: {weight1.memory_config().shard_spec}")
@@ -135,19 +134,104 @@ class FusedResblock:
         weight1_shape = weight1.shape
         weight1_tile = weight1.get_tile()
 
-        # assert (
-        # input_shape[0] // input_tile.tile_shape[0] == 1
-        # ), f"M ({input_shape[0]}) must be a single tile with height same as tile_height ({input_tile.tile_shape[0]})"
+        # Validate inputs are ttnn.Tensor and on same device
+        assert isinstance(input_tensor, ttnn.Tensor), f"Input tensor must be ttnn.Tensor, got {type(input_tensor)}"
+        assert isinstance(weight0, ttnn.Tensor), f"Weight must be ttnn.Tensor, got {type(weight0)}"
+        assert isinstance(weight1, ttnn.Tensor), f"Weight must be ttnn.Tensor, got {type(weight1)}"
+        assert isinstance(output_tensor, ttnn.Tensor), f"Output tensor must be ttnn.Tensor, got {type(output_tensor)}"
+        assert (
+            input_tensor.device() == weight0.device() == weight1.device() == output_tensor.device()
+        ), "All tensors must be on the same device"
+
+        # Validate rank and matmul shape compatibility
+        assert len(input_shape) >= 2, f"Input tensor must have rank >= 2, got {len(input_shape)}"
+        assert len(weight0_shape) >= 2, f"Weight0 must have rank >= 2, got {len(weight0_shape)}"
+        assert len(weight1_shape) >= 2, f"Weight1 must have rank >= 2, got {len(weight1_shape)}"
+        assert len(output_tensor.shape) >= 2, f"Output tensor must have rank >= 2, got {len(output_tensor.shape)}"
+
+        # Validate matmul shape compatibility: input [M, K] @ weight0 [K, K] -> intermediate [M, K]
+        # Then intermediate [M, K] @ weight1 [K, K] -> output [M, K]
+        input_m, input_k = input_shape[-2], input_shape[-1]
+        weight0_k_in, weight0_k_out = weight0_shape[-2], weight0_shape[-1]
+        weight1_k_in, weight1_k_out = weight1_shape[-2], weight1_shape[-1]
+        output_m, output_k = output_tensor.shape[-2], output_tensor.shape[-1]
+
+        assert input_k == weight0_k_in, f"Input K dimension ({input_k}) must match weight0 K_in ({weight0_k_in})"
+        assert (
+            weight0_k_out == weight1_k_in
+        ), f"Weight0 K_out ({weight0_k_out}) must match weight1 K_in ({weight1_k_in})"
+        assert weight1_k_out == input_k, f"Weight1 K_out ({weight1_k_out}) must match input K ({input_k})"
+
+        # Note: input M may be replicated across cores, so input_m can be larger than output_m
+        # The actual batch dimension should match after accounting for replication
+        assert output_k == input_k, f"Output K dimension ({output_k}) must match input K ({input_k})"
+
+        # Validate tile compatibility and K dimension divisibility
         assert (
             input_shape[1] % input_tile.tile_shape[1] == 0
-        ), f"K ({input_shape[1]}) must be divisible by tile_width ({input_tile.tile_shape[1]})"
+        ), f"Input K ({input_shape[1]}) must be divisible by tile width ({input_tile.tile_shape[1]})"
         num_tiles_k = input_shape[1] // input_tile.tile_shape[1]
 
-        # TODO: Equality comparison checks exact match so we can't use this for now
-        # assert weight0.memory_config().shard_spec.grid == weight1.memory_config().shard_spec.grid, f"Weights must have the same core grid"
-        all_matmul_cores = (
-            weight0.memory_config().shard_spec.grid
-        )  # All matmul cores are the same for weight0 and weight1
+        # Validate dtype compatibility
+        input_dtype = input_tensor.dtype
+        weight0_dtype = weight0.dtype
+        weight1_dtype = weight1.dtype
+        out_dtype = output_tensor.dtype
+        assert (
+            weight0_dtype == weight1_dtype
+        ), f"Weight0 dtype ({weight0_dtype}) must match weight1 dtype ({weight1_dtype})"
+
+        # Validate sharding expectations
+        assert (
+            input_tensor.memory_config().shard_spec is not None
+        ), "Input tensor must have shard_spec (must be sharded)"
+        assert weight0.memory_config().shard_spec is not None, "Weight0 must have shard_spec (must be sharded)"
+        assert weight1.memory_config().shard_spec is not None, "Weight1 must have shard_spec (must be sharded)"
+        assert (
+            output_tensor.memory_config().shard_spec is not None
+        ), "Output tensor must have shard_spec (must be sharded)"
+
+        # Validate matmul cores don't overlap with mcast core
+        all_matmul_cores = weight0.memory_config().shard_spec.grid
+        assert not all_matmul_cores.contains(
+            FusedResblock.MCAST_CORE
+        ), f"Matmul cores {all_matmul_cores} must not contain mcast core {FusedResblock.MCAST_CORE}"
+
+        # Validate weight tile is 32x32 and weight shard width is 1 tile
+        # This op only supports single output tile in N dimension (we only iterate over K, not multiple output tiles)
+        weight0_shard_shape = weight0.memory_config().shard_spec.shape
+        weight1_shard_shape = weight1.memory_config().shard_spec.shape
+        weight0_shard_tiles_h = weight0_shard_shape[0] // weight0_tile.tile_shape[0]
+        weight0_shard_tiles_w = weight0_shard_shape[1] // weight0_tile.tile_shape[1]
+        weight1_shard_tiles_h = weight1_shard_shape[0] // weight1_tile.tile_shape[0]
+        weight1_shard_tiles_w = weight1_shard_shape[1] // weight1_tile.tile_shape[1]
+
+        assert (
+            weight0_tile.tile_shape[0] == 32 and weight0_tile.tile_shape[1] == 32
+        ), f"Weight0 tile must be exactly 32x32, got {weight0_tile.tile_shape}"
+        assert (
+            weight1_tile.tile_shape[0] == 32 and weight1_tile.tile_shape[1] == 32
+        ), f"Weight1 tile must be exactly 32x32, got {weight1_tile.tile_shape}"
+        assert (
+            weight0_shard_tiles_w == 1
+        ), f"Weight0 shard width must be exactly 1 tile (got {weight0_shard_tiles_w} tiles). This op only iterates over K dimension and does not support multiple output tiles in N dimension. Shard shape: {weight0_shard_shape} elements, tile: {weight0_tile.tile_shape}"
+        assert (
+            weight1_shard_tiles_w == 1
+        ), f"Weight1 shard width must be exactly 1 tile (got {weight1_shard_tiles_w} tiles). This op only iterates over K dimension and does not support multiple output tiles in N dimension. Shard shape: {weight1_shard_shape} elements, tile: {weight1_tile.tile_shape}"
+
+        # Validate that we only support single output tile per core (M=1 tile, N=1 tile per shard) - we only iterate over K
+        # The output is width-sharded, so we check the shard shape, not the global shape
+        out_shape = output_tensor.shape
+        out_tile = output_tensor.get_tile()
+        out_shard_shape = output_tensor.memory_config().shard_spec.shape
+        out_shard_tiles_m = out_shard_shape[0] // out_tile.tile_shape[0]
+        out_shard_tiles_n = out_shard_shape[1] // out_tile.tile_shape[1]
+        assert (
+            out_shard_tiles_m == 1
+        ), f"Output shard M dimension must be exactly 1 tile (got {out_shard_tiles_m} tiles). This op only supports single output tile in M dimension per core and iterates over K dimension only. Shard shape: {out_shard_shape} elements, tile: {out_tile.tile_shape}"
+        assert (
+            out_shard_tiles_n == 1
+        ), f"Output shard N dimension must be exactly 1 tile (got {out_shard_tiles_n} tiles). This op only supports single output tile in N dimension per core and iterates over K dimension only. Shard shape: {out_shard_shape} elements, tile: {out_tile.tile_shape}"
 
         activation_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             FusedResblock.MatmulCoreCBIndex.ACTIVATION_CB, input_tensor
@@ -162,8 +246,6 @@ class FusedResblock:
             FusedResblock.MatmulCoreCBIndex.OUT_CB, output_tensor
         )
 
-        out_shape = output_tensor.shape
-        out_tile = output_tensor.get_tile()
         out_dtype = output_tensor.dtype
         out_tile_size = out_tile.get_tile_size(out_dtype)
         out_tile_descriptor = ttnn.TileDescriptor(out_tile)
@@ -200,7 +282,7 @@ class FusedResblock:
         all_cores = all_matmul_cores.merge(all_mcast_cores)
         assert (
             all_cores.size() == all_matmul_cores.size() + all_mcast_cores.size()
-        ), f"All cores must be the same size as all matmul cores plus one for the mcast core"
+        ), "All cores must be the same size as all matmul cores plus one for the mcast core"
         logger.debug(f"All cores: {all_cores}")
 
         mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
