@@ -13,10 +13,6 @@
 
 namespace ttnn::operations::pool::upsample {
 
-// =============================================================================
-// Basic Utilities
-// =============================================================================
-
 inline bool is_integer_scale(float scale) { return scale == std::floor(scale); }
 
 inline uint32_t compute_num_cores_nhw(
@@ -31,10 +27,6 @@ inline uint32_t compute_num_cores_nhw(
     const auto grid_size = shard_spec.grid.bounding_box().grid_size();
     return (shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR) ? grid_size.y : grid_size.x;
 }
-
-// =============================================================================
-// Path Selection (Single Source of Truth)
-// =============================================================================
 
 enum class UpsamplePath { INTEGER_OPTIMIZED, FLOAT_GENERAL, UNSUPPORTED };
 
@@ -79,10 +71,6 @@ inline UpsamplePath select_upsample_path(const Tensor& input, float scale_h, flo
 
     return UpsamplePath::UNSUPPORTED;
 }
-
-// =============================================================================
-// Output MemoryConfig Helpers
-// =============================================================================
 
 // For ND sharded tensors (float path only)
 inline tt::tt_metal::MemoryConfig compute_nd_output_mem_config(
@@ -135,10 +123,6 @@ inline tt::tt_metal::MemoryConfig compute_float_output_mem_config(
     return tt::tt_metal::MemoryConfig(input_mem_config.memory_layout(), input_mem_config.buffer_type(), out_spec);
 }
 
-// =============================================================================
-// Error Messages
-// =============================================================================
-
 inline std::string generate_unsupported_config_message(
     const Tensor& input, float scale_h, float scale_w, const std::string& mode) {
     std::string msg = "Unsupported upsample configuration:";
@@ -173,7 +157,7 @@ inline std::string generate_unsupported_config_message(
     msg += "\n  - Integer scales + nearest + ROW_MAJOR + (INTERLEAVED|HEIGHT_SHARDED|BLOCK_SHARDED)";
     msg += "\n  - Integer scales + nearest + TILE + INTERLEAVED";
     msg += "\n  - Float scales + nearest + ROW_MAJOR + any memory layout";
-    msg += "\n  - Integer scales + bilinear + any layout (will autoshard if needed)";
+    msg += "\n  - Integer scales + bilinear + HEIGHT_SHARDED or INTERLEAVED)";
 
     return msg;
 }

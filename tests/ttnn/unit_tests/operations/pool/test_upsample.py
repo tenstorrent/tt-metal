@@ -569,7 +569,7 @@ def test_nearest_upsample_with_uneven_input_shards(
         ([1, 64, 8, 16], 2.0, 0.5),
         ([1, 128, 16, 8], 0.5, 2.0),
         # Typical ML shapes
-        ([1, 64, 28, 28], 2.0, 2.0),
+        ([1, 64, 28, 28], 2.5, 2.5),
     ],
 )
 def test_upsample_nearest_float_interleaved(device, input_shape, scale_factor_h, scale_factor_w):

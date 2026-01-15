@@ -25,10 +25,6 @@ static std::array<uint32_t, 4> get_input_shape(const UpsampleParams& args, const
     return {s[0], s[1], s[2], s[3]};
 }
 
-// =============================================================================
-// Program Factory Selection
-// =============================================================================
-
 UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const Tensor& input = tensor_args.input_tensor;
@@ -48,10 +44,6 @@ UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
 
     return program::UpsampleNearestFloatProgramFactory{};
 }
-
-// =============================================================================
-// Validation
-// =============================================================================
 
 void UpsampleOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -76,6 +68,10 @@ void UpsampleOperation::validate_on_program_cache_miss(
             args.scale_factor_h,
             args.scale_factor_w);
         TT_FATAL(input.dtype() == tt::tt_metal::DataType::BFLOAT16, "Bilinear upsample requires BFLOAT16 input");
+        TT_FATAL(input.memory_config().is_sharded(), "Bilinear upsample requires sharded input tensor");
+        TT_FATAL(
+            input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+            "Bilinear upsample requires HEIGHT_SHARDED input tensor");
     }
 
     // TILE layout requirements
@@ -96,10 +92,6 @@ void UpsampleOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
 }
-
-// =============================================================================
-// Output Specs
-// =============================================================================
 
 UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -147,10 +139,6 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
 
     return make_spec(compute_float_output_mem_config(input_mc, out_n, out_h, out_w));
 }
-
-// =============================================================================
-// Output Tensor Creation
-// =============================================================================
 
 UpsampleOperation::tensor_return_value_t UpsampleOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
