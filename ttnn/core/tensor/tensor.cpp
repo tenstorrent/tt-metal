@@ -681,6 +681,8 @@ auto get_datatype_tile_size(DataType dtype) {
 // for particular data type.
 bool can_exec_ops_on_device(DataType type) {
     switch (type) {
+        case DataType::BFLOAT16:
+            // We support bfloat16 but the change breaks unit tests, will enable in the follow-up PR
         case DataType::FLOAT32:
             // https://github.com/tenstorrent/tt-metal/issues/23405 (layout precision loss)
             // https://github.com/tenstorrent/tt-metal/issues/30147 (typecast rounding error)
@@ -725,18 +727,6 @@ bool can_construct_on_device(
          ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0)));
 }
 
-template <typename T>
-bool can_borrow_data(
-    const Layout& layout,
-    const TensorLayout& src_tensor_layout,
-    const ttnn::Shape& tensor_shape,
-    const DataType& src_dtype) {
-    return layout == Layout::ROW_MAJOR &&
-           src_tensor_layout.compute_physical_shape(tensor_shape) ==
-               src_tensor_layout.compute_logical_2d_shape(tensor_shape) &&
-           src_dtype == convert_to_data_type<T>();
-}
-
 Tensor create_tt_tensor_from_host_data(
     HostBuffer& host_buffer,
     DataType src_dtype,
@@ -759,7 +749,7 @@ Tensor create_tt_tensor_from_host_data(
         TensorLayout src_tensor_layout(src_dtype, PageConfig(layout, optional_tile), memory_config);
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(dst_layout, optional_tile), memory_config);
 
-        const bool pydata_borrowable = can_borrow_data<T>(layout, src_tensor_layout, tensor_shape, src_dtype);
+        const bool pydata_borrowable = src_dtype == convert_to_data_type<T>();
 
         if (exec_on_device && construct_on_device && pydata_borrowable) {
             return Tensor::from_borrowed_data(
