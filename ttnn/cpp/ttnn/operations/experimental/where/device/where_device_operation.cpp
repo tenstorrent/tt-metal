@@ -16,7 +16,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ternary {
+namespace ttnn::experimental::prim {
 
 static_assert(
     ttnn::device_operation::DeviceOperationConcept<WhereDeviceOperation>,
@@ -155,4 +155,4 @@ WhereDeviceOperation::invoke(
             .output_tensor = output_tensor}};
 }
 
-}  // namespace ttnn::operations::experimental::ternary
+}  // namespace ttnn::experimental::prim
