@@ -27,7 +27,7 @@
 #include "tt_metal/hw/inc/experimental/udm/udm_api.hpp"
 #include "tests/ttnn/unit_tests/gtests/udm/nd_iter_args.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/dprint.h"
 
 void kernel_main() {
@@ -73,7 +73,7 @@ void kernel_main() {
     // ==================== Initialize Scaler CB ====================
     // Generate scaler tile for reduction (1.0 for SUM, 1/W for MEAN)
     cb_reserve_back(cb_scaler, 1);
-    generate_reduce_scaler(cb_scaler, scaler_packed);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_scaler, scaler_packed);
     cb_push_back(cb_scaler, 1);
 
     // ==================== Compute Initial Page IDs ====================

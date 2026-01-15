@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
@@ -44,6 +44,6 @@ void kernel_main() {
     {
         constexpr uint32_t cb_reduce_scaler = tt::CBIndex::c_1;
         const uint32_t reduce_scaler = get_arg_val<uint32_t>(0);
-        generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+        dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
     }
 }
