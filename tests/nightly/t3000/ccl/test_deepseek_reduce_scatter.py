@@ -93,12 +93,15 @@ def run_reduce_scatter_impl(
     tt_reduce_scatter_output_list = []
 
     def run_op(i):
+        # logger.info(F"Start Running Op")
         tt_reduce_scatter_output_tensor = ttnn.experimental.deepseek_reduce_scatter(
             tt_input_tensor_mesh_list[i],
             output_memory_config=mem_config_rs,
             num_links=num_links,
             cluster_axis=cluster_axis,
         )
+        # ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        # logger.info(F"End Running Op")
 
         return tt_reduce_scatter_output_tensor
 
@@ -204,8 +207,8 @@ def run_reduce_scatter_impl(
             3,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
-            False,
-            1,
+            True,  # True
+            5,  # 5
         ),  # T3K single link test - 4 tiles per slice forward, 4 tiles per slice backward
     ],
     # ids=[

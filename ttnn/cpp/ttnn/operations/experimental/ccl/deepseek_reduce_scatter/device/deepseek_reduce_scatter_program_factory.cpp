@@ -491,9 +491,9 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
             writer_rt_args[6] = intermediate_slice_tensors.at(6).buffer()->address();
             writer_rt_args[7] = intermediate_slice_tensors.at(7).buffer()->address();
             writer_rt_args[8] = output_tensor.buffer()->address();
-            writer_rt_args[10] = op_semaphore.address();
-            writer_rt_args[11] = barrier_semaphores.at(0).address();
-            writer_rt_args[12] = barrier_semaphores.at(1).address();
+            writer_rt_args[11] = op_semaphore.address();
+            writer_rt_args[12] = barrier_semaphores.at(0).address();
+            writer_rt_args[13] = barrier_semaphores.at(1).address();
         }
     }
 }
