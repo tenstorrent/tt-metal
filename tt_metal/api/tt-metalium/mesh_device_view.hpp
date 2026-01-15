@@ -68,7 +68,9 @@ public:
 
     // Returns `IDevice*` instance for `coord`.
     // In multi-host context, throws if `coord` is querying a remote device.
-    [[deprecated("Deprecated, retrieving physical devices can fail in distributed contexts.")]] [[nodiscard]] IDevice*
+    [[deprecated(
+        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
+        "28-02-2026.")]] [[nodiscard]] IDevice*
     get_device(const MeshCoordinate& coord) const;
 
     // Returns `tt::tt_fabric::FabricNodeId` for `coord`.
@@ -113,7 +115,9 @@ public:
 
     // Returns true if the view is fully local, i.e. all devices in the view are local.
     // Throws if the coordinate is out of bounds of this view.
-    [[deprecated("Deprecated, is_local should be avoided as it is likely to cause issues in distributed contexts.")]]
+    [[deprecated(
+        "Deprecated, is_local should be avoided as it is likely to cause issues in distributed contexts. This will be "
+        "removed after 28-02-2026.")]]
     bool is_local(const MeshCoordinate& coord) const;
 
     // Returns the coordinate range of all local devices in this view.
