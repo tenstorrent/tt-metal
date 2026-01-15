@@ -26,7 +26,7 @@ class TTNNLinear(TTNNModule):
     @classmethod
     def from_torch(cls, linear: nn.Linear):
         """Create TTNNLinear from PyTorch Linear layer."""
-        new_linear = TTNNLinear(
+        new_linear = cls(
             in_features=linear.in_features,
             out_features=linear.out_features,
         )
@@ -93,16 +93,6 @@ class TTNNLinearLLama(TTNNLinear):
                 self.torch_layer.bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
             )
 
-    @classmethod
-    def from_torch(cls, linear: nn.Linear):
-        """Create TTNNLinearLLama from PyTorch Linear layer."""
-        new_linear = TTNNLinearLLama(
-            in_features=linear.in_features,
-            out_features=linear.out_features,
-        )
-        new_linear._fallback_torch_layer = linear
-        return new_linear
-
     @deallocate_weights_after
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass with automatic weight deallocation."""
@@ -111,16 +101,6 @@ class TTNNLinearLLama(TTNNLinear):
 
 class TTNNLinearLLamaBFloat16(TTNNLinear):
     """TTNN Linear layer optimized for LLaMA models using bfloat16."""
-
-    @classmethod
-    def from_torch(cls, linear: nn.Linear):
-        """Create TTNNLinearLLama from PyTorch Linear layer."""
-        new_linear = TTNNLinearLLamaBFloat16(
-            in_features=linear.in_features,
-            out_features=linear.out_features,
-        )
-        new_linear._fallback_torch_layer = linear
-        return new_linear
 
     @deallocate_weights_after
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
@@ -167,7 +147,7 @@ class TTNNViTIntermediate(TTNNLinearGelu):
         assert (
             torch_vit_intermediate.intermediate_act_fn.__class__.__name__ == "GELUActivation"
         ), "Only GELU activation is supported."
-        new_intermediate = TTNNViTIntermediate()
+        new_intermediate = cls()
         new_intermediate._fallback_torch_layer = torch_vit_intermediate
         new_intermediate.dense = TTNNLinear.from_torch(torch_vit_intermediate.dense)
         return new_intermediate

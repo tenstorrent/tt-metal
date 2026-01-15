@@ -180,7 +180,7 @@ class TTNNFusedQKVSelfAttention(TTNNModule):
     @classmethod
     def from_torch(cls, fused_qkv: "PytorchFusedQKVSelfAttention"):
         """Create TTNNViTSelfAttention from PyTorch ViTSelfAttention."""
-        new_fused_qkv = TTNNFusedQKVSelfAttention()
+        new_fused_qkv = cls()
         new_fused_qkv._fallback_torch_layer = fused_qkv
         new_fused_qkv.num_attention_heads = fused_qkv.num_attention_heads
         new_fused_qkv.hidden_size = fused_qkv.hidden_size
@@ -249,7 +249,7 @@ class TTNNSelfAttention(TTNNModule):
     @classmethod
     def from_torch(cls, self_attention: "SelfAttention"):
         """Create TTNNViTSelfAttention from PyTorch ViTSelfAttention."""
-        new_self_attention = TTNNSelfAttention(
+        new_self_attention = cls(
             attention_config=self_attention.config,
         )
         new_self_attention._fallback_torch_layer = self_attention
@@ -316,7 +316,7 @@ class TTNNViTSelfAttention(TTNNSelfAttention):
     @classmethod
     def from_torch(cls, self_attention: "ViTSelfAttention"):
         """Create TTNNViTSelfAttention from PyTorch ViTSelfAttention."""
-        new_self_attention = TTNNViTSelfAttention(
+        new_self_attention = cls(
             attention_config=self_attention.config,
         )
         new_self_attention._fallback_torch_layer = self_attention

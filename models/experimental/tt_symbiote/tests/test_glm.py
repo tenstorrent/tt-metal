@@ -60,7 +60,7 @@ def get_attention_mappings():
         @classmethod
         def from_torch(cls, attention_module: OriginalGlm4MoeAttention) -> "TTNNGlm4MoeAttention":
             """Create TTNNBottleneck from PyTorch Bottleneck layer."""
-            new_attention = Glm4MoeAttention(attention_module)
+            new_attention = cls(attention_module)
             return new_attention
 
         def forward(
@@ -252,7 +252,7 @@ def get_naive_moe_mapping():
         @classmethod
         def from_torch(cls, MOE_layer: OriginalGlm4MoeNaiveMoe) -> "Glm4MoeNaiveMoe":
             """Create TTNNBottleneck from PyTorch Bottleneck layer."""
-            new_router = Glm4MoeNaiveMoe(MOE_layer)
+            new_router = cls(MOE_layer)
             return new_router
 
         def forward(

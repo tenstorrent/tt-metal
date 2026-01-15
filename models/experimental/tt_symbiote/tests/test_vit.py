@@ -40,7 +40,7 @@ class RewrittenViTEmbeddings(nn.Module):
     @classmethod
     def from_torch(cls, embeddings: ViTEmbeddings):
         """Create TTNNViTEmbeddings from PyTorch ViTEmbeddings layer."""
-        new_embeddings = RewrittenViTEmbeddings(embeddings)
+        new_embeddings = cls(embeddings)
         return new_embeddings
 
     def forward(
@@ -64,7 +64,7 @@ class RewrittenViTOutput(nn.Module):
     @classmethod
     def from_torch(cls, old_layer: ViTOutput):
         """Create TTNNViTEmbeddings from PyTorch ViTEmbeddings layer."""
-        new_layer = RewrittenViTOutput(old_layer)
+        new_layer = cls(old_layer)
         return new_layer
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
@@ -91,7 +91,7 @@ class RewrittenViTLayer(nn.Module):
     @classmethod
     def from_torch(cls, old_layer: ViTLayer):
         """Create TTNNViTEmbeddings from PyTorch ViTEmbeddings layer."""
-        new_layer = RewrittenViTLayer(old_layer)
+        new_layer = cls(old_layer)
         return new_layer
 
     def forward(
