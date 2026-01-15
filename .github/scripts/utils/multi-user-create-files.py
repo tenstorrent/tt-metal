@@ -38,7 +38,7 @@ def multi_user_containers(num_containers, image):
                 "TTNN_RUNTIME_ARTIFACTS": f"/app/tt-metal/.ttnn_runtime_artifacts_{i}",
                 "LD_LIBRARY_PATH": "/app/tt-metal/build/lib",
                 "PYTHONPATH": "/app/tt-metal",
-                "TT_MESH_GRAPH_DESC_PATH": "/app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml",
+                "TT_MESH_GRAPH_DESC_PATH": "/app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto",
                 "TT_MULTI_USER_GALAXY": f"/app/tt-metal/.multi-user-galaxy-docker-files/tray-{i}.txt",
             },
             "devices": devices,

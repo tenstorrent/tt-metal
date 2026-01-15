@@ -13,6 +13,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
+    KvCacheConfig,
     MeshDeviceStub,
     ReduceScatterAsyncMinimalConfig,
     SavedWeight,
@@ -126,6 +127,7 @@ class MLA2D(MLA1D):
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
         cache: torch.Tensor | None = None,
+        kv_cache_override: KvCacheConfig | None = None,
     ) -> ModelState:
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
@@ -135,6 +137,7 @@ class MLA2D(MLA1D):
                 mesh_device,
                 ccl,
                 None if cache is None else cache.reshape(mesh_device.shape[0], -1, *cache.shape[1:]),
+                kv_cache_override,
             ),
             "ccl": ccl,
         }

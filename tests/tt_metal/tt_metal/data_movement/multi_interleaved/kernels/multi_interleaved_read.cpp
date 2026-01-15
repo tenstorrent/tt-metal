@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
-#include "accessor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor.h"
 
 // DRAM to L1 read
 void kernel_main() {

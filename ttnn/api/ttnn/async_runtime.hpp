@@ -6,7 +6,7 @@
 
 #include <optional>
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "types.hpp"
 
 namespace ttnn {

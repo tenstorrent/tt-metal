@@ -36,7 +36,7 @@ namespace detail {
 bool DispatchStateCheck(bool isFastDispatch);
 
 std::map<ChipId, IDevice*> CreateDevices(
-    // TODO: delete this in favour of DevicePool
+    // TODO: delete this in favour of DeviceManager
     const std::vector<ChipId>& device_ids,
     uint8_t num_hw_cqs = 1,
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
@@ -45,10 +45,22 @@ std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<uint32_t>& l1_bank_remap = {},
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
     bool init_profiler = true,
-    bool use_max_eth_core_count_on_all_devices = false,
+    [[deprecated]] bool ignored = false,  // This argument was not used
     bool initialize_fabric_and_dispatch_fw = true);
 
 void CloseDevices(const std::map<ChipId, IDevice*>& devices);
+
+/**
+ * Returns a pointer to an active device with the given ID, NULL otherwise
+ *
+ * Return value: IDevice*
+ *
+ * | Argument    | Description                                     | Data type               | Valid range      |
+ * Required |
+ * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
+ * | device_id   | ID of the device to look for                    | ChipId                  | Valid device IDs | Yes |
+ */
+IDevice* GetActiveDevice(ChipId device_id);
 
 /**
  * Copies data from a host buffer into the specified buffer
@@ -139,17 +151,16 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to
- * `$TT_METAL_HOME/built/<device>/kernels/<kernel name>/<kernel hash>`
+ * `<tt-metal-cache directory>/<build_key>/kernels/<kernel name>/<kernel hash>`
  *
+ *  The build key component accounts for device architecture as binaries are not compatible across architectures.
  *  To speed up compilation there is a kernel compilation cache that skips over generating binaries for the previously
  * compiled kernels. Kernel uniqueness is determined by the kernel hash which is computed based on compile time args,
  * defines, and kernel type specific attributes such as NOC for data movement kernels and math fidelity for compute
- * kernels
- *  TODO: Kernel hash needs to account for device architecture as binaries are not the same across architectures.
+ * kernels.
  *  On cache hits the kernel is not recompiled if the output binary directory exists, otherwise the kernel is compiled.
- *  This cache is static is enabled for the duration of the running process.
- *  By default the cache does not persistent across runs, but can be enabled by calling EnablePersistentKernelCache().
- * Setting this will skip compilation when output binary directory exists.
+ *  This cache is static and is enabled for the duration of the running process.
+ *  Across runs, previously compiled kernels are recompiled if the source code or dependencies have changed.
  *
  *  Return value: void
  *

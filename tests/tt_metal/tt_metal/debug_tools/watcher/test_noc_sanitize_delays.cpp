@@ -33,11 +33,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -50,12 +48,12 @@ using namespace tt::tt_metal;
 // and incrementing by 1.0f for each element.
 void inc_populate(std::vector<std::uint32_t>& vec, float start_from) {
     float val = start_from;
-    for (std::uint32_t i = 0; i < vec.size(); i++) {
+    for (unsigned int& elem : vec) {
         bfloat16 num_1_bfloat16 = bfloat16(val);
         val = val + 1.0f;
         bfloat16 num_2_bfloat16 = bfloat16(val);
         val = val + 1.0f;
-        vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+        elem = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
 }
 
@@ -67,7 +65,7 @@ void RunDelayTestOnCore(
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     const uint32_t SINGLE_TILE_SIZE = 2 * 1024;

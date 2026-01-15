@@ -16,7 +16,7 @@
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -26,10 +26,10 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt::tt_metal {
-
-namespace event_dispatch {
+namespace tt::tt_metal::event_dispatch {
 
 namespace {
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
@@ -84,7 +84,7 @@ void issue_record_event_commands(
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         auto offset_index = *sub_device_ids[i];
@@ -219,6 +219,4 @@ void read_events_from_completion_queue(
         event_descriptor.get_global_event_id());
 }
 
-}  // namespace event_dispatch
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::event_dispatch

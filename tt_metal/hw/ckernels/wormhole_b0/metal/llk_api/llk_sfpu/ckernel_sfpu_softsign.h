@@ -23,7 +23,7 @@ inline void calculate_softsign() {
 
 template <bool APPROXIMATION_MODE>
 void init_softsign() {
-    recip_init<APPROXIMATION_MODE>();
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu

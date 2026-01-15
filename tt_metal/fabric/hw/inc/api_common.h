@@ -223,20 +223,47 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
                 !has_flag(UpdateMask, UnicastScatterWriteUpdateMask::ChunkSizes),
             "UnicastScatterWriteUpdateMask requires command_header but std::nullptr_t was provided");
     }
-    if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::DstAddrs)) {
-        for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+    constexpr bool update_addresses = has_flag(UpdateMask, UnicastScatterWriteUpdateMask::DstAddrs);
+    constexpr bool update_chunk_sizes = has_flag(UpdateMask, UnicastScatterWriteUpdateMask::ChunkSizes);
+
+    if constexpr (!std::is_same_v<CommandHeaderT, std::nullptr_t>) {
+        if constexpr (update_addresses || update_chunk_sizes) {
+            ASSERT(
+                command_header.chunk_count >= NOC_SCATTER_WRITE_MIN_CHUNKS &&
+                command_header.chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+            packet_header->command_fields.unicast_scatter_write.chunk_count = command_header.chunk_count;
+        }
+    }
+
+    if constexpr (update_addresses) {
+        for (uint8_t i = 0; i < command_header.chunk_count; i++) {
             auto comps = get_noc_address_components(command_header.noc_address[i]);
             auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);
             packet_header->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
         }
-    }
-    if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::ChunkSizes)) {
-        for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1; i++) {
-            packet_header->command_fields.unicast_scatter_write.chunk_size[i] = command_header.chunk_size[i];
+        for (uint8_t i = command_header.chunk_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+            packet_header->command_fields.unicast_scatter_write.noc_address[i] = 0;
         }
     }
+
     if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize)) {
         packet_header->payload_size_bytes = packet_size_bytes;
+    }
+
+    if constexpr (update_chunk_sizes) {
+        const uint16_t payload_size = packet_header->payload_size_bytes;
+        size_t accumulated = 0;
+        const uint8_t chunk_size_count = command_header.chunk_count - 1;
+        for (uint8_t i = 0; i < chunk_size_count; i++) {
+            uint16_t chunk = command_header.chunk_size[i];
+            ASSERT(chunk > 0);
+            accumulated += chunk;
+            packet_header->command_fields.unicast_scatter_write.chunk_size[i] = chunk;
+        }
+        ASSERT(accumulated < payload_size);
+        for (uint8_t i = chunk_size_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1; i++) {
+            packet_header->command_fields.unicast_scatter_write.chunk_size[i] = 0;
+        }
     }
 }
 

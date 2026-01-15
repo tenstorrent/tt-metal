@@ -17,7 +17,7 @@ from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import ReshardConfig
+from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig, ReshardConfig
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
@@ -170,6 +170,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
         mla_caches: Sequence[torch.Tensor] | None = None,
+        kv_cache_override: KvCacheConfig | None = None,
     ) -> Any:
         assert mla_caches is None or (
             len(mla_caches) >= 1
@@ -186,6 +187,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     mesh_device,
                     ccl,
                     mla_cache,
+                    kv_cache_override,
                 )
                 for mla_cache in (
                     mla_caches[: hf_config.first_k_dense_replace]
@@ -194,7 +196,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 )
             ],
             "moe_decoder_block": [
-                MoEDecoderBlock2D.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache)
+                MoEDecoderBlock2D.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache, kv_cache_override)
                 for mla_cache in (
                     mla_caches[hf_config.first_k_dense_replace :]
                     if mla_caches is not None
@@ -215,6 +217,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         page_tables: Sequence[ttnn.Tensor],
     ) -> ttnn.Tensor:
         """Forward pass for decode mode."""
+
         x = Embedding2D.forward_decode(x, cfg["embedding"])
 
         for (block_cfg, BlockClass), page_table in zip(

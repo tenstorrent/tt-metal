@@ -163,9 +163,8 @@ Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, c
             auto shard_spec = input_memory_config.shard_spec().value();
             shard_spec.shape[1] = output_padded_shape[-1];  // update output shard to match new shard width
             return MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
-        } else {
-            return input_memory_config;
         }
+        return input_memory_config;
     };
 
     // Just edit shape if shape has a 0 dimension
@@ -195,14 +194,14 @@ Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, c
                     return Tensor(std::move(device_storage), new_spec, tensor.tensor_topology());
                 }
                 if (tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-                    auto device_buffer = device_storage.get_buffer();
+                    auto* device_buffer = device_storage.get_buffer();
                     const auto& tensor_spec = tensor.tensor_spec();
                     auto page_size_bytes = tensor_spec.compute_page_size_bytes();
                     device_buffer->set_page_size(page_size_bytes);
                     return Tensor(std::move(device_storage), new_spec, tensor.tensor_topology());
                 }
 
-                auto device_buffer = device_storage.get_buffer();
+                auto* device_buffer = device_storage.get_buffer();
                 tt::tt_metal::ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
 
                 auto shard_spec = shard_spec_buffer.tensor_shard_spec;

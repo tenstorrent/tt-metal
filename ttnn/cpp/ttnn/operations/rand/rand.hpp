@@ -8,7 +8,7 @@
 namespace ttnn::operations::rand {
 struct Rand {
     static Tensor invoke(
-        const ttnn::Shape& size,
+        const ttnn::Shape& shape,
         MeshDevice& device,
         DataType dtype = DataType::BFLOAT16,
         Layout layout = Layout::TILE,

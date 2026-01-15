@@ -7,13 +7,14 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "all_to_all_dispatch_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::ccl {
 
 AllToAllDispatchDeviceOperation::program_factory_t AllToAllDispatchDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return AllToAllDispatchSparse{};
 }
 
@@ -77,7 +78,7 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
 }
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -86,7 +87,7 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     auto indices_shape = tensor_args.expert_indices_tensor.tensor_spec().logical_shape();
     auto mapping_shape = tensor_args.expert_mapping_tensor.tensor_spec().logical_shape();
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     uint32_t output_concat_dim = operation_attributes.output_concat_dim;
 
@@ -156,8 +157,10 @@ AllToAllDispatchDeviceOperation::tensor_return_value_t AllToAllDispatchDeviceOpe
     return {output_tensor, metadata_tensor};
 }
 
-std::tuple<AllToAllDispatchDeviceOperation::operation_attributes_t, AllToAllDispatchDeviceOperation::tensor_args_t>
-AllToAllDispatchDeviceOperation::invoke(
+}  // namespace ttnn::operations::ccl
+
+namespace ttnn::prim {
+ttnn::operations::ccl::AllToAllDispatchDeviceOperation::tensor_return_value_t all_to_all_dispatch(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
@@ -167,10 +170,11 @@ AllToAllDispatchDeviceOperation::invoke(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    AllToAllTransferType impl,
+    ttnn::operations::ccl::AllToAllDispatchDeviceOperation::AllToAllTransferType impl,
     uint32_t output_concat_dim) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::ccl::AllToAllDispatchDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .worker_core_range_set = worker_core_range_set,
             .output_mem_config = memory_config,
             .axis = axis,
@@ -178,11 +182,10 @@ AllToAllDispatchDeviceOperation::invoke(
             .topology = topology,
             .impl = impl,
             .output_concat_dim = output_concat_dim},
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,
             .expert_mapping_tensor = expert_mapping_tensor,
-            .optional_output_tensors = optional_output_tensors}};
+            .optional_output_tensors = optional_output_tensors});
 }
-
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::prim

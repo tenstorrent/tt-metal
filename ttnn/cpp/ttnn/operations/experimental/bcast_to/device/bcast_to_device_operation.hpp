@@ -54,7 +54,7 @@ struct BcastToOperation {
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& c);
     };
 
     using program_factory_t = std::variant<BcastToTileFactory>;
@@ -64,16 +64,15 @@ struct BcastToOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const ttnn::Shape& output_shape,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& output);
 };
 }  // namespace ttnn::operations::experimental::broadcast_to
 
 namespace ttnn::prim {
-constexpr auto bcast_to =
-    ttnn::register_operation<"ttnn::prim::bcast_to", ttnn::operations::experimental::broadcast_to::BcastToOperation>();
-}
+
+ttnn::operations::experimental::broadcast_to::BcastToOperation::tensor_return_value_t bcast_to(
+    const Tensor& input,
+    const ttnn::Shape& output_shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output);
+
+}  // namespace ttnn::prim

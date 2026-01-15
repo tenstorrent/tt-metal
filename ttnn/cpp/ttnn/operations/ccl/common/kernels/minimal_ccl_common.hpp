@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -153,8 +153,8 @@ void scatter_write_for_fabric_write(
     uint32_t first_payload_size_bytes,
     uint32_t second_payload_size_bytes) {
     pkt_hdr->to_noc_unicast_scatter_write(
-        tt::tt_fabric::NocUnicastScatterCommandHeader{
-            {first_noc0_dest_noc_addr, second_noc0_dest_noc_addr}, (uint16_t)first_payload_size_bytes},
+        tt::tt_fabric::NocUnicastScatterCommandHeader(
+            {first_noc0_dest_noc_addr, second_noc0_dest_noc_addr}, {static_cast<uint16_t>(first_payload_size_bytes)}),
         first_payload_size_bytes + second_payload_size_bytes);
 
     tt::tt_fabric::fabric_async_write(
@@ -338,8 +338,8 @@ FORCE_INLINE void scatter_fabric_write_unidir(
     const size_t payload_l1_address = l1_read_addr;
 
     pkt_hdr->to_noc_unicast_scatter_write(
-        tt::tt_fabric::NocUnicastScatterCommandHeader{
-            noc0_dest_noc_addr, noc0_dest_noc_addr_next_core, payload_size_bytes_first_core},
+        tt::tt_fabric::NocUnicastScatterCommandHeader(
+            {noc0_dest_noc_addr, noc0_dest_noc_addr_next_core}, {payload_size_bytes_first_core}),
         payload_size_bytes_first_core * 2);
 
     perform_payload_send(fabric_direction_connection, l1_read_addr, payload_size_bytes_first_core * 2, pkt_hdr);

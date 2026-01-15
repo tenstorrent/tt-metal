@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 /**
  * add a cb full of indices for the tile
  * each row is identical in the index tensor, so we just need to add an offset based on which row tile it is

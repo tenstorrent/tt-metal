@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "debug/fw_debug.h"
+#include "internal/debug/fw_debug.h"
 #include "ckernel.h"
 #include "ckernel_gpr_map.h"
 #include "llk_param_structs.h"

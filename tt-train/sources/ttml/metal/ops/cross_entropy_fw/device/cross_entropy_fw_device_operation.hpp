@@ -30,18 +30,16 @@ struct CrossEntropyForwardDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& target_tensor,
-        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::cross_entropy_fw::device
 
 namespace ttnn::prim {
 
-constexpr auto ttml_cross_entropy_fw = ttnn::register_operation<
-    "ttnn::prim::ttml_cross_entropy_fw",
-    ttml::metal::ops::cross_entropy_fw::device::CrossEntropyForwardDeviceOperation>();
+ttml::metal::ops::cross_entropy_fw::device::CrossEntropyForwardDeviceOperation::tensor_return_value_t
+ttml_cross_entropy_fw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& target_tensor,
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+
 }  // namespace ttnn::prim

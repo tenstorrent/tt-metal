@@ -69,7 +69,7 @@ def test_crossattnmid(
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     B, C, H, W = list(ttnn_input_tensor.shape)
 
@@ -83,6 +83,7 @@ def test_crossattnmid(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_encoder_tensor = ttnn.from_torch(
         torch_encoder_tensor,
         dtype=ttnn.bfloat16,

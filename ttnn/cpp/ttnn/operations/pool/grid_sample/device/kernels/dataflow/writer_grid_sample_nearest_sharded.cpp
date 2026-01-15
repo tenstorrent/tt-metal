@@ -4,8 +4,8 @@
 
 #include <cmath>
 #include <stdint.h>
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 

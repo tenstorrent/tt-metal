@@ -30,4 +30,5 @@ void run_telemetry_collector(
     const tt::llrt::RunTimeOptions& rtoptions,
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
     int watchdog_timeout_seconds,
-    int failure_exposure_duration_seconds);
+    int failure_exposure_duration_seconds,
+    bool mmio_only = false);

@@ -3,13 +3,14 @@
 ## Quick Links
 - Tracy Profiler Repo: https://github.com/wolfpld/tracy
 - Tracy Documentation: https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf
-- Metal Fork of Tracy: https://github.com/tenstorrent-metal/tracy/tree/71d4c8d378b52af7da7012b9b595a61e9304f0bb
+- Metal Fork of Tracy: https://github.com/tenstorrent/tracy
+- Official Metalium Tracy Documentation: [docs/source/tt-metalium/tools/tracy_profiler.rst](../../docs/source/tt-metalium/tools/tracy_profiler.rst)
 
 ## Introduction
 Tracy is an open-source C++ profiling tool with sampling and code instrumentation profiling capabilities. The profiled application is a client, and the profiler itself is a server (by default runs on port 8086). It was named this way because the client is a thin layer that just collects events and sends them for processing and long-term storage on the server. The fact that the server needs to connect to the client to begin the profiling session may be a bit confusing at first.
 
 ## Things built from Tracy that are needed in tt-metal
-tt-metal is still on v0.10 of tracy. tt-metal has forked the tracy repo and added specific functionality to support running tracy on tenstorrent devices. Repo located here: https://github.com/tenstorrent-metal/tracy/tree/71d4c8d378b52af7da7012b9b595a61e9304f0bb. They key differences between v0.10 and v0.11.1 are how the tools within Tracy are built, with the former being from Makefile and the later upgrading to CMake. Metal plans to uplift to this version in the near future.
+tt-metal uses v0.10 of Tracy. tt-metal has forked the tracy repo and added specific functionality to support running tracy on Tenstorrent devices. The fork is located at https://github.com/tenstorrent/tracy and is vendored in the repository at `tt_metal/third_party/tracy/`. The key differences between v0.10 and v0.11.1 are how the tools within Tracy are built, with the former being from Makefile and the latter upgrading to CMake.
 
 For instructional purposes, the following section describes metal's fork of v0.10.
 
@@ -22,7 +23,7 @@ libTracyClient.a
 ```
 
 ### tracy-capture
-tracy-capture is a command line executable that acts as the tracy server to capture events from tracy-client. It will dump a .tracy file which you can feed into tracy-profiler GUI. 
+tracy-capture is a command line executable that acts as the tracy server to capture events from tracy-client. It will dump a .tracy file which you can feed into tracy-profiler GUI.
 ```
 cd capture/build/unix
 make all
@@ -53,7 +54,7 @@ Add the Tracy repository to your project directory (as a third_party submodule)
 ```
 mkdir third_party
 cd third_party
-git clone https://github.com/tenstorrent-metal/tracy/tree/71d4c8d378b52af7da7012b9b595a61e9304f0bb
+git clone https://github.com/tenstorrent/tracy.git
 cd tracy
 ```
 
@@ -78,8 +79,8 @@ Define TRACY_ENABLE=ON for the WHOLE project (otherwise, won't be able to collec
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRACY_ENABLE=ON")
 ```
 
-### 5. Insert macros 
-Insert tracy related macro calls into your code 
+### 5. Insert macros
+Insert tracy related macro calls into your code
 eg. Zones in Tracy are marked sections of code that users are interested in profiling. Tracy provides macros such as ZoneScoped; to accomplish this. Please refer to section 3 of Tracy’s documentation for further information on zones and available macros.
 ```
 TracyMessageL("hello");
@@ -108,7 +109,7 @@ Instead of starting tracy-capture via command line, you can start tracy-profiler
 ```
 
 ### 3. Start application
-Start your application in a different terminal. This is the application that has been compiled with all the stuff mentioned in Basic Tracy Integration. As your application runs, you will see tracy-capture capturing events/tracy-profiler capturing events. 
+Start your application in a different terminal. This is the application that has been compiled with all the stuff mentioned in Basic Tracy Integration. As your application runs, you will see tracy-capture capturing events/tracy-profiler capturing events.
 ```
 ./runner
 ```
@@ -116,7 +117,7 @@ Start your application in a different terminal. This is the application that has
 ### 4. (Only if did 1.) Feed .tracy into tracy-profiler
 If you used tracy-capture, it will dump a .tracy file once this is complete. You can then feed this .tracy file into the tracy-profiler to view the results.
 
-### 5. (Only if did 1.) View .tracy contents 
+### 5. (Only if did 1.) View .tracy contents
 You can also view the contents of the .tracy file as a csv file using tracy-csvexport. This will dump the results in csv format which you can pip into a file and view the results. Optionally, you can also save the .tracy file via the GUI itself and then feed it into the tracy-csvexport tool.
 ```
 ./tracy-csvexport hello.tracy
@@ -134,7 +135,7 @@ The following section will provide an example of how to use Tracy in a sample ap
     - hellolib.hpp
   - CMakeLists.txt
   - main.cpp
-  - hellolib.cpp 
+  - hellolib.cpp
 ```
 
 ### 2. Fill in contents of each file found below
@@ -142,7 +143,7 @@ The following section will provide an example of how to use Tracy in a sample ap
 ```
 mkdir third_party
 cd third_party
-git clone https://github.com/tenstorrent-metal/tracy/tree/71d4c8d378b52af7da7012b9b595a61e9304f0bb
+git clone https://github.com/tenstorrent/tracy.git
 cd tracy
 ```
 
@@ -170,7 +171,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRACY_ENABLE=ON")
 add_library(hellolib SHARED hellolib.cpp)
 
 target_include_directories(hellolib
-    PUBLIC 
+    PUBLIC
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/third_party/tracy/public
 )
@@ -241,10 +242,10 @@ int divide(int a, int b) {
 ### 3. Build Project
 This will build the executable and binarines in `build/` folder.
 ```
-mkdir -p build 
+mkdir -p build
 cd build/
-cmake -G Ninja -DTRACY_ENABLE=ON .. 
-ninja 
+cmake -G Ninja -DTRACY_ENABLE=ON ..
+ninja
 ```
 
 ### 4. Build tracy-capture
@@ -281,12 +282,16 @@ If you used tracy-capture and want to view the results, you can pass them throug
 If you used tracy-capture to get the .tracy file, you can upload it into tracy-profiler GUI offline on your macbook. Follow instructions on GUI widget.
 
 ## Tracy + Metal
-The following sections relates to tt-metal's usage of Tracy. tt-metal uses v0.10 version of Tracy. They have also built on-top of tracy with custom files to support device side profiling. Repo found here: https://github.com/tenstorrent-metal/tracy/tree/71d4c8d378b52af7da7012b9b595a61e9304f0bb. There are several components regarding how tt-metal integrates Tracy and provides profiler support.
+The following sections relate to tt-metal's usage of Tracy. tt-metal uses v0.10 version of Tracy. They have also built on top of Tracy with custom files to support device side profiling. The fork is located at https://github.com/tenstorrent/tracy and is vendored in the repository at `tt_metal/third_party/tracy/`. There are several components regarding how tt-metal integrates Tracy and provides profiler support.
 
-### Building in profiler mode
-You can build metal in profiler mode using the following
+### Building with Tracy profiler
+Tracy profiler is **enabled by default** when building tt-metal. Simply run:
 ```
-./build_metal -p
+./build_metal.sh
+```
+To disable the profiler, use:
+```
+./build_metal.sh --disable-profiler
 ```
 All of the tools that are needed by metal are generated under `build/tools/profiler/bin/`.
 
@@ -298,19 +303,19 @@ eg: target_link_libraries(tt_metal PUBLIC compiler_flags $<$<BOOL:${ENABLE_TRACY
 ```
 
 ### profiler.o
-A profiler object gets generated with various low level API calls within tt-metal. This object is linked against tt_metal.so. 
+A profiler object gets generated with various low level API calls within tt-metal. This object is linked against tt_metal.so.
 ```
-location: tt-metal/tt_metal/tools/profiler
+location: tt_metal/impl/profiler
 eg: profiler.cpp
 ```
 
-### Tracy module tool for dev convenience 
+### Tracy module tool for dev convenience
 ```
-location: tt-metal/ttnn/tracy
+location: tools/tracy
 eg: __main__.py
 ```
 
-Developers can use the tracy module tool that will handle everything interally for them (such as tracy-capture, tracy-csvexport etc). This is provided for convenience. Profiling python code with tracy requires running your python code with the python tracy module. For profiling your entire python program, run your program as follows.
+Developers can use the tracy module tool that will handle everything internally for them (such as tracy-capture, tracy-csvexport etc). This is provided for convenience. Profiling python code with tracy requires running your python code with the python tracy module. For profiling your entire python program, run your program as follows.
 ```
 python -m tracy {test_script}.py
 ```
@@ -318,7 +323,7 @@ python -m tracy {test_script}.py
 ### Tracy post-processing scripts
 Metal will dump out various information about kernel profiling data. All this information gets cleaned and presented in a visible format through various post-processing scripts. If you are using the tracy module script infrastructure provided by metal, it will handle all of this for you.
 ```
-location: tt-metal/tt_metal/tools/profiler
+location: tools/tracy
 eg: process_ops_logs.py
 ```
 

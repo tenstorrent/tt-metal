@@ -6,6 +6,9 @@ if(isMultiConfig)
     if(NOT "TSan" IN_LIST CMAKE_CONFIGURATION_TYPES)
         list(APPEND CMAKE_CONFIGURATION_TYPES TSan)
     endif()
+    if(NOT "CodeCoverage" IN_LIST CMAKE_CONFIGURATION_TYPES)
+        list(APPEND CMAKE_CONFIGURATION_TYPES CodeCoverage)
+    endif()
     if(NOT "ASanCoverage" IN_LIST CMAKE_CONFIGURATION_TYPES)
         list(APPEND CMAKE_CONFIGURATION_TYPES ASanCoverage)
     endif()
@@ -18,6 +21,7 @@ set_property(
         DEBUG_CONFIGURATIONS
             ASan
             TSan
+            CodeCoverage
             ASanCoverage
 )
 
@@ -36,6 +40,13 @@ set(CMAKE_CXX_FLAGS_TSAN "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
 set(CMAKE_EXE_LINKER_FLAGS_TSAN "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
 set(CMAKE_SHARED_LINKER_FLAGS_TSAN "${CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
 set(CMAKE_MODULE_LINKER_FLAGS_TSAN "${CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
+
+# CodeCoverage build type: LLVM coverage mapping without sanitizers (inherit RelWithDebInfo flags)
+set(CMAKE_C_FLAGS_CODECOVERAGE "${CMAKE_C_FLAGS_RELWITHDEBINFO} -fprofile-instr-generate -fcoverage-mapping")
+set(CMAKE_CXX_FLAGS_CODECOVERAGE "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -fprofile-instr-generate -fcoverage-mapping")
+set(CMAKE_EXE_LINKER_FLAGS_CODECOVERAGE "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO} -fprofile-instr-generate")
+set(CMAKE_SHARED_LINKER_FLAGS_CODECOVERAGE "${CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO} -fprofile-instr-generate")
+set(CMAKE_MODULE_LINKER_FLAGS_CODECOVERAGE "${CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO} -fprofile-instr-generate")
 
 # ASanCoverage build type: ASan + LLVM coverage mapping (inherit ASan flags)
 set(CMAKE_C_FLAGS_ASANCOVERAGE "${CMAKE_C_FLAGS_ASAN} -fprofile-instr-generate -fcoverage-mapping")

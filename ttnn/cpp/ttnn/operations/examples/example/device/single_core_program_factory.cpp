@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::examples {
 ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::SingleCore::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
@@ -17,8 +17,8 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     tt::tt_metal::Program program{};
 
@@ -123,7 +123,7 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
 
 void ExampleDeviceOperation::SingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
@@ -133,8 +133,8 @@ void ExampleDeviceOperation::SingleCore::override_runtime_arguments(
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});

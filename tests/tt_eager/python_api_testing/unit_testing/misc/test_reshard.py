@@ -935,3 +935,498 @@ def test_sd_reshard(
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
     passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
     assert passing, output
+
+
+@pytest.mark.parametrize(
+    "input_shape, core_grid_y, core_grid_x",
+    [
+        # SentenceBERT embeddings reshard configuration
+        # Shape: [batch_size, 1, sequence_length, hidden_size]
+        # Original error: NOC target address overflow during interleaved to block sharded reshard
+        ([8, 1, 384, 768], 8, 6),
+        # DP mode with 2 devices (16 batch total)
+        ([16, 1, 384, 768], 8, 6),
+    ],
+)
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_reshard_interleaved_to_block_sharded(
+    device,
+    input_shape,
+    core_grid_y,
+    core_grid_x,
+    in_dtype,
+    out_dtype,
+):
+    """
+    Test reshard from interleaved L1 to BLOCK sharded memory config.
+
+    This test is based on a NOC error found in SentenceBERT embeddings:
+    - Input: interleaved L1 tensor with shape [batch, 1, seq_len, hidden_size]
+    - Output: BLOCK sharded on core_grid with dtype conversion
+    - The error was: "unicast write 3203369245 bytes... (NOC target address overflow)"
+      with garbage values indicating memory corruption in reshard kernel parameters
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if core_grid_x > grid_size.x or core_grid_y > grid_size.y:
+        pytest.skip(f"Core grid ({core_grid_x}, {core_grid_y}) exceeds device grid size ({grid_size.x}, {grid_size.y})")
+
+    # Create input tensor in interleaved L1 memory
+    torch_tensor = torch.randn(input_shape).bfloat16()
+    tt_tensor = ttnn.from_torch(torch_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_tensor = ttnn.to_memory_config(tt_tensor, ttnn.L1_MEMORY_CONFIG)
+
+    # Create BLOCK sharded memory config (same as SentenceBERT embeddings)
+    output_mem_config = ttnn.create_sharded_memory_config(
+        tt_tensor.shape,
+        core_grid=ttnn.CoreGrid(y=core_grid_y, x=core_grid_x),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    # Perform reshard with dtype conversion
+    tt_tensor_resharded = ttnn.to_memory_config(tt_tensor, output_mem_config, dtype=out_dtype)
+
+    # Verify result
+    tt_tensor_interleaved = ttnn.to_memory_config(tt_tensor_resharded, ttnn.L1_MEMORY_CONFIG)
+    torch_result = ttnn.to_torch(tt_tensor_interleaved)
+
+    if out_dtype == ttnn.bfloat8_b:
+        # bfloat8_b has lower precision
+        passing, output = comp_pcc(torch_tensor, torch_result, 0.99)
+    else:
+        passing, output = comp_equal(torch_tensor, torch_result)
+
+    assert passing, output
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "batch_size, seq_len, hidden_size",
+    [
+        # SentenceBERT embeddings shape after unsqueeze: [batch, 1, seq_len, hidden_size]
+        (8, 384, 768),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_reshard_sentencebert_embeddings(
+    device,
+    batch_size,
+    seq_len,
+    hidden_size,
+    layout,
+):
+    """
+    Test reshard operation matching SentenceBERT embeddings pattern.
+
+    This reproduces the exact operation from ttnn_sentencebert_embeddings.py:
+    - Input: interleaved L1 tensor from embedding addition
+    - Output: BLOCK sharded on 8x6 grid with bfloat8_b dtype
+    - The NOC error kernel was: writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp
+    - Error: "unicast write 3203369245 bytes to L1[addr=0x6448f51d]" (NOC target address overflow)
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 6 or grid_size.y < 8:
+        pytest.skip(f"Device grid size ({grid_size.x}, {grid_size.y}) too small for 8x6 grid")
+
+    # bfloat8_b only works with TILE_LAYOUT
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        out_dtype = ttnn.bfloat16
+    else:
+        out_dtype = ttnn.bfloat8_b
+
+    # Shape after unsqueeze in SentenceBERT: [batch, 1, seq_len, hidden_size]
+    input_shape = [batch_size, 1, seq_len, hidden_size]
+
+    # Simulate the embeddings computation (word + token_type + position embeddings)
+    torch_tensor = torch.randn(input_shape).bfloat16()
+
+    # Create tensor in interleaved L1 (result of embedding additions)
+    tt_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
+    tt_tensor = ttnn.to_memory_config(tt_tensor, ttnn.L1_MEMORY_CONFIG)
+
+    # Create BLOCK sharded memory config (exact match to SentenceBERT embeddings)
+    output_mem_config = ttnn.create_sharded_memory_config(
+        tt_tensor.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=6),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    # Perform reshard with dtype conversion (this is where NOC error occurred)
+    tt_tensor_resharded = ttnn.to_memory_config(tt_tensor, output_mem_config, dtype=out_dtype)
+
+    # Verify result
+    tt_tensor_interleaved = ttnn.to_memory_config(tt_tensor_resharded, ttnn.L1_MEMORY_CONFIG)
+    torch_result = ttnn.to_torch(tt_tensor_interleaved)
+
+    if out_dtype == ttnn.bfloat8_b:
+        passing, output = comp_pcc(torch_tensor, torch_result, 0.99)
+    else:
+        passing, output = comp_equal(torch_tensor, torch_result)
+    assert passing, output
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576}],
+    indirect=True,
+)
+def test_reshard_sentencebert_embeddings_full(device):
+    """
+    Minimal repro for NOC error from SentenceBERT.
+
+    Bug: sharded_to_interleaved corrupts memory, causing subsequent
+    interleaved-to-sharded reshard to use garbage values for NOC transfer.
+
+    Sequence that triggers bug:
+    1. HEIGHT_SHARDED L1 tensor
+    2. sharded_to_interleaved (corrupts memory)
+    3. to_memory_config to BLOCK sharded <- NOC error here
+
+    Error: "unicast write 3203347578 bytes... (NOC target address overflow)"
+    Kernel: writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 6 or grid_size.y < 8:
+        pytest.skip(f"Device grid size ({grid_size.x}, {grid_size.y}) too small for 8x6 grid")
+
+    batch_size = 8
+    seq_len = 384
+    hidden_size = 768
+
+    # Create L1 HEIGHT sharded memory config (8x8 grid, shard shape (1, seq_len))
+    l1_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    l1_shard_spec = ttnn.ShardSpec(l1_grid, (1, seq_len), ttnn.ShardOrientation.ROW_MAJOR)
+    l1_sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, l1_shard_spec)
+
+    # Step 1: Create HEIGHT_SHARDED L1 tensor
+    input_ids = torch.randint(0, 1000, (batch_size, seq_len), dtype=torch.int32)
+    tt_input = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_input = ttnn.to_memory_config(tt_input, l1_sharded_config)
+
+    # Step 2: sharded_to_interleaved - THIS CORRUPTS MEMORY
+    tt_input_interleaved = ttnn.sharded_to_interleaved(tt_input, ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_input_interleaved)  # Don't need this, just corrupts state
+
+    # Step 3: Create new tensor and reshard to BLOCK sharded
+    embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
+
+    # Step 4: Reshard to BLOCK sharded - NOC ERROR OCCURS HERE
+    output_mem_config = ttnn.create_sharded_memory_config(
+        tt_embeddings.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=6),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, output_mem_config, dtype=ttnn.bfloat8_b)
+
+    ttnn.synchronize_device(device)
+    assert tt_embeddings.shape == ttnn.Shape([batch_size, seq_len, hidden_size])
+
+
+# ============================================================================
+# Variants to narrow down the corruption source
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576}],
+    indirect=True,
+)
+def test_reshard_variant1_skip_sharded_to_interleaved(device):
+    """
+    Variant 1: Skip sharded_to_interleaved, keep deallocate.
+    Expected: PASS (if sharded_to_interleaved is the culprit)
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 6 or grid_size.y < 8:
+        pytest.skip(f"Device grid size ({grid_size.x}, {grid_size.y}) too small for 8x6 grid")
+
+    batch_size = 8
+    seq_len = 384
+    hidden_size = 768
+
+    l1_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    l1_shard_spec = ttnn.ShardSpec(l1_grid, (1, seq_len), ttnn.ShardOrientation.ROW_MAJOR)
+    l1_sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, l1_shard_spec)
+
+    # Create HEIGHT_SHARDED tensor
+    input_ids = torch.randint(0, 1000, (batch_size, seq_len), dtype=torch.int32)
+    tt_input = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_input = ttnn.to_memory_config(tt_input, l1_sharded_config)
+
+    # SKIP sharded_to_interleaved - just deallocate
+    ttnn.deallocate(tt_input)
+
+    # Create new tensor and reshard to BLOCK sharded
+    embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
+
+    output_mem_config = ttnn.create_sharded_memory_config(
+        tt_embeddings.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=6),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, output_mem_config, dtype=ttnn.bfloat8_b)
+
+    ttnn.synchronize_device(device)
+    assert tt_embeddings.shape == ttnn.Shape([batch_size, seq_len, hidden_size])
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576}],
+    indirect=True,
+)
+def test_reshard_variant2_skip_deallocates(device):
+    """
+    Variant 2: Keep sharded_to_interleaved, skip deallocates.
+    Expected: FAIL if sharded_to_interleaved alone corrupts, PASS if deallocation is needed
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 6 or grid_size.y < 8:
+        pytest.skip(f"Device grid size ({grid_size.x}, {grid_size.y}) too small for 8x6 grid")
+
+    batch_size = 8
+    seq_len = 384
+    hidden_size = 768
+
+    l1_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    l1_shard_spec = ttnn.ShardSpec(l1_grid, (1, seq_len), ttnn.ShardOrientation.ROW_MAJOR)
+    l1_sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, l1_shard_spec)
+
+    # Create HEIGHT_SHARDED tensor
+    input_ids = torch.randint(0, 1000, (batch_size, seq_len), dtype=torch.int32)
+    tt_input = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_input = ttnn.to_memory_config(tt_input, l1_sharded_config)
+
+    # Do sharded_to_interleaved but SKIP deallocates
+    tt_input_interleaved = ttnn.sharded_to_interleaved(tt_input, ttnn.L1_MEMORY_CONFIG)
+    # NO deallocate - tensors stay allocated
+
+    # Create new tensor and reshard to BLOCK sharded
+    embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
+
+    output_mem_config = ttnn.create_sharded_memory_config(
+        tt_embeddings.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=6),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, output_mem_config, dtype=ttnn.bfloat8_b)
+
+    ttnn.synchronize_device(device)
+    assert tt_embeddings.shape == ttnn.Shape([batch_size, seq_len, hidden_size])
+
+    # Cleanup
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_input_interleaved)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576}],
+    indirect=True,
+)
+def test_reshard_variant3_skip_height_sharded(device):
+    """
+    Variant 3: Start with interleaved tensor instead of HEIGHT_SHARDED.
+    Expected: PASS (if HEIGHT_SHARDED is required to trigger bug)
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 6 or grid_size.y < 8:
+        pytest.skip(f"Device grid size ({grid_size.x}, {grid_size.y}) too small for 8x6 grid")
+
+    batch_size = 8
+    seq_len = 384
+    hidden_size = 768
+
+    # Create INTERLEAVED tensor (not HEIGHT_SHARDED)
+    input_ids = torch.randint(0, 1000, (batch_size, seq_len), dtype=torch.int32)
+    tt_input = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    # Keep as interleaved, don't convert to HEIGHT_SHARDED
+
+    ttnn.deallocate(tt_input)
+
+    # Create new tensor and reshard to BLOCK sharded
+    embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
+
+    output_mem_config = ttnn.create_sharded_memory_config(
+        tt_embeddings.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=6),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, output_mem_config, dtype=ttnn.bfloat8_b)
+
+    ttnn.synchronize_device(device)
+    assert tt_embeddings.shape == ttnn.Shape([batch_size, seq_len, hidden_size])
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576}],
+    indirect=True,
+)
+def test_reshard_variant4_only_deallocate_interleaved(device):
+    """
+    Variant 4: Only deallocate the interleaved tensor (not the sharded one).
+    Tests if deallocating the sharded tensor matters.
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 6 or grid_size.y < 8:
+        pytest.skip(f"Device grid size ({grid_size.x}, {grid_size.y}) too small for 8x6 grid")
+
+    batch_size = 8
+    seq_len = 384
+    hidden_size = 768
+
+    l1_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    l1_shard_spec = ttnn.ShardSpec(l1_grid, (1, seq_len), ttnn.ShardOrientation.ROW_MAJOR)
+    l1_sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, l1_shard_spec)
+
+    # Create HEIGHT_SHARDED tensor
+    input_ids = torch.randint(0, 1000, (batch_size, seq_len), dtype=torch.int32)
+    tt_input = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_input = ttnn.to_memory_config(tt_input, l1_sharded_config)
+
+    # Do sharded_to_interleaved
+    tt_input_interleaved = ttnn.sharded_to_interleaved(tt_input, ttnn.L1_MEMORY_CONFIG)
+    # Only deallocate interleaved, keep sharded
+    ttnn.deallocate(tt_input_interleaved)
+
+    # Create new tensor and reshard to BLOCK sharded
+    embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
+
+    output_mem_config = ttnn.create_sharded_memory_config(
+        tt_embeddings.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=6),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, output_mem_config, dtype=ttnn.bfloat8_b)
+
+    ttnn.synchronize_device(device)
+    assert tt_embeddings.shape == ttnn.Shape([batch_size, seq_len, hidden_size])
+
+    # Cleanup
+    ttnn.deallocate(tt_input)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576}],
+    indirect=True,
+)
+def test_reshard_variant5_only_deallocate_sharded(device):
+    """
+    Variant 5: Only deallocate the sharded tensor (not the interleaved one).
+    Tests if deallocating the interleaved tensor matters.
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 6 or grid_size.y < 8:
+        pytest.skip(f"Device grid size ({grid_size.x}, {grid_size.y}) too small for 8x6 grid")
+
+    batch_size = 8
+    seq_len = 384
+    hidden_size = 768
+
+    l1_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    l1_shard_spec = ttnn.ShardSpec(l1_grid, (1, seq_len), ttnn.ShardOrientation.ROW_MAJOR)
+    l1_sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, l1_shard_spec)
+
+    # Create HEIGHT_SHARDED tensor
+    input_ids = torch.randint(0, 1000, (batch_size, seq_len), dtype=torch.int32)
+    tt_input = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_input = ttnn.to_memory_config(tt_input, l1_sharded_config)
+
+    # Do sharded_to_interleaved
+    tt_input_interleaved = ttnn.sharded_to_interleaved(tt_input, ttnn.L1_MEMORY_CONFIG)
+    # Only deallocate sharded, keep interleaved
+    ttnn.deallocate(tt_input)
+
+    # Create new tensor and reshard to BLOCK sharded
+    embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
+
+    output_mem_config = ttnn.create_sharded_memory_config(
+        tt_embeddings.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=6),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, output_mem_config, dtype=ttnn.bfloat8_b)
+
+    ttnn.synchronize_device(device)
+    assert tt_embeddings.shape == ttnn.Shape([batch_size, seq_len, hidden_size])
+
+    # Cleanup
+    ttnn.deallocate(tt_input_interleaved)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576}],
+    indirect=True,
+)
+def test_reshard_variant6_reverse_dealloc_order(device):
+    """
+    Variant 6: Reverse deallocation order (interleaved first, then sharded).
+    Tests if deallocation order matters.
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 6 or grid_size.y < 8:
+        pytest.skip(f"Device grid size ({grid_size.x}, {grid_size.y}) too small for 8x6 grid")
+
+    batch_size = 8
+    seq_len = 384
+    hidden_size = 768
+
+    l1_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    l1_shard_spec = ttnn.ShardSpec(l1_grid, (1, seq_len), ttnn.ShardOrientation.ROW_MAJOR)
+    l1_sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, l1_shard_spec)
+
+    # Create HEIGHT_SHARDED tensor
+    input_ids = torch.randint(0, 1000, (batch_size, seq_len), dtype=torch.int32)
+    tt_input = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_input = ttnn.to_memory_config(tt_input, l1_sharded_config)
+
+    # Do sharded_to_interleaved
+    tt_input_interleaved = ttnn.sharded_to_interleaved(tt_input, ttnn.L1_MEMORY_CONFIG)
+    # Reverse order: deallocate interleaved first, then sharded
+    ttnn.deallocate(tt_input_interleaved)
+    ttnn.deallocate(tt_input)
+
+    # Create new tensor and reshard to BLOCK sharded
+    embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
+
+    output_mem_config = ttnn.create_sharded_memory_config(
+        tt_embeddings.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=6),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_embeddings = ttnn.to_memory_config(tt_embeddings, output_mem_config, dtype=ttnn.bfloat8_b)
+
+    ttnn.synchronize_device(device)
+    assert tt_embeddings.shape == ttnn.Shape([batch_size, seq_len, hidden_size])

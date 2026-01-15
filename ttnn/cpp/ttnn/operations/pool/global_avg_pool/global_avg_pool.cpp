@@ -6,11 +6,11 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 template <PoolType pool>
-Tensor pool_2d(const Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
+Tensor pool_2d(
+    const Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& /*output_dtype*/) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
     const auto& input_shape = input.padded_shape();
     switch (pool) {
@@ -36,5 +36,4 @@ Tensor global_avg_pool2d(
     return output;
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

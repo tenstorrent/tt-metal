@@ -9,11 +9,9 @@ import pytest
 import ttnn
 from loguru import logger
 
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from ....parallel.config import DiTParallelConfig, ParallelFactor, EncoderParallelConfig, VAEParallelConfig
 from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
-from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    TimingCollector,
-)
 
 
 @pytest.mark.parametrize(
@@ -22,7 +20,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 34000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -35,7 +33,8 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     ("mesh_device", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
-        pytest.param((1, 4), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        pytest.param((1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2, "1x2sp0tp1", id="1x2sp0tp1"),
+        pytest.param((2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2, "2x2sp0tp1", id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
         pytest.param((4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4, "4x8sp0tp1", id="4x8sp0tp1"),
         pytest.param((4, 8), (8, 1), (4, 0), (4, 0), (4, 0), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),
@@ -115,8 +114,6 @@ def test_flux1_pipeline(
     logger.info(f"VAE parallel config: {vae_parallel_config}")
     logger.info(f"T5 enabled: {enable_t5_text_encoder}")
 
-    timing_collector = TimingCollector()
-
     pipeline = Flux1Pipeline.create_pipeline(
         checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-{model_variant}"),
         mesh_device=mesh_device,
@@ -130,8 +127,6 @@ def test_flux1_pipeline(
         num_links=num_links,
         topology=topology,
     )
-
-    pipeline.timing_collector = timing_collector
 
     prompts = [
         "A luxury sports car.",
@@ -158,23 +153,30 @@ def test_flux1_pipeline(
         filename_prefix += "_untraced"
 
     def run(*, prompt: str, number: int, seed: int) -> None:
-        images = pipeline.run_single_prompt(
-            width=width, height=height, prompt=prompt, num_inference_steps=num_inference_steps, seed=seed, traced=traced
-        )
+        benchmark_profiler = BenchmarkProfiler()
+        with benchmark_profiler("run", iteration=0):
+            images = pipeline.run_single_prompt(
+                width=width,
+                height=height,
+                prompt=prompt,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                traced=traced,
+                profiler=benchmark_profiler,
+                profiler_iteration=0,
+            )
 
         output_filename = f"{filename_prefix}_{number}.png"
         images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
-        timing_data = timing_collector.get_timing_data()
-        logger.info(f"CLIP encoding time: {timing_data.clip_encoding_time:.2f}s")
-        logger.info(f"T5 encoding time: {timing_data.t5_encoding_time:.2f}s")
-        logger.info(f"Total encoding time: {timing_data.total_encoding_time:.2f}s")
-        logger.info(f"VAE decoding time: {timing_data.vae_decoding_time:.2f}s")
-        logger.info(f"Total pipeline time: {timing_data.total_time:.2f}s")
-        if timing_data.denoising_step_times:
-            avg_step_time = sum(timing_data.denoising_step_times) / len(timing_data.denoising_step_times)
-            logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
+        logger.info(f"CLIP encoding time: {benchmark_profiler.get_duration('clip_encoding', 0):.2f}s")
+        logger.info(f"T5 encoding time: {benchmark_profiler.get_duration('t5_encoding', 0):.2f}s")
+        logger.info(f"Total encoding time: {benchmark_profiler.get_duration('encoder', 0):.2f}s")
+        logger.info(f"VAE decoding time: {benchmark_profiler.get_duration('vae', 0):.2f}s")
+        logger.info(f"Total pipeline time: {benchmark_profiler.get_duration('total', 0):.2f}s")
+        avg_step_time = benchmark_profiler.get_duration("denoising", 0) / num_inference_steps
+        logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
 
     if no_prompt:
         for i, prompt in enumerate(prompts):

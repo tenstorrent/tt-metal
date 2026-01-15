@@ -8,9 +8,8 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
-#include <stdint.h>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include <cstdint>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include <vector>
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -25,16 +24,15 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 struct WorkerMemMap {
     uint32_t source_l1_buffer_address;
@@ -47,7 +45,7 @@ struct WorkerMemMap {
 
 // Utility function reused across tests to get address params
 WorkerMemMap generate_worker_mem_map(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology topology) {
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
@@ -211,5 +209,4 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
 TEST_F(Fabric2DFixture, TestUnicastConnAPI2DSmoke) { RunTestUnicastSmoke(this); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPI1DSmoke) { RunTestUnicastSmoke(this); }
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests

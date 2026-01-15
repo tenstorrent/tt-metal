@@ -22,9 +22,7 @@
 #include "hal_types.hpp"
 #include <tt-metalium/allocator_state.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 enum class BufferType;
 namespace allocator {
 class Algorithm;
@@ -70,7 +68,7 @@ public:
 
     BankManager(
         const BufferType& buffer_type,
-        const std::vector<int64_t>& bank_descriptors,
+        const std::vector<int64_t>& bank_offsets,
         DeviceAddr size_bytes,
         uint32_t alignment_bytes,
         DeviceAddr alloc_offset = 0,
@@ -78,7 +76,7 @@ public:
         const AllocatorDependencies& dependencies = AllocatorDependencies());
     BankManager(
         const BufferType& buffer_type,
-        const std::unordered_map<uint32_t, int64_t>& bank_id_to_descriptor,
+        const std::unordered_map<uint32_t, int64_t>& bank_id_to_bank_offset,
         DeviceAddr size_bytes,
         DeviceAddr interleaved_address_limit,
         uint32_t alignment_bytes,
@@ -203,6 +201,4 @@ private:
         AllocatorDependencies::AllocatorID allocator_id, DeviceAddr size_per_bank, DeviceAddr address_limit);
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -56,6 +56,7 @@ def test_downblock2d(device, temb_shape, input_shape, debug_mode, is_ci_env, res
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, [B, C, H, W], ttnn_temb_tensor)
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)

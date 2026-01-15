@@ -10,6 +10,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d import DecoderBlock1D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
@@ -315,9 +316,8 @@ def run_test_forward_pass_decoder2d(
     "mode, seq_len, batch_size_per_row",
     [
         ("decode", 1, 32),
-        ("prefill", 128, 1),
-        # ("prefill", 2048, 1),  # Test chunking # TODO: Uncomment once MLA prefill works
-    ],
+    ]
+    + [("prefill", seq_len, 1) for seq_len in PREFILL_SEQ_LENS],
 )
 def test_forward_pass(
     DecoderBlockClass: type[DecoderBlock1DBase],
@@ -336,6 +336,11 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
+    if mode == "prefill" and seq_len != 128:
+        pytest.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        )
     test_closure(
         DecoderBlockClass,
         module_path,

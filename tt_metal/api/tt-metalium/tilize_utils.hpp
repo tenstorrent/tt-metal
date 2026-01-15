@@ -41,7 +41,7 @@ std::uint32_t round_up_to_tile(int val, int tile_val);
 
 template <class T>
 std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
-    tt::stl::Span<const T> data,
+    tt::stl::Span<const T> in_tile_swizzled,
     std::optional<PhysicalSize> tile_shape = std::nullopt,
     std::optional<PhysicalSize> face_shape = std::nullopt,
     bool transpose_face = false,
@@ -49,7 +49,7 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
 
 template <class T>
 std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
-    tt::stl::Span<const T> data,
+    tt::stl::Span<const T> in_tile_nfaces,
     std::optional<PhysicalSize> tile_shape = std::nullopt,
     std::optional<PhysicalSize> face_shape = std::nullopt,
     bool transpose_face = false,
@@ -57,7 +57,7 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
 
 template <typename T>
 std::vector<T> convert_layout(
-    tt::stl::Span<const T> data,
+    tt::stl::Span<const T> inp,
     const PhysicalSize& shape,
     TensorLayoutType inL,
     TensorLayoutType outL,
@@ -68,7 +68,7 @@ std::vector<T> convert_layout(
 
 template <typename T>
 std::vector<T> convert_layout(
-    tt::stl::Span<const T> data,
+    tt::stl::Span<const T> inp,
     tt::stl::Span<const uint32_t> shape,
     TensorLayoutType inL,
     TensorLayoutType outL,

@@ -14,10 +14,6 @@ The script supports two practical modes:
   - Full‑model mode: requires config, tokenizer, and `.safetensors`
   - Random‑weights mode: requires config; tokenizer is optional (dummy tokenization is used if missing)
 
-Common environment variables:
-- `DEEPSEEK_V3_HF_MODEL`: Path to a local Hugging Face model directory that contains config (and tokenizer + safetensors for full‑model mode). Defaults to `models/demos/deepseek_v3/reference`.
-- `DEEPSEEK_V3_CACHE`: Optional path where converted TTNN weights and caches are written. Defaults to `generated/deepseek_v3`.
-
 Tokenizer (full‑model mode): expect one of `tokenizer.model`, `tokenizer.json`, `spiece.model`, or `tokenizer_config.json`.
 
 ## Quick Start
@@ -28,31 +24,32 @@ Use this when you have a local DeepSeek‑V3 model (config, tokenizer, and `.saf
 ```bash
 # Point to a local HF model directory (contains tokenizer + .safetensors)
 export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
-# Optional: where to store converted TTNN weights
+# Where to store converted TTNN weights
 export DEEPSEEK_V3_CACHE=/proj_sw/user_dev/deepseek_ttnn_cache_all_61_layers
+# What system type are we running on? (Can be TG, DUAL, QUAD)
+export MESH_DEVICE=DUAL
 
 python models/demos/deepseek_v3/demo/demo.py \
   "Explain quantum tunneling in one paragraph." \
+  --model-path $DEEPSEEK_V3_HF_MODEL \
+  --cache-dir $DEEPSEEK_V3_CACHE \
   --max-new-tokens 64
-```
-
-You can also pass `--model-path` instead of setting the env var:
-
-```bash
-python models/demos/deepseek_v3/demo/demo.py \
-  "Write a haiku about compilers." \
-  --model-path /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528 \
-  --max-new-tokens 32
 ```
 
 ### 2) Single‑layer with random weights (fast)
 Runs a minimal single‑layer pipeline with randomly initialized weights. This does not require `.safetensors`, and the tokenizer is optional. If no tokenizer is found, the demo synthesizes simple token IDs. The prompt is not used in this mode, so you don’t need to provide one.
 
 ```bash
-# Model path only needs config (tokenizer optional) and defaults to models/demos/deepseek_v3/reference
+# Point to a local HF model directory (contains tokenizer + .safetensors)
+export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+# What system type are we running on? (Can be TG, DUAL, QUAD)
+export MESH_DEVICE=DUAL
 
+# Model path only needs config (tokenizer optional)
 python models/demos/deepseek_v3/demo/demo.py \
   --random-weights --single-layer mlp \
+  --model-path $DEEPSEEK_V3_HF_MODEL \
+  --cache-dir $DEEPSEEK_V3_CACHE \
   --max-new-tokens 16
 ```
 
@@ -69,35 +66,16 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 ```
 
 - `prompt`: Text prompt to generate from (required in full‑model mode; ignored in `--random-weights`).
-- `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/deepseek_v3/reference`.
+- `--model-path PATH`: Local HF model directory.
   - Full‑model mode requires tokenizer files and at least one `.safetensors` shard.
   - Random‑weights mode only requires `config.json`; tokenizer is optional.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32). Greedy decoding only.
-- `--cache-dir PATH`: Where to store converted TTNN weights and caches (default: `$DEEPSEEK_V3_CACHE` or `generated/deepseek_v3`).
+- `--cache-dir PATH`: Where to store converted TTNN weights and caches.
 - `--random-weights`: Use randomly initialized weights derived from the HF config (no safetensors).
 - `--single-layer {mlp,moe}`: With `--random-weights`, request a single‑layer run. `mlp` is supported; `moe` is not.
 
-## Examples
-
-- Explicit model and cache paths:
-  ```bash
-  python models/demos/deepseek_v3/demo/demo.py \
-    "Summarize the history of RISC architectures." \
-    --model-path /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528 \
-    --cache-dir /proj_sw/user_dev/deepseek_ttnn_cache_all_61_layers \
-    --max-new-tokens 80
-  ```
-
-- Fast pipeline check, no safetensors, no prompt:
-  ```bash
-  python models/demos/deepseek_v3/demo/demo.py \
-    --model-path /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528 \
-    --random-weights --single-layer mlp \
-    --max-new-tokens 8
-  ```
-
 ## Behavior and Output
-- The demo opens a mesh device based on available device IDs (e.g., `4x8` mesh for 32 devices, otherwise a single row).
+- The demo opens a mesh device based on specified system type (`TG`, `DUAL`, `QUAD`).
 - Prefill is emulated by iterating decode steps over the prompt before generating new tokens.
 - Prints the generated text between separators:
   ```

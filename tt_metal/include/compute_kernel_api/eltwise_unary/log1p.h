@@ -6,7 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_log1p.h"
+#include "ckernel_sfpu_log1p.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -14,9 +15,10 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
+
 template <bool fast_and_approx = false>
 ALWI void log1p_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log1p_init<APPROX, fast_and_approx>()));
+    MATH(SFPU_THREE_TEMPLATE_PARAM_INIT(log1p, sfpu::log1p_init, APPROX, fast_and_approx, DST_ACCUM_MODE));
 }
 
 // clang-format off
@@ -35,7 +37,7 @@ ALWI void log1p_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void log1p_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_log1p<APPROX, fast_and_approx>(idst)));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_LOG1P(log1p, RC, APPROX, fast_and_approx, DST_ACCUM_MODE, idst));
 }
 
 }  // namespace ckernel

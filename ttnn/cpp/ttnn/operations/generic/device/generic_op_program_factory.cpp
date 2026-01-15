@@ -15,8 +15,8 @@ using namespace tt::tt_metal;
 
 GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperation::GenericProgram::create(
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
     Program program{operation_attributes};
 
     shared_variables_t shared_vars;
@@ -34,8 +34,8 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
 void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 
@@ -48,18 +48,15 @@ void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     for (size_t kernel_handle = 0; kernel_handle < shared_vars.num_kernel_handles; ++kernel_handle) {
         const auto& kernel_desc = operation_attributes.kernels[kernel_handle];
 
-        for (size_t i = 0; i < kernel_desc.runtime_args.size(); i++) {
-            for (size_t j = 0; j < kernel_desc.runtime_args[i].size(); j++) {
-                const auto& runtime_arg = kernel_desc.runtime_args[i][j];
-                if (!runtime_arg.empty()) {
-                    auto& cached_runtime_args = GetRuntimeArgs(program, kernel_handle, CoreCoord(i, j));
-                    TT_FATAL(
-                        cached_runtime_args.size() == runtime_arg.size(),
-                        "Runtime args size mismatch: cached {} vs new {}",
-                        cached_runtime_args.size(),
-                        runtime_arg.size());
-                    std::copy(runtime_arg.begin(), runtime_arg.end(), cached_runtime_args.data());
-                }
+        for (const auto& [core_coord, runtime_arg] : kernel_desc.runtime_args) {
+            if (!runtime_arg.empty()) {
+                auto& cached_runtime_args = GetRuntimeArgs(program, kernel_handle, core_coord);
+                TT_FATAL(
+                    cached_runtime_args.size() == runtime_arg.size(),
+                    "Runtime args size mismatch: cached {} vs new {}",
+                    cached_runtime_args.size(),
+                    runtime_arg.size());
+                std::copy(runtime_arg.begin(), runtime_arg.end(), cached_runtime_args.data());
             }
         }
         if (!kernel_desc.common_runtime_args.empty()) {

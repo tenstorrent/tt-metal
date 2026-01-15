@@ -1,13 +1,12 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
 #include "ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -78,13 +77,20 @@ Tensor BcastOperation::invoke(
                 "Error");
         }
     }
-    return tt::tt_metal::operation::run_with_autoformat(
-               EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_memory_config},
-               {input_tensor_a, input_tensor_b},
-               {},
-               {output_tensor},
-               0 /* pad_value*/)
-        .at(0);
+
+    // Bcast only works with tile layout, so we need to tilize the input tensors if neccessary
+    auto padded_shape_a = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_a.padded_shape());
+    auto padded_shape_b = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_b.padded_shape());
+    Tensor formatted_a = ttnn::tilize_with_val_padding(
+        input_tensor_a, padded_shape_a, tt::tt_metal::PadValue(0.0f), input_tensor_a.memory_config());
+    Tensor formatted_b = ttnn::tilize_with_val_padding(
+        input_tensor_b, padded_shape_b, tt::tt_metal::PadValue(0.0f), input_tensor_b.memory_config());
+
+    // in_place is set to false because inputs are already transformed to formatted_a/formatted_b,
+    // so the original input tensors cannot be modified in-place anyway
+    const bool in_place = false;
+    return ttnn::prim::bcast(
+        formatted_a, formatted_b, bcast_op, bcast_dim, output_memory_config, in_place, output_tensor);
 }
 
 }  // namespace ttnn::operations::data_movement

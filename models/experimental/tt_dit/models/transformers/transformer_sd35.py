@@ -10,10 +10,11 @@ from ...layers.feedforward import ParallelFeedForward
 from ...layers.embeddings import SD35CombinedTimestepTextProjEmbeddings, PatchEmbed
 from ...utils.substate import substate
 from .attention_sd35 import SD35JointAttention
+from ...layers.module import Module
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
-class SD35TransformerBlock:
+class SD35TransformerBlock(Module):
     def __init__(
         self,
         dim,
@@ -26,6 +27,8 @@ class SD35TransformerBlock:
         parallel_config=None,
         padding_config=None,
     ):
+        super().__init__()
+
         assert not use_dual_attention, "Expecting not dual attention"
 
         self.dim = dim
@@ -243,7 +246,7 @@ class SD35TransformerBlock:
             self.norm2_context.load_torch_state_dict(substate(state_dict, "norm2_context"))
             self.ff_context.load_torch_state_dict(rename_ff_state(substate(state_dict, "ff_context")))
 
-    def __call__(self, spatial_1BND, prompt_1BLD, time_embed_11BE, N, L):
+    def forward(self, spatial_1BND, prompt_1BLD, time_embed_11BE, N, L):
         """
         spatial_1BND: fractured N on SP, fractured D on TP
         prompt_1BLD: replicated on SP, fractured D on TP
@@ -263,8 +266,9 @@ class SD35TransformerBlock:
             spatial_gate_ff,
         ) = chunk_time(spatial_time_11BF, 6)
 
-        spatial_normed_1BND = self.norm1_norm(spatial_1BND)
-        spatial_normed_1BND = spatial_normed_1BND * (1 + spatial_scale_attn) + spatial_shift_attn
+        spatial_normed_1BND = self.norm1_norm(
+            spatial_1BND, dynamic_weight=(1 + spatial_scale_attn), dynamic_bias=spatial_shift_attn
+        )
 
         if self.context_pre_only:
             prompt_scale_attn, prompt_shift_attn = chunk_time(prompt_time_11BE, 2)
@@ -282,8 +286,9 @@ class SD35TransformerBlock:
                 prompt_gate_ff,
             ) = chunk_time(prompt_time_11BE, 6)
 
-        prompt_normed_1BLD = self.norm1_context_norm(prompt_1BLD)
-        prompt_normed_1BLD = prompt_normed_1BLD * (1 + prompt_scale_attn) + prompt_shift_attn
+        prompt_normed_1BLD = self.norm1_context_norm(
+            prompt_1BLD, dynamic_weight=(1 + prompt_scale_attn), dynamic_bias=prompt_shift_attn
+        )
 
         if self.parallel_config.tensor_parallel.factor > 1:
             # Gather spatial, prompt before attention
@@ -323,8 +328,9 @@ class SD35TransformerBlock:
         # residual
         spatial_1BND = spatial_1BND + spatial_attn_1BLD
 
-        spatial_normed_1BND = self.norm2(spatial_1BND)
-        spatial_normed_1BND = spatial_normed_1BND * (1 + spatial_scale_ff) + spatial_shift_ff
+        spatial_normed_1BND = self.norm2(
+            spatial_1BND, dynamic_weight=(1 + spatial_scale_ff), dynamic_bias=spatial_shift_ff
+        )
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = ttnn.experimental.all_gather_async(
@@ -352,8 +358,9 @@ class SD35TransformerBlock:
 
         prompt_1BLD += prompt_attn_1BLD
 
-        prompt_normed_1BLD = self.norm2_context(prompt_1BLD)
-        prompt_normed_1BLD = prompt_normed_1BLD * (1 + prompt_scale_ff) + prompt_shift_ff
+        prompt_normed_1BLD = self.norm2_context(
+            prompt_1BLD, dynamic_weight=(1 + prompt_scale_ff), dynamic_bias=prompt_shift_ff
+        )
 
         if self.parallel_config.tensor_parallel.factor > 1:
             prompt_normed_1BLD = ttnn.experimental.all_gather_async(
@@ -384,7 +391,7 @@ def chunk_time(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     return [t[:, :, :, i * size : (i + 1) * size] for i in range(count)]
 
 
-class SD35Transformer2DModel:
+class SD35Transformer2DModel(Module):
     def __init__(
         self,
         sample_size=128,
@@ -404,6 +411,8 @@ class SD35Transformer2DModel:
         parallel_config=None,
         padding_config=None,
     ):
+        super().__init__()
+
         self.sample_size = sample_size
         self.patch_size = patch_size
         self.in_channels = in_channels
@@ -531,7 +540,7 @@ class SD35Transformer2DModel:
         self.norm_out_norm.from_cached_state_dict(substate(cache_dict, "norm_out_norm"))
         self.proj_out.from_cached_state_dict(substate(cache_dict, "proj_out"))
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         self.pos_embed.load_torch_state_dict(substate(state_dict, "pos_embed"))
         self.time_text_embed.load_torch_state_dict(substate(state_dict, "time_text_embed"))
         self.context_embedder.load_torch_state_dict(substate(state_dict, "context_embedder"))
@@ -543,7 +552,7 @@ class SD35Transformer2DModel:
         self.norm_out_norm.load_torch_state_dict(substate(state_dict, "norm_out.norm"))
         self.proj_out.load_torch_state_dict(substate(state_dict, "proj_out"))
 
-    def __call__(self, spatial, prompt_embed, pooled_projections, timestep, N, L):
+    def forward(self, spatial, prompt_embed, pooled_projections, timestep, N, L):
         """
         Args:
             spatial: Input spatial tensor (latents) - fractured dim 2 along sp_axis

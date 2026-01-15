@@ -22,7 +22,6 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
     }
     auto input_shape = input->get_shape();
 
-    auto input_seq_len = input_shape[-2];
     auto input_head_dim = input_shape[-1];
 
     if (input_head_dim != params.head_dim) {
@@ -32,13 +31,6 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
             params.head_dim));
     }
 
-    if (input_seq_len != params.sequence_length) {
-        throw std::runtime_error(fmt::format(
-            "RoPE input tensor's sequence length ({}) must match the sequence length in the params ({})",
-            input_seq_len,
-            params.sequence_length));
-    }
-
     auto trans_mat_shape = params.trans_mat.logical_shape();
     auto trig_param_shapes = std::array{
         params.cos_cache.logical_shape(),
@@ -46,14 +38,14 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
         params.neg_cos_cache.logical_shape(),
         params.neg_sin_cache.logical_shape()};
 
-    auto expected_trig_shape = ttnn::Shape{1U, 1U, input_seq_len, input_head_dim};
+    auto expected_trig_shape = ttnn::Shape{1U, 1U, params.sequence_length, params.head_dim};
     if (!std::ranges::all_of(
             trig_param_shapes, [&expected_trig_shape](auto shape) { return shape == expected_trig_shape; })) {
         throw std::runtime_error(fmt::format(
             "All trigonometric rotary embedding parameters must have shape [1, 1, {}, {}], but got shapes: "
             "cos_cache: {}, sin_cache: {}, neg_cos_cache: {}, neg_sin_cache: {}",
-            input_seq_len,
-            input_head_dim,
+            params.sequence_length,
+            params.head_dim,
             params.cos_cache.logical_shape(),
             params.sin_cache.logical_shape(),
             params.neg_cos_cache.logical_shape(),
@@ -112,7 +104,8 @@ E apply_rope_scaling(const E& freqs, const RopeScalingParams& p) {
 
 // trans_mat, sin_cache, cos_cache are all precomputed and stored somewhere in
 // the module hierarchy and passed to the operation.
-autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
+autograd::TensorPtr rope(
+    const autograd::TensorPtr& input, const RotaryEmbeddingParams& params, const uint32_t token_position) {
     validate_rope_input_and_params(input, params);
 
     auto input_logical_shape = input->get_value().logical_shape();
@@ -134,10 +127,30 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
         return unbatched_input;
     };
 
+    // Slice cos/sin caches to the specific position if provided (for decode mode)
+    ttnn::Tensor cos_cache_to_use = params.cos_cache;
+    ttnn::Tensor sin_cache_to_use = params.sin_cache;
+    ttnn::Tensor neg_cos_cache_to_use = params.neg_cos_cache;
+    ttnn::Tensor neg_sin_cache_to_use = params.neg_sin_cache;
+
+    if (token_position > 0U) {
+        auto pos = token_position;
+        ttnn::SmallVector<uint32_t> start = {0, 0, pos, 0};
+        ttnn::SmallVector<uint32_t> end = {1, 1, pos + seq_len, head_dim};
+        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+
+        cos_cache_to_use = ttnn::slice(params.cos_cache, start, end, step);
+        sin_cache_to_use = ttnn::slice(params.sin_cache, start, end, step);
+        neg_cos_cache_to_use = ttnn::slice(params.neg_cos_cache, start, end, step);
+        neg_sin_cache_to_use = ttnn::slice(params.neg_sin_cache, start, end, step);
+    }
+
+    // after setting is_decode_mode to and converting all required tensors' memory layout to SHARDED, receiving DRAM OOM
+    // errors
     auto out_tensor = ttnn::experimental::rotary_embedding_llama(
         squish_batch(input->get_value()),
-        params.cos_cache,
-        params.sin_cache,
+        cos_cache_to_use,
+        sin_cache_to_use,
         params.trans_mat,
         /*is_decode_mode=*/false,
         /*memory_config=*/std::nullopt,
@@ -149,20 +162,21 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     // caches. Note: we can just reuse trans_mat here since the data movement
     // should be the same on the backward pass (we use the same trick to speed
     // up the matmul, and the matrix used is specified by the cos/sin caches.)
-    autograd::GradFunction grad_fn = [squish_batch, unsquish_batch, input, params, out]() {
-        auto dL_dout = out->get_grad();
+    autograd::GradFunction grad_fn =
+        [squish_batch, unsquish_batch, input, params, out, neg_cos_cache_to_use, neg_sin_cache_to_use]() {
+            auto dL_dout = out->get_grad();
 
-        auto dL_dinput = ttnn::experimental::rotary_embedding_llama(
-            squish_batch(dL_dout),
-            params.neg_cos_cache,
-            params.neg_sin_cache,
-            params.trans_mat,
-            /*is_decode_mode=*/false,
-            /*memory_config=*/std::nullopt,
-            /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
-        auto unsquished = unsquish_batch(dL_dinput);
-        input->add_grad(unsquished);
-    };
+            auto dL_dinput = ttnn::experimental::rotary_embedding_llama(
+                squish_batch(dL_dout),
+                neg_cos_cache_to_use,
+                neg_sin_cache_to_use,
+                params.trans_mat,
+                /*is_decode_mode=*/false,
+                /*memory_config=*/std::nullopt,
+                /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
+            auto unsquished = unsquish_batch(dL_dinput);
+            input->add_grad(unsquished);
+        };
 
     auto links = autograd::get_links(input);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad_fn), links));

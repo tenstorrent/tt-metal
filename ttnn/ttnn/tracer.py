@@ -20,7 +20,8 @@ import ttnn.torch_tracer
 
 import ttnn
 
-TracedTensor = ttnn.torch_tracer.TracedTensor
+# TracedTensor = ttnn.torch_tracer.TracedTensor
+TAG_TRACEDTENSOR = ttnn.torch_tracer.TAG_TRACEDTENSOR
 TracedTorchTensor = ttnn.torch_tracer.TracedTorchTensor
 
 TorchTensor = ttnn.torch_tracer.TorchTensor
@@ -62,7 +63,9 @@ class TTNNOperation:
     __repr__ = to_string
 
 
-class TracedTTNNTensor(ttnn.Tensor, ttnn.torch_tracer.TracedTensor):
+class TracedTTNNTensor(ttnn.Tensor):
+    TRACEDTENSOR = None  # tag as an alternative to multiple inheritance
+
     def __init__(self, tensor: ttnn.Tensor, *, graph: nx.MultiDiGraph, node: ttnn.torch_tracer.Node, output_index: int):
         super().__init__(tensor)
         self.graph: nx.MultiDiGraph = graph
@@ -95,7 +98,7 @@ def preprocess_args_and_kwargs(*function_args, **function_kwargs) -> Any:
     import torch
 
     def preprocess_arg(arg: Any) -> Any:
-        if isinstance(arg, ttnn.torch_tracer.TracedTensor):
+        if hasattr(arg, TAG_TRACEDTENSOR):
             return arg
         elif isinstance(arg, ttnn.Tensor):
             return create_ttnn_input_tensor(arg)
@@ -121,7 +124,7 @@ def preprocess_return_value(return_value):
         output_tensors.append(return_value)
     elif isinstance(return_value, ttnn.Tensor) and not isinstance(return_value, TracedTTNNTensor):
         output_tensors.append(create_ttnn_input_tensor(return_value))
-    elif isinstance(return_value, ttnn.torch_tracer.TracedTensor):
+    elif hasattr(return_value, TAG_TRACEDTENSOR):
         output_tensors.append(return_value)
     elif isinstance(return_value, (tuple, list)):
         for value in return_value:

@@ -12,7 +12,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.common.tt_sampling import TTSampling
+from models.common.sampling.tt_sampling import TTSampling
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.common.utility_functions import (
@@ -318,7 +318,7 @@ def test_llama_model_inference(
                 page_table=page_table_tt,
             )
             # Sampling
-            tt_out_tok = tt_sampling(tt_out[0], seed)
+            tt_out_tok = tt_sampling(tt_out[0])
 
             # Convert ttnn tensor to torch tensor
             mesh_composer = ttnn.ConcatMesh2dToTensor(

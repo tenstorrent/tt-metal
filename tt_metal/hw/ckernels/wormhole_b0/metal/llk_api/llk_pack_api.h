@@ -9,7 +9,7 @@
 #include "ckernel_template.h"
 #include "cpack_common.h"
 #include "ckernel_globals.h"
-#include "circular_buffer.h"
+#include "internal/circular_buffer_interface.h"
 
 #include "llk_io.h"
 #include "llk_defs.h"
@@ -17,12 +17,14 @@
 #include "llk_param_structs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_rows.h"
 #include "llk_pack_untilize.h"
 
 /*************************************************************************
  * LLK PACK
  *************************************************************************/
 
+// TODO NC: Remove as the part of tt-metal#34499
 template <bool untilize = false, bool zero_output = false>
 inline void llk_pack_mop_config(const uint32_t output) {
     const std::uint32_t output_id = get_output_id(output);
@@ -31,7 +33,7 @@ inline void llk_pack_mop_config(const uint32_t output) {
     const bool partial_face = get_output_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_mop_config_<untilize, zero_output, DstTileFaceLayout::RowMajor, false>(
+    _llk_pack_mop_config_<untilize, zero_output>(
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
@@ -111,41 +113,6 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
     llk_pack_untilize_hw_configure<is_fp32_dest_acc_en, untilize>(&llk_pack_params, face_r_dim, num_faces);
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, bool untilize = false>
-inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
-    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
-
-    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
-
-    _llk_pack_reduce_hw_configure_<type, dim, is_fp32_dest_acc_en, untilize>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        tile_size,
-        face_r_dim,
-        num_faces,
-        partial_face,
-        narrow_tile,
-        pack_params->relu_config.val);
-}
-
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en,
-    bool untilize = false,
-    ReluType relu_type = ReluType::NO_RELU,
-    std::uint32_t relu_threshold = 0>
-inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output) {
-    llk_pack_params_t llk_pack_params = {
-        .pack_output = pack_output,
-        .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold}}};
-    llk_pack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, untilize>(&llk_pack_params);
-}
-
 template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/>
 inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -154,17 +121,8 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_init_<untilize, zero_output, DstTileFaceLayout::RowMajor, false>(
-        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
-
-    set_packer_l1_offset(pack_dst_format[output_id]);
-
-    // To untilize narrow tile (32x16) we just pack 2 faces back to back
-    // Number of datums to pack per row
-    const uint face_dim = face_r_dim * FACE_C_DIM;
-    const uint pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
-
-    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
+    _llk_pack_init_<untilize, zero_output>(
+        pack_dst_format[output_id], pack_src_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, true);
 }
 
 template <bool out_of_order_output, bool untilize>
@@ -228,16 +186,7 @@ inline void llk_pack_untilize_init(
     const std::uint32_t output_id = get_output_id(output);
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
-        pack_dst_format[output_id], face_r_dim, num_faces);
-
-    // Pack row by row
-    if constexpr (diagonal) {
-        TT_SETADCXX(p_setadc::PAC, 1 - 1, 0x0);
-    } else if constexpr (narrow_row) {
-        TT_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
-    } else {
-        TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    }
+        pack_dst_format[output_id], face_r_dim, num_faces, true);
 }
 
 template <
@@ -288,6 +237,49 @@ inline void llk_matmul_pack(
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
     }
 }
+
+/*************************************************************************
+ * LLK PACK ROWS
+ *
+ * This is a non-standard packing operation that requires explicit initialization
+ * and uninitialization, similar to pack_untilize.
+ *************************************************************************/
+
+/**
+ * @brief Initialize the pack rows operation.
+ *
+ * @param num_rows Total number of rows to pack from the destination register to L1.
+ *                 Each row contains 16 datums. Valid range: 1 to 64.
+ *
+ * This function prepares the packer hardware to pack a specified number of rows
+ * from the destination register to L1 memory in row-major format.
+ */
+inline void llk_pack_rows_init(const std::uint32_t num_rows) { _llk_pack_rows_init_(num_rows); }
+
+/**
+ * @brief Pack rows from a destination register to L1 memory.
+ *
+ * @param dst_index Index in the destination register to read from
+ * @param output The output circular buffer identifier
+ * @param output_index The index in the output CB to write to
+ *
+ * This function packs the specified number of rows (configured via llk_pack_rows_init)
+ * from the destination register to the output circular buffer.
+ */
+inline void llk_pack_rows(
+    const std::uint32_t dst_index, const std::uint32_t output, const std::uint32_t output_index = 0) {
+    const std::uint8_t output_id = get_output_id(output);
+    const std::uint32_t pack_addr = get_output_tile_address<true, false>(output_id, output_index);
+    _llk_pack_rows_(dst_index, pack_addr);
+}
+
+/**
+ * @brief Uninitialize the pack rows operation.
+ *
+ * Restores packer addrmods and counters to a safe default state.
+ * Should be called after the pack rows operation is complete.
+ */
+inline void llk_pack_rows_uninit() { _llk_pack_rows_uninit_(); }
 
 /*************************************************************************
  * LLK PACK FAST TILIZE
@@ -363,8 +355,7 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE, DstTileFaceLayout::RowMajor, untilize, diagonal>(
-        face_r_dim, narrow_tile);
+    _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE, untilize>(face_r_dim, narrow_tile);
 }
 
 template <bool is_fp32_dest_acc_en, bool untilize = false>
@@ -373,8 +364,7 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor, untilize>(
-        face_r_dim, narrow_tile);
+    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(face_r_dim, narrow_tile);
 }
 
 template <bool mail2math = true, bool mail2pack = true>
@@ -399,7 +389,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, DstTileFaceLayout::RowMajor>(
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
@@ -409,6 +399,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         narrow_tile);
 }
 
+// TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     std::uint32_t old_output_id = get_output_id(old_output);

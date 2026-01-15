@@ -4,10 +4,11 @@
 import pytest
 import torch
 from loguru import logger
+from transformers.models.mixtral.configuration_mixtral import MixtralConfig
+from transformers.models.mixtral.modeling_mixtral import MixtralBlockSparseTop2MLP, MixtralRMSNorm
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.t3000.mixtral8x7b.reference.model import FeedForward, RMSNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor
@@ -23,34 +24,37 @@ def convert2ref(state_dict):
 
 
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
-def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral_mlp_inference(mesh_device, reset_seeds, mode):
     seqlen = 32
-    t3k_mesh_device.disable_and_clear_program_cache()
+    mesh_device.disable_and_clear_program_cache()
     dtypes = {
         "w1": ttnn.bfloat8_b,
         "w2": ttnn.bfloat8_b,
         "w3": ttnn.bfloat8_b,
     }
 
-    model_args = ModelArgs(t3k_mesh_device)
+    model_args = ModelArgs(mesh_device)
     model_args.n_layers = 32
+    # Note: The naming conventions in Hugging Face (HF) Mixtral differ from those in `ModelArgs`.
+    # In HF, `hidden_size` refers to the attention dimension, whereas in `ModelArgs`, `hidden_dim` specifies the hidden layer size of the FFN.
+    mixtral_cofig = MixtralConfig(hidden_size=model_args.dim, intermediate_size=model_args.hidden_dim)
+
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
 
-    tt_model = TtMixtralMLP(
-        mesh_device=t3k_mesh_device, state_dict=state_dict, args=model_args, layer_num=0, dtypes=dtypes
-    )
+    tt_model = TtMixtralMLP(mesh_device=mesh_device, state_dict=state_dict, args=model_args, layer_num=0, dtypes=dtypes)
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
         k: v for k, v in state_dict.items() if (k.startswith("layers.0.") and "attention" not in k and "norm" not in k)
     }
     partial_state_dict_ref = {k[32:]: v for k, v in partial_state_dict.items() if f"experts.{0}" in k}
-    reference_model = FeedForward(model_args)
+    reference_model = MixtralBlockSparseTop2MLP(mixtral_cofig)
     reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
 
     rms_state_dict = {k[18:]: v for k, v in state_dict.items() if (k.startswith("layers.0.ffn_norm."))}
-    rms = RMSNorm(dim=model_args.dim)
+    rms = MixtralRMSNorm(hidden_size=model_args.dim)
     rms.load_state_dict(rms_state_dict)
 
     original_input = (torch.rand(1, 1, seqlen, model_args.dim) * 2) - 1
@@ -75,7 +79,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
             torch_input,
             dtype=ttnn.bfloat16,  # or your desired dtype
             layout=ttnn.TILE_LAYOUT,
-            device=t3k_mesh_device,
+            device=mesh_device,
             memory_config=width_sharded_mem_config,
         )
     else:
@@ -83,12 +87,12 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
             torch_input,
             dtype=ttnn.bfloat16,  # or your desired dtype
             layout=ttnn.TILE_LAYOUT,
-            device=t3k_mesh_device,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     tt_output = tt_model(tt_input, mode)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

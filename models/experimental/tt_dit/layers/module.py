@@ -34,6 +34,7 @@ class Module(ABC):
     def __init__(self) -> None:
         self._children = {}
         self._parameters = {}
+        self._is_loaded = False
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
@@ -146,6 +147,7 @@ class Module(ABC):
                 parts.append("unexpected Torch state keys: " + ", ".join(unexpected_keys))
             raise ValueError("; ".join(parts))
 
+        self._is_loaded = True
         return IncompatibleKeys(missing_keys, unexpected_keys)
 
     @deprecated("Use load_torch_state_dict instead")
@@ -179,6 +181,8 @@ class Module(ABC):
                 msg = f"{err} while loading '{path}'"
                 raise LoadingError(msg) from err
 
+        self._is_loaded = True
+
     def to_cached_state_dict(self, path_prefix: str) -> dict[str, str]:
         cache_dict = {}
 
@@ -207,6 +211,21 @@ class Module(ABC):
             except LoadingError as err:
                 msg = f"{err} while loading '{path}'"
                 raise LoadingError(msg) from err
+
+        self._is_loaded = True
+
+    def deallocate_weights(self) -> None:
+        """Deallocate all parameter weights from device memory recursively."""
+        for _, child in self.named_children():
+            child.deallocate_weights()
+
+        for _, parameter in self.named_parameters():
+            parameter.deallocate()
+
+        self._is_loaded = False
+
+    def is_loaded(self) -> bool:
+        return self._is_loaded
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -395,6 +414,12 @@ class Parameter:
     def data(self, value: ttnn.Tensor) -> None:
         self._check_data(value)
         self._data = value
+
+    def deallocate(self) -> None:
+        """Deallocate the parameter's device memory."""
+        if self._data is not None:
+            ttnn.deallocate(self._data)
+            self._data = None
 
     def _check_data(self, value: ttnn.Tensor) -> None:
         if self.on_host:

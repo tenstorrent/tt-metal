@@ -69,7 +69,7 @@ void MAIN {
         mm_init_short(in_cb, trans_mat_cb);
         ACQ();
 
-        matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0, false);
+        matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
         pack_tile(0, rotated_in_interm_cb, 0);
 
         REL();

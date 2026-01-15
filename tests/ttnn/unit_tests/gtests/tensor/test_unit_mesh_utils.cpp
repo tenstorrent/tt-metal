@@ -85,9 +85,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
 
     ASSERT_THAT(disaggregated_tensors, SizeIs(unit_meshes.size()));
 
-    for (size_t i = 0; i < disaggregated_tensors.size(); i++) {
-        const auto& tensor = disaggregated_tensors[i];
-
+    for (const auto& tensor : disaggregated_tensors) {
         EXPECT_NE(tensor.device(), nullptr);
         EXPECT_EQ(tensor.device()->shape().mesh_size(), 1);
         EXPECT_EQ(tensor.logical_shape(), shape);

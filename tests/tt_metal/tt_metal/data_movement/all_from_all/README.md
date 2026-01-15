@@ -22,9 +22,9 @@ By the end of the test, every master core should have received the same data fro
 
 Test attributes such as pages per transaction and number of transactions per subordinate core, and latency measures such as kernel and pre-determined scope cycles are recorded by the profiler.
 
-A pcc check is performed by cross-checking the data of all the subordinate cores pieced-together against the data received by each master core. This ensures that the data integrity is maintained throughout the data movement process.
+An equality check is performed by cross-checking the data of all the subordinate cores pieced-together against the data received by each master core. This ensures that the data integrity is maintained throughout the data movement process.
 
-Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+Test expectations are that the equality checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:

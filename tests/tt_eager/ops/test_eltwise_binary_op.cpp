@@ -65,7 +65,7 @@ int main() {
 
     int device_id = 0;
     auto device_owner = MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
+    auto* device = device_owner.get();
 
     {
         ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});

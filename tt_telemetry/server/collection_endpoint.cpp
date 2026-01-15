@@ -212,8 +212,7 @@ static bool collection_endpoint_thread(std::shared_ptr<TelemetryCollectionEndpoi
     return true;
 }
 
-std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_collection_endpoint(
-    uint16_t port, const std::string& metal_home) {
+std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_collection_endpoint(uint16_t port) {
     auto server = std::make_shared<TelemetryCollectionEndpoint>(port);
     auto future = std::async(std::launch::async, collection_endpoint_thread, server);
     return std::make_pair(std::move(future), server);

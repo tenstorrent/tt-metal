@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/bfloat8.hpp>
 #include <cmath>
 #include <functional>
@@ -40,11 +40,9 @@
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -125,12 +123,11 @@ template <class T_in>
 std::vector<uint32_t> get_tilized_packed_golden_broadcast(
     std::vector<T_in>& src, const std::vector<uint32_t>& shape, BroadcastDim dim, tt::DataFormat T_out) {
     static_assert(
-        std::is_same<bfloat16, T_in>::value || std::is_same<float, T_in>::value,
-        "Only float & Float_16b type as input allowed");
+        std::is_same_v<bfloat16, T_in> || std::is_same_v<float, T_in>, "Only float & Float_16b type as input allowed");
     std::vector<uint32_t> tilized_packed_res;
     ::unit_tests::compute::GoldenConfig config = {.num_tiles_r_dim = shape.at(0), .num_tiles_c_dim = 1};
     std::vector<T_in> vBroadcast = get_broadcasted_vec(src, shape, dim);
-    if constexpr (std::is_same<bfloat16, T_in>::value) {
+    if constexpr (std::is_same_v<bfloat16, T_in>) {
         if (T_out == tt::DataFormat::Float16_b) {
             auto packed_vec = pack_vector<uint32_t, bfloat16>(vBroadcast);
             tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
@@ -144,7 +141,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
-    } else if constexpr (std::is_same<float, T_in>::value) {
+    } else if constexpr (std::is_same_v<float, T_in>) {
         if (T_out == tt::DataFormat::Float16_b) {
             std::vector<bfloat16> tempfp16bv;
             tempfp16bv.resize(vBroadcast.size());

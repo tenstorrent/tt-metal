@@ -6,8 +6,8 @@
 #include "adaptive_pools.hpp"
 #include "adaptive_pool_utils.hpp"
 #include "ttnn/operations/pool/generic/generic_pools.hpp"
-namespace ttnn {
-namespace operations::experimental::adaptive_pool {
+
+namespace ttnn::operations::experimental::adaptive_pool {
 
 // Reusing the generic pool2d functionality from the regular pool operations
 Tensor AdaptiveAvgPool2DOp::invoke(
@@ -18,6 +18,7 @@ Tensor AdaptiveAvgPool2DOp::invoke(
     uint32_t channels,
     std::array<uint32_t, 2> output_size,
     const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<op_slicing::Op2DSliceConfig>& dram_slice_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     bool deallocate_input,
@@ -43,6 +44,7 @@ Tensor AdaptiveAvgPool2DOp::invoke(
         false,         // count_include_pad always false because we want to ignore padding values
         std::nullopt,  // divisor_override
         memory_config,
+        dram_slice_config,
         applied_shard_scheme,
         compute_kernel_config,
         deallocate_input,
@@ -57,6 +59,7 @@ Tensor AdaptiveMaxPool2DOp::invoke(
     uint32_t channels,
     std::array<uint32_t, 2> output_size,
     const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<op_slicing::Op2DSliceConfig>& dram_slice_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     bool deallocate_input,
     bool reallocate_output) {
@@ -80,6 +83,7 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         {1, 1},  // dilation
         false,   // ceil_mode
         memory_config,
+        dram_slice_config,
         applied_shard_scheme,
         deallocate_input,
         reallocate_output,
@@ -90,5 +94,4 @@ Tensor AdaptiveMaxPool2DOp::invoke(
     return result.at(0);
 }
 
-}  // namespace operations::experimental::adaptive_pool
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::adaptive_pool

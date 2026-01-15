@@ -5,7 +5,7 @@
 #include "moreh_adam.hpp"
 
 #include "ttnn/operations/moreh/moreh_adam/device/moreh_adam_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
 

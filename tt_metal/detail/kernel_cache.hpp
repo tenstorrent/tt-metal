@@ -18,12 +18,12 @@ struct HashLookup {
 
     bool exists(size_t khash) {
         std::unique_lock<std::mutex> lock(mutex_);
-        return hashes_.find(khash) != hashes_.end();
+        return hashes_.contains(khash);
     }
     bool add(size_t khash) {
         std::unique_lock<std::mutex> lock(mutex_);
         bool ret = false;
-        if (hashes_.find(khash) == hashes_.end()) {
+        if (!hashes_.contains(khash)) {
             hashes_.insert(khash);
             ret = true;
         }
@@ -32,7 +32,7 @@ struct HashLookup {
 
     void wait_for_bin_generated(size_t khash) {
         std::unique_lock<std::mutex> lock(mutex_);
-        bin_ready_cv_.wait(lock, [this, khash]() { return generated_bins_.find(khash) != generated_bins_.end(); });
+        bin_ready_cv_.wait(lock, [this, khash]() { return generated_bins_.contains(khash); });
     }
 
     void add_generated_bin(size_t khash) {

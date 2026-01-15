@@ -14,6 +14,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pinned_memory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh_translation_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
@@ -77,6 +78,9 @@ else()
 endif()
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
+
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(distributed)
 
 foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
     GENERATE_FBS_HEADER(${FBS_FILE} TARGET distributed)

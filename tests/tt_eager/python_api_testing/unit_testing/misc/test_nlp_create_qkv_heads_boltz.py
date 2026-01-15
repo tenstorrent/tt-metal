@@ -9,7 +9,6 @@ from models.common.utility_functions import tt2torch_tensor, comp_pcc
 from models.common.utility_functions import is_grayskull
 import torch
 import ttnn
-from models.experimental.stable_diffusion_35_large.tt.utils import assert_quality
 
 """
 Test for nlp_create_qkv_heads_boltz operation

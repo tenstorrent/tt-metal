@@ -6,7 +6,7 @@
 
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
 #include <atomic>
@@ -33,6 +33,7 @@
 #include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -49,8 +50,8 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     // across all regions
     std::unordered_map<MeshCoordinateRange, uint32_t> trace_sizes;
 
-    for (auto& trace_md : mesh_trace_md) {
-        auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
+    for (const auto& trace_md : mesh_trace_md) {
+        const auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
         auto& sysmem_manager = mesh_device->get_device(sysmem_mgr_coord)->sysmem_manager();
         auto trace_data_word_offset = trace_md.offset / sizeof(uint32_t);
         auto trace_data_size_words = trace_md.size / sizeof(uint32_t);
@@ -157,7 +158,7 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
 
     const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
     mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
-    auto trace_region_size = mesh_cq.device()->allocator()->get_config().trace_region_size;
+    auto trace_region_size = mesh_cq.device()->allocator_impl()->get_config().trace_region_size;
     TT_FATAL(
         mesh_cq.device()->get_trace_buffers_size() <= trace_region_size,
         "Creating trace buffers of size {}B on MeshDevice {}, but only {}B is allocated for trace region.",
@@ -180,7 +181,7 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     std::unordered_map<MeshCoordinateRange, uint32_t> write_offset_per_device_range = {};
     for (auto& mesh_trace_data : trace_buffer->desc->ordered_trace_data) {
         auto& device_range = mesh_trace_data.device_range;
-        if (write_offset_per_device_range.find(device_range) == write_offset_per_device_range.end()) {
+        if (!write_offset_per_device_range.contains(device_range)) {
             write_offset_per_device_range.insert({device_range, 0});
         }
         std::vector<uint32_t> write_data = mesh_trace_data.data;

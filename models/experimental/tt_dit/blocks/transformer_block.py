@@ -40,6 +40,9 @@ class TransformerBlock(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
+        attention_k_chunk_size: int = 512,
+        attention_q_chunk_size: int = 128,
+        is_fsdp: bool = False,
     ) -> None:
         super().__init__()
 
@@ -56,12 +59,17 @@ class TransformerBlock(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
+        # FSDP: shard weights on sequence parallel axis to reduce memory
+        fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+
         self.norm1_linear = ColParallelLinear(
             modulation_dim,
             6 * dim,
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         self.norm1_norm = DistributedLayerNorm(
@@ -81,6 +89,8 @@ class TransformerBlock(Module):
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
@@ -105,6 +115,9 @@ class TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            k_chunk_size=attention_k_chunk_size,
+            q_chunk_size=attention_q_chunk_size,
+            is_fsdp=is_fsdp,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -123,6 +136,7 @@ class TransformerBlock(Module):
             activation_fn=ff_activation_fn,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
 
@@ -145,6 +159,7 @@ class TransformerBlock(Module):
                 activation_fn=ff_activation_fn,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
             )
 
@@ -214,8 +229,14 @@ class TransformerBlock(Module):
             spatial_gate_ff,
         ) = _chunk_time3d(spatial_time, 6)
 
-        spatial_normed = ttnn.squeeze(self.norm1_norm(ttnn.unsqueeze(spatial, 0)), 0)
-        spatial_normed = spatial_normed * (1 + spatial_scale_attn) + spatial_shift_attn
+        spatial_normed = ttnn.squeeze(
+            self.norm1_norm(
+                ttnn.unsqueeze(spatial, 0),
+                dynamic_weight=(1 + spatial_scale_attn),
+                dynamic_bias=spatial_shift_attn,
+            ),
+            0,
+        )
 
         if self.context_pre_only:
             prompt_scale_attn, prompt_shift_attn = _chunk_time3d(prompt_time, 2)
@@ -233,8 +254,14 @@ class TransformerBlock(Module):
                 prompt_gate_ff,
             ) = _chunk_time3d(prompt_time, 6)
 
-        prompt_normed = ttnn.squeeze(self.norm1_context_norm(ttnn.unsqueeze(prompt, 0)), 0)
-        prompt_normed = prompt_normed * (1 + prompt_scale_attn) + prompt_shift_attn
+        prompt_normed = ttnn.squeeze(
+            self.norm1_context_norm(
+                ttnn.unsqueeze(prompt, 0),
+                dynamic_weight=(1 + prompt_scale_attn),
+                dynamic_bias=prompt_shift_attn,
+            ),
+            0,
+        )
 
         # Gather spatial, prompt before attention
         spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
@@ -258,8 +285,14 @@ class TransformerBlock(Module):
         if self.add_attention_to_output:
             spatial = spatial_plus_attn
 
-        spatial_normed = ttnn.squeeze(self.norm2(ttnn.unsqueeze(spatial_plus_attn, 0)), 0)
-        spatial_normed = spatial_normed * (1 + spatial_scale_ff) + spatial_shift_ff
+        spatial_normed = ttnn.squeeze(
+            self.norm2(
+                ttnn.unsqueeze(spatial_plus_attn, 0),
+                dynamic_weight=(1 + spatial_scale_ff),
+                dynamic_bias=spatial_shift_ff,
+            ),
+            0,
+        )
 
         spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
             spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
@@ -277,8 +310,14 @@ class TransformerBlock(Module):
         if self.add_attention_to_output:
             prompt = prompt_plus_attn
 
-        prompt_normed = ttnn.squeeze(self.norm2_context(ttnn.unsqueeze(prompt_plus_attn, 0)), 0)
-        prompt_normed = prompt_normed * (1 + prompt_scale_ff) + prompt_shift_ff
+        prompt_normed = ttnn.squeeze(
+            self.norm2_context(
+                ttnn.unsqueeze(prompt_plus_attn, 0),
+                dynamic_weight=(1 + prompt_scale_ff),
+                dynamic_bias=prompt_shift_ff,
+            ),
+            0,
+        )
 
         prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
             prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
@@ -290,14 +329,6 @@ class TransformerBlock(Module):
         prompt = prompt + prompt_ff
 
         return spatial, prompt
-
-    @classmethod
-    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int) -> int:
-        return Attention.spatial_sequence_padding_length(length=length, sp_factor=sp_factor)
-
-    @staticmethod
-    def pad_spatial_sequence(x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
-        return Attention.pad_spatial_sequence(x, sp_factor=sp_factor)
 
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:

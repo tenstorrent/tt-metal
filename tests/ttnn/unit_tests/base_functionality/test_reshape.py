@@ -394,6 +394,54 @@ def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, 
     assert_with_pcc(torch_result, output, 0.9999)
 
 
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 1445, 192), (1445, 192)),
+        ((1, 256), (1, 1, 256)),
+        ((16, 1, 32), (16, 1, 32)),
+    ],
+)
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.uint32), (torch.float32, ttnn.float32)]
+)
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    (
+        # single core
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        # multiple disjoint cores
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            ]
+        ),
+    ),
+)
+def test_reshape_subgrid(device, input_shape, output_shape, layout, memory_config, dtype, sub_core_grids):
+    if memory_config == ttnn.L1_MEMORY_CONFIG and input_shape in [(2888, 49, 96), (1, 1500, 1, 512)]:
+        pytest.xfail("Test case is too big for L1")
+
+    torch_dtype, ttnn_dtype = dtype
+
+    size = math.prod(input_shape)
+    torch_input_tensor = torch.linspace(1, size, size, dtype=torch_dtype).reshape(input_shape)
+
+    if torch_dtype == torch.int32:
+        torch_input_tensor = torch_input_tensor.abs()
+
+    torch_result = torch_input_tensor.reshape(output_shape)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=layout, dtype=ttnn_dtype, device=device, memory_config=memory_config
+    )
+    ttnn_output = ttnn.reshape(input_tensor, output_shape, sub_core_grids=sub_core_grids)
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_result, output, 0.9999)
+
+
 @pytest.mark.parametrize("recreate_mapping_tensor", (ttnn.TileReshapeMapMode.CACHE, ttnn.TileReshapeMapMode.RECREATE))
 def test_reshape_tile_program_cache(device, recreate_mapping_tensor):
     for input_shape, output_shape in ((1, 8, 8), (1, 16, 4)), ((16, 1, 5), (4, 2, 10)):

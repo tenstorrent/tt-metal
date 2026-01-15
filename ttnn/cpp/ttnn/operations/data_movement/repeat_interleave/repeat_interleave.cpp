@@ -9,9 +9,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace data_movement {
+namespace ttnn::operations::data_movement {
 
 // repeat interleave supports repeats as 1 to inf, dim between 0 to 2
 ttnn::Tensor ExecuteRepeatInterleave::invoke(
@@ -68,6 +66,4 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(
     return typecast ? ttnn::typecast(original_layout, input_a.dtype(), mem_config) : original_layout;
 }
 
-}  // namespace data_movement
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement

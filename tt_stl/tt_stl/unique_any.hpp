@@ -11,11 +11,15 @@
 
 namespace ttsl {
 
+// NOLINTBEGIN(modernize-type-traits)
 template <auto MAX_STORAGE_SIZE, auto ALIGNMENT>
 struct unique_any final {
     using storage_t = std::array<std::byte, MAX_STORAGE_SIZE>;
 
-    template <typename Type, typename BaseType = std::decay_t<Type>>
+    template <
+        typename Type,
+        typename BaseType = std::decay_t<Type>,
+        std::enable_if_t<!std::is_same_v<BaseType, unique_any>, int> = 0>
     unique_any(Type&& object) :
         pointer{new(&type_erased_storage) BaseType{std::forward<Type>(object)}},
         delete_storage{[](storage_t& self) { reinterpret_cast<BaseType*>(&self)->~BaseType(); }},
@@ -78,6 +82,7 @@ private:
     void (*delete_storage)(storage_t&) = nullptr;
     void* (*move_storage)(storage_t& storage, void*) = nullptr;
 };
+// NOLINTEND(modernize-type-traits)
 
 }  // namespace ttsl
 

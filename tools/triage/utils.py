@@ -2,8 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 import os
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rich.theme import Theme
 
 
 def should_use_color() -> bool:
@@ -26,32 +31,36 @@ def should_use_color() -> bool:
     return sys.stdout.isatty()
 
 
-# Cache the result of should_use_color
-_USE_COLOR = should_use_color()
+def create_console_theme(disable_colors: bool) -> Theme:
+    """Create a Rich theme for console output based on color support."""
+    from rich.theme import Theme
+    from rich.style import Style
 
-# Colors for terminal output
-RST = "\033[0m" if _USE_COLOR else ""
-BLUE = "\033[34m" if _USE_COLOR else ""  # For good values
-RED = "\033[31m" if _USE_COLOR else ""  # For bad values
-GREEN = "\033[32m" if _USE_COLOR else ""  # For instructions
-GREY = "\033[37m" if _USE_COLOR else ""  # For general information
-ORANGE = "\033[33m" if _USE_COLOR else ""  # For warnings
-VERBOSE_CLR = "\033[94m" if _USE_COLOR else ""  # For verbose output
-
-
-# Tabulate format for displaying tables
-from tabulate import TableFormat, Line, DataRow
-
-DEFAULT_TABLE_FORMAT = TableFormat(
-    lineabove=Line("╭", "─", "┬", "╮"),
-    linebelowheader=Line("├", "─", "┼", "┤"),
-    linebetweenrows=None,
-    linebelow=Line("╰", "─", "┴", "╯"),
-    headerrow=DataRow("│", "│", "│"),
-    datarow=DataRow("│", "│", "│"),
-    padding=1,
-    with_header_hide=None,
-)
+    blue = Style(color="blue")
+    red = Style(color="red")
+    green = Style(color="green")
+    grey = Style(color="grey85")
+    yellow = Style(color="yellow")
+    styles: dict[str, str | Style] = {
+        "command": green,  # Command that user should execute
+        "debug": green,  # Debug messages
+        "info": blue,  # Informational messages
+        "error": red,  # Error messages
+        "status": blue,  # Status messages
+        "warning": yellow,  # Warning messages
+        "verbose": grey,  # Verbose output messages
+        "progress.tasks": "gray50",  # Progress task numbers
+        "progress.description": "grey85",  # Progress description
+        "blue": blue,
+        "red": red,
+        "green": green,
+        "grey": grey,
+        "yellow": yellow,
+    }
+    if disable_colors or not should_use_color():
+        for key in styles.keys():
+            styles[key] = ""
+    return Theme(styles)
 
 
 # Verbosity and logging methods
@@ -115,24 +124,49 @@ VERBOSITY_VALUE: Verbosity = Verbosity.INFO
 
 def ERROR(s, **kwargs):
     if Verbosity.supports(Verbosity.ERROR):
-        print(f"{RED}{s}{RST}", **kwargs)
+        try:
+            from triage import console
+
+            console.print(f"[error]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"ERROR: {s}", **kwargs)
 
 
 def WARN(s, **kwargs):
     if Verbosity.supports(Verbosity.WARN):
-        print(f"{ORANGE}{s}{RST}", **kwargs)
+        try:
+            from triage import console
+
+            console.print(f"[warning]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"WARNING: {s}", **kwargs)
 
 
 def DEBUG(s, **kwargs):
     if Verbosity.supports(Verbosity.DEBUG):
-        print(f"{GREEN}{s}{RST}", **kwargs)
+        try:
+            from triage import console
+
+            console.print(f"[debug]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"DEBUG: {s}", **kwargs)
 
 
 def INFO(s, **kwargs):
     if Verbosity.supports(Verbosity.INFO):
-        print(f"{BLUE}{s}{RST}", **kwargs)
+        try:
+            from triage import console
+
+            console.print(f"[info]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"INFO: {s}", **kwargs)
 
 
 def VERBOSE(s, **kwargs):
     if Verbosity.supports(Verbosity.VERBOSE):
-        print(f"{GREY}{s}{RST}", **kwargs)
+        try:
+            from triage import console
+
+            console.print(f"[verbose]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"VERBOSE: {s}", **kwargs)

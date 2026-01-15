@@ -106,7 +106,7 @@ struct CachedProgramFactory {
 // Generic Program Cache: This data structure is tied to a device handle and can store generic program types from
 // TT-Metal and TT-Eager using tt::stl::concepts::unique_any.
 struct ProgramCache {
-    bool contains(uint64_t program_hash) const { return this->cache_.count(program_hash) > 0; }
+    bool contains(uint64_t program_hash) const { return this->cache_.contains(program_hash); }
 
     CachedProgramFactory& get(uint64_t program_hash) { return this->cache_.at(program_hash); }
 

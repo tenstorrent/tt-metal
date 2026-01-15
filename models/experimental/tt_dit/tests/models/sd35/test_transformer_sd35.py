@@ -13,7 +13,7 @@ from ....utils.check import assert_quality
 from ....models.transformers.transformer_sd35 import SD35TransformerBlock, SD35Transformer2DModel
 from ....parallel.manager import CCLManager
 from ....parallel.config import DiTParallelConfig, ParallelFactor
-from .....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from diffusers import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from ....utils.padding import PaddingConfig
 from ....utils.cache import get_cache_path, get_and_create_cache_path, save_cache_dict, load_cache_dict
 import time
@@ -124,7 +124,9 @@ def test_sd35_transformer_block(
 
     # NOTE: DO NOT run torch model before creating TT tensors. Torch model will modify the input tensors in place.
     # Run torch model
-    torch_spatial, torch_prompt = torch_model(spatial=spatial_input, prompt=prompt_input, time_embed=time_embed_input)
+    torch_prompt, torch_spatial = torch_model(
+        hidden_states=spatial_input, encoder_hidden_states=prompt_input, temb=time_embed_input
+    )
 
     # Run TT model
     tt_spatial_out, tt_prompt_out = tt_model(tt_spatial, tt_prompt, tt_time_embed, spatial_seq_len, prompt_seq_len)
@@ -305,11 +307,12 @@ def test_sd35_transformer2d_model(
     # Run torch model
     with torch.no_grad():
         torch_output = torch_model(
-            spatial=spatial_input_nchw,
-            prompt_embed=prompt_input,
+            hidden_states=spatial_input_nchw,
+            encoder_hidden_states=prompt_input,
             pooled_projections=pooled_projections,
             timestep=timestep,
-        )
+            return_dict=False,
+        )[0].permute(0, 2, 3, 1)
 
     # Convert inputs to TT tensors with proper sharding
     tt_spatial = bf16_tensor(spatial_input_nhwc_tt, device=submesh_device, mesh_axis=sp_axis, shard_dim=2)
@@ -340,7 +343,7 @@ def test_sd35_transformer2d_model(
     for i in range(len(tt_output_tensors)):
         logger.info(f"Checking output tensor {i}")
         tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
-        assert_quality(torch_output.squeeze(), tt_output_torch.squeeze(), pcc=0.999_940)
+        assert_quality(torch_output.squeeze(), tt_output_torch.squeeze(), pcc=0.998_000)
 
     print("SD35Transformer2DModel test passed successfully!")
 

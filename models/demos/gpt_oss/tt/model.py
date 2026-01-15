@@ -149,7 +149,7 @@ class Model:
         # Create a dummy CCL manager for GPT-OSS
         from models.demos.gpt_oss.tt.ccl import CCLManager
 
-        ccl_manager = CCLManager(mesh_device)
+        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
 
         # Create instance using direct initialization
         instance = cls.__new__(cls)
@@ -227,14 +227,21 @@ class Model:
         return logits
 
     def ttnn_decode_forward(
-        self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, sampling_on_device=False
+        self,
+        tokens,
+        current_pos,
+        rot_mat_idxs=None,
+        page_table=None,
+        kv_cache=None,
+        sampling_on_device=False,
+        capture_sampling_trace=False,
     ):
         """
         Decode forward pass - processes single tokens.
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
         """
         # Embed tokens
-        input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
+        input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
         # Ensure proper shape for decoder layers
         if len(input_embeds.shape) == 4:
@@ -246,13 +253,16 @@ class Model:
         rope_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
 
         # Forward through layers and head (shared with prefill)
-        return self._forward_layers_and_head(
+        out = self._forward_layers_and_head(
             hidden_states=hidden_states,
             rope_mats=rope_mats,
             current_pos=current_pos,
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        # Return logits and None for log-probs for compatibility with generator interface
+        # TODO: Add log-probs return value once sampling_on_device is supported
+        return out, None
 
     def ttnn_prefill_forward(
         self,
@@ -365,10 +375,17 @@ class Model:
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def prepare_inputs_prefill_trace(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_inputs_prefill_trace(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
+    ):
         """Prepare inputs on host so we later send them to device"""
         host_inputs = self.prepare_inputs_prefill(
-            tokens, start_pos=start_pos, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+            tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            trace_enabled=True,
+            last_token_idx=last_token_idx,
         )
         return host_inputs
 
@@ -380,7 +397,9 @@ class Model:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
         return tokens_embd, tt_page_table, tt_chunk_page_table
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
+    def prepare_inputs_prefill(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+    ):
         """Prepare inputs for prefill mode"""
         # Embed the tokens
         if tokens.dim() == 2:

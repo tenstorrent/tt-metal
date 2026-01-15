@@ -9,8 +9,8 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "device/layernorm_op.hpp"
-
+#include "device/layernorm_device_operation.hpp"
+#include "ttnn/device.hpp"
 namespace ttnn::operations::normalization {
 
 ttnn::Tensor ExecuteLayerNorm::invoke(
@@ -33,24 +33,22 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);
     }
 
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
+                                                                   : ttnn::GetDefaultDevice()->arch();
     bool approx_mode = false;
     bool fp32_acc = true;
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, approx_mode, fp32_acc);
-    return tt::tt_metal::operation::run(
-               LayerNorm{
-                   .norm_type = LayerNormType::LAYERNORM,
-                   .distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED,
-                   .eps = epsilon,
-                   .output_mem_config = output_memory_config,
-                   .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
-                   .compute_kernel_config = kernel_config_val},
-               {input_tensor},
-               {residual_input_tensor, weight, bias, std::nullopt})
-        .at(0);
+
+    return ttnn::prim::layer_norm(
+        input_tensor,
+        epsilon,
+        weight,
+        bias,
+        residual_input_tensor,
+        output_memory_config,
+        program_config.value_or(create_program_config(input_tensor.shard_spec())),
+        kernel_config_val);
 }
 
 }  // namespace ttnn::operations::normalization

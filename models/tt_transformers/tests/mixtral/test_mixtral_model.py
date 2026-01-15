@@ -9,11 +9,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.t3000.mixtral8x7b.reference.model import Transformer as refTransformer
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
-from models.tt_transformers.tt.load_checkpoints import convert_meta_to_hf
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_model.py
 
@@ -129,17 +127,7 @@ def test_model_inference(
 
     model_name = model_args.base_model_name
     if layers == 1:  # quick mode has tight PCC checks for known models
-        if model_args.checkpoint_type == CheckpointType.HuggingFace:
-            model_name = model_args.base_model_name
-        else:
-            model_name = {
-                (16, False): "llama32_1b",
-                (28, False): "llama32_3b",
-                (32, False): "llama31_8b",
-                (32, True): "llama32_11b",
-                (80, False): "llama31_70b",
-                (80, True): "llama32_90b",
-            }[(model_args.n_layers, model_args.is_llama_vision())]
+        model_name = model_args.base_model_name
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {
@@ -192,20 +180,6 @@ def test_model_inference(
     if layers is not None:
         model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
-    state_dict_prefix = model_args.get_state_dict_prefix("", None)
-    reference_state_dict = {
-        k[len(state_dict_prefix) :]: v
-        for k, v in state_dict.items()
-        if (
-            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-            or any(
-                [
-                    f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-                ]
-            )
-        )
-    }
 
     prompts = ["This is a test"] * model_args.max_batch_size
     if dummy_weights:
@@ -224,15 +198,10 @@ def test_model_inference(
 
     reference_model = None
     if run_ref_pt:
-        reference_model = refTransformer(args=model_args)
-        reference_model.load_state_dict(convert2ref(state_dict))
-        reference_model.eval()
+        reference_model = model_args.reference_transformer(load_checkpoint=True)
 
     # Embedding on host
-    embd = reference_model.tok_embeddings
-    embd._load_state_dict = embd.load_state_dict
-    embd.load_state_dict = lambda x: embd._load_state_dict(convert_meta_to_hf(x, model_args.head_dim))
-    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
+    embd = model_args.reference_embedding()
 
     generation_start_pos = 0
     generation_length = iterations
@@ -343,7 +312,7 @@ def test_model_inference(
             start_pos_ids = [start_pos for _ in range(batch)]
             positions = torch.LongTensor([start_pos])
             # In this test all users have the same position
-            ref_output = ref_output = reference_model(pt_decode_input, positions).detach().float()
+            ref_output = reference_model(pt_decode_input, positions).detach().float()
 
         # Increment position
         current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
@@ -407,20 +376,10 @@ def test_model_inference(
             # Compare KV caches
             if cache_pcc:
                 for l in range(model_args.n_layers):
-                    if model_args.checkpoint_type == CheckpointType.HuggingFace:
-                        pytorch_layer_present = [
-                            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                        ]
-                    else:
-                        pytorch_layer_present = [
-                            reference_model.layers[l]
-                            .attention.cache_k.clone()
-                            .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                            reference_model.layers[l]
-                            .attention.cache_v.clone()
-                            .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                        ]
+                    pytorch_layer_present = [
+                        reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                    ]
                     tt_layer_present = []
                     if paged_attention:
                         for layer_past in tt_model.layers[l].attention.layer_past:

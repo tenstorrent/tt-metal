@@ -41,7 +41,7 @@ class TestFactory:
         mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
         # Setup CCL
-        ccl_manager = CCLManager(mesh_device)
+        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_shape[0] > 1 else 1)
 
         config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
         # state_dict = TestFactory._generate_dummy_state_dict(config)
@@ -136,7 +136,13 @@ def parametrize_mesh_with_fabric():
 def parametrize_batch_seq(configs=None):
     """Universal batch/seq parametrization"""
     configs = configs or [(1, 1), (1, 32)]
-    return pytest.mark.parametrize("batch_size, seq_len", configs)
+    ids = [
+        f"prefill_{seq_len//1024 if seq_len > 1024 else seq_len}" + ("k" if seq_len > 1024 else "")
+        if seq_len > 1
+        else "decode_mode"
+        for batch_size, seq_len in configs
+    ]
+    return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)
 
 
 def parametrize_weights(use_real=False):

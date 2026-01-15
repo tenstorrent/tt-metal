@@ -7,7 +7,6 @@
 #include "sort_device_operation_types.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
@@ -26,9 +25,9 @@ struct SortProgramFactorySingleRowSingleCore {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const SortParams&, const SortInputs&, tensor_return_value_t&);
     static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        cached_program_t&, const SortParams&, const SortInputs&, tensor_return_value_t&);
 };
 
 // SortProgramFactoryCrossCoreDataExchange - single row, multi core with processing multiple tiles on one core with
@@ -42,9 +41,9 @@ struct SortProgramFactoryCrossCoreDataExchange {
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const SortParams&, const SortInputs&, tensor_return_value_t&);
     static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        cached_program_t&, const SortParams&, const SortInputs&, tensor_return_value_t&);
 
     /**
      * @brief Strategies for slicing work across cores in cross-core data exchange sort.
@@ -78,9 +77,9 @@ struct SortProgramFactorySingleRowMultiCore {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const SortParams&, const SortInputs&, tensor_return_value_t&);
     static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        cached_program_t&, const SortParams&, const SortInputs&, tensor_return_value_t&);
 };
 
 }  // namespace ttnn::operations::data_movement::sort::program

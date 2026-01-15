@@ -213,7 +213,7 @@ for (uint32_t h = 0; h < out_subblock_h; h++) {
         for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
             int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
             int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-            matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, in0_index, in1_index, dst_index, false /* transpose */);
+            matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, in0_index, in1_index, dst_index);
             in1_index_inner_dim_offset += in1_per_core_w;
         }
         dst_index++;

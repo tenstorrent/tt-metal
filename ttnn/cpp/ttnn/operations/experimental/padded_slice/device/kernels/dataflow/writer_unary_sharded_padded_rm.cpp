@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 void kernel_main() {
     const uint32_t num_units = get_arg_val<uint32_t>(0);
     const uint32_t num_elements_per_row = get_arg_val<uint32_t>(1);

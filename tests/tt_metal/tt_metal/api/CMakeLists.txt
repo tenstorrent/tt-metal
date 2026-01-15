@@ -27,6 +27,7 @@ target_sources(
         test_bit_utils.cpp
         test_buffer_region.cpp
         test_compile_time_args.cpp
+        test_compile_defines.cpp
         test_direct.cpp
         test_dram_to_l1_multicast.cpp
         test_dram.cpp
@@ -49,6 +50,7 @@ target_sources(
         test_worker_config_buffer.cpp
         test_blockfloat_common.cpp
         test_duplicate_kernel.cpp
+        test_core_local_mem_api.cpp
 )
 
 target_include_directories(

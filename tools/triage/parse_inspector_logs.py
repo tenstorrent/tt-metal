@@ -66,7 +66,7 @@ BinaryStatus: TypeAlias = Literal["notSent", "inFlight", "committed"]
 
 @dataclass
 class DeviceBinaryStatus:
-    deviceId: int
+    metalDeviceId: int
     status: BinaryStatus
 
 
@@ -409,15 +409,12 @@ def get_devices_in_use(programs: list[ProgramData]) -> set[int]:
 def get_log_directory(log_directory: str | None = None) -> str:
     if log_directory:
         return log_directory
-    elif "TT_METAL_INSPECTOR_LOG_PATH" in os.environ:
-        return os.environ.get("TT_METAL_INSPECTOR_LOG_PATH")
-    elif "TT_METAL_HOME" in os.environ:
-        return os.path.join(os.environ.get("TT_METAL_HOME"), "generated", "inspector")
+    elif "TT_METAL_LOGS_PATH" in os.environ:
+        return os.path.join(os.environ.get("TT_METAL_LOGS_PATH"), "generated", "inspector")
     else:
         import tempfile
 
         return os.path.join(tempfile.gettempdir(), "tt-metal", "inspector")
-    assert False, "unreachable"
 
 
 class InspectorLogsData:
@@ -458,8 +455,8 @@ class InspectorLogsData:
 
     @cached_property
     def devices_in_use(self):
-        GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["deviceIds"])
-        return GetDevicesInUseResults(deviceIds=list(get_devices_in_use(self.getPrograms().programs)))
+        GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["metalDeviceIds"])
+        return GetDevicesInUseResults(metalDeviceIds=list(get_devices_in_use(self.getPrograms().programs)))
 
     def getDevicesInUse(self):
         return self.devices_in_use

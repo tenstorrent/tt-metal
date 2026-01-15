@@ -7,8 +7,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_prefetcher)
 target_sources(
     ttnn_op_prefetcher
     PRIVATE
-        prefetcher/device/dram_prefetcher_op.cpp
-        prefetcher/device/dram_prefetcher_op_multi_core.cpp
+        prefetcher/device/dram_prefetcher_device_operation.cpp
+        prefetcher/device/dram_prefetcher_program_factory.cpp
         prefetcher/dram_prefetcher.cpp
 )
 

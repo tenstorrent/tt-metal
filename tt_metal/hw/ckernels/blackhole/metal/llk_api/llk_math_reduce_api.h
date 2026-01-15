@@ -43,9 +43,6 @@ template <
     bool is_fp32_dest_acc_en,
     int num_fidelity_phases = 0,
     bool enforce_fp32_accumulation = false /*unused*/>
-inline void llk_math_reduce_init(
-    const std::uint32_t within_face_16x16_transpose =
-        0) {  // within_face_16x16_transpose used for unpack, ignored by math
-    _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, num_fidelity_phases, enforce_fp32_accumulation>(
-        within_face_16x16_transpose);
+inline void llk_math_reduce_init() {
+    _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, num_fidelity_phases, enforce_fp32_accumulation>();
 }

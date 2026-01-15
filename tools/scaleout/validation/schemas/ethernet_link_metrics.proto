@@ -26,6 +26,8 @@ message EthChannelIdentifier {
     uint64 tray_id = 3;
     uint64 asic_location = 4;
     uint32 channel = 5;
+    uint32 port_id = 6;
+    uint32 port_type = 7;
 }
 
 message EthernetLinkMetrics {

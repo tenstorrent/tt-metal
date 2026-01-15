@@ -21,7 +21,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create(
     const auto op = operation_attributes.op;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto device = output_grad.device();
+    auto* device = output_grad.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
@@ -153,7 +153,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create(
 
 void MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& input_grad) {
     auto& program = cached_program.program;

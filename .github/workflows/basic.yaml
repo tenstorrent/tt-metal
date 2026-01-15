@@ -38,8 +38,14 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
+      - name: Checkout actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/

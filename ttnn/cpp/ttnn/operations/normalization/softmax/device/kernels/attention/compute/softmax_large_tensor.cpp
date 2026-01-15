@@ -17,7 +17,7 @@
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api.h"
 
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 // clang-format off
 // 3 Loops in code

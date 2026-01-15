@@ -4,11 +4,31 @@
 
 #pragma once
 
-#include "ttnn/operation.hpp"
+#include "convert_to_chw_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::cnn::detail {
+namespace ttnn::operations::experimental::cnn::to_chw::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
-    const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size);
+struct ConvertToCHWProgramFactory {
+    struct shared_variables_t {
+        tt::tt_metal::CBHandle cb_in = 0;
+        tt::tt_metal::CBHandle cb_out = 0;
+        std::vector<CoreCoord> input_cores;
+        tt::tt_metal::KernelHandle reader_kernel_id = 0;
+        tt::tt_metal::KernelHandle writer_kernel_id = 0;
+        tt::tt_metal::KernelHandle compute_kernel_id = 0;
+        uint32_t total_tiles_per_core = 0;
+    };
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-}  // namespace ttnn::operations::experimental::cnn::detail
+    static cached_program_t create(
+        const ToChwParams& operation_attributes, const ToChwInputs& tensor_args, Tensor& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const ToChwParams& operation_attributes,
+        const ToChwInputs& tensor_args,
+        Tensor& output);
+};
+
+}  // namespace ttnn::operations::experimental::cnn::to_chw::program

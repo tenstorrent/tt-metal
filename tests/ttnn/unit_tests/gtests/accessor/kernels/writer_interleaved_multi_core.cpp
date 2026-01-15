@@ -8,8 +8,8 @@ Each core handles a specific range of pages [start_page_id, end_page_id).
 */
 
 #include <cstdint>
-#include "dataflow_api.h"
-#include "accessor/tensor_accessor.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
     auto args_dst = TensorAccessorArgs<0, 0>();

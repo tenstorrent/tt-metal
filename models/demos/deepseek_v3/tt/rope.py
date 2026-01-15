@@ -124,7 +124,7 @@ class RotarySetup:
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
-    def get_rot_idxs(self, position_idxs):
+    def get_rot_idxs(self, position_idxs, on_host: bool = False):
         """
         Get the rotary positional embedding indices for the given position indices.
         Args:
@@ -160,7 +160,7 @@ class RotarySetup:
                 dims=(None, None) if interleaved else (1, None),
                 mesh_shape=self.device.shape,
             ),
-            device=self.device,
+            device=None if on_host else self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -246,6 +246,53 @@ class RotarySetup:
 
         cos = ttnn.interleaved_to_sharded(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
         sin = ttnn.interleaved_to_sharded(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
+
+        if return_rot_idxs:
+            return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}, rot_idxs
+        return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}
+
+    def get_rot_mats_from_rot_idxs(
+        self, rot_idxs: ttnn.Tensor, return_rot_idxs: bool = False
+    ) -> dict[str, ttnn.Tensor]:
+        """
+        Generate rotation matrices from pre-computed rot_idxs using only ttnn operations.
+        This method contains only the ttnn embedding and transformation ops, without any
+        torch tensor conversions, making it suitable for trace capture.
+
+        Args:
+            rot_idxs: TTNN tensor of shape [1, batch] containing rotary position indices,
+                     already on device (output from get_rot_idxs())
+
+        Returns:
+            Dictionary containing cos_matrix, sin_matrix, and trans_matrix
+        """
+        assert isinstance(rot_idxs, ttnn.Tensor), "rot_idxs must be a TTNN tensor"
+        assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
+        # All operations below are pure ttnn ops (no from_torch/as_tensor)
+        embedding_layout = ttnn.TILE_LAYOUT
+        cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, dim]
+        sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=embedding_layout)  # [1, batch, dim]
+
+        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, dim]
+        sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, dim]
+
+        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
+        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
+
+        if self.batch_size_per_row % ttnn.TILE_SIZE != 0:
+            cos = cos[:, : self.batch_size_per_row, :, :]
+            sin = sin[:, : self.batch_size_per_row, :, :]
+
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.dim),
+            core_grid=self.batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        cos = ttnn.interleaved_to_sharded(cos, mem_config)
+        sin = ttnn.interleaved_to_sharded(sin, mem_config)
 
         if return_rot_idxs:
             return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}, rot_idxs

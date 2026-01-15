@@ -8,8 +8,7 @@
 #include <string>
 #include <tt_stl/assert.hpp>
 
-namespace ttnn {
-namespace operations::experimental::adaptive_pool {
+namespace ttnn::operations::experimental::adaptive_pool {
 
 // Kernels dimension (width or height) can be only uniform and give correct result by padding the border elements
 // Therefore for feasibility of making kernels uniform we need to make sure that the middle elements already are
@@ -54,12 +53,12 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> calculate_actual_kernel_
 // Helper function designed to generate the stride values for each output elements the same way it is
 // calculated in pytorch implementation
 std::vector<uint32_t> calculate_actual_stride_patterns(
-    uint32_t input_size,
+    uint32_t /*input_size*/,
     uint32_t output_size,
-    uint32_t kernel_size,
+    uint32_t /*kernel_size*/,
     uint32_t stride,
-    uint32_t pad_before,
-    uint32_t pad_after) {
+    uint32_t /*pad_before*/,
+    uint32_t /*pad_after*/) {
     std::vector<uint32_t> actual_strides;
 
     // Calculate the actual start positions in the padded input for each output
@@ -278,5 +277,4 @@ void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint
     }
 }
 
-}  // namespace operations::experimental::adaptive_pool
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::adaptive_pool

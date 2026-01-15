@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/assert.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
+#include "api/debug/assert.h"
+#include <cstring>
 
 void kernel_main() {
     uint32_t core_x = get_arg_val<uint32_t>(0);
@@ -14,7 +15,7 @@ void kernel_main() {
     const char* msg2 = "Adding the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ.";
     const char* msg3 = "Now, in reverse, to make it even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.";
 
-    ASSERT(msg1.size() + msg2.size() + msg3.size() > DPRINT_BUFFER_SIZE);
+    ASSERT(strlen(msg1) + strlen(msg2) + strlen(msg3) > DPRINT_BUFFER_SIZE);
     DPRINT << "(" << core_x << "," << core_y << "): " << msg1 << " (" << core_x << "," << core_y << "): " << msg2
            << " (" << core_x << "," << core_y << "): " << msg3 << ENDL();
 
@@ -26,7 +27,7 @@ void kernel_main() {
         "ability to talk to all creatures. From that day on, Tim helped others, becoming a hero in the animal kingdom. "
         "And so, the little mouse learned that bravery and kindness can change the world.";
 
-    ASSERT(large_msg > DPRINT_BUFFER_SIZE);
+    ASSERT(strlen(large_msg) > DPRINT_BUFFER_SIZE);
     DPRINT << "(" << core_x << "," << core_y << "): " << large_msg << ENDL();
 
     const char* msg_with_newlines =

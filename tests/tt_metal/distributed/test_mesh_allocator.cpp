@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <mesh_device.hpp>
-#include <stddef.h>
+#include <cstddef>
 #include <memory>
 
 #include <tt-metalium/buffer.hpp>

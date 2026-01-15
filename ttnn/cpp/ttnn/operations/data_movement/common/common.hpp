@@ -10,16 +10,13 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace data_movement {
+namespace ttnn::operations::data_movement {
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, uint32_t);
-
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& output_shape);
-
-ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
+ttnn::Tensor squeeze_from_ND_to_4D(
+    const ttnn::Tensor& tensor, const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape);
 ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 
@@ -147,11 +144,11 @@ public:
                     return std::apply(t2, transformed_args);
                 }
                 return transformed_args;
-            } else if (*t2_required) {
-                return t2(args...);
-            } else {
-                return std::make_tuple(args...);
             }
+            if (*t2_required) {
+                return t2(args...);
+            }
+            return std::make_tuple(args...);
         };
 
         auto merged_post_transform =
@@ -162,13 +159,14 @@ public:
                 auto t2_output = t2(output);
                 auto t1_output = t1(t2_output);
                 return t1_output;
-            } else if (*t1_required) {
-                return t1(output);
-            } else if (*t2_required) {
-                return t2(output);
-            } else {
-                return output;
             }
+            if (*t1_required) {
+                return t1(output);
+            }
+            if (*t2_required) {
+                return t2(output);
+            }
+            return output;
         };
 
         return MassagedOperation(MassagedOperationParams<OpOutputType, OpInputTypes...>{
@@ -202,6 +200,13 @@ ttnn::Shape compute_padded_shape(
     uint32_t tile_height = tt::constants::TILE_HEIGHT,
     uint32_t tile_width = tt::constants::TILE_WIDTH);
 
+/**
+ * Pads a shape to align with tile dimensions
+ * @param unpadded_shape Original shape to be padded
+ * @return Padded shape aligned to tile dimensions
+ */
+ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape);
+
 enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 
 // Helper function for creating a sharded memory configuration for a tensor
@@ -224,6 +229,4 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
 
 uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
-}  // namespace data_movement
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement

@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <cstring>
 
-#include "dataflow_api.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
+#include "api/dataflow/dataflow_api.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -28,16 +28,12 @@ void kernel_main() {
     uint32_t end_row = start_row + num_rows_to_process;
 
     for (uint32_t r = start_row; r < end_row; r++) {
-        for (uint32_t c = 0, idx = r * Wt; c < Wt; c += block_size) {
-            cb_wait_front(cb_dataflow_idx, block_size);
-            uint32_t l1_read_addr = get_read_ptr(cb_dataflow_idx);
+        for (uint32_t c = 0; c < Wt; c += block_size) {
+            uint32_t current_block_size = (c + block_size <= Wt) ? block_size : (Wt - c);
+            uint32_t start_idx = r * Wt + c;
 
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++idx) {
-                noc_async_write_tile(idx, output_addr_generator, l1_read_addr);
-                l1_read_addr += tile_bytes;
-            }
-            noc_async_write_barrier();
-            cb_pop_front(cb_dataflow_idx, block_size);
+            write_tiles_by_row(
+                cb_dataflow_idx, output_addr_generator, start_idx, current_block_size, tile_bytes, block_size);
         }
     }
 }

@@ -1,7 +1,7 @@
 # VGG
 
 ## Platforms:
-    Grayskull (e150), Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ## Introduction
 The VGG model is a popular convolutional neural network architecture introduced by the Visual Geometry Group at Oxford in their paper "Very Deep Convolutional Networks for Large-Scale Image Recognition" (2014). It is widely used for image classification and feature extraction tasks.

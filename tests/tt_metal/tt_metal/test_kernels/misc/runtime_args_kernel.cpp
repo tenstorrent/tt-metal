@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "risc_attribs.h"
-#include "debug/dprint.h"
+#include "internal/risc_attribs.h"
+#include "api/debug/dprint.h"
 // TODO FIXME: this build system is ridiculously stupid
 #ifdef COMPILE_FOR_TRISC
 #include "compute_kernel_api/tile_move_copy.h"

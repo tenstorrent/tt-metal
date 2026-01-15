@@ -15,24 +15,25 @@
 #include <string>
 #include <functional>
 #include <optional>
+#include <unordered_map>
 
 #include <llrt/hal.hpp>
-#include <umd/device/firmware/firmware_info_provider.hpp>
 #include <umd/device/cluster.hpp>
 
 #include <telemetry/metric.hpp>
+#include <telemetry/arc/caching_arc_telemetry_reader.hpp>
 #include <tt_metal/fabric/physical_system_descriptor.hpp>
 
 class TopologyHelper;
 
 class ARCUintMetric : public UIntMetric {
 public:
-    // Constructor using FirmwareInfoProvider
+    // Constructor using CachingARCTelemetryReader
     ARCUintMetric(
         tt::tt_metal::ASICDescriptor asic_descriptor,
-        tt::umd::FirmwareInfoProvider* firmware_provider,
+        std::shared_ptr<CachingARCTelemetryReader> telemetry_reader,
         const std::string& metric_name,
-        std::function<std::optional<uint32_t>()> getter_func,
+        std::function<std::optional<uint32_t>(const ARCTelemetrySnapshot*)> getter_func,
         MetricUnit units = MetricUnit::UNITLESS);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -42,19 +43,19 @@ public:
 
 private:
     tt::tt_metal::ASICDescriptor asic_descriptor_;
-    tt::umd::FirmwareInfoProvider* firmware_provider_;
+    std::shared_ptr<CachingARCTelemetryReader> telemetry_reader_;
     std::string metric_name_;
-    std::function<std::optional<uint32_t>()> getter_func_;
+    std::function<std::optional<uint32_t>(const ARCTelemetrySnapshot*)> getter_func_;
 };
 
 class ARCDoubleMetric : public DoubleMetric {
 public:
-    // Constructor using FirmwareInfoProvider
+    // Constructor using CachingARCTelemetryReader
     ARCDoubleMetric(
         tt::tt_metal::ASICDescriptor asic_descriptor,
-        tt::umd::FirmwareInfoProvider* firmware_provider,
+        std::shared_ptr<CachingARCTelemetryReader> telemetry_reader,
         const std::string& metric_name,
-        std::function<std::optional<double>()> getter_func,
+        std::function<std::optional<double>(const ARCTelemetrySnapshot*)> getter_func,
         MetricUnit units = MetricUnit::UNITLESS);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -64,19 +65,19 @@ public:
 
 private:
     tt::tt_metal::ASICDescriptor asic_descriptor_;
-    tt::umd::FirmwareInfoProvider* firmware_provider_;
+    std::shared_ptr<CachingARCTelemetryReader> telemetry_reader_;
     std::string metric_name_;
-    std::function<std::optional<double>()> getter_func_;
+    std::function<std::optional<double>(const ARCTelemetrySnapshot*)> getter_func_;
 };
 
 class ARCStringMetric : public StringMetric {
 public:
-    // Constructor using FirmwareInfoProvider
+    // Constructor using CachingARCTelemetryReader
     ARCStringMetric(
         tt::tt_metal::ASICDescriptor asic_descriptor,
-        tt::umd::FirmwareInfoProvider* firmware_provider,
+        std::shared_ptr<CachingARCTelemetryReader> telemetry_reader,
         const std::string& metric_name,
-        std::function<std::optional<std::string>()> getter_func,
+        std::function<std::optional<std::string>(const ARCTelemetrySnapshot*)> getter_func,
         MetricUnit units = MetricUnit::UNITLESS);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -86,10 +87,13 @@ public:
 
 private:
     tt::tt_metal::ASICDescriptor asic_descriptor_;
-    tt::umd::FirmwareInfoProvider* firmware_provider_;
+    std::shared_ptr<CachingARCTelemetryReader> telemetry_reader_;
     std::string metric_name_;
-    std::function<std::optional<std::string>()> getter_func_;
+    std::function<std::optional<std::string>(const ARCTelemetrySnapshot*)> getter_func_;
 };
+
+std::unordered_map<tt::ChipId, std::shared_ptr<CachingARCTelemetryReader>> create_arc_telemetry_readers(
+    const std::unique_ptr<tt::umd::Cluster>& cluster);
 
 void create_arc_metrics(
     std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
@@ -98,4 +102,5 @@ void create_arc_metrics(
     std::vector<std::unique_ptr<StringMetric>>& string_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<TopologyHelper>& topology_translation,
-    const std::unique_ptr<tt::tt_metal::Hal>& hal);
+    const std::unique_ptr<tt::tt_metal::Hal>& hal,
+    const std::unordered_map<tt::ChipId, std::shared_ptr<CachingARCTelemetryReader>>& telemetry_reader_by_chip_id);

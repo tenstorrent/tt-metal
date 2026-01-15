@@ -5,17 +5,36 @@
 #include <tt-metalium/tile.hpp>
 #include <algorithm>
 #include <stdexcept>
+#include <iostream>
 
 #include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tt_backend_api_types.hpp"
+#include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal {
 
+constexpr std::array<std::array<std::array<uint32_t, 2>, 2>, 12> TILE_FACE_HW_CHOICES = {
+    {// TODO: add other tile shapes once llk supported it
+     {{{32, 32}, {16, 16}}},
+     {{{16, 32}, {16, 16}}},
+     {{{32, 16}, {16, 16}}},
+     {{{16, 16}, {16, 16}}},
+     // these shapes are not supported yet on llk, just for host loopback
+     {{{8, 32}, {8, 16}}},
+     {{{4, 32}, {4, 16}}},
+     {{{2, 32}, {2, 16}}},
+     {{{1, 32}, {1, 16}}},
+     // these shapes are not supported yet on llk, just for host loopback
+     {{{8, 16}, {8, 16}}},
+     {{{4, 16}, {4, 16}}},
+     {{{2, 16}, {2, 16}}},
+     {{{1, 16}, {1, 16}}}}};
+
 Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) : tile_shape(tile_shape) {
-    auto it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [this](const auto& pair) {
+    const auto* it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [this](const auto& pair) {
         if (pair[0] == this->tile_shape) {
             this->face_shape = pair[1];
             return true;
@@ -78,6 +97,11 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
 
 bool Tile::operator==(const Tile& other) const {
     return tile_shape == other.tile_shape && face_shape == other.face_shape;
+}
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tile& tile) {
+    tt::stl::reflection::operator<<(os, tile);
+    return os;
 }
 
 }  // namespace tt::tt_metal

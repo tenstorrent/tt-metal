@@ -9,6 +9,8 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize(
     "shapes",

@@ -2,12 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topk_utils.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace reduction {
-namespace topk_utils {
+namespace ttnn::operations::reduction::topk::utils {
 
 uint32_t largest_power_of_two(uint32_t x) { return x == 0 ? 0 : (1U << (31 - __builtin_clz(x))); }
 
@@ -66,7 +63,6 @@ std::optional<TopKCoreConfig> find_topk_core_config(
 }
 
 bool verify_multi_core_cost(
-    const std::vector<ttnn::Tensor>& input_tensors,
     uint32_t width,
     uint32_t min_dim,
     uint32_t max_dim,
@@ -80,7 +76,7 @@ bool verify_multi_core_cost(
     return config.has_value();
 }
 
-bool verify_single_core_cost(const std::vector<ttnn::Tensor>& input_tensors, uint32_t k, bool uint16_output) {
+bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool uint16_output) {
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
     uint32_t Ktiles = tt::div_up(k, tt::constants::TILE_WIDTH);
@@ -88,8 +84,8 @@ bool verify_single_core_cost(const std::vector<ttnn::Tensor>& input_tensors, uin
     uint32_t transposed_cb_tile_count = 4;
     uint32_t result_prep_cb_tile_count = 2 * Ktiles;  // intermediate output
     uint32_t output_cb_tile_count = Ktiles;
-    auto device = input_tensors.at(0).device();
-    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
+    auto* device = input_tensor.device();
+    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat index_cb_data_format = uint16_output ? tt::DataFormat::UInt16 : tt::DataFormat::UInt32;
     uint32_t value_tile_size = tt::tile_size(value_cb_data_format);
     uint32_t index_tile_size = tt::tile_size(index_cb_data_format);
@@ -99,7 +95,4 @@ bool verify_single_core_cost(const std::vector<ttnn::Tensor>& input_tensors, uin
     return memory_cost_local < device->l1_size_per_core();
 }
 
-}  // namespace topk_utils
-}  // namespace reduction
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction::topk::utils

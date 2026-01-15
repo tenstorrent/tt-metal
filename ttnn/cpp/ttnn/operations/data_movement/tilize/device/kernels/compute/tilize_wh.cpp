@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-// #include "debug/dprint.h"
+// #include "api/debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {

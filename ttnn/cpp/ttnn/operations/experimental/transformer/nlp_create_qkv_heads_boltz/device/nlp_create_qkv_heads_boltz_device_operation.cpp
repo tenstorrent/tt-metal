@@ -5,6 +5,7 @@
 #include "nlp_create_qkv_heads_boltz_device_operation.hpp"
 
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 // Generic NLP CreateHeads op
@@ -148,7 +149,7 @@ void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
 }
 
 void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 NlpCreateHeadsBoltzDeviceOperation::spec_return_value_t NlpCreateHeadsBoltzDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -234,37 +235,41 @@ NlpCreateHeadsBoltzDeviceOperation::tensor_return_value_t NlpCreateHeadsBoltzDev
 }
 
 NlpCreateHeadsBoltzDeviceOperation::program_factory_t NlpCreateHeadsBoltzDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor_q;
     if (input_tensor.is_sharded()) {
         return Sharded{};
-    } else {
-        return Interleaved{};
     }
-}
-
-std::
-    tuple<NlpCreateHeadsBoltzDeviceOperation::operation_attributes_t, NlpCreateHeadsBoltzDeviceOperation::tensor_args_t>
-    NlpCreateHeadsBoltzDeviceOperation::invoke(
-        const Tensor& input_tensor_q,
-        const std::optional<Tensor>& input_tensor_kv,
-        const uint32_t num_q_heads,
-        const std::optional<uint32_t> num_kv_heads,
-        uint32_t head_dim,
-        const bool transpose_k_heads,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
-    return {
-        operation_attributes_t{
-            .num_q_heads = num_q_heads,
-            .num_kv_heads = num_kv_heads.value_or(num_q_heads),
-            .head_dim = head_dim,
-            .transpose_k_heads = transpose_k_heads,
-            .output_mem_config = memory_config.value_or(input_tensor_q.memory_config())},
-        tensor_args_t{
-            .input_tensor_q = input_tensor_q,
-            .input_tensor_kv = input_tensor_kv,
-            .optional_output_tensors = optional_output_tensors.value_or(std::vector<std::optional<Tensor>>{})}};
+    return Interleaved{};
 }
 
 }  // namespace ttnn::operations::experimental::transformer
+
+namespace ttnn::prim {
+
+std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads_boltz(
+    const Tensor& input_tensor_q,
+    const std::optional<Tensor>& input_tensor_kv,
+    uint32_t num_q_heads,
+    std::optional<uint32_t> num_kv_heads,
+    uint32_t head_dim,
+    bool transpose_k_heads,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
+    using OperationType = ttnn::operations::experimental::transformer::NlpCreateHeadsBoltzDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .num_q_heads = num_q_heads,
+        .num_kv_heads = num_kv_heads.value_or(num_q_heads),
+        .head_dim = head_dim,
+        .transpose_k_heads = transpose_k_heads,
+        .output_mem_config = memory_config.value_or(input_tensor_q.memory_config())};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor_q = input_tensor_q,
+        .input_tensor_kv = input_tensor_kv,
+        .optional_output_tensors = optional_output_tensors.value_or(std::vector<std::optional<Tensor>>{})};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+
+}  // namespace ttnn::prim

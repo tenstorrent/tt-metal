@@ -15,7 +15,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 import ttnn
-from models.common.utility_functions import enable_persistent_kernel_cache, nearest_32
+from models.common.utility_functions import nearest_32
 from models.common.utils import top_k_top_p_filtering
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
@@ -262,8 +262,6 @@ def run_falcon_demo_kv(
 
     kv_cache_singlelayer = tt_FalconCausalLM_singlelayer.initialize_kv_cache()  # only used for compile
 
-    enable_persistent_kernel_cache()
-
     ### First prefill run with compile ###
     use_cache = True
     profiler.start("compile_prefill")
@@ -368,7 +366,6 @@ def run_falcon_demo_kv(
     profiler.end("initializing_KV_cache")
 
     ### Second prefill run without compile ###
-    enable_persistent_kernel_cache()
 
     post_processor = partial(post_process)
     output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
@@ -625,6 +622,7 @@ def run_falcon_demo_kv(
 @pytest.mark.parametrize("greedy_sampling", (False,))
 @pytest.mark.parametrize("max_seq_len", (128,))
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_demo(
     perf_mode,
     greedy_sampling,
@@ -632,10 +630,8 @@ def test_demo(
     user_input,
     model_location_generator,
     get_tt_cache_path,
-    t3k_mesh_device,
+    mesh_device,
 ):
-    # disable_persistent_kernel_cache()
-
     return run_falcon_demo_kv(
         user_input=user_input,
         model_version=model_config_entries["_name_or_path"],
@@ -646,7 +642,7 @@ def test_demo(
         max_seq_len=max_seq_len,
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         prefill_on_host=False,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,

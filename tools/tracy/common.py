@@ -25,6 +25,8 @@ if "TT_METAL_PROFILER_DIR" in ENVS.keys():
 
 PROFILER_BIN_DIR = TT_METAL_HOME / "build/tools/profiler/bin"
 
+PROFILER_DEFAULT_OP_SUPPORT_COUNT = 1000
+
 TRACY_OPS_TIMES_FILE_NAME = "tracy_ops_times.csv"
 TRACY_OPS_DATA_FILE_NAME = "tracy_ops_data.csv"
 TRACY_MODULE_PATH = TT_METAL_HOME / "tt_metal/third_party/tracy"

@@ -499,15 +499,16 @@ def test_max(mesh_device):
     indirect=True,
 )
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
-def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_ttnn_multi_device_all_gather_all_devices(mesh_device):
     """Multidevice API test for ttnn.all_gather CCL operation for full 8-device T3K"""
 
-    full_tensor = torch.ones((1, 1, 32, 32 * t3k_mesh_device.get_num_devices()), dtype=torch.bfloat16)
-    for i in range(t3k_mesh_device.get_num_devices()):
+    full_tensor = torch.ones((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
+    for i in range(mesh_device.get_num_devices()):
         full_tensor[..., i * 32 : (i + 1) * 32] = i
 
-    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=3))
-    ttnn_tensor = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(mesh_device, dim=3))
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
     assert False, "Legacy ccl call removed until new implementation is done"
     # ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
@@ -523,27 +524,28 @@ def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-def test_sharded_matmul(t3k_mesh_device):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_sharded_matmul(mesh_device):
     q_heads_1B4D = ttnn.from_torch(
         torch.randn(1, 32, 32, 128),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        device=mesh_device,
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
     keys_1BDP = ttnn.from_torch(
         torch.randn(1, 32, 128, 32),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        device=mesh_device,
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
-    q_heads_1B4D = ttnn.to_device(q_heads_1B4D, t3k_mesh_device)
-    keys_1BDP = ttnn.to_device(keys_1BDP, t3k_mesh_device)
+    q_heads_1B4D = ttnn.to_device(q_heads_1B4D, mesh_device)
+    keys_1BDP = ttnn.to_device(keys_1BDP, mesh_device)
 
     core_grid = ttnn.CoreGrid(y=4, x=8)
-    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     if (compute_grid_size.x < core_grid.x) or (compute_grid_size.y < core_grid.y):
         pytest.skip("Test requires larger grid size")
 
@@ -671,8 +673,9 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
     assert ttnn.get_memory_config(tensor) == memory_config
 
 
-def test_visualize_mesh_device(t3k_mesh_device):
-    ttnn.visualize_mesh_device(t3k_mesh_device)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_visualize_mesh_device(mesh_device):
+    ttnn.visualize_mesh_device(mesh_device)
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x2_grid")], indirect=True)
@@ -773,9 +776,10 @@ def test_heterogenous_operation_dispatch():
 
 # Verify that submeshes can be created on a mesh device with fabric enabled
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_fabric_with_submeshes(t3k_mesh_device):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_fabric_with_submeshes(mesh_device):
     logger.info("Spawning 2 1x4 submeshes on a 2x4 mesh device with fabric enabled")
-    submeshes = t3k_mesh_device.create_submeshes(ttnn.MeshShape(1, 4))
+    mesh_device.create_submeshes(ttnn.MeshShape(1, 4))
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)

@@ -10,7 +10,7 @@ import torch
 
 def test_open_device():
     """Simple unit test to test device open/close APIs"""
-    device = ttnn.open_device(device_id=0)
+    device = ttnn.open_device(device_id=0, num_command_queues=1)
     ttnn.close_device(device)
 
 

@@ -155,17 +155,8 @@ golden_pcc_obj = {
 
 golden_pcc = {
     ttnn.device.Arch.WORMHOLE_B0: copy.deepcopy(golden_pcc_obj),
-    ttnn.device.Arch.GRAYSKULL: copy.deepcopy(golden_pcc_obj),
     ttnn.device.Arch.BLACKHOLE: copy.deepcopy(golden_pcc_obj),
 }
-
-golden_pcc[ttnn.device.Arch.GRAYSKULL][16][
-    (
-        ttnn.MathFidelity.LoFi,
-        ttnn.bfloat8_b,
-        ttnn.bfloat8_b,
-    )
-] = 0.936
 
 
 class ResNet50TestInfra:

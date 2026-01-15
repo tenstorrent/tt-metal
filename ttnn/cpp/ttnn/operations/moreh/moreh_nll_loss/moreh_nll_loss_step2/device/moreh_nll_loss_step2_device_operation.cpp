@@ -3,18 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_nll_loss_step2_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::moreh::moreh_nll_loss_step2 {
 
 MorehNllLossStep2DeviceOperation::program_factory_t MorehNllLossStep2DeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return Factory{};
 }
 
 void MorehNllLossStep2DeviceOperation::validate_inputs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& target_tensor = tensor_args.target_tensor;
     const std::optional<Tensor>& weight_tensor = tensor_args.weight_tensor;
@@ -109,24 +110,27 @@ MorehNllLossStep2DeviceOperation::tensor_return_value_t MorehNllLossStep2DeviceO
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
-std::tuple<MorehNllLossStep2DeviceOperation::operation_attributes_t, MorehNllLossStep2DeviceOperation::tensor_args_t>
-MorehNllLossStep2DeviceOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_nll_loss_step2
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_nll_loss_step2::MorehNllLossStep2DeviceOperation::tensor_return_value_t
+moreh_nll_loss_step2(
     const Tensor& input_tensor,
     const Tensor& target_tensor,
     const std::string& reduction,
     const std::optional<Tensor>& weight_tensor,
     const std::optional<Tensor>& divisor_tensor,
     const std::optional<Tensor>& output_tensor,
-    const int32_t ignore_index,
+    int32_t ignore_index,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            reduction,
-            ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
-            memory_config.value_or(input_tensor.memory_config()),
-            compute_kernel_config},
-        tensor_args_t{input_tensor, target_tensor, weight_tensor, divisor_tensor, output_tensor}};
+    using OperationType = ttnn::operations::moreh::moreh_nll_loss_step2::MorehNllLossStep2DeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        reduction,
+        ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : static_cast<uint32_t>(ignore_index),
+        memory_config.value_or(input_tensor.memory_config()),
+        compute_kernel_config};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor, target_tensor, weight_tensor, divisor_tensor, output_tensor};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
-
-}  // namespace ttnn::operations::moreh::moreh_nll_loss_step2
+}  // namespace ttnn::prim

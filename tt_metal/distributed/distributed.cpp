@@ -28,7 +28,7 @@ void EventSynchronize(const MeshEvent& event) {
         return;
     }
     for (const auto& coord : event.device_range()) {
-        auto physical_device = event.device()->get_device(coord);
+        auto* physical_device = event.device()->get_device(coord);
         while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
             ;
         }
@@ -41,7 +41,7 @@ bool EventQuery(const MeshEvent& event) {
     }
     bool event_completed = true;
     for (const auto& coord : event.device_range()) {
-        auto physical_device = event.device()->get_device(coord);
+        auto* physical_device = event.device()->get_device(coord);
         event_completed &= physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
     }
     return event_completed;
@@ -71,8 +71,9 @@ void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_devi
 }
 
 bool UsingDistributedEnvironment() {
+    using multihost::DistributedContext;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    return distributed_context.is_initialized() && *(distributed_context.size()) > 1;
+    return DistributedContext::is_initialized() && *(distributed_context.size()) > 1;
 }
 
 }  // namespace tt::tt_metal::distributed

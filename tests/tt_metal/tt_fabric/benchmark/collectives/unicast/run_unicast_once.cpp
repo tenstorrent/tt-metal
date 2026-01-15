@@ -58,8 +58,8 @@ inline bool pick_forwarding_link_or_fail(
 // Device lookup and basic existence check.
 inline bool lookup_devices_or_fail(
     ChipId src_phys, ChipId dst_phys, tt::tt_metal::IDevice*& src_dev, tt::tt_metal::IDevice*& dst_dev) {
-    src_dev = find_device_by_id(src_phys);
-    dst_dev = find_device_by_id(dst_phys);
+    src_dev = tt::tt_metal::detail::GetActiveDevice(src_phys);
+    dst_dev = tt::tt_metal::detail::GetActiveDevice(dst_phys);
     if (!src_dev || !dst_dev) {
         ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
         return false;

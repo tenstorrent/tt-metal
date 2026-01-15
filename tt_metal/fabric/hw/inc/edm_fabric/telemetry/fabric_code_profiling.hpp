@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
-#include "tt_metal/hw/inc/risc_attribs.h"
+#include "internal/ethernet/tt_eth_api.h"
+#include "internal/risc_attribs.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 

@@ -9,14 +9,13 @@
 
 #include "core_coord.hpp"
 #include "fd_kernel.hpp"
-#include "mesh_graph.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct prefetch_static_config_t {
     std::optional<uint32_t> my_downstream_cb_sem_id;
@@ -57,6 +56,11 @@ struct prefetch_static_config_t {
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
+
+    // Offsets of runtime args
+    std::optional<uint32_t> offsetof_my_dev_id;
+    std::optional<uint32_t> offsetof_to_dev_id;
+    std::optional<uint32_t> offsetof_router_direction;
 };
 
 struct prefetch_dependent_config_t {
@@ -101,6 +105,8 @@ public:
 
     void GenerateDependentConfigs() override;
 
+    void InitializeRuntimeArgsValues() override;
+
     void ConfigureCore() override;
 
     const prefetch_static_config_t& GetStaticConfig() { return static_config_; }
@@ -113,5 +119,4 @@ private:
     bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

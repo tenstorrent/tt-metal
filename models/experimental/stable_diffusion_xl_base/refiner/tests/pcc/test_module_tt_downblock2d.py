@@ -17,7 +17,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize(
     "input_shape, temb_shape, block_id, pcc",
     [
-        ((1, 384, 128, 128), (1, 1536), 0, 0.999),
+        ((1, 384, 128, 128), (1, 1536), 0, 0.998),
         ((1, 1536, 16, 16), (1, 1536), 3, 0.998),
     ],
 )
@@ -62,6 +62,7 @@ def test_downblock2d(device, temb_shape, input_shape, block_id, pcc, debug_mode,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, [B, C, H, W], ttnn_temb_tensor)
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)

@@ -1,0 +1,104 @@
+name: "TTNN registered ops documentation check"
+
+# This workflow checks that all registered TTNN operations are documented in the API reference.
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 30
+
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - BH
+      timeout:
+        required: false
+        type: number
+        default: 30
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+
+jobs:
+  ttnn-ops-docs-check:
+    name: TTNN Ops Docs Check on ${{ inputs.runner-label }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    runs-on: >-
+      ${{
+        (format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label))
+      }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ttnn nightly check OPs docs
+        timeout-minutes: ${{ inputs.timeout }}
+        run: python3 scripts/detect_undocumented_ttnn_ops.py
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "ttnn_ops_docs_check_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        # Only notify during failed scheduled runs
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U08DCK9MA1E # Miłosz Gajewski
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

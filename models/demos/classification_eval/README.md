@@ -44,7 +44,7 @@ Where,
 **Resnet50:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/demos/classification_eval/classification_eval.py::test_resnet50_image_classification_eval[16-act_dtype0-weight_dtype0-device_params0-tt_model]
+ pytest models/demos/classification_eval/classification_eval.py::test_resnet50_image_classification_eval[16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-device_params0-tt_model]
  ```
 
 **MobileNetV2:** <br>
@@ -106,7 +106,7 @@ Where,
 **Resnet50:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/demos/classification_eval/classification_eval.py::test_resnet50_image_classification_eval[16-act_dtype0-weight_dtype0-device_params0-torch_model]
+ pytest models/demos/classification_eval/classification_eval.py::test_resnet50_image_classification_eval[16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-device_params0-torch_model]
  ```
 
 **MobileNetV2:** <br>

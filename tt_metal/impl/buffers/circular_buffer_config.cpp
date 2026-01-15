@@ -19,13 +19,13 @@ namespace tt::tt_metal {
 // Static circular buffer spec
 CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec) :
-    total_size_(total_size), globally_allocated_address_(std::nullopt), dynamic_cb_(false) {
+    total_size_(total_size), globally_allocated_address_(std::nullopt) {
     this->set_config(data_format_spec);
 }
 
 // User is expected to use the builder here.
 CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
-    total_size_(total_size), globally_allocated_address_(std::nullopt), dynamic_cb_(false) {}
+    total_size_(total_size), globally_allocated_address_(std::nullopt) {}
 
 // Dynamic circular buffer spec
 CircularBufferConfig::CircularBufferConfig(
@@ -55,10 +55,10 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
                 format_descriptor.page_size);
         }
         this->page_sizes_[format_descriptor.buffer_index] = format_descriptor.page_size;
-        // if (format_descriptor.tile) {
-        //     this->tiles_[format_descriptor.buffer_index] = Tile(
-        //         {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
-        // }
+        if (format_descriptor.tile) {
+            this->tiles_[format_descriptor.buffer_index] = Tile(
+                {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
+        }
     };
     this->buffer_indices_.reserve(descriptor.format_descriptors.size() + descriptor.remote_format_descriptors.size());
     this->local_buffer_indices_.reserve(descriptor.format_descriptors.size());
@@ -107,7 +107,7 @@ CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, 
             buffer_index,
             NUM_CIRCULAR_BUFFERS);
     }
-    if (this->buffer_indices_.find(buffer_index) == this->buffer_indices_.end()) {
+    if (!this->buffer_indices_.contains(buffer_index)) {
         TT_THROW(
             "Illegal circular buffer index {}. Page size can only be specified for buffer indices configured "
             "during config creation",
@@ -196,7 +196,7 @@ uint32_t CircularBufferConfig::buffer_size() const { return this->buffer_size_; 
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
-    auto is_remote_index = parent.remote_buffer_indices_.find(buffer_index) != parent.remote_buffer_indices_.end();
+    auto is_remote_index = parent.remote_buffer_indices_.contains(buffer_index);
     if (is_remote_index) {
         TT_THROW("Buffer index {} is already marked as remote", buffer_index);
     }
@@ -207,11 +207,11 @@ CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::RemoteBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
-    auto is_local_index = parent.local_buffer_indices_.find(buffer_index) != parent.local_buffer_indices_.end();
+    auto is_local_index = parent.local_buffer_indices_.contains(buffer_index);
     if (is_local_index) {
         TT_THROW("Buffer index {} is already marked as local", buffer_index);
     }
-    if (parent.remote_buffer_indices_.find(buffer_index) == parent.remote_buffer_indices_.end()) {
+    if (!parent.remote_buffer_indices_.contains(buffer_index)) {
         TT_FATAL(parent.remote_buffer_indices_.empty(), "Can only specify one remote buffer index per config");
     }
     auto builder = Builder(parent, buffer_index);

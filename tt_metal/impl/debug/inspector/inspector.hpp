@@ -6,6 +6,7 @@
 
 #include <memory>
 #include "impl/program/program_impl.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"
 
 namespace tt::tt_metal {

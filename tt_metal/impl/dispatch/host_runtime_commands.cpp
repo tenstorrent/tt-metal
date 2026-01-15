@@ -26,6 +26,9 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/debug/dprint_server.hpp>
+#include <impl/debug/watcher_server.hpp>
 
 using namespace tt::tt_metal;
 

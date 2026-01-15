@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ethernet/dataflow_api.h"
-#include "ethernet/tunneling.h"
-#include "firmware_common.h"
+#include "internal/ethernet/dataflow_api.h"
+#include "internal/ethernet/tunneling.h"
+#include "internal/firmware_common.h"
 #include "noc_parameters.h"
-#include "risc_attribs.h"
-#include "dataflow_api.h"
+#include "internal/risc_attribs.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "debug/watcher_common.h"
+#include "internal/debug/watcher_common.h"
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {

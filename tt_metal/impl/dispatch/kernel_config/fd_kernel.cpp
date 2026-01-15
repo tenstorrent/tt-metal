@@ -19,6 +19,7 @@
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/debug/dprint_server.hpp>
 
 using namespace tt::tt_metal;
 
@@ -111,12 +112,17 @@ FDKernel* FDKernel::Generate(
 uint32_t FDKernel::get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core) {
     // TODO(#22895): Too many core types. Consolidate programmable_core_type_index with ProgrammableCoreType and
     // CoreType
-    uint32_t programmable_core_type_index =
-        (dispatch_core_type == CoreType::WORKER)
-            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
-        : is_active_eth_core
-            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
-            : MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+    uint32_t programmable_core_type_index;
+    if (dispatch_core_type == CoreType::WORKER) {
+        programmable_core_type_index =
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    } else if (is_active_eth_core) {
+        programmable_core_type_index =
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+    } else {
+        programmable_core_type_index =
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+    }
 
     return programmable_core_type_index;
 }
@@ -159,7 +165,7 @@ KernelHandle FDKernel::configure_kernel_variant(
     }
 
     if (GetCoreType() == CoreType::WORKER) {
-        return tt::tt_metal::CreateKernel(
+        kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -171,7 +177,7 @@ KernelHandle FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     } else {
-        return tt::tt_metal::CreateKernel(
+        kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -182,10 +188,19 @@ KernelHandle FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     }
+
+    return kernel_handle_;
 }
 
 void FDKernel::create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes) {
     attributes.worker_flow_control_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
     attributes.worker_buffer_index_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
     attributes.worker_teardown_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+}
+
+void FDKernel::SetRuntimeArgs() {
+    TT_ASSERT(program_ != nullptr, "Program must be set before setting runtime args");
+    if (not runtime_args_.empty()) {
+        tt_metal::SetRuntimeArgs(*program_, kernel_handle_, logical_core_, runtime_args_);
+    }
 }

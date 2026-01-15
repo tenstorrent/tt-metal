@@ -171,7 +171,6 @@ def test_sharded_rm(
             memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
             buffer_type=ttnn.BufferType.L1,
         ),
-        is_l1_aligned=True,
     )
 
     tt_og = xt.cpu().to_torch()

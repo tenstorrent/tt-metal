@@ -28,7 +28,7 @@ struct ElementWiseMultiCoreWhereProgram {
     static cached_program_t create(
         const where_ttt_args::operation_attributes_type& operation_attributes,
         const where_ttt_args::tensor_args_type& tensor_args,
-        where_ttt_args::tensor_return_value_type& tensor_return_value);
+        where_ttt_args::tensor_return_value_type& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,

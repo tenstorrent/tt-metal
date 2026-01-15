@@ -18,9 +18,9 @@ uint32_t DeviceCommandCalculator::get_max_write_packed_sub_cmds(
     uint32_t packed_write_max_unicast_sub_cmds,
     bool no_stride) const {
     static_assert(
-        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
-        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
-    constexpr bool is_unicast = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value;
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd> or
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
+    constexpr bool is_unicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>;
     uint32_t sub_cmd_sizeB =
         is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
     // Approximate calculation due to alignment

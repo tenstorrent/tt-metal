@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -213,25 +213,7 @@ void kernel_main() {
             noc_async_writes_flushed();
         }
 
-        // Copy the entire input
-        if (direction) {
-            for (uint32_t t = 0; t < input_halo_dim_size; t++) {
-                uint32_t dst_stick_id = (t + padding_left) * num_sticks_per_halo_dim + stick_start_id;
-                dst_stick_id += outer_dim_offset;
-                for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                    cb_wait_front(cb_output_id, 1);
-                    uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-
-                    uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
-                    noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-
-                    dst_stick_id++;
-
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_output_id, 1);
-                }
-            }
-        }
+        // No local interior copy in this kernel. Dedicated local-copy kernels handle that work.
 
         outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
     }

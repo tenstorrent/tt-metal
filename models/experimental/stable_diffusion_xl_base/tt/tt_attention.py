@@ -32,13 +32,6 @@ class TtAttention(LightweightModule):
         self.heads = out_dim // dim_head if out_dim is not None else heads
         self.head_dim = dim_head
 
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-            q_chunk_size=128,
-            k_chunk_size=128,
-            exp_approx_mode=False,
-        )
-
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         k_weights = state_dict[f"{module_path}.to_k.weight"].unsqueeze(0).unsqueeze(0)
         v_weights = state_dict[f"{module_path}.to_v.weight"].unsqueeze(0).unsqueeze(0)
@@ -48,6 +41,9 @@ class TtAttention(LightweightModule):
 
         self.is_self_attention = (
             q_weights.shape[-1] == k_weights.shape[-1] and q_weights.shape[-1] == v_weights.shape[-1]
+        )
+        self.sdpa_program_config = model_config.get_sdpa_config(
+            module_path=module_path, is_self_attention=self.is_self_attention
         )
 
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -60,8 +56,6 @@ class TtAttention(LightweightModule):
         attention_weights_dtype = model_config.attention_weights_dtype
 
         if self.is_self_attention == True:
-            self.sdpa_program_config.q_chunk_size = 128
-            self.sdpa_program_config.k_chunk_size = 1024 if self.heads == 20 else 512
             fused_qkv_weights = torch.cat(
                 [
                     torch.transpose(q_weights, -2, -1),
@@ -81,15 +75,20 @@ class TtAttention(LightweightModule):
             self.k_program_config = model_config.get_matmul_config(f"{module_path}.to_k")
             self.v_program_config = model_config.get_matmul_config(f"{module_path}.to_v")
 
+            self.k_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.to_k")
+            self.v_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.to_v")
+
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(
             device, out_weights, out_bias, attention_weights_dtype
         )
 
         self.q_program_config = model_config.get_matmul_config(f"{module_path}.to_q")
         self.q_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_q")
+        self.q_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.to_q")
 
         self.dense_out_program_config = model_config.get_matmul_config(f"{module_path}.to_out")
         self.default_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_out")
+        self.out_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.to_out")
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
@@ -97,33 +96,14 @@ class TtAttention(LightweightModule):
         B, C, H, W = list(hidden_states.shape)
 
         if self.is_self_attention:
-            if self.q_program_config is not None:
-                if hidden_states.shape[-1] == 640:
-                    memory_config = ttnn.create_sharded_memory_config(
-                        shape=(1, 1, 512, 256),
-                        core_grid=ttnn.CoreGrid(y=8, x=8),
-                        strategy=ttnn.ShardStrategy.BLOCK,
-                        use_height_and_width_as_shard_shape=True,
-                    )
-                else:
-                    memory_config = ttnn.create_sharded_memory_config(
-                        shape=(1, 1, 1024 // 8, 3840 // 8),
-                        core_grid=ttnn.CoreGrid(y=8, x=8),
-                        strategy=ttnn.ShardStrategy.BLOCK,
-                        use_height_and_width_as_shard_shape=True,
-                    )
-            else:
-                memory_config = None
-
             qkv_fused = ttnn.matmul(
                 hidden_states,
                 self.tt_qkv_weights,
-                memory_config=memory_config,
+                memory_config=self.q_memory_config,
                 dtype=ttnn.bfloat16,
                 compute_kernel_config=self.q_compute_kernel_config,
                 program_config=self.q_program_config,
             )
-            qkv_fused = ttnn.sharded_to_interleaved(qkv_fused, ttnn.L1_MEMORY_CONFIG)
 
             (
                 q_heads,
@@ -139,19 +119,19 @@ class TtAttention(LightweightModule):
                 self.tt_q_weights,
                 program_config=self.dense_out_program_config,
                 compute_kernel_config=self.q_compute_kernel_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=self.q_memory_config,
             )
             k_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_k_weights,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=self.k_memory_config,
                 compute_kernel_config=self.default_compute_kernel_config,
                 program_config=self.k_program_config,
             )
             v_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_v_weights,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=self.v_memory_config,
                 compute_kernel_config=self.default_compute_kernel_config,
                 program_config=self.v_program_config,
             )
@@ -198,7 +178,7 @@ class TtAttention(LightweightModule):
             bias=self.tt_out_bias,
             program_config=self.dense_out_program_config,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if W == 1280 else ttnn.L1_MEMORY_CONFIG,
+            memory_config=self.out_memory_config,
         )
 
         return hidden_states

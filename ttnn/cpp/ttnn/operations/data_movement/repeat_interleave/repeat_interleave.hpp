@@ -12,8 +12,8 @@
 #include <ranges>
 
 namespace ttnn {
-namespace operations {
-namespace data_movement {
+
+namespace operations::data_movement {
 
 struct ExecuteRepeatInterleave {
     // # This operation does not support the following cases:
@@ -21,14 +21,13 @@ struct ExecuteRepeatInterleave {
     // #   - Shape([2[32], 2[32]]) -> repeats = Tensor[1,2], dim = 1
 
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
+        const ttnn::Tensor& input_a,
         uint32_t repeats,
         int32_t dim,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
-}  // namespace data_movement
-}  // namespace operations
+}  // namespace operations::data_movement
 
 constexpr auto repeat_interleave =
     ttnn::register_operation<"ttnn::repeat_interleave", ttnn::operations::data_movement::ExecuteRepeatInterleave>();

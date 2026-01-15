@@ -174,7 +174,7 @@ FactoryParameters get_factory_parameters(
 }
 
 uint32_t calculate_L1_usage(
-    const Tensor& input,
+    DataType input_dtype,
     uint32_t in_channels,
     uint32_t pad_h,
     uint32_t pad_w,
@@ -184,15 +184,16 @@ uint32_t calculate_L1_usage(
     bool return_indices,
     uint32_t kernel_h,
     uint32_t kernel_w,
-    uint32_t out_h,
-    uint32_t out_w,
+    uint32_t /*out_h*/,
+    uint32_t /*out_w*/,
     const MemoryConfig& input_memory,
     const MemoryConfig& output_memory,
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     const Layout& output_layout,
-    const DataType& output_dtype) {
+    const DataType& output_dtype,
+    bool config_tensor_in_dram) {
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -207,7 +208,7 @@ uint32_t calculate_L1_usage(
 
     FactoryParameters params = get_factory_parameters(
         num_shards_c,
-        input.dtype(),
+        input_dtype,
         output_dtype,
         kernel_h,
         kernel_w,
@@ -294,14 +295,42 @@ uint32_t calculate_L1_usage(
             params.index_nbytes;
         out_idx_cb_config_size = out_cb_npages * out_cb_pagesize;
     }
+    uint32_t config_tensor_l1_CB_size = 0;
+    if (config_tensor_in_dram) {
+        auto output_shard_shape = output_memory.shard_spec().value().shape;
+        config_tensor_l1_CB_size =
+            (output_shard_shape[0] * 6) + 2;  // Worst case of 6 Bytes per output elem for reader indices
+        if (!one_scalar_per_core) {
+            config_tensor_l1_CB_size +=
+                output_shard_shape[0] * 6;  // Additional 6 Bytes per output elem for avg pool scalar config tensor
+        }
+    }
+    log_trace(
+        tt::LogOp,
+        "L1 Usage Breakdown: in_scalar_cb_size_0 = {}, in_scalar_cb_size_1 = {}, clear_value_cb_size = {}, "
+        "in_cb_config_0_size = {}, in_cb_config_1_size = {}, total_mpwi_cb_size = {}, pre_tilize_cb_size = {}, "
+        "config_tensor_l1_CB_size = {} "
+        "out_cb_config_size = {}, out_idx_cb_config_size = {}",
+        in_scalar_cb_size_0,
+        in_scalar_cb_size_1,
+        clear_value_cb_size,
+        in_cb_config_0_size,
+        in_cb_config_1_size,
+        total_mpwi_cb_size,
+        pre_tilize_cb_size,
+        config_tensor_l1_CB_size,
+        sliding_window::align_buffer(out_cb_config_size),
+        sliding_window::align_buffer(out_idx_cb_config_size));
 
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           total_mpwi_cb_size + pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
-           sliding_window::align_buffer(out_idx_cb_config_size);
+           total_mpwi_cb_size + pre_tilize_cb_size + config_tensor_l1_CB_size +
+           sliding_window::align_buffer(out_cb_config_size) + sliding_window::align_buffer(out_idx_cb_config_size);
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
-    const Tensor& input_tensor,
+    const DataType& input_dtype,
+    const Layout& input_layout,
+    CoreCoord compute_grid_size,
     const SlidingWindowConfig& sliding_window_config,
     uint32_t channels,
     Pool2DType pool_type,
@@ -309,10 +338,10 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     std::optional<int32_t> divisor_override,
     bool return_indices,
     const Layout& output_layout,
-    const DataType& output_dtype) {
+    const DataType& output_dtype,
+    bool config_tensor_in_dram) {
     uint32_t batch_size = sliding_window_config.batch_size;
     auto output_shape = sliding_window_config.get_output_shape();
-    auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
     struct l1_usage_config {
         uint32_t l1_usage{};
@@ -327,7 +356,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             ttnn::Shape({1, 1, nhw, out_channel_padded}), parallel_config, tt::constants::TILE_HEIGHT);
     };
 
-    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    bool is_in_tiled = input_layout == ttnn::TILE_LAYOUT;
     bool is_out_tiled = output_layout == ttnn::TILE_LAYOUT;
 
     auto calc_l1_usage_inner = [&](TensorMemoryLayout layout, ShardOrientation orientation) -> l1_usage_config {
@@ -348,7 +377,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             return {std::numeric_limits<uint32_t>::max(), input_parallel_config};
         }
         uint32_t l1_usage = calculate_L1_usage(
-            input_tensor,
+            input_dtype,
             sliding_window_config.channels,
             sliding_window_config.get_pad_h(),
             sliding_window_config.get_pad_w(),
@@ -366,7 +395,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             count_include_pad,
             divisor_override,
             output_layout,
-            output_dtype);
+            output_dtype,
+            config_tensor_in_dram);
 
         return {.l1_usage = l1_usage, .config = input_parallel_config};
     };
@@ -421,23 +451,6 @@ void validate_input_params(
     // Support both (1, 1, nhw, c) and (n, h, w, c) formats
     bool is_flattened_format =
         (input_shape[0] == 1 && input_shape[1] == 1 && input_shape[2] == nhw && input_shape[3] == channels);
-    bool is_nhwc_format =
-        (input_shape[0] == batch_size && input_shape[1] == input_h && input_shape[2] == input_w &&
-         input_shape[3] == channels);
-
-    // Unflattened tesnor currently supported for non_block formats only.
-    TT_FATAL(
-        is_flattened_format || (is_nhwc_format && !is_block_float(input_tensor.dtype())),
-        "Input tensor shape {} does not match expected shape. For block format inputs (bfloat8_b/bfloat4_b) only "
-        "flattened format (1, 1, {}, {}) is supported. Unflattened format ({}, {}, {}, {}) is not supported for block "
-        "format inputs.",
-        input_shape,
-        nhw,
-        channels,
-        batch_size,
-        input_h,
-        input_w,
-        channels);
 
     if (is_in_tiled && is_flattened_format) {
         const uint32_t padded_channels = tt::round_up(channels, tt::constants::TILE_WIDTH);
@@ -475,13 +488,11 @@ void validate_input_params(
 
     // check that padding is not excessive (should not be more than half the kernel size)
     TT_FATAL(
-        pad_top <= kernel_size[0] / 2 && pad_bottom <= kernel_size[0] / 2 && pad_left <= kernel_size[1] / 2 &&
-            pad_right <= kernel_size[1] / 2,
-        "Pool2D: Padding ({}, {}, {}, {}) should not exceed half of kernel size ({}, {})",
+        pad_top <= kernel_size[0] / 2 && pad_bottom <= kernel_size[0] / 2 && pad_left <= kernel_size[1] / 2,
+        "Pool2D: Padding ({}, {}, {}) should not exceed half of kernel size ({}, {})",
         pad_top,
         pad_bottom,
         pad_left,
-        pad_right,
         kernel_size[0],
         kernel_size[1]);
 

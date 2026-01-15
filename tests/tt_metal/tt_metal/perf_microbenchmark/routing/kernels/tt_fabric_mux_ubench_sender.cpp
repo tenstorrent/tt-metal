@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
-#include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/assert.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
+#include "api/debug/assert.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"

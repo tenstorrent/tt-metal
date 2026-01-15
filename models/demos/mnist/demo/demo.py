@@ -10,7 +10,6 @@ from torchvision import datasets, transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.mnist.reference.mnist import MnistModel
 from models.demos.mnist.tt import tt_mnist
 
@@ -68,8 +67,6 @@ def test_demo_dataset(
     iterations,
     model_location_generator,
 ):
-    disable_persistent_kernel_cache()
-
     return run_demo_dataset(
         device=device,
         batch_size=batch_size,

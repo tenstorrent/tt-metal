@@ -5,6 +5,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto target_addr = get_arg_val<uint32_t>(i++);
     auto output_grad_addr = get_arg_val<uint32_t>(i++);
@@ -21,6 +22,9 @@ void kernel_main() {
     constexpr uint32_t cb_weight = tt::CBIndex::c_2;
 
     constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
+
+    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
+    constexpr uint32_t cb_output_grad_scratch = tt::CBIndex::c_8;
 
     // ublocks size defined in tiles
     const uint32_t target_tile_bytes = get_tile_size(cb_target);
@@ -42,7 +46,7 @@ void kernel_main() {
     const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
     // weight: (1, C)
-    read_line(cb_weight, addrg_weight, Ct);
+    read_line(cb_weight, cb_weight_scratch, addrg_weight, Ct);
 
     cb_wait_front(cb_weight, Ct);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
@@ -50,7 +54,7 @@ void kernel_main() {
 
     const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
 
-    read_line(cb_output_grad, addrg_output_grad, Nt);
+    read_line(cb_output_grad, cb_output_grad_scratch, addrg_output_grad, Nt);
 
     cb_wait_front(cb_output_grad, Nt);
 

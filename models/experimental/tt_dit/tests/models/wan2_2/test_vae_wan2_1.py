@@ -1008,12 +1008,12 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("check_cache", [True])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis",
+    "mesh_device, h_axis, w_axis, num_links",
     [
-        ((2, 4), 0, 1),
-        ((1, 8), 0, 1),
-        ((1, 4), 1, 0),
-        ((4, 8), 0, 1),
+        ((2, 4), 0, 1, 1),
+        ((1, 8), 0, 1, 1),
+        ((1, 4), 1, 0, 1),
+        ((4, 8), 0, 1, 4),
     ],
     ids=[
         "2x4_h0_w1",
@@ -1024,7 +1024,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, check_cache, reset_seeds):
+def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache, reset_seeds):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanDecoder3d as TorchWanDecoder3d
 
     # mesh_device.disable_and_clear_program_cache()
@@ -1056,7 +1056,7 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
     )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),

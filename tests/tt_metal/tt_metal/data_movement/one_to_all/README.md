@@ -10,9 +10,9 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 ## Test Flow
 L1 memory is allocated on multiple Tensix cores: one master core (sender) and multiple subordinate cores (receivers). Data is written into the L1 memory on the master core. The master core issues NOC transactions (either unicast or multicast) to transfer its data to L1 memory on all subordinate cores. Once data is transferred to all subordinate cores, hardware barriers ensure data validity and completion of the transaction.
 
-Test attributes such as transaction sizes, number of transactions, and grid configurations as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
+Test attributes such as transaction sizes, number of transactions, and grid configurations as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through an equality check.
 
-Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+Test expectations are that the equality checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:
@@ -37,6 +37,7 @@ The tests use the Mesh Device API with fast dispatch mode:
 | is_linked                     | bool                  | Determines if linked/chained NOC transactions are used. |
 | multicast_scheme_type         | uint32_t              | Specifies the multicast scheme type for advanced multicast tests. |
 | virtual_channel               | N/A                   | (1) Option to specify unicast VC for each transaction, (2) Option for a sub-test that uses a separate VC for each transaction (TODO)|
+| use_2_0_api                   | bool                  | Determines if the test uses the experimental device 2.0 API |
 
 ## Test Cases
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
@@ -53,3 +54,16 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
    - Support for loopback operations
 
 3. **Advanced Multicast Schemes**: Tests different multicast implementation strategies for optimal performance across various grid sizes and communication patterns.
+
+## Device 2.0 API Tests
+This test suite now includes tests using the new device 2.0 experimental NOC API. These tests provide the same functionality as the original tests but use an updated API design.
+
+### Key Features of Device 2.0 API Tests:
+- **Experimental NOC API**: Uses `experimental::Noc`, `experimental::UnicastEndpoint` and `experimental::MulticastEndpoint` for structured NOC operations
+- **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
+
+### Device 2.0 Kernels:
+- `sender_multicast_2_0.cpp`: Implements the sender functionality using the experimental NOC API with multicast async write operations
+- `sender_unicast_2_0.cpp`: Implements the sender functionality using the experimental NOC API with unicast async write operations
+
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new experimental API.

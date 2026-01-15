@@ -31,12 +31,14 @@
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
 
 SubDeviceManagerTracker::SubDeviceManagerTracker(
-    IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     device_(device) {
+    TT_FATAL(device_ != nullptr, "SubDeviceManagerTracker requires a valid device");
     auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator), sub_devices);
     default_sub_device_manager_ = sub_device_manager.get();
     active_sub_device_manager_ = default_sub_device_manager_;
@@ -74,15 +76,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
                 sub_device_manager->get_core_go_message_mapping());
         }
     } else {
-        for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
-            auto& hw_cq = device_->command_queue(cq_id);
-            // Only need to reset launch messages once, so reset on cq 0
-            hw_cq.reset_worker_state(
-                cq_id == 0,
-                num_sub_devices,
-                sub_device_manager->noc_mcast_unicast_data(),
-                sub_device_manager->get_core_go_message_mapping());
-        }
+        TT_FATAL(false, "Sub device managers are unsupported with non-mesh devices");
     }
     sub_device_manager->reset_sub_device_stall_group();
 }

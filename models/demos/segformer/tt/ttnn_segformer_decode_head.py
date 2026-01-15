@@ -61,12 +61,7 @@ class TtSegformerDecodeHead:
                 encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
             encoder_hidden_state = ttnn.reshape(encoder_hidden_state, (batch_size, height, width, -1))
 
-            if encoder_hidden_state.shape[-2] == 16:
-                ncores = 16
-            elif encoder_hidden_state.shape[-2] == 32:
-                ncores = 32
-            else:
-                ncores = 64
+            ncores = 64
 
             shard_grid = get_shard_grid_from_num_cores(ncores, device)
             shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
@@ -78,8 +73,9 @@ class TtSegformerDecodeHead:
             input_memory_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
-            encoder_hidden_state = ttnn.to_memory_config(encoder_hidden_state, memory_config=input_memory_config)
+
             encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
+            encoder_hidden_state = ttnn.to_memory_config(encoder_hidden_state, memory_config=input_memory_config)
 
             encoder_hidden_state = ttnn.upsample(
                 encoder_hidden_state,
@@ -92,8 +88,6 @@ class TtSegformerDecodeHead:
             )
 
             ttnn.deallocate(encoder_hidden_state)
-            encoder_hidden_state_to_concat = ttnn.reallocate(encoder_hidden_state_to_concat)
-
             all_hidden_states += (encoder_hidden_state_to_concat,)
 
             index += 1
@@ -103,11 +97,9 @@ class TtSegformerDecodeHead:
         ttnn.deallocate(all_hidden_states[1])
         ttnn.deallocate(all_hidden_states[2])
         ttnn.deallocate(all_hidden_states[3])
-        concated_tensor = ttnn.reallocate(concated_tensor)
 
         concated_tensor_tile = ttnn.to_layout(concated_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(concated_tensor)
-        concated_tensor_tile = ttnn.reallocate(concated_tensor_tile)
 
         hidden_states, __, __ = self.linear_fuse(device, concated_tensor_tile)
         logits, __, __ = self.classifier(device, hidden_states)

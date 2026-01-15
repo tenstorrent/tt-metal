@@ -28,6 +28,16 @@ on:
         required: false
         type: boolean
         default: false
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        required: false
+        type: boolean
+        default: false
 
   workflow_dispatch:
     inputs:
@@ -82,24 +92,41 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: 🐍 Install minimum set of packages
         timeout-minutes: 10
         run: |
           cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
-          python3 -m pip install -r tutorials-dev.txt
+          uv pip install -r tutorials-dev.txt
 
       - name: 🛠️ Install testing utils
         timeout-minutes: 10
         run: |
           cd scripts/basic_dev_image
-          python3 -m pip install -r minimum-testing-kit.txt
+          uv pip install -r minimum-testing-kit.txt
+
+      - name: 🛠️ Install tt-triage dependencies
+        timeout-minutes: 10
+        run: |
+          apt-get update
+          apt-get install -y curl
+          source /opt/venv/bin/activate
+          ./scripts/install_debugger.sh
+          uv pip install -r ./tools/triage/requirements.txt
 
       - name: 🧪 Run tests
         timeout-minutes: ${{ inputs.timeout }}

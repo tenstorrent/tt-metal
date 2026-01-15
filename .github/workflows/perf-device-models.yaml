@@ -2,10 +2,21 @@ name: "(Single-card) Device perf regressions"
 
 on:
   workflow_dispatch:
+    inputs:
+      architecture:
+        description: 'Architectures to test: ["blackhole"], ["wormhole_b0"], or both (default)'
+        required: false
+        type: string
+        default: '["blackhole", "wormhole_b0"]'
+      requested-models:
+        description: "List of requested models as JSON array, for example: [\"resnet50\", \"vit\"]. Default is 'all'"
+        default: "all"
+        type: string
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
 
+run-name: "(Single-card) Device perf regressions"
 jobs:
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
@@ -24,3 +35,5 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      architecture: ${{ inputs.architecture || '["blackhole", "wormhole_b0"]' }}
+      requested-models: ${{ inputs.requested-models || 'all' }}

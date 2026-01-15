@@ -4,8 +4,8 @@
 
 #include "data_format.hpp"
 
-#include <tt_stl/assert.hpp>      // for tt_throw, TT_FATAL
-#include <base_types.hpp>  // for UnpackToDestMode
+#include <tt_stl/assert.hpp>  // for tt_throw, TT_FATAL
+#include <base_types.hpp>     // for UnpackToDestMode
 #include <circular_buffer_constants.h>
 #include <functional>
 #include <iostream>       // for basic_ostream
@@ -63,10 +63,7 @@ DataFormat check_consistent_format_across_buffers(DataFormat data_format[NUM_CIR
         }
 
         if (data_format[i] != DataFormat::Invalid) {
-            TT_FATAL(
-                ALL_VALID_FORMATS.find(data_format[i]) != ALL_VALID_FORMATS.end(),
-                "Format = {} not supported",
-                data_format[i]);
+            TT_FATAL(ALL_VALID_FORMATS.contains(data_format[i]), "Format = {} not supported", data_format[i]);
 
             if (last_valid_format != DataFormat::Invalid) {
                 TT_FATAL(
@@ -87,10 +84,7 @@ DataFormat check_valid_formats_in_out_data_formats(DataFormat data_format[NUM_CI
     DataFormat last_valid_format = DataFormat::Invalid;
     for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         if (data_format[i] != DataFormat::Invalid) {
-            TT_FATAL(
-                ALL_VALID_FORMATS.find(data_format[i]) != ALL_VALID_FORMATS.end(),
-                "Format = {} not supported",
-                data_format[i]);
+            TT_FATAL(ALL_VALID_FORMATS.contains(data_format[i]), "Format = {} not supported", data_format[i]);
             last_valid_format = data_format[i];
         }
     }
@@ -212,6 +206,7 @@ DataFormat get_single_pack_src_format(
             case DataFormat::RawUInt16: pack_src_format = DataFormat::Float16; break;
             default: pack_src_format = DataFormat::Lf8; break;
         }
+        // NOLINTNEXTLINE(bugprone-branch-clone)
     } else if (data_format == DataFormat::UInt16) {
         pack_src_format = data_format;
     } else if (data_format == DataFormat::Invalid) {
@@ -220,9 +215,11 @@ DataFormat get_single_pack_src_format(
         pack_src_format = DataFormat::Float16;
     } else if (fp32_dest_acc_en) {
         if (is_bfp_format(data_format)) {
-            pack_src_format = bfp8_pack_precise
-                                  ? DataFormat::Float32
-                                  : (is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8);
+            if (bfp8_pack_precise) {
+                pack_src_format = DataFormat::Float32;
+            } else {
+                pack_src_format = is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
+            }
         } else if (is_exp_b_format(data_format) || (data_format == DataFormat::Float32)) {
             pack_src_format = data_format;
         } else if (data_format == DataFormat::Float16) {
@@ -235,6 +232,8 @@ DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::UInt16;
         } else if (data_format == DataFormat::UInt8) {
             pack_src_format = DataFormat::UInt8;
+        } else if (data_format == DataFormat::Int8) {
+            pack_src_format = DataFormat::Int8;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", data_format);
         }
@@ -268,9 +267,11 @@ DataFormat get_single_pack_src_format(
             }
             pack_src_format = unpack_conditional_dst_format;
         } else if (is_bfp_format(data_format)) {
-            pack_src_format = bfp8_pack_precise
-                                  ? (is_exp_b_format(data_format) ? DataFormat::Float16_b : DataFormat::Float16)
-                                  : (is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8);
+            if (bfp8_pack_precise) {
+                pack_src_format = is_exp_b_format(data_format) ? DataFormat::Float16_b : DataFormat::Float16;
+            } else {
+                pack_src_format = is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
+            }
         } else {
             pack_src_format = data_format;
         }
@@ -281,9 +282,11 @@ DataFormat get_single_pack_src_format(
         DataFormat pack_src_format_tmp = data_format;
 
         if (is_bfp_format(data_format)) {
-            pack_src_format_tmp = bfp8_pack_precise
-                                      ? (is_exp_b_format(data_format) ? DataFormat::Float16_b : DataFormat::Float16)
-                                      : (is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8);
+            if (bfp8_pack_precise) {
+                pack_src_format_tmp = is_exp_b_format(data_format) ? DataFormat::Float16_b : DataFormat::Float16;
+            } else {
+                pack_src_format_tmp = is_exp_b_format(data_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
+            }
         }
 
         if (pack_src_format_tmp != DataFormat::Float32) {

@@ -7,6 +7,7 @@
 #include "autograd/tensor.hpp"
 #include "base_transformer.hpp"
 #include "common/transformer_common.hpp"
+#include "modules/grouped_query_attention.hpp"
 #include "modules/llama_block.hpp"
 #include "modules/module_base.hpp"
 #include "ops/rope_op.hpp"
@@ -51,8 +52,19 @@ public:
     explicit Llama(const LlamaConfig& config);
     virtual ~Llama() = default;
     void load_from_safetensors(const std::filesystem::path& model_path) override;
+
+    // Forward pass with optional KV cache
     ttml::autograd::TensorPtr operator()(
-        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
+        const ttml::autograd::TensorPtr& x,
+        const ttml::autograd::TensorPtr& mask,
+        std::shared_ptr<common::transformer::KvCache> kv_cache,
+        const uint32_t new_tokens);
+
+    ttml::autograd::TensorPtr operator()(
+        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override {
+        // When kv_cache is nullptr, new_tokens is not used, so pass 0
+        return (*this)(x, mask, std::shared_ptr<common::transformer::KvCache>(), 0);
+    }
 
     // Get the original vocabulary size for token validation
     [[nodiscard]] uint32_t get_original_vocab_size() const {

@@ -76,9 +76,9 @@ void generate_noc_transfer_burst_for_tensor_slice(
 
 void validate_lowered_noc_commands(const ttnn::ccl::cmd::HostCclCommandNocTransferBurst& noc_transfer_burst) {
     TT_FATAL(!noc_transfer_burst.transfer_burst_groupings.empty(), "Internal error: No transfer burst groupings");
-    for (auto& transfer_burst_grouping : noc_transfer_burst.transfer_burst_groupings) {
+    for (const auto& transfer_burst_grouping : noc_transfer_burst.transfer_burst_groupings) {
         TT_FATAL(transfer_burst_grouping.num_transfers_per_packet > 0, "Internal error: No transfers per packet");
-        for (auto& transfer_info : transfer_burst_grouping.transfer_infos) {
+        for (const auto& transfer_info : transfer_burst_grouping.transfer_infos) {
             TT_FATAL(transfer_info.noc_transfer_size_bytes > 0, "Internal error: No transfer size bytes");
         }
     }
@@ -214,7 +214,7 @@ std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> tensor_slice_commands_
     const tt::tt_metal::Tensor& tensor,
     size_t packet_size_bytes) {
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> lowered_command_stream;
-    for (auto& command : command_stream) {
+    for (const auto& command : command_stream) {
         switch (command.command_code) {
             case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR: [[fallthrough]];
             case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB:

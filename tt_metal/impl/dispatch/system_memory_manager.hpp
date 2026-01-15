@@ -43,7 +43,7 @@ public:
 
     void set_bypass_mode(bool enable, bool clear);
 
-    bool get_bypass_mode();
+    bool get_bypass_mode() const;
 
     std::vector<uint32_t>& get_bypass_data();
 
@@ -77,6 +77,8 @@ public:
     uint32_t completion_queue_wait_front(uint8_t cq_id, std::atomic<bool>& exit_condition) const;
 
     void send_completion_queue_read_ptr(uint8_t cq_id) const;
+
+    void* get_completion_queue_ptr(uint8_t cq_id) const;
 
     void wrap_issue_queue_wr_ptr(uint8_t cq_id);
 

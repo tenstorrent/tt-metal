@@ -7,9 +7,19 @@ import ttnn
 from ...layers.normalization import RMSNorm
 from ...layers.linear import ColParallelLinear
 from ...utils.substate import substate
+from models.common.utility_functions import is_blackhole
 
 
 class MochiAttention:
+    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
+    sdpa_chunk_size_map = {
+        (False, 2, 4): (128, 512),
+        (False, 8, 4): (128, 512),
+        (True, 2, 2): (128, 512),
+        (True, 8, 4): (128, 512),
+    }
+    default_sdpa_chunk_size = (256, 256)
+
     def __init__(
         self,
         query_dim,
@@ -107,11 +117,27 @@ class MochiAttention:
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            compute_with_storage_grid_size=full_grid,
             q_chunk_size=256,
             k_chunk_size=512,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
+
+        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
+            (
+                is_blackhole(),
+                self.parallel_config.sequence_parallel.factor,
+                self.parallel_config.tensor_parallel.factor,
+            ),
+            self.default_sdpa_chunk_size,
+        )
+        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            q_chunk_size=ring_sdpa_chunk_size[0],
+            k_chunk_size=ring_sdpa_chunk_size[1],
+            exp_approx_mode=False,  # NOTE: False is more correct
+        )
+
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -224,24 +250,24 @@ class MochiAttention:
                 out_state["bias"] = bias
             return out_state
 
-        self.norm_q.load_state_dict(substate(state_dict, "norm_q"))
-        self.norm_k.load_state_dict(substate(state_dict, "norm_k"))
-        self.norm_added_q.load_state_dict(substate(state_dict, "norm_added_q"))
-        self.norm_added_k.load_state_dict(substate(state_dict, "norm_added_k"))
+        self.norm_q.load_torch_state_dict(substate(state_dict, "norm_q"))
+        self.norm_k.load_torch_state_dict(substate(state_dict, "norm_k"))
+        self.norm_added_q.load_torch_state_dict(substate(state_dict, "norm_added_q"))
+        self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
 
         qkv_state = reshape_and_merge_qkv(
             substate(state_dict, "to_q"), substate(state_dict, "to_k"), substate(state_dict, "to_v")
         )
-        self.to_qkv.load_state_dict(qkv_state)
+        self.to_qkv.load_torch_state_dict(qkv_state)
 
         add_qkv_state = reshape_and_merge_qkv(
             substate(state_dict, "add_q_proj"), substate(state_dict, "add_k_proj"), substate(state_dict, "add_v_proj")
         )
-        self.add_qkv_proj.load_state_dict(add_qkv_state)
+        self.add_qkv_proj.load_torch_state_dict(add_qkv_state)
 
-        self.to_out.load_state_dict(substate(state_dict, "to_out.0"))
+        self.to_out.load_torch_state_dict(substate(state_dict, "to_out.0"))
         if not self.context_pre_only:
-            self.to_add_out.load_state_dict(substate(state_dict, "to_add_out"))
+            self.to_add_out.load_torch_state_dict(substate(state_dict, "to_add_out"))
 
     def __call__(self, spatial_1BND, prompt_1BLP, N, rope_cos, rope_sin, trans_mat):
         """
@@ -297,7 +323,7 @@ class MochiAttention:
                 ),
                 joint_strategy="rear",
                 logical_n=N,
-                program_config=self.sdpa_program_config,
+                program_config=self.ring_sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(

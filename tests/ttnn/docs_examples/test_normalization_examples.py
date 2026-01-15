@@ -9,7 +9,6 @@ import math
 from loguru import logger
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_group_norm(device):
     #
     # Sharded Input Tensor Example
@@ -60,18 +59,12 @@ def test_group_norm(device):
     # e.g. The mask at [0][0][:][:] would be a 32x32 tensor where the left half is 1 and the right half is 0
     # While [0][1][:][:] would be a 32x32 tensor where the left half is 0 and the right half is 1
     input_mask_tensor = ttnn.create_group_norm_input_mask(
-        num_channels=C,
+        num_channel=C,
         num_groups=num_groups,
         num_cores_across_channel=1,  # As explained in the Limitations, supply 1 for height sharded input tensors
+        data_type=ttnn.bfloat8_b,
     )
-
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
     # Prepare gamma and beta for TTNN. Currently these are just 1D tensors of size [C], which isn't compatible with tile based processing
     # First they will zero padded if needed (does not apply to this example)
@@ -169,6 +162,25 @@ def test_layer_norm(device):
     logger.info(f"Layer Norm result: {output_tensor}")
 
 
+def test_layernorm_distributed(device):
+    # Create input tensor
+    input_tensor = ttnn.rand([1, 1, 32, 32], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Apply pre-all-gather layer normalization
+    stats = ttnn.layer_norm_pre_all_gather(input_tensor)
+    logger.info(f"Layer Norm Pre All Gather result: {stats}")
+
+    # On a distributed setup, all gather would go here to collect the stats from all devices
+    # See documentation for ttnn.all_gather for example usage of all_gather
+
+    # Now apply the post-all-gather layer normalization
+    output = ttnn.layer_norm_post_all_gather(input_tensor, stats)
+    logger.info(f"Layer Norm Post All Gather result: {output}")
+
+    # For reference, this two-step process is equivalent to the following
+    # output = ttnn.layer_norm(input_tensor)
+
+
 def test_rms_norm(device):
     # Setup input tensor and weight
     h, w = 32, 64
@@ -179,6 +191,26 @@ def test_rms_norm(device):
     # Apply RMS normalization
     output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
     logger.info(f"RMS Norm result: {output_tensor}")
+
+
+def test_rms_norm_distributed(device):
+    # Create input tensor
+    input_tensor = ttnn.rand([1, 1, 32, 32], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.rand([32], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Apply pre-all-gather RMS normalization
+    stats = ttnn.rms_norm_pre_all_gather(input_tensor)
+    logger.info(f"RMS Norm Pre All Gather result: {stats}")
+
+    # On a distributed setup, an all gather would go here to collect the stats from all the devices
+    # See documentation for ttnn.all_gather for example usage of all_gather
+
+    # Now apply the post-all-gather RMS normalization
+    output = ttnn.rms_norm_post_all_gather(input_tensor, stats, weight=weight)
+    logger.info(f"RMS Norm Post All Gather result: {output}")
+
+    # For reference, this two-step process is equivalent to the following
+    # output = ttnn.rms_norm(input_tensor, weight=weight)
 
 
 def test_batch_norm(device):
@@ -214,6 +246,14 @@ def test_softmax(device):
     logger.info(f"Softmax result: {output_tensor}")
 
 
+def test_softmax_default_program_config(device):
+    # Create input tensor
+    tensor = ttnn.rand((1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Explicitly specify a default config
+    ttnn.softmax_in_place(tensor, dim=-1, program_config=ttnn.SoftmaxDefaultProgramConfig())
+
+
 def test_scale_mask_softmax(device):
     # Setup input tensor and mask
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -234,28 +274,15 @@ def test_scale_mask_softmax(device):
     logger.info(f"Scale Mask Softmax result: {tt_output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_softmax_in_place(device):
     # Create input tensor
     shape = [1, 1, 32, 32]
     input_tensor = ttnn.rand(shape, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Apply in-place softmax
-    output_tensor = ttnn.softmax_in_place(input_tensor)
-    logger.info(f"Softmax In Place result: {output_tensor}")
-
-    # Create input tensor
-    tensor = ttnn.rand((1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Configure softmax program
-    compute_grid = device.compute_with_storage_grid_size()
-    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=compute_grid, subblock_w=8, block_h=32, block_w=32
-    )
-
-    # Perform in-place softmax
-    result = ttnn.softmax_in_place(tensor, program_config=program_config)
-    logger.info(f"Softmax In Place result: {result}")
+    logger.info(f"Input tensor before softmax in place: {input_tensor}")
+    ttnn.softmax_in_place(input_tensor)
+    logger.info(f"Input tensor after softmax in place: {input_tensor}")
 
 
 def test_scale_mask_softmax_in_place(device):
@@ -345,38 +372,3 @@ def test_scale_causal_mask_hw_dims_softmax_in_place(device):
         program_config=program_config,
     )
     logger.info(f"Scale Causal Mask HW Dims Softmax In Place result: {tt_output_sharded}")
-
-
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
-def test_softmax_default_program_config(device):
-    # Create input tensor
-    tensor = ttnn.rand((1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Configure softmax program
-    compute_grid = device.compute_with_storage_grid_size()
-    program_config = ttnn.SoftmaxDefaultProgramConfig()
-
-    # Perform softmax
-    result = ttnn.softmax(tensor, dim=-1, program_config=program_config)
-    logger.info(f"Softmax with Program Config result: {result}")
-
-
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
-def test_softmax_sharded_multi_core_program_config(device):
-    # Create input tensor
-    compute_grid = device.compute_with_storage_grid_size()
-    fuse_head = 2
-    batch = compute_grid.x
-    num_cores_r = compute_grid.y
-
-    input_shape = (batch, num_cores_r, fuse_head * 384, 768)
-    input_tensor = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Configure softmax program
-    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=compute_grid, subblock_w=8, block_h=32, block_w=32
-    )
-
-    # Perform softmax
-    result = ttnn.softmax(input_tensor, dim=-1, program_config=program_config)
-    logger.info(f"Softmax with Sharded Multi Core Program Config result: {result}")

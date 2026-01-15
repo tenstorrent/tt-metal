@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
+#include <vector>
+
 #include "ttnn/decorators.hpp"
 
 #include <tt-metalium/global_circular_buffer.hpp>
-#include "device/dram_prefetcher_op.hpp"
 
 namespace ttnn {
 namespace operations::dram_prefetcher {

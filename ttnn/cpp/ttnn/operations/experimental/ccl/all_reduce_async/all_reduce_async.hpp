@@ -14,9 +14,8 @@
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace experimental {
-namespace ccl {
+
+namespace operations::experimental::ccl {
 
 struct ExecuteAllReduceAsync {
     static ttnn::Tensor invoke(
@@ -34,7 +33,7 @@ struct ExecuteAllReduceAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         std::optional<std::uint32_t> cluster_axis,
-        const MeshDevice& mesh_device,
+        MeshDevice& mesh_device,
         const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
         const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
         const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
@@ -57,7 +56,7 @@ struct ExecuteAllReduceAsync {
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& buffer_tensor,
         uint32_t cluster_axis,
-        const MeshDevice& mesh_device,
+        MeshDevice& mesh_device,
         const GlobalSemaphore& multi_device_global_semaphore,
         std::optional<const DataType> dtype,
         const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -71,7 +70,7 @@ struct ExecuteAllReduceAsync {
         const std::vector<ttnn::Tensor>& input_tensors,
         ttnn::Tensor& buffer_tensor,
         uint32_t cluster_axis,
-        const MeshDevice& mesh_device,
+        MeshDevice& mesh_device,
         const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
         std::optional<const DataType> dtype,
         const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -82,9 +81,7 @@ struct ExecuteAllReduceAsync {
         bool use_optimal_ccl_for_llama);
 };
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 namespace experimental {
 

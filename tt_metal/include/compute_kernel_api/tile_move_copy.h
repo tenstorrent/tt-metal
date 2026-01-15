@@ -24,13 +24,14 @@ namespace ckernel {
  * |-------------|---------------------------------------------------|----------|----------------------------------------------------|----------|
  * | cbid        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                            | False    |
  * | transpose   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate tranpose is set   | False    |
+ * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face | uint32_t | Any positive value will indicate transpose within 16x16 face is set        | False    |
  */
 // clang-format on
-ALWI void copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
+ALWI void copy_tile_to_dst_init_short(
+    uint32_t cbid, uint32_t transpose = 0, uint32_t transpose_within_16x16_face = false) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        transpose, false /*transpose within 16x16 face*/, cbid)));
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, cbid)));
+        transpose, transpose_within_16x16_face, cbid)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
 }
 /**
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
@@ -88,7 +89,7 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
 ALWI void copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        in_cb_id, start_in_tile_index, ntiles, false)));
+        in_cb_id, start_in_tile_index, ntiles)));
     MATH((llk_math_eltwise_unary_datacopy_block<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         start_dst_tile_index, ntiles, in_cb_id)));
 }
