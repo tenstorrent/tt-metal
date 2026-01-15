@@ -461,13 +461,88 @@ def test_selective_tilize_no_trace(
 
     logger.info(f"Output torch shape: {output_torch.shape}")
 
-    # TODO: Add verification against golden_output once kernel implementation is complete
-    # For now, just verify the output shape is correct
     experts_per_device = experts // devices
 
-    # The output from the op is [experts_per_device, total_tokens, hidden_size] per device
-    # After concat, it should be [devices * experts_per_device, total_tokens, hidden_size]
-    # or depending on tiling: [devices, experts_per_device, total_tokens_padded, hidden_size_padded]
+    # The output from the op is [experts_per_device, total_tokens, hidden_size] per device (TILE_LAYOUT)
+    # After concat along dim=0, shape is [devices * experts_per_device, total_tokens, hidden_size]
+    # We need to reshape to [devices, experts_per_device, total_tokens, hidden_size] for comparison
+
+    # Handle potential tile padding in the output
+    output_total_tokens = output_torch.shape[1]
+    output_hidden_size = output_torch.shape[2]
 
     logger.info(f"Expected shape (per device): [{experts_per_device}, {total_tokens}, {hidden_size}]")
-    logger.info(f"Test completed - output shape verification pending kernel implementation")
+    logger.info(f"Actual output (concatenated): {output_torch.shape}")
+
+    # Reshape concatenated output to [devices, experts_per_device, total_tokens, hidden_size]
+    output_reshaped = output_torch.reshape(devices, experts_per_device, output_total_tokens, output_hidden_size)
+
+    # Remove tile padding if present (output may be padded to tile boundaries)
+    if output_total_tokens > total_tokens:
+        output_reshaped = output_reshaped[:, :, :total_tokens, :]
+    if output_hidden_size > hidden_size:
+        output_reshaped = output_reshaped[:, :, :, :hidden_size]
+
+    logger.info(f"Output reshaped (after removing padding): {output_reshaped.shape}")
+    logger.info(f"Golden output shape: {golden_output.shape}")
+
+    # Verify output against golden
+    # The output is dense: for each expert, the first N tokens are valid (where N = expert_token_counts)
+    # and the remaining tokens are garbage. We only compare the valid tokens.
+    all_passed = True
+    total_comparisons = 0
+    total_mismatches = 0
+
+    for device_idx in range(devices):
+        for expert_idx in range(experts_per_device):
+            num_valid_tokens = expert_token_counts[device_idx, expert_idx].item()
+
+            if num_valid_tokens == 0:
+                continue
+
+            # Extract valid tokens from output and golden
+            output_slice = output_reshaped[device_idx, expert_idx, :num_valid_tokens, :]
+            golden_slice = golden_output[device_idx, expert_idx, :num_valid_tokens, :]
+
+            # Convert to float32 for comparison (bfloat16 comparison can be tricky)
+            output_slice_f32 = output_slice.to(torch.float32)
+            golden_slice_f32 = golden_slice.to(torch.float32)
+
+            # Compute PCC (Pearson Correlation Coefficient)
+            output_flat = output_slice_f32.flatten()
+            golden_flat = golden_slice_f32.flatten()
+
+            if golden_flat.numel() > 1:
+                pcc = torch.corrcoef(torch.stack([output_flat, golden_flat]))[0, 1].item()
+            else:
+                pcc = 1.0 if torch.allclose(output_flat, golden_flat, rtol=1e-2, atol=1e-2) else 0.0
+
+            # Check for exact match (with tolerance for bfloat16)
+            is_close = torch.allclose(output_slice_f32, golden_slice_f32, rtol=1e-2, atol=1e-2)
+
+            # Count mismatches
+            mismatches = (~torch.isclose(output_slice_f32, golden_slice_f32, rtol=1e-2, atol=1e-2)).sum().item()
+            total_comparisons += output_slice_f32.numel()
+            total_mismatches += mismatches
+
+            if not is_close or pcc < 0.99:
+                logger.warning(
+                    f"Device {device_idx}, Expert {expert_idx}: "
+                    f"PCC={pcc:.6f}, is_close={is_close}, "
+                    f"mismatches={mismatches}/{output_slice_f32.numel()}"
+                )
+                all_passed = False
+            else:
+                logger.info(
+                    f"Device {device_idx}, Expert {expert_idx}: " f"PCC={pcc:.6f}, PASSED ({num_valid_tokens} tokens)"
+                )
+
+    # Summary
+    accuracy = (total_comparisons - total_mismatches) / total_comparisons * 100 if total_comparisons > 0 else 100
+    logger.info(f"\nVerification Summary:")
+    logger.info(f"  Total comparisons: {total_comparisons}")
+    logger.info(f"  Total mismatches: {total_mismatches}")
+    logger.info(f"  Accuracy: {accuracy:.2f}%")
+    logger.info(f"  Overall result: {'PASSED' if all_passed else 'FAILED'}")
+
+    assert all_passed, f"Output verification failed! Accuracy: {accuracy:.2f}%"

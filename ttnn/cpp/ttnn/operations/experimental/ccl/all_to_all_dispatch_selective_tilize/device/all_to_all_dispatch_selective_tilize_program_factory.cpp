@@ -471,6 +471,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     std::vector<uint32_t> compute_tilizer_runtime_args = {0};  // [0]: max_tiles_per_chunk (set per-core below)
 
     for (uint32_t i = 0; i < num_tilizer_cores; i++) {
+        // First tilizer core is the drain tilizer core (has indices/scores sharded to it)
+        selective_tilize_runtime_args.at(is_drain_tilizer_core_idx) = (i == 0) ? 1 : 0;
+
         // Set work split parameters based on which group the core is in
         uint32_t tilizer_subtoken_size = 0;
         if (tilizer_cores_group_1.contains(selective_tilize_cores.at(i))) {
