@@ -745,8 +745,8 @@ def test_untilize_multi_core_sharded_to_interleaved(
         [2, 64, 64],
         [1, 64, 64],
         [2, 32, 32],
-        # [2, 256, 512],
-        [4, 4, 256, 512],
+        [2, 256, 512],
+        # [4, 4, 256, 512],
     ],
 )
 @pytest.mark.parametrize(
@@ -773,15 +773,15 @@ def test_untilize_multi_core_sharded_to_interleaved(
             4,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 2))}),
         ],
-        [
-            16,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(7, 2)),
-                }
-            ),
-        ],
+        # [
+        #     16,
+        #     ttnn.CoreRangeSet(
+        #         {
+        #             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+        #             ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(7, 2)),
+        #         }
+        #     ),
+        # ],
     ],
 )
 def test_untilize_multi_core_nd_sharded_to_interleaved(

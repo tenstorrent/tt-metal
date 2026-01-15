@@ -76,6 +76,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t num_tiles_per_input_block = num_tiles_per_row;
     uint32_t num_input_blocks_per_full_core = num_rows_per_full_core;
     uint32_t num_input_blocks_per_cliff_core = num_rows_per_cliff_core;
+    uint32_t num_shards = 0;
     if (input_is_sharded) {
         CoreRangeSet grid;
         uint32_t input_shard_height;
@@ -108,6 +109,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                 nd_shard_spec.grid,
                 nd_shard_spec.orientation,
                 nd_shard_spec.shard_distribution_strategy);
+            num_shards = distribution_spec.num_shards();
             const auto page_mapping = distribution_spec.compute_page_mapping();
             for (size_t core_idx = 0; core_idx < page_mapping.all_cores.size(); ++core_idx) {
                 const auto& core = page_mapping.all_cores.at(core_idx);
@@ -257,10 +259,22 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         (uint32_t)num_cols_per_input_block,
         (uint32_t)num_cols_per_output_block,
     };
+    if (input_is_nd_sharded) {
+        writer_compile_time_args.push_back(input_single_tile_size);
+        writer_compile_time_args.push_back(num_shards);
+        writer_compile_time_args.push_back(num_compute_cores);
+        writer_compile_time_args.push_back(num_tiles_per_row);
+        writer_compile_time_args.push_back(tile_width);
+        std::cout << "num_shards: " << num_shards << std::endl;
+        std::cout << "num_cores: " << num_compute_cores << std::endl;
+    }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
     } else {
         TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    }
+    if (input_is_nd_sharded) {
+        TensorAccessorArgs(*src0_buffer).append_to(writer_compile_time_args);
     }
 
     // Writer kernel
@@ -371,7 +385,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         const auto& shard_shape_pages = distribution_spec.shard_shape_in_pages();
         const uint32_t shard_width = shard_shape_pages[-1];
         const uint32_t shard_rows = shard_volume / shard_width;
-
+        uint32_t start_shard_id = 0;
         for (uint32_t i = 0; i < full_cores.size(); ++i) {
             //     uint32_t height_wise_input_block_start_index =
             //     (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
@@ -427,7 +441,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                         if (!first_row) {
                             std::cout << ", ";
                         }
-                        std::cout << host_page_id;
+                        std::cout << "AAAAAAAAA" << host_page_id << std::endl;
                         num_input_blocks_to_process++;
                         height_wise_input_block_start_indices.push_back(host_page_id / num_tiles_per_row);
                         uint32_t tile_index_width = host_page_id % num_tiles_per_row;
@@ -537,23 +551,26 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             std::cout << "size of vector_num_cols_already_processed_in_first_output_block: "
                       << vector_num_cols_already_processed_in_first_output_block.size() << std::endl;
 
-            std::vector<uint32_t> writer_run_time_args = {dst_buffer->address(), num_input_blocks_to_process};
-            writer_run_time_args.insert(
-                writer_run_time_args.end(),
-                height_wise_input_block_start_indices.begin(),
-                height_wise_input_block_start_indices.end());
-            writer_run_time_args.insert(
-                writer_run_time_args.end(),
-                vector_num_unpadded_cols_per_input_block.begin(),
-                vector_num_unpadded_cols_per_input_block.end());
-            writer_run_time_args.insert(
-                writer_run_time_args.end(),
-                width_wise_output_block_start_indices.begin(),
-                width_wise_output_block_start_indices.end());
-            writer_run_time_args.insert(
-                writer_run_time_args.end(),
-                vector_num_cols_already_processed_in_first_output_block.begin(),
-                vector_num_cols_already_processed_in_first_output_block.end());
+            std::vector<uint32_t> writer_run_time_args = {
+                dst_buffer->address(), num_input_blocks_to_process, src0_buffer->address(), start_shard_id};
+            start_shard_id++;
+
+            // writer_run_time_args.insert(
+            //     writer_run_time_args.end(),
+            //     height_wise_input_block_start_indices.begin(),
+            //     height_wise_input_block_start_indices.end());
+            // writer_run_time_args.insert(
+            //     writer_run_time_args.end(),
+            //     vector_num_unpadded_cols_per_input_block.begin(),
+            //     vector_num_unpadded_cols_per_input_block.end());
+            // writer_run_time_args.insert(
+            //     writer_run_time_args.end(),
+            //     width_wise_output_block_start_indices.begin(),
+            //     width_wise_output_block_start_indices.end());
+            // writer_run_time_args.insert(
+            //     writer_run_time_args.end(),
+            //     vector_num_cols_already_processed_in_first_output_block.begin(),
+            //     vector_num_cols_already_processed_in_first_output_block.end());
             // height_wise_input_block_start_indices,
             // vector_num_unpadded_cols_per_input_block,
             // width_wise_output_block_start_indices,

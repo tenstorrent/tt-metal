@@ -16,7 +16,10 @@ void kernel_main() {
     // std::vector<uint32_t> width_wise_output_block_start_indices; //= get_arg_val<std::vector<uint32_t>>(4);
     // std::vector<uint32_t> vector_num_cols_already_processed_in_first_output_block; //=
     // get_arg_val<std::vector<uint32_t>>(5);
-    const uint32_t rt_arg_index = 2;
+    const uint32_t src0_addr = get_arg_val<uint32_t>(2);
+    const uint32_t start_shard_id = get_arg_val<uint32_t>(3);
+    // const uint32_t input_single_tile_size = get_arg_val<uint32_t>(3);
+    // const uint32_t rt_arg_index = 4;
     // for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
     //     height_wise_input_block_stasrt_indices.push_back(get_arg_val<uint32_t>(rt_arg_index));
     //     rt_arg_index++;
@@ -43,23 +46,30 @@ void kernel_main() {
     constexpr uint32_t output_element_size = get_compile_time_arg_val(5);
     constexpr uint32_t num_cols_per_input_block = get_compile_time_arg_val(6);
     constexpr uint32_t num_cols_per_output_block = get_compile_time_arg_val(7);
-
+    constexpr uint32_t input_single_tile_size = get_compile_time_arg_val(8);
+    constexpr uint32_t num_shards = get_compile_time_arg_val(9);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(10);
+    constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(11);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(12);
 #ifdef SHARDED
     using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(8),    // Memory layout
-        get_compile_time_arg_val(9),    // The number of sharding cores
-        get_compile_time_arg_val(10),   // The page size we offset each write to
-        get_compile_time_arg_val(11),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(12),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(13),   // pages_per_shard_x
-        get_compile_time_arg_val(14)>;  // pages_per_shard_y
+        get_compile_time_arg_val(13),   // Memory layout
+        get_compile_time_arg_val(14),   // The number of sharding cores
+        get_compile_time_arg_val(15),   // The page size we offset each write to
+        get_compile_time_arg_val(16),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(17),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(18),   // pages_per_shard_x
+        get_compile_time_arg_val(19)>;  // pages_per_shard_y
 
     const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(6));
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(4));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
+    constexpr auto src0_args = TensorAccessorArgs<20>();
 #else
-    constexpr auto dst_args = TensorAccessorArgs<8>();
+    constexpr auto dst_args = TensorAccessorArgs<13>();
     const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
+    constexpr auto src0_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
+    const auto accessor_src = TensorAccessor(src0_args, src0_addr, input_single_tile_size);
 #endif
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index,
@@ -137,11 +147,15 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_id_out0, num_tiles_per_input_block);
     };
-
+#if 0
     // Each input block processed separately
     // uint32_t height_wise_input_block_index = height_wise_input_block_start_index;
     DPRINT << "num_input_blocks_to_process: " << num_input_blocks_to_process << ENDL();
     for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
+        //get page id
+        //compute parameters for this block
+        //call the write block function
+        //advance to next page id ???
         uint32_t height_wise_input_block_index =
             get_arg_val<uint32_t>(rt_arg_index + i);  // height_wise_input_block_start_indices[i];
         uint32_t num_unpadded_cols_per_input_block = get_arg_val<uint32_t>(
@@ -185,5 +199,50 @@ void kernel_main() {
         // else {
         //         height_wise_input_block_index += 2;  // WAS ++. HARDCODED MUST FIGURE OUT CORRECT LOGIC
         // }
+    }
+#endif
+    // Access pages within kernel
+    for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
+        auto shard_pages = accessor_src.shard_pages(shard_id);
+        DPRINT << "shard_id: " << shard_id << ENDL();
+        uint32_t idx_in_shard = 0;
+        // for (const auto& page : shard_pages) {
+        //     auto page_id = page.page_id();
+        //     if (idx_in_shard % num_tiles_per_input_block == 0) {
+        //         DPRINT << "first_page_id_in_row: " << page_id << ENDL();
+        //     }
+        //     idx_in_shard++;
+        // }
+        for (auto it = shard_pages.begin(); it != shard_pages.end(); it += num_tiles_per_input_block) {
+            auto page_id = it->page_id();
+            uint32_t height_wise_input_block_index =
+                page_id / num_tiles_per_row;  // add compile time arg for num_tiles_per_row
+            uint32_t tile_index_width = page_id % num_tiles_per_row;
+            uint32_t width_wise_input_block_index = tile_index_width / num_tiles_per_input_block;
+
+            uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
+            if (tile_index_width + num_tiles_per_input_block >= num_tiles_per_row) {
+                // we have an uneven shard with padding along the width dimension, so ignore those last
+                // padded columns
+                num_unpadded_cols_per_input_block =
+                    (num_tiles_per_row - tile_index_width) * tile_width;  // add compile time arg for tile_width
+            }
+
+            uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
+            uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
+            uint32_t num_cols_already_processed_in_first_output_block =
+                input_block_global_col_index % num_cols_per_output_block;
+            // Process the current block
+            write_tiles_in_current_block(
+                height_wise_input_block_index,
+                width_wise_output_block_start_index,
+                num_unpadded_cols_per_input_block,
+                num_cols_already_processed_in_first_output_block);
+
+            // if (idx_in_shard % num_tiles_per_input_block == 0) {
+            DPRINT << "first_page_id_in_row: " << page_id << ENDL();
+            // }
+            // idx_in_shard++;
+        }
     }
 }
