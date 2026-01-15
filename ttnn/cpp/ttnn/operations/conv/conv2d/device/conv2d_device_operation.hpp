@@ -22,16 +22,17 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 
-namespace ttnn::operations::conv::conv2d {
+namespace ttnn::prim {
+
+namespace sliding_window = ttnn::operations::sliding_window;
 
 struct Conv2dDeviceOperation {
     using operation_attributes_t = Conv2dParams;
-    using hashable_operation_attributes_t = conv2d::hashable_operation_attributes_t;
+    using hashable_operation_attributes_t = Conv2dHashableParams;
     using tensor_args_t = Conv2dInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t =
-        std::variant<program::Conv2dShardedProgramFactory, program::Conv2dWidthShardedProgramFactory>;
+    using program_factory_t = std::variant<Conv2dShardedProgramFactory, Conv2dWidthShardedProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
@@ -70,11 +71,7 @@ conv_op_l1_usage calculate_L1_usage(
     uint32_t input_channels_padded,
     bool skip_act_cb_create = false);
 
-}  // namespace ttnn::operations::conv::conv2d
-
-namespace ttnn::prim {
-
-ttnn::operations::conv::conv2d::Conv2dDeviceOperation::tensor_return_value_t conv2d(
+Tensor conv2d(
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
@@ -83,8 +80,8 @@ ttnn::operations::conv::conv2d::Conv2dDeviceOperation::tensor_return_value_t con
     uint32_t groups,
     bool untilize_out,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
-    const ttnn::operations::conv::conv2d::Conv2dParallelizationConfig& parallelization_config,
-    const ttnn::operations::conv::conv2d::Conv2dBlockConfig& block_config,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,
     tt::tt_metal::DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,

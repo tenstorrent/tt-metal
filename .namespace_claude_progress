@@ -94,3 +94,13 @@ upsample
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/reduction/accumulation/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/reduction/accumulation/ema/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/reduction/generic/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/reduction/manual_seed/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/reduction/moe/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/reduction/prod/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/reduction/sampling/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/sliding_window/halo/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device
