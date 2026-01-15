@@ -10,7 +10,7 @@
 namespace ttnn::operations::dram_prefetcher {
 
 DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::DramPrefetcherProgramFactory{};
 }
 
@@ -78,8 +78,8 @@ void DramPrefetcherOperation::validate_on_program_cache_hit(
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-spec_return_value_t DramPrefetcherOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+TensorSpec DramPrefetcherOperation::compute_output_specs(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     return TensorSpec(
         ttnn::Shape{32, 32},
         tt::tt_metal::TensorLayout(
@@ -110,6 +110,6 @@ ttnn::operations::dram_prefetcher::DramPrefetcherOperation::tensor_return_value_
     };
     auto tensor_args = OperationType::tensor_args_t{.input_tensors = tensors};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

@@ -23,9 +23,7 @@
 namespace ttnn::operations::data_movement::repeat::program {
 
 RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RepeatParams& operation_attributes, const RepeatInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const uint32_t num_repeats = operation_attributes.m_num_repeats;
@@ -142,9 +140,9 @@ RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::c
 
 void RepeatProgramFactoryHigherDim::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RepeatParams& /*operation_attributes*/,
+    const RepeatInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 

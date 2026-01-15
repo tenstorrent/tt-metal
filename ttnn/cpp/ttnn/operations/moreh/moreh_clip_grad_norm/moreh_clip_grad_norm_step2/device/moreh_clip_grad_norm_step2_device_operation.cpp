@@ -11,7 +11,7 @@
 namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2 {
 
 void MorehClipGradNormStep2Operation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     check_tensor(tensor_args.tmp_pow_sum, "moreh_clip_grad_norm_step2", "tmp_pow_sum");
 
     if (tensor_args.total_norm.has_value()) {
@@ -20,7 +20,7 @@ void MorehClipGradNormStep2Operation::validate_inputs(
 };
 
 MorehClipGradNormStep2Operation::program_factory_t MorehClipGradNormStep2Operation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 };
 
@@ -70,6 +70,6 @@ moreh_clip_grad_norm_step2(
     auto operation_attributes = OperationType::operation_attributes_t{
         norm_type, memory_config.value_or(tmp_pow_sum.memory_config()), compute_kernel_config};
     auto tensor_args = OperationType::tensor_args_t{tmp_pow_sum, total_norm};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::ccl {
 
 LlamaReduceScatterCreateHeadsDeviceOperation::program_factory_t
 LlamaReduceScatterCreateHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return LlamaReduceScatterCreateHeads{};
 }
 
@@ -54,7 +54,7 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_mis
 }
 
 void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 LlamaReduceScatterCreateHeadsDeviceOperation::spec_return_value_t
 LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
@@ -191,7 +191,7 @@ llama_reduce_scatter_create_heads(
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

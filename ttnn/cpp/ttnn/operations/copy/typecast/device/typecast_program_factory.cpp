@@ -157,7 +157,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
 
 void TypecastProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& typecast_reader_kernel_id = cached_program.shared_variables.typecast_reader_kernel_id;
@@ -214,9 +214,8 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (ntiles % ncores == 0) {
             break;
-        } else {
-            ncores--;
         }
+        ncores--;
     }
     TT_FATAL(
         (ntiles % (ncores) == 0), "{} num of tiles are not split uniformly across {} num of cores", ntiles, ncores);
@@ -309,9 +308,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     uint32_t tile_start_id = 0;
     auto ntiles_per_core = ntiles_per_block * nblocks_per_core;
 
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        CoreCoord core = cores[i];
-
+    for (auto core : cores) {
         tt::tt_metal::SetRuntimeArgs(
             program, typecast_reader_kernel_id, core, {src_buffer->address(), ntiles_per_core, tile_start_id});
 
@@ -328,7 +325,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
 
 void TypecastSubgridProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& typecast_reader_kernel_id = cached_program.shared_variables.typecast_reader_kernel_id;

@@ -8,12 +8,12 @@
 namespace ttnn::operations::experimental::reduction {
 
 IntImgDeviceOperation::program_factory_t IntImgDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return IntImgProgramFactory{};
 }
 
 void IntImgDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_shape = tensor_args.input_tensor.logical_shape();
     const auto& input_layout = tensor_args.input_tensor.layout();
     const auto& input_dtype = tensor_args.input_tensor.dtype();
@@ -35,7 +35,7 @@ void IntImgDeviceOperation::validate_on_program_cache_hit(
 }
 
 IntImgDeviceOperation::spec_return_value_t IntImgDeviceOperation::compute_output_specs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     auto output_layout{Layout::TILE};
     const auto& input_tensor = tensor_args.input_tensor;
     const auto output_shape{input_tensor.logical_shape()};
@@ -59,7 +59,7 @@ ttnn::operations::experimental::reduction::IntImgDeviceOperation::tensor_return_
     auto operation_attributes = OperationType::operation_attributes_t{};
     auto tensor_args = OperationType::tensor_args_t{input_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

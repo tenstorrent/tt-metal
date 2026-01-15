@@ -56,12 +56,11 @@ ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
 }
 
 ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.use_multicore) {
         return program::ArgMaxMultiCoreProgramFactory{};
-    } else {
-        return program::ArgMaxSingleCoreProgramFactory{};
     }
+    return program::ArgMaxSingleCoreProgramFactory{};
 }
 
 void ArgMaxDeviceOperation::validate_on_program_cache_hit(
@@ -160,7 +159,7 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t ArgMaxDeviceOperation::compute_output_specs(
+TensorSpec ArgMaxDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
@@ -173,7 +172,7 @@ spec_return_value_t ArgMaxDeviceOperation::compute_output_specs(
         TensorLayout(args.output_dtype, PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
 }
 
-tensor_return_value_t ArgMaxDeviceOperation::create_output_tensors(
+Tensor ArgMaxDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor.value();
@@ -194,7 +193,7 @@ ttnn::Tensor argmax(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<Tensor> optional_output_tensor) {
     using OperationType = ttnn::operations::reduction::argmax::ArgMaxDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_dtype = output_dtype,
             .dim = dim,

@@ -23,7 +23,7 @@ void validate_pool2d(
     const Pool2DType pool_type,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const MemoryConfig& out_mem_config,
-    const std::optional<const int32_t> divisor_override,
+    const std::optional<const int32_t> /*divisor_override*/,
     const bool return_indices,
     const Layout& output_layout) {
     // check the input tensor
@@ -95,7 +95,7 @@ void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
-    const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
+    const operation_attributes_t& op_attr, const tensor_args_t& /*tensor*/) {
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& out_mem_config = op_attr.memory_config_;
     const auto& output_dtype = op_attr.output_dtype_;
@@ -153,9 +153,8 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
         return {
             create_device_tensor(output_spec_data, tensor.input_tensor_.device()),
             create_device_tensor(output_spec_ind, tensor.input_tensor_.device())};
-    } else {
-        return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
     }
+    return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
 }
 
 tt::stl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
@@ -225,9 +224,10 @@ std::vector<ttnn::Tensor> pool2d(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
-    uint32_t memory_used) {
+    uint32_t memory_used,
+    bool config_tensor_in_dram) {
     using OperationType = ttnn::operations::pool::Pool2D;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .sliding_window_config_ = sliding_window_config,
             .pool_type_ = pool_type,
@@ -238,7 +238,8 @@ std::vector<ttnn::Tensor> pool2d(
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,
             .return_indices_ = return_indices,
-            .memory_used = memory_used},
+            .memory_used = memory_used,
+            .config_tensor_in_dram = config_tensor_in_dram},
         OperationType::tensor_args_t{input_tensor});
 }
 }  // namespace ttnn::prim

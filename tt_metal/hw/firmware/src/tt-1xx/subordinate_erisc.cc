@@ -9,7 +9,6 @@
 #include "hostdev/dev_msgs.h"
 #include "stream_io_map.h"
 #include "internal/firmware_common.h"
-#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
@@ -50,7 +49,7 @@ static_assert(
 #endif
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MAILBOX_ADDR);
-volatile tt_l1_ptr uint8_t* const subordinate_erisc_run = &mailboxes->subordinate_sync.dm1;
+volatile tt_l1_ptr uint8_t* const subordinate_erisc_run = mailboxes->subordinate_sync.map;
 
 // Note: This is just for the firmware
 // The kernel defines NOC_MODE and NOC_INDEX

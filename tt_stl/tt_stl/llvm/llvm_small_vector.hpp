@@ -56,7 +56,7 @@ class iterator_range;
 
 template <class Iterator>
 using EnableIfConvertibleToInputIterator = std::enable_if_t<
-    std::is_convertible<typename std::iterator_traits<Iterator>::iterator_category, std::input_iterator_tag>::value>;
+    std::is_convertible_v<typename std::iterator_traits<Iterator>::iterator_category, std::input_iterator_tag>>;
 
 /// This is all the stuff common to all SmallVectors.
 ///
@@ -195,7 +195,7 @@ protected:
     }
 
     /// Check whether Elt will be invalidated by resizing the vector to NewSize.
-    void assertSafeToReferenceAfterResize(const void* Elt, size_t NewSize) {
+    void assertSafeToReferenceAfterResize([[maybe_unused]] const void* Elt, [[maybe_unused]] size_t NewSize) {
         assert(
             isSafeToReferenceAfterResize(Elt, NewSize) &&
             "Attempting to reference an element of the vector in an operation "
@@ -216,7 +216,7 @@ protected:
         this->assertSafeToReferenceAfterResize(From, 0);
         this->assertSafeToReferenceAfterResize(To - 1, 0);
     }
-    template <class ItTy, std::enable_if_t<!std::is_same<std::remove_const_t<ItTy>, T*>::value, bool> = false>
+    template <class ItTy, std::enable_if_t<!std::is_same_v<std::remove_const_t<ItTy>, T*>, bool> = false>
     void assertSafeToReferenceAfterClear(ItTy, ItTy) {}
 
     /// Check whether any part of the range will be invalidated by growing.
@@ -227,7 +227,7 @@ protected:
         this->assertSafeToAdd(From, To - From);
         this->assertSafeToAdd(To - 1, To - From);
     }
-    template <class ItTy, std::enable_if_t<!std::is_same<std::remove_const_t<ItTy>, T*>::value, bool> = false>
+    template <class ItTy, std::enable_if_t<!std::is_same_v<std::remove_const_t<ItTy>, T*>, bool> = false>
     void assertSafeToAddRange(const ItTy&, const ItTy&) {}
 
     /// Reserve enough space to add one element, and return the updated element
@@ -336,8 +336,8 @@ public:
 /// trivially assignable.
 template <
     typename T,
-    bool = (std::is_trivially_copy_constructible<T>::value) && (std::is_trivially_move_constructible<T>::value) &&
-           std::is_trivially_destructible<T>::value>
+    bool = (std::is_trivially_copy_constructible_v<T>) && (std::is_trivially_move_constructible_v<T>) &&
+           std::is_trivially_destructible_v<T>>
 class SmallVectorTemplateBase : public SmallVectorTemplateCommon<T> {
     friend class SmallVectorTemplateCommon<T>;
 
@@ -404,7 +404,7 @@ protected:
         size_t NewCapacity;
         T* NewElts = mallocForGrow(NumElts, NewCapacity);
         std::uninitialized_fill_n(NewElts, NumElts, Elt);
-        this->destroy_range(this->begin(), this->end());
+        this->destroy_range(this->begin(), this->end());  // NOLINT(readability-static-accessed-through-instance)
         takeAllocationForGrow(NewElts, NewCapacity);
         this->set_size(NumElts);
     }
@@ -519,7 +519,7 @@ protected:
     /// starting with "Dest", constructing elements into it as needed.
     template <typename T1, typename T2>
     static void uninitialized_copy(
-        T1* I, T1* E, T2* Dest, std::enable_if_t<std::is_same<std::remove_const_t<T1>, T2>::value>* = nullptr) {
+        T1* I, T1* E, T2* Dest, std::enable_if_t<std::is_same_v<std::remove_const_t<T1>, T2>>* = nullptr) {
         // Use memcpy for PODs iterated by pointers (which includes SmallVector
         // iterators): std::uninitialized_copy optimizes to memmove, but we can
         // use memcpy here. Note that I and E are iterators and thus might be
@@ -786,7 +786,7 @@ private:
     iterator insert_one_impl(iterator I, ArgType&& Elt) {
         // Callers ensure that ArgType is derived from T.
         static_assert(
-            std::is_same<std::remove_const_t<std::remove_reference_t<ArgType>>, T>::value,
+            std::is_same_v<std::remove_const_t<std::remove_reference_t<ArgType>>, T>,
             "ArgType must be derived from T!");
 
         if (I == this->end()) {  // Important special case for empty vector.
@@ -808,8 +808,7 @@ private:
 
         // If we just moved the element we're inserting, be sure to update
         // the reference (never happens if TakesParamByValue).
-        static_assert(
-            !TakesParamByValue || std::is_same<ArgType, T>::value, "ArgType must be 'T' when taking by value!");
+        static_assert(!TakesParamByValue || std::is_same_v<ArgType, T>, "ArgType must be 'T' when taking by value!");
         if (!TakesParamByValue && this->isReferenceToRange(EltPtr, I, this->end())) {
             ++EltPtr;
         }
@@ -1238,7 +1237,7 @@ public:
 
     SmallVector(std::initializer_list<T> IL) : SmallVectorImpl<T>(N) { this->append(IL); }
 
-    template <typename U, typename = std::enable_if_t<std::is_convertible<U, T>::value>>
+    template <typename U, typename = std::enable_if_t<std::is_convertible_v<U, T>>>
     explicit SmallVector(ArrayRef<U> A) : SmallVectorImpl<T>(N) {
         this->append(A.begin(), A.end());
     }

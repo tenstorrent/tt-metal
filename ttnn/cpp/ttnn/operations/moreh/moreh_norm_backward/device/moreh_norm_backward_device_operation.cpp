@@ -11,7 +11,7 @@
 namespace ttnn::operations::moreh::moreh_norm_backward {
 
 void MorehNormBackwardOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     check_tensor(tensor_args.input, "moreh_norm_backward", "input");
     check_tensor(tensor_args.output, "moreh_norm_backward", "output");
     check_tensor(tensor_args.output_grad, "moreh_norm_backward", "output_grad");
@@ -19,7 +19,7 @@ void MorehNormBackwardOperation::validate_inputs(
 }
 
 MorehNormBackwardOperation::program_factory_t MorehNormBackwardOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 
@@ -76,6 +76,6 @@ ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation::tensor
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
     };
     auto tensor_args = OperationType::tensor_args_t{input, output, output_grad, input_grad};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

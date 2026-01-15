@@ -17,12 +17,10 @@ NLPCreateQKVHeadsDecodeDeviceOperation::select_program_factory(
     if (is_input_sharded) {
         if (operation_attributes.input_on_subcoregrids) {
             return program::NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory{};
-        } else {
-            return program::NLPCreateQKVHeadsDecodeShardedProgramFactory{};
         }
-    } else {
-        return program::NLPCreateQKVHeadsDecodeInterleavedProgramFactory{};
+        return program::NLPCreateQKVHeadsDecodeShardedProgramFactory{};
     }
+    return program::NLPCreateQKVHeadsDecodeInterleavedProgramFactory{};
 }
 
 void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_hit(
@@ -221,7 +219,7 @@ std::vector<Tensor> nlp_create_qkv_heads_decode(
         .output_mem_config = output_mem_config};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .batch_offset = batch_offset};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

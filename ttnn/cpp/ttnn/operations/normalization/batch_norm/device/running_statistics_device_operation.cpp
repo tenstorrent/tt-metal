@@ -29,7 +29,7 @@ inline void check_tensor_stat(const Tensor& tensor, std::string_view name, std::
 }  // namespace
 
 void RunningStatistics::validate_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& [batch_mean, batch_var, running_mean, running_var] = tensor_args;
 
     // mean (1, C, 1, 1)
@@ -50,7 +50,7 @@ void RunningStatistics::validate_tensors(
 }
 
 RunningStatistics::program_factory_t RunningStatistics::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return RunningStatisticsProgramFactory();
 }
 
@@ -128,6 +128,6 @@ ttnn::operations::normalization::RunningStatistics::tensor_return_value_t runnin
         batch_mean.dtype()};
     OperationType::tensor_args_t tensor_args{batch_mean, batch_var, std::move(running_mean), std::move(running_var)};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

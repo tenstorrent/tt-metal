@@ -8,12 +8,12 @@
 namespace ttnn::operations::bernoulli {
 
 BernoulliDeviceOperation::program_factory_t BernoulliDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t&  /*tensor_args*/) {
     return ProgramFactory{};
 }
 
 void BernoulliDeviceOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
 
@@ -91,6 +91,6 @@ ttnn::operations::bernoulli::BernoulliDeviceOperation::tensor_return_value_t ber
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

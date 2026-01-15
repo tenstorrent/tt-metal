@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::moreh::moreh_adam {
 void MorehAdamOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& params_in = tensor_args.param_in;
     const auto& grad = tensor_args.grad;
     const auto& exp_avg_in = tensor_args.exp_avg_in;
@@ -48,7 +48,7 @@ void MorehAdamOperation::validate_inputs(
 }
 
 MorehAdamOperation::program_factory_t MorehAdamOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // For now we litteraly don't care and return a single factory. Whatever
     return ProgramFactory{};
 }
@@ -159,6 +159,6 @@ ttnn::operations::moreh::moreh_adam::MorehAdamOperation::tensor_return_value_t m
         exp_avg_sq_in,
         max_exp_avg_sq_in,
         {param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out}};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

@@ -10,7 +10,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::transformer {
 
 ConcatenateHeadsDeviceOperation::program_factory_t ConcatenateHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::ConcatenateHeadsProgramFactory{};
 }
 
@@ -53,7 +53,7 @@ void ConcatenateHeadsDeviceOperation::validate_on_program_cache_miss(
         "Unsupported grid shape");
 }
 
-spec_return_value_t ConcatenateHeadsDeviceOperation::compute_output_specs(
+TensorSpec ConcatenateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -68,7 +68,7 @@ spec_return_value_t ConcatenateHeadsDeviceOperation::compute_output_specs(
             input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
 }
 
-tensor_return_value_t ConcatenateHeadsDeviceOperation::create_output_tensors(
+Tensor ConcatenateHeadsDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
@@ -109,7 +109,7 @@ ttnn::operations::experimental::transformer::ConcatenateHeadsDeviceOperation::te
     };
     auto tensor_args = OperationType::tensor_args_t{.input = input_tensor, .preallocated_output = preallocated_output};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

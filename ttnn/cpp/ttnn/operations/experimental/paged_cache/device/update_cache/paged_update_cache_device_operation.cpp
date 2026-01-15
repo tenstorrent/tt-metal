@@ -12,13 +12,12 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::paged_cache::update {
 
 PagedUpdateCacheDeviceOperation::program_factory_t PagedUpdateCacheDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     // Use mesh workload factory when mesh_coords is provided to enable coordinate filtering
     if (operation_attributes.mesh_coords.has_value()) {
         return program::PagedUpdateCacheMeshWorkloadFactory{};
-    } else {
-        return program::PagedUpdateCacheProgramFactory{};
     }
+    return program::PagedUpdateCacheProgramFactory{};
 }
 
 void PagedUpdateCacheDeviceOperation::validate_on_program_cache_hit(
@@ -196,13 +195,13 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
 }
 
 PagedUpdateCacheDeviceOperation::spec_return_value_t PagedUpdateCacheDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation
     return tensor_args.cache_tensor.tensor_spec();
 }
 
 PagedUpdateCacheDeviceOperation::tensor_return_value_t PagedUpdateCacheDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // In-place operation, return the cache tensor
     return tensor_args.cache_tensor;
 }
@@ -257,7 +256,7 @@ paged_update_cache(
             update_idxs_tensor.has_value() ? std::optional<Tensor>(update_idxs_tensor.value()) : std::nullopt,
         .page_table = page_table.has_value() ? std::optional<Tensor>(page_table.value()) : std::nullopt};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

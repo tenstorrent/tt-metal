@@ -20,9 +20,7 @@ constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
 static FixedPoint float_to_fixed(float value) { return static_cast<FixedPoint>(value * FIXED_ONE); }
 
 UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
     const ttnn::Tensor& input = tensor_args.input_tensor;
     const ttnn::Tensor& output = output_tensor;
     const uint32_t scale_factor_h = operation_attributes.scale_factor_h;
@@ -258,9 +256,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
 
     uint32_t total_sticks_processed = 0;
 
-    for (uint32_t i = 0; i < logical_cores.size(); ++i) {
-        const tt::tt_metal::CoreCoord& core_coord = logical_cores[i];
-
+    for (const auto& core_coord : logical_cores) {
         // Calculate actual output sticks for this core
         uint32_t out_sticks_this_core = std::min(max_out_sticks_per_core, total_output_sticks - total_sticks_processed);
 
@@ -317,9 +313,9 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
 
 void UpsampleBilinearProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const UpsampleParams& /*operation_attributes*/,
+    const UpsampleInputs& tensor_args,
+    Tensor& output_tensor) {
     tt::tt_metal::Program& program = cached_program.program;
     tt::tt_metal::CBHandle& cb_src0 = cached_program.shared_variables.cb_src0;
     tt::tt_metal::CBHandle& out_cb = cached_program.shared_variables.out_cb;

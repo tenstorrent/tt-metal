@@ -40,7 +40,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL((args.dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
-spec_return_value_t FastReduceNCDeviceOperation::compute_output_specs(
+TensorSpec FastReduceNCDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -56,7 +56,7 @@ spec_return_value_t FastReduceNCDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), args.output_mem_config));
 }
 
-tensor_return_value_t FastReduceNCDeviceOperation::create_output_tensors(
+Tensor FastReduceNCDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -81,7 +81,7 @@ ttnn::operations::experimental::reduction::detail::FastReduceNCDeviceOperation::
         .dim = dim, .output_mem_config = output_mem_config, .compute_kernel_config = compute_kernel_config};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = output};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

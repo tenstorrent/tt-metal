@@ -558,9 +558,9 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 template <bool SDPA_EXP_APPROX_MODE>
 void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
-    vFloat beta = ckernel::sfpu::Converter::as_float(param0);
-    vFloat beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);
-    vFloat threshold = ckernel::sfpu::Converter::as_float(param2);
+    float beta = ckernel::sfpu::Converter::as_float(param0);
+    float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);
+    float threshold = ckernel::sfpu::Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         ckernel::sfpu::calculate_softplus_body<APPROX>(beta, beta_reciprocal, threshold);
         sfpi::dst_reg += 2;

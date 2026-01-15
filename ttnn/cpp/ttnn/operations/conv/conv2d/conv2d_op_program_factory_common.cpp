@@ -52,7 +52,7 @@ std::vector<CBInfo> get_cb_info(
     const Conv2dParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> input_shape,
+    std::array<uint32_t, 2> /*input_shape*/,
     std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
@@ -468,12 +468,14 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
         float peak_rate_gbps;  // Maximum achievable transfer rate
     };
 
+    // NOLINTBEGIN(modernize-use-std-numbers)
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
         default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
     }
+    // NOLINTEND(modernize-use-std-numbers)
 
     // Clamp transfer size to the linear growth region
     const uint32_t effective_transfer_size =
@@ -595,7 +597,7 @@ bool is_split_reader_viable(
     uint32_t weights_block_ntiles,
     uint32_t weights_tile_size,
     uint32_t dilation_w,
-    uint32_t num_blocks_act_h,
+    uint32_t /*num_blocks_act_h*/,
     uint32_t act_block_w_ntiles,
     bool fp32_dest_acc,
     DataType output_datatype,
@@ -666,9 +668,9 @@ bool is_split_reader_viable(
 
 void post_conv2d_op_memory_checks(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& /*output_tensor*/) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;
     const auto& input_tensor_bias = tensor_args.bias;

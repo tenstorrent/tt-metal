@@ -149,7 +149,7 @@ void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
 }
 
 void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 NlpCreateHeadsBoltzDeviceOperation::spec_return_value_t NlpCreateHeadsBoltzDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -235,13 +235,12 @@ NlpCreateHeadsBoltzDeviceOperation::tensor_return_value_t NlpCreateHeadsBoltzDev
 }
 
 NlpCreateHeadsBoltzDeviceOperation::program_factory_t NlpCreateHeadsBoltzDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor_q;
     if (input_tensor.is_sharded()) {
         return Sharded{};
-    } else {
-        return Interleaved{};
     }
+    return Interleaved{};
 }
 
 }  // namespace ttnn::operations::experimental::transformer
@@ -270,7 +269,7 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads_boltz(
         .input_tensor_kv = input_tensor_kv,
         .optional_output_tensors = optional_output_tensors.value_or(std::vector<std::optional<Tensor>>{})};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

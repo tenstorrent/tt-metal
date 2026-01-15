@@ -61,7 +61,7 @@ void MorehGroupNormOperation::validate_tensors(
 }
 
 MorehGroupNormOperation::program_factory_t MorehGroupNormOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return MorehGroupNormFactory();
 }
 
@@ -180,6 +180,6 @@ ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation::tensor_retur
         rstd_memory_config.value_or(input.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, gamma, beta, output, mean, rstd};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

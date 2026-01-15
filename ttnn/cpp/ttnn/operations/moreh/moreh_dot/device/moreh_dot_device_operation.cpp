@@ -10,12 +10,13 @@
 
 namespace ttnn::operations::moreh::moreh_dot {
 MorehDotOperation::program_factory_t MorehDotOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // For now we litteraly don't care and return a single factory. Whatever
     return SingleCore{};
 }
 
-void MorehDotOperation::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehDotOperation::validate(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_a;
     const auto& input_b = tensor_args.input_b;
 
@@ -83,6 +84,6 @@ ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_return_value_t mor
         memory_config.value_or(input_a.memory_config()),
         init_device_compute_kernel_config(input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input_a, input_b, output};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

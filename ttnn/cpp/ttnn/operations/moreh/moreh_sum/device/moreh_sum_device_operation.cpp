@@ -21,20 +21,20 @@ MorehSumOperation::program_factory_t MorehSumOperation::select_program_factory(
     if (tensor_args.input.dtype() == DataType::INT32) {
         if (operation_attributes.dim == input_rank - 1) {
             return MorehSumWIntFactory{};
-        } else if (operation_attributes.dim == input_rank - 2) {
-            return MorehSumHIntFactory{};
-        } else {
-            return MorehSumNCIntFactory{};
         }
+        if (operation_attributes.dim == input_rank - 2) {
+            return MorehSumHIntFactory{};
+        }
+        return MorehSumNCIntFactory{};
     }
 
     if (operation_attributes.dim == input_rank - 1) {
         return MorehSumWFactory{};
-    } else if (operation_attributes.dim == input_rank - 2) {
-        return MorehSumHFactory{};
-    } else {
-        return MorehSumNCFactory{};
     }
+    if (operation_attributes.dim == input_rank - 2) {
+        return MorehSumHFactory{};
+    }
+    return MorehSumNCFactory{};
 }
 
 void validate_tensors(
@@ -140,6 +140,6 @@ ttnn::operations::moreh::moreh_sum::MorehSumOperation::tensor_return_value_t mor
         memory_config.value_or(input.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

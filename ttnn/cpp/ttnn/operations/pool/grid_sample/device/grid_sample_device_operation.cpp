@@ -11,13 +11,12 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 GridSampleOperation::program_factory_t GridSampleOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     const std::string mode = operation_attributes.mode;
     if (mode == "bilinear") {
         return program::GridSampleBilinearProgramFactory{};
-    } else {
-        return program::GridSampleNearestProgramFactory{};
     }
+    return program::GridSampleNearestProgramFactory{};
 }
 
 void GridSampleOperation::validate_on_program_cache_miss(
@@ -329,7 +328,7 @@ ttnn::Tensor grid_sample(
     bool batch_output_channels,
     const std::optional<MemoryConfig>& memory_config) {
     using OperationType = ttnn::operations::pool::grid_sample::GridSampleOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .mode = mode,
             .padding_mode = padding_mode,

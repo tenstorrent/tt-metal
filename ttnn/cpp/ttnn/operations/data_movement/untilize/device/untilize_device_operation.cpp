@@ -5,7 +5,7 @@
 #include "untilize_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "factories/untilize_single_core_program_factory.hpp"
@@ -47,9 +47,8 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
         // as the current default multi core implementation processes an entire row of tiles at once.
         if (!output_is_sharded && num_tiles_per_col == 1) {
             return 0;
-        } else {
-            return 1;
         }
+        return 1;
     }
     return 2;
 }
@@ -244,6 +243,7 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         // specs
         return program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
     }
+
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
     uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
 
@@ -257,32 +257,17 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
 
     size_t grid_area = grid_size.x * grid_size.y;
-    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(num_tiles_per_col) / grid_area);
-    const uint32_t num_compute_cores =
-        nblocks_per_core == 0 ? num_tiles_per_col : std::ceil(static_cast<float>(num_tiles_per_col) / nblocks_per_core);
+    auto [num_compute_cores, nblocks_per_core] = compute_ncores(grid_area, num_tiles_per_col);
 
     constexpr uint32_t threshold_row_block = 32;
     if (!input_is_sharded and !output_is_sharded) {
-        if (num_tiles_per_row > threshold_row_block) {
-            if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
-                uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
-                                            (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
-
-                // Compute grid area and initial blocks-per-core using integer math.
-                uint32_t nblocks_per_core_wh = (grid_area == 0) ? 1 : (num_blocks_block + grid_area - 1) / grid_area;
-
-                // Adjust nblocks_per_core_wh and determine the optimal block size.
-                auto [adjusted_nblocks_per_core, single_block_size] =
-                    closest_square_larger_than_b(nblocks_per_core_wh, num_tiles_per_row, num_tiles_per_col, grid_area);
-                nblocks_per_core_wh = adjusted_nblocks_per_core;
-
-                const uint32_t total_blocks_width = tt::div_up(num_tiles_per_row, single_block_size);
-                const uint32_t total_blocks_height = tt::div_up(num_tiles_per_col, single_block_size);
-                const uint32_t total_blocks = total_blocks_width * total_blocks_height;
-                const uint32_t ncores_block = (nblocks_per_core_wh == 0) ? num_blocks_block : total_blocks;
-                if (num_compute_cores < ncores_block) {
-                    return program::UntilizeMultiCoreBlockProgramFactory{};
-                }
+        if (num_tiles_per_row > threshold_row_block and
+            (num_tiles_per_col > threshold_row_block or num_tiles_per_row > num_tiles_per_col)) {
+            uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
+                                        (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+            auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+            if (num_compute_cores < ncores_wh.ncores) {
+                return program::UntilizeMultiCoreBlockProgramFactory{};
             }
         }
     }
@@ -291,7 +276,8 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     auto pf_option = get_pf_type(output_is_sharded, input_tensor_a);
     if (pf_option == 0) {
         return program::UntilizeMultiCoreParallelizeColumnProgramFactory{};
-    } else if (pf_option == 1) {
+    }
+    if (pf_option == 1) {
         return program::UntilizeSingleCoreProgramFactory{};
     }
     // Default multi core implementation
@@ -300,7 +286,7 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
 UntilizeDeviceOperation::create_op_performance_model(
-    const UntilizeDeviceOperation::operation_attributes_t& op_attr,
+    const UntilizeDeviceOperation::operation_attributes_t& /*op_attr*/,
     const UntilizeDeviceOperation::tensor_args_t& inputs,
     tensor_return_value_t& output) {
     const auto& input_tensor = inputs.input;
@@ -341,7 +327,7 @@ ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t 
     bool enough_space_height,
     uint32_t pf_type) {
     using OperationType = ttnn::operations::data_movement::UntilizeDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_mem_config = std::move(output_mem_config),
             .use_multicore = use_multicore,

@@ -15,12 +15,11 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::reshape_on_device {
 
 ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
         return ReshapeRMProgramFactory{};
-    } else {
-        return ReshapeTileProgramFactory{};
     }
+    return ReshapeTileProgramFactory{};
 }
 
 void ReshapeDeviceOperation::validate_on_program_cache_miss(
@@ -110,7 +109,7 @@ ttnn::operations::data_movement::reshape_on_device::ReshapeDeviceOperation::tens
     const tt::tt_metal::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     using OperationType = ttnn::operations::data_movement::reshape_on_device::ReshapeDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{logical_output_shape, padded_output_shape, output_mem_config},
         OperationType::tensor_args_t{input_tensor});
 }

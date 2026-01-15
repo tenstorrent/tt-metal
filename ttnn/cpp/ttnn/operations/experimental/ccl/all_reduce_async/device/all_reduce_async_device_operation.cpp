@@ -14,7 +14,7 @@
 namespace ttnn::operations::experimental::ccl::all_reduce_async {
 
 AllReduceAsyncDeviceOperation::program_factory_t AllReduceAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return AllReduceAsyncMeshWorkloadFactory{};
 }
 
@@ -163,7 +163,7 @@ all_reduce_async(
         &mesh_device);
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .buffer_tensor = buffer_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

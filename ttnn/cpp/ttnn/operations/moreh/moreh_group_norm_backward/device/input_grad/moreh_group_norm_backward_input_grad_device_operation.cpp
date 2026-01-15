@@ -55,7 +55,7 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
 
 MorehGroupNormBackwardInputGradOperation::program_factory_t
 MorehGroupNormBackwardInputGradOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return MorehGroupNormBackwardInputGradFactory();
 }
 
@@ -113,6 +113,6 @@ moreh_group_norm_backward_input_grad(
         input_grad_memory_config.value_or(output_grad.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     OperationType::tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma, input_grad};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

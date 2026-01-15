@@ -12,7 +12,7 @@
 namespace ttnn::operations::data_movement {
 
 MoeRoutingRemapDeviceOperation::program_factory_t MoeRoutingRemapDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return SingleCore{};
 }
 
@@ -79,7 +79,7 @@ ttnn::operations::data_movement::MoeRoutingRemapDeviceOperation::tensor_return_v
     const std::optional<ttnn::MemoryConfig>& output_mem_config,
     const std::optional<ttnn::Tensor>& optional_output_routing_weights) {
     using OperationType = ttnn::operations::data_movement::MoeRoutingRemapDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .non_zero_weight_size = non_zero_weight_size,
             .expert_parallel_size = expert_parallel_size,

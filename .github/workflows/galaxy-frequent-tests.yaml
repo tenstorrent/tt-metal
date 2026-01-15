@@ -18,6 +18,7 @@ on:
           - mochi
           - flux1
           - motif
+          - qwenimage
   schedule:
     - cron: "0 3 * * *"  # Every day at 3:00 UTC
 

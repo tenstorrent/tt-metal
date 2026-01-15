@@ -68,6 +68,11 @@ on:
         type: boolean
         default: false
         description: "Build UMD tests"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
       fetch-depth:
         required: false
         type: number
@@ -157,6 +162,11 @@ on:
         type: boolean
         default: false
         description: "Build UMD tests"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-docker-image:
@@ -229,13 +239,11 @@ jobs:
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
-        CARGO_HOME: /tmp/.cargo
-        TT_FROM_PRECOMPILED_DIR: /work
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
@@ -283,7 +291,6 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
       - name: Create ccache tmpdir
         run: |
@@ -294,6 +301,13 @@ jobs:
           # Zero out the stats so we can see how we did this build
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           ccache -z
+
+      - name: 🔧 Configure git safe.directory
+        run: |
+          # The checkout action adds $GITHUB_WORKSPACE (/__w/tt-metal/tt-metal) as a safe directory,
+          # but not /work which is mounted from the host. Git commands from /work fail due to
+          # ownership mismatch (host uid vs container root). Add /work to safe.directory.
+          git config --global --add safe.directory /work
 
       - name: 🔧 CMake configure
         run: |
@@ -315,6 +329,9 @@ jobs:
           fi
           if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
             build_command="$build_command --build-umd-tests"
+          fi
+          if [ "${{ inputs.enable-lto }}" = "true" ]; then
+            build_command="$build_command --enable-lto"
           fi
           echo "build-artifact.yaml running: $build_command"
           $build_command
@@ -393,6 +410,7 @@ jobs:
     needs: build-docker-image
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type }}
       python-version: ${{ inputs.version == '22.04' && '3.10' || '3.12' }}
       docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}

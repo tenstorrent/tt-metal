@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ccl::neighbor_pad {
 
 NeighborPadAsyncDeviceOperation::program_factory_t NeighborPadAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return NeighborPadAsyncMeshWorkloadFactory{};
 }
 
@@ -83,7 +83,7 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t NeighborPadAsyncDeviceOperation::compute_output_specs(
+TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
@@ -92,7 +92,7 @@ spec_return_value_t NeighborPadAsyncDeviceOperation::compute_output_specs(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 
-tensor_return_value_t NeighborPadAsyncDeviceOperation::create_output_tensors(
+Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -176,7 +176,7 @@ neighbor_pad_async(
 
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = std::nullopt};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

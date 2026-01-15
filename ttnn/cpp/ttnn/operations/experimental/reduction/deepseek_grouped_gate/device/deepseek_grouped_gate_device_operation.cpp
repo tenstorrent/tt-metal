@@ -100,7 +100,7 @@ deepseek_grouped_gate(
         output_mem_config.value_or(scores.memory_config())};
     auto tensor_args = OperationType::tensor_args_t{scores, bias};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim
@@ -108,7 +108,7 @@ deepseek_grouped_gate(
 namespace ttnn::operations::experimental::reduction {
 
 DeepseekGroupedGateDeviceOperation::program_factory_t DeepseekGroupedGateDeviceOperation::select_program_factory(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 

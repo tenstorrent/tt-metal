@@ -16,7 +16,7 @@
 namespace ttnn::operations::experimental::ccl::slice_reshard_async {
 
 SliceReshardAsyncDeviceOperation::program_factory_t SliceReshardAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::SliceReshardAsyncProgramFactory{};
 }
 
@@ -43,7 +43,7 @@ void SliceReshardAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
 }
 
-spec_return_value_t SliceReshardAsyncDeviceOperation::compute_output_specs(
+TensorSpec SliceReshardAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto shape = input_tensor.logical_shape();
@@ -52,7 +52,7 @@ spec_return_value_t SliceReshardAsyncDeviceOperation::compute_output_specs(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 
-tensor_return_value_t SliceReshardAsyncDeviceOperation::create_output_tensors(
+Tensor SliceReshardAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
@@ -118,7 +118,7 @@ slice_reshard_async(
         num_devices);
     auto tensor_args = OperationType::tensor_args_t{.input = input_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

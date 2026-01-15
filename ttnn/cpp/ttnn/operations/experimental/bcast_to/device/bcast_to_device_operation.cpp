@@ -29,7 +29,7 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
 }
 
 BcastToOperation::program_factory_t BcastToOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
     switch (input.layout()) {
@@ -134,7 +134,7 @@ ttnn::operations::experimental::broadcast_to::BcastToOperation::tensor_return_va
         output_shape, memory_config.value_or(input.memory_config()), subtile_broadcast_type};
     auto tensor_args = OperationType::tensor_args_t{input, output};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

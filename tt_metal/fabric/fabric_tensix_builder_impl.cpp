@@ -881,9 +881,8 @@ const char* FabricTensixDatamoverMuxBuilder::get_kernel_file_path() const {
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         return "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_udm_mux_extension.cpp";
-    } else {
-        return "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp";
     }
+    return "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp";
 }
 
 tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverMuxBuilder::build_connection_to_fabric_channel(
@@ -1096,8 +1095,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
         ct_args.push_back(relay_config_typed->get_relay_termination_signal_address());
     } else if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
         // Add sender_channel_is_traffic_injection_channel_array to ct args for MUX mode
-        for (size_t i = 0; i < sender_channel_is_traffic_injection_channel_array.size(); i++) {
-            ct_args.push_back(sender_channel_is_traffic_injection_channel_array[i] ? 1 : 0);
+        for (bool is_injection : sender_channel_is_traffic_injection_channel_array) {
+            ct_args.push_back(is_injection ? 1 : 0);
         }
     }
 

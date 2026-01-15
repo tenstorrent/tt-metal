@@ -9,12 +9,11 @@
 namespace ttnn::operations::data_movement::reshape {
 
 ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return ReshapeRMProgramFactory{};
-    } else {
-        return ReshapeTiledProgramFactory{};
     }
+    return ReshapeTiledProgramFactory{};
 }
 
 void ReshapeDeviceOperation::validate_on_program_cache_miss(
@@ -95,7 +94,7 @@ ttnn::operations::data_movement::reshape::ReshapeDeviceOperation::tensor_return_
     bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     using OperationType = ttnn::operations::data_movement::reshape::ReshapeDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor, sub_core_grid},
         OperationType::tensor_args_t{input});

@@ -26,6 +26,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
@@ -36,7 +37,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -79,7 +80,8 @@ void log_external_operation(const operation::ExternalOperation& operation, const
 }
 #else
 
-void log_external_operation(const operation::ExternalOperation& operation, const std::vector<Tensor>& input_tensors) {}
+void log_external_operation(
+    const operation::ExternalOperation& /*operation*/, const std::vector<Tensor>& /*input_tensors*/) {}
 
 #endif
 
@@ -158,10 +160,9 @@ Tensor create_typed_tt_tensor_from_py_data(
             output = output.to_device(device, tensor_spec.memory_config(), cq_id);
         }
         return output;
-    } else {
-        return Tensor::from_span(
-            tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
     }
+    return Tensor::from_span(
+        tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
 }
 
 Tensor create_tt_tensor_from_py_data(
@@ -290,9 +291,8 @@ Tensor convert_python_tensor_to_tt_tensor(
                 "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
                 optional_layout.value());
             return Layout::TILE;
-        } else {
-            return optional_layout.value_or(Layout::ROW_MAJOR);
         }
+        return optional_layout.value_or(Layout::ROW_MAJOR);
     }();
 
     // Important: `nb::object` copying and destruction must be done while holding GIL, which nanobind ensures for a
@@ -350,6 +350,12 @@ struct RowMajorHostBuffer {
 // If `padded_output` is true, the returned buffer will be padded to the tile size.
 // If `padded_output` is false, the returned buffer will be in logical view.
 RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, const bool padded_output) {
+    // conversion to Host storage after
+    // issue #31136: to_torch with mesh_composer=None on device-sharded tensor
+    if (std::holds_alternative<DeviceStorage>(tt_tensor.storage())) {
+        return convert_to_row_major_host_buffer(tt_tensor.cpu(), padded_output);
+    }
+
     const auto& tensor_spec = tt_tensor.tensor_spec();
 
     // Performs logical data conversion on the concrete data type.
@@ -489,10 +495,7 @@ nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(RowMajorHostBuffer&
 }
 
 auto parse_external_operation(
-    const nb::callable& external_operation,
-    const nb::args& args,
-    const nb::kwargs& kwargs,
-    std::optional<std::string> function_name_override = std::nullopt) {
+    const nb::callable& external_operation, std::optional<std::string> function_name_override = std::nullopt) {
     std::string function_name;
     if (function_name_override.has_value()) {
         function_name = function_name_override.value();
@@ -559,7 +562,7 @@ void pytensor_module(nb::module_& mod) {
                 std::function([function, function_name](const nb::args& args, const nb::kwargs& kwargs) {
                     ZoneScopedN("TT_DNN_FALLBACK_OP");
                     auto [operation, input_tensors] =
-                        CMAKE_UNIQUE_NAMESPACE::parse_external_operation(function, args, kwargs, function_name);
+                        CMAKE_UNIQUE_NAMESPACE::parse_external_operation(function, function_name);
                     GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
                     CMAKE_UNIQUE_NAMESPACE::log_external_operation(operation, input_tensors);
                     auto output = function(*args, **kwargs);
@@ -941,16 +944,19 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "item",
             [](const Tensor& self) -> nb::object {
+                TT_FATAL(
+                    self.logical_volume() == 1,
+                    "tensor.item() requires tensor to have exactly one element, but got {} elements",
+                    self.logical_volume());
                 switch (self.dtype()) {
-                    case DataType::FLOAT32: return nb::cast(self.item<float>());
-                    case DataType::BFLOAT16: return nb::cast(static_cast<float>(self.item<bfloat16>()));
-                    // case DataType::BFLOAT16: return nb::cast(self.item<bfloat16>().to_float());
+                    case DataType::FLOAT32: return nb::cast(self.to_vector<float>()[0]);
+                    case DataType::BFLOAT16: return nb::cast(static_cast<float>(self.to_vector<bfloat16>()[0]));
                     case DataType::BFLOAT8_B:
-                    case DataType::BFLOAT4_B: return nb::cast(self.item<float>());
-                    case DataType::INT32: return nb::cast(self.item<int32_t>());
-                    case DataType::UINT32: return nb::cast(self.item<uint32_t>());
-                    case DataType::UINT16: return nb::cast(self.item<uint16_t>());
-                    case DataType::UINT8: return nb::cast(self.item<uint8_t>());
+                    case DataType::BFLOAT4_B: return nb::cast(self.to_vector<float>()[0]);
+                    case DataType::INT32: return nb::cast(self.to_vector<int32_t>()[0]);
+                    case DataType::UINT32: return nb::cast(self.to_vector<uint32_t>()[0]);
+                    case DataType::UINT16: return nb::cast(self.to_vector<uint16_t>()[0]);
+                    case DataType::UINT8: return nb::cast(self.to_vector<uint8_t>()[0]);
                     case DataType::INVALID: TT_THROW("Unsupported DataType");
                 }
                 TT_THROW("Unreachable");
@@ -1494,7 +1500,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, int N, int C, int H, int W) {
-                return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
+                return ttnn::reshape(self, ttnn::SmallVector<int>{N, C, H, W});
             },
             R"doc(
                 Reshapes TT tensor
@@ -1515,9 +1521,7 @@ void pytensor_module(nb::module_& mod) {
             )doc")
         .def(
             "reshape",
-            [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
-                return ttnn::reshape(self, infer_dims_for_reshape(self, shape));
-            },
+            [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor { return ttnn::reshape(self, shape); },
             R"doc(
                 Reshapes TT tensor
 

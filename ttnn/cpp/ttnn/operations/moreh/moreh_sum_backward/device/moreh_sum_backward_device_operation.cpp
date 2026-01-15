@@ -95,7 +95,7 @@ void MorehSumBackwardOperation::validate_inputs(
 }
 
 MorehSumBackwardOperation::program_factory_t MorehSumBackwardOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 
@@ -147,6 +147,6 @@ ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation::tensor_r
         memory_config.value_or(output_grad.memory_config()),
         init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{output_grad, input, input_grad};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

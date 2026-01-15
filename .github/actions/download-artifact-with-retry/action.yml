@@ -1,0 +1,74 @@
+name: "Download artifact with verification and retry"
+description: "Downloads a .deb package artifact, verifies integrity, and retries if verification fails"
+
+inputs:
+  name:
+    description: "Name of the artifact to download"
+    required: true
+  path:
+    description: "Directory to download the artifact to"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Download artifact
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+
+    - name: Verify packages
+      id: verify
+      shell: bash
+      continue-on-error: true
+      run: |
+        cd "${{ inputs.path }}"
+        shopt -s nullglob
+        deb_files=(*.deb)
+        if [ ${#deb_files[@]} -eq 0 ]; then
+          echo "::error::No .deb files found in ${{ inputs.path }}"
+          exit 1
+        fi
+        for deb in "${deb_files[@]}"; do
+          if dpkg-deb --info "$deb" > /dev/null 2>&1; then
+            echo "OK: $deb"
+          else
+            echo "::error::CORRUPT: $deb"
+            exit 1
+          fi
+        done
+
+    - name: Clear corrupted packages
+      if: steps.verify.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::warning::Package verification failed, retrying download..."
+        rm -f "${{ inputs.path }}"/*.deb
+
+    - name: Retry download
+      if: steps.verify.outcome == 'failure'
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+
+    - name: Verify packages after retry
+      if: steps.verify.outcome == 'failure'
+      shell: bash
+      run: |
+        cd "${{ inputs.path }}"
+        shopt -s nullglob
+        deb_files=(*.deb)
+        if [ ${#deb_files[@]} -eq 0 ]; then
+          echo "::error::No .deb files found after retry"
+          exit 1
+        fi
+        for deb in "${deb_files[@]}"; do
+          if dpkg-deb --info "$deb" > /dev/null 2>&1; then
+            echo "OK: $deb"
+          else
+            echo "::error::CORRUPT after retry: $deb"
+            exit 1
+          fi
+        done

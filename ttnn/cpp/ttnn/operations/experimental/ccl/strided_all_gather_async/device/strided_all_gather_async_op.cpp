@@ -13,7 +13,7 @@
 namespace ttnn::operations::experimental::ccl::strided_all_gather_async {
 
 StridedAllGatherAsync::program_factory_t StridedAllGatherAsync::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::StridedAllGatherAsyncProgramFactory{};
 }
 
@@ -23,7 +23,7 @@ void StridedAllGatherAsync::validate_on_program_cache_hit(
 }
 
 void StridedAllGatherAsync::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensors_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensors_args*/) {}
 
 StridedAllGatherAsync::spec_return_value_t StridedAllGatherAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
@@ -39,9 +39,8 @@ StridedAllGatherAsync::tensor_return_value_t StridedAllGatherAsync::create_outpu
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.persistent_output_buffer.has_value()) {
         return {tensor_args.persistent_output_buffer.value()};
-    } else {
-        return {create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input_tensor.device())};
     }
+    return {create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input_tensor.device())};
 }
 
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
@@ -119,7 +118,7 @@ strided_all_gather_async(
         mm_block_wt};
     auto tensor_args = OperationType::tensor_args_t{input_tensor, persistent_output_buffer};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

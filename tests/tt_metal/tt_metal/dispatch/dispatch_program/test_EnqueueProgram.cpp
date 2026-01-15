@@ -167,16 +167,15 @@ void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
 
 void initialize_dummy_semaphores(
     Program& program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values) {
-    for (uint32_t i = 0; i < init_values.size(); i++) {
-        CreateSemaphore(program, core_ranges, init_values[i]);
+    for (unsigned int init_value : init_values) {
+        CreateSemaphore(program, core_ranges, init_value);
     }
 }
 
 std::vector<CBHandle> initialize_dummy_circular_buffers(
     Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs) {
     std::vector<CBHandle> cb_handles;
-    for (uint32_t i = 0; i < cb_configs.size(); i++) {
-        const CBConfig& cb_config = cb_configs[i];
+    for (const auto& cb_config : cb_configs) {
         const uint32_t cb_id = cb_config.cb_id;
         const uint32_t cb_num_pages = cb_config.num_pages;
         const uint32_t page_size = cb_config.page_size;
@@ -213,10 +212,10 @@ bool cb_config_successful(
                 cb_config_vector);
 
             uint32_t cb_addr = l1_unreserved_base;
-            for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
-                const uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
-                const uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
-                const uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
+            for (const auto& config : program_config.cb_config_vector) {
+                const uint32_t index = config.cb_id * sizeof(uint32_t);
+                const uint32_t cb_num_pages = config.num_pages;
+                const uint32_t cb_size = cb_num_pages * config.page_size;
                 const bool addr_match = cb_config_vector.at(index) == cb_addr;
                 const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                 const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
@@ -342,7 +341,11 @@ bool test_dummy_EnqueueProgram_with_sems(
     distributed::MeshWorkload& workload,
     const DummyProgramConfig& program_config,
     const vector<vector<uint32_t>>& expected_semaphore_vals) {
-    TT_ASSERT(program_config.cr_set.size() == expected_semaphore_vals.size());
+    TT_FATAL(
+        program_config.cr_set.size() == expected_semaphore_vals.size(),
+        "cr_set size {} must match expected_semaphore_vals size {}",
+        program_config.cr_set.size(),
+        expected_semaphore_vals.size());
 
     bool are_all_semaphore_values_correct = true;
 
@@ -354,7 +357,11 @@ bool test_dummy_EnqueueProgram_with_sems(
     uint32_t expected_semaphore_vals_idx = 0;
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
-        TT_ASSERT(expected_semaphore_vals_for_core.size() == program_config.num_sems);
+        TT_FATAL(
+            expected_semaphore_vals_for_core.size() == program_config.num_sems,
+            "expected_semaphore_vals_for_core size {} must match num_sems {}",
+            expected_semaphore_vals_for_core.size(),
+            program_config.num_sems);
         expected_semaphore_vals_idx++;
         for (const CoreCoord& core_coord : core_range) {
             vector<uint32_t> semaphore_vals;
@@ -846,7 +853,8 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorI
         case HalProgrammableCoreType::TENSIX:
             switch (processor_class) {
                 case HalProcessorClassType::DM:
-                    TT_ASSERT(0 <= processor_id && processor_id < 2);
+                    TT_FATAL(
+                        0 <= processor_id && processor_id < 2, "processor_id {} must be 0 or 1 for DM", processor_id);
                     unique_args_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1) +
                                        processor_id * 256 * sizeof(uint32_t);
                     common_args_addr = unique_args_addr + (3 + processor_id) * 256 * sizeof(uint32_t);

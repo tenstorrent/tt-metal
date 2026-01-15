@@ -34,8 +34,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& actual_output_shape,
-    const std::vector<CoreCoord>& cores,
-    uint32_t max_read_size) {
+    const std::vector<CoreCoord>& cores) {
     auto input_shape = input_tensor.logical_shape();
     auto output_shard_spec = output_tensor.shard_spec().value();
     auto output_shard_shape = output_shard_spec.shape;
@@ -190,9 +189,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
 }
 
 PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PaddedSliceParams& operation_attributes, const PaddedSliceInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.padded_slice_start;
     const auto& output_tensor_end = operation_attributes.padded_slice_end;
@@ -327,7 +324,7 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
     }
 
     auto all_runtime_args = get_padded_slice_runtime_args_rm_sharded_output(
-        a, output, output_tensor_start, actual_output_shape, iter_cores, max_read_size);
+        a, output, output_tensor_start, actual_output_shape, iter_cores);
 
     uint32_t i = 0;
     for (const auto& core : iter_cores) {
@@ -350,9 +347,9 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
 
 void PaddedSliceRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PaddedSliceParams& /*operation_attributes*/,
+    const PaddedSliceInputs& tensor_args,
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     const auto& src_tensor = tensor_args.input;
     auto& dst_tensor = output;
@@ -364,8 +361,7 @@ void PaddedSliceRMProgramFactory::override_runtime_arguments(
         dst_tensor,
         shared_vars.output_tensor_start,
         shared_vars.actual_output_shape,
-        shared_vars.iter_cores,
-        shared_vars.max_read_size);
+        shared_vars.iter_cores);
 
     uint32_t i = 0;
     for (const auto& core : shared_vars.iter_cores) {

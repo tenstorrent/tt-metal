@@ -112,7 +112,8 @@ int main(int argc, char* argv[]) {
         if (s == "-h" || s == "--help") {
             print_usage(argv[0]);
             return 0;
-        } else if ((s.starts_with("-d=")) || (s.starts_with("--devices="))) {
+        }
+        if ((s.starts_with("-d=")) || (s.starts_with("--devices="))) {
             string list = s.substr(s.find('=') + 1);
             // "all" is acceptable, and the same as the default.
             if (list == "all") {

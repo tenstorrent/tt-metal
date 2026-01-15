@@ -13,7 +13,7 @@ namespace ttnn::operations::reduction::ema {
 using namespace tt::tt_metal;
 
 EmaDeviceOperation::program_factory_t EmaDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return program::EmaProgramFactory{};
 }
 
@@ -70,7 +70,7 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!std::isnan(operation_attributes.alpha), "EMA alpha must be a valid number, got NaN");
 }
 
-spec_return_value_t EmaDeviceOperation::compute_output_specs(
+TensorSpec EmaDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
@@ -78,7 +78,7 @@ spec_return_value_t EmaDeviceOperation::compute_output_specs(
     return tensor_args.input.tensor_spec().with_memory_config(operation_attributes.output_mem_config);
 }
 
-tensor_return_value_t EmaDeviceOperation::create_output_tensors(
+Tensor EmaDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor.value();
@@ -97,7 +97,7 @@ ttnn::Tensor ema_device(
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<Tensor> optional_output_tensor) {
     using OperationType = ttnn::operations::reduction::ema::EmaDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .alpha = alpha,
             .grid_size = grid_size,

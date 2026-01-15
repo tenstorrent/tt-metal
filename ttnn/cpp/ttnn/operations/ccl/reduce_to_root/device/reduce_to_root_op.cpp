@@ -78,7 +78,7 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
 };
 
 ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
@@ -219,7 +219,7 @@ ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
     const std::optional<Tensor>& optional_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
     using OperationType = ttnn::operations::ccl::ReduceToRootOp;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             root_coord,
             scale_fp32,

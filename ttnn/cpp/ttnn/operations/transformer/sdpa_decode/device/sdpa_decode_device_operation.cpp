@@ -281,8 +281,8 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             D);
 
         // Check valid seqlen
-        for (int i = 0; i < operation_attributes.cur_pos.size(); i++) {
-            TT_FATAL(operation_attributes.cur_pos[i] < k_shape[-2], "cur_pos must be <= K sequence dim");
+        for (unsigned int cur_pos_val : operation_attributes.cur_pos) {
+            TT_FATAL(cur_pos_val < k_shape[-2], "cur_pos must be <= K sequence dim");
         }
     }
 
@@ -335,7 +335,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
+TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.q;
     Layout output_layout = Layout::TILE;
@@ -352,7 +352,7 @@ spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
         output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }
 
-tensor_return_value_t SdpaDecodeDeviceOperation::create_output_tensors(
+Tensor SdpaDecodeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
@@ -433,7 +433,7 @@ ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation::tensor_re
         .attention_sink = attention_sink,
     };
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

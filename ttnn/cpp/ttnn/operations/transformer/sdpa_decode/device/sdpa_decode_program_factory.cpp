@@ -21,9 +21,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer::sdpa_decode::program {
 
 SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SdpaDecodeParams& operation_attributes, const SdpaDecodeInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     bool use_mla = operation_attributes.use_mla.value_or(false);
@@ -403,9 +401,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // - In non-causal mode, mask can be an input tensor which needs proper handling to read as 16x32 tiles
     // - Only support Float16_b since block float w/ shared exp needs special handling to read as 16x32 tiles
     // In compute, need to find a proper way to get num_faces for sfpu functions
-    const bool use_half_tile =
-        (is_causal and num_q_heads <= 16 and q_df == tt::DataFormat::Float16_b and
-         device->arch() == tt::ARCH::WORMHOLE_B0);
+    const bool use_half_tile = (is_causal and num_q_heads <= 16 and q_df == tt::DataFormat::Float16_b);
 
     if (use_half_tile) {
         q_tile = half_tile;
@@ -1005,8 +1001,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     if (num_active_cores < num_cores_available) {
         log_debug(tt::LogOp, "idle cores {}", core_group_idle.size());
         // Set the rest of the cores to idle
-        for (uint32_t i = 0; i < core_group_idle.size(); ++i) {
-            CoreCoord core = core_group_idle[i];
+        for (auto core : core_group_idle) {
             log_debug(tt::LogOp, "Setting core {} to idle", core);
             // reader runtime args
             std::vector<uint32_t> reader_rt_args = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -1046,9 +1041,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
 void SdpaDecodeProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SdpaDecodeParams& operation_attributes,
+    const SdpaDecodeInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
 
     const auto& shared_variables = cached_program.shared_variables;
