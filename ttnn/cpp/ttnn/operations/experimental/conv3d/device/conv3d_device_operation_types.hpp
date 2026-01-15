@@ -63,7 +63,7 @@ struct Conv3dConfig {
     }
 };
 
-struct operation_attributes_t {
+struct Conv3dParams {
     Conv3dConfig config;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -77,7 +77,7 @@ struct operation_attributes_t {
     uint32_t groups;
 };
 
-struct tensor_args_t {
+struct Conv3dInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias_tensor;

@@ -20,8 +20,8 @@
 namespace ttnn::operations::experimental::conv3d {
 
 struct Conv3dDeviceOperation {
-    using operation_attributes_t = conv3d::operation_attributes_t;
-    using tensor_args_t = conv3d::tensor_args_t;
+    using operation_attributes_t = Conv3dParams;
+    using tensor_args_t = Conv3dInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::Conv3dProgramFactory>;

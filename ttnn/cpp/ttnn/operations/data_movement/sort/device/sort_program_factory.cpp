@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement::sort::program {
 
 // Single row - single core
 SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingleRowSingleCore::create(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    const SortParams& attributes, const SortInputs& tensor_args, tensor_return_value_t& output_tensors) {
     // Program config
     tt::tt_metal::Program program{};
 
@@ -247,8 +247,8 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
 
 void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*attributes*/,
-    const tensor_args_t& tensor_args,
+    const SortParams& /*attributes*/,
+    const SortInputs& tensor_args,
     tensor_return_value_t& output_tensors) {
     auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
     auto* value_tensor_buffer = output_tensors.at(0).buffer();
@@ -290,7 +290,7 @@ void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
 // SortProgramFactoryCrossCoreDataExchange - single row, multi core with processing multiple tiles on one core with
 // cross core data exchange
 SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCrossCoreDataExchange::create(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    const SortParams& attributes, const SortInputs& tensor_args, tensor_return_value_t& output_tensors) {
     // Program config
     tt::tt_metal::Program program{};
 
@@ -607,8 +607,8 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
 
 void SortProgramFactoryCrossCoreDataExchange::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*attributes*/,
-    const tensor_args_t& tensor_args,
+    const SortParams& /*attributes*/,
+    const SortInputs& tensor_args,
     tensor_return_value_t& output_tensors) {
     auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
     auto* const value_tensor_buffer = output_tensors.at(0).buffer();
@@ -685,7 +685,7 @@ uint32_t SortProgramFactoryCrossCoreDataExchange::rounddown_pow2(uint32_t n) {
 
 // Single row - multi core
 SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleRowMultiCore::create(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    const SortParams& attributes, const SortInputs& tensor_args, tensor_return_value_t& output_tensors) {
     // Program config
     tt::tt_metal::Program program{};
 
@@ -955,8 +955,8 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
 
 void SortProgramFactorySingleRowMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*attributes*/,
-    const tensor_args_t& tensor_args,
+    const SortParams& /*attributes*/,
+    const SortInputs& tensor_args,
     tensor_return_value_t& output_tensors) {
     auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
     auto* const value_tensor_buffer = output_tensors.at(0).buffer();

@@ -8,12 +8,12 @@
 
 namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice {
 
-struct operation_attributes_t {
+struct NlpKvCacheLoadSliceParams {
     ttnn::Shape output_tensor_start;
     ttnn::Shape output_tensor_end;
 };
 
-struct tensor_args_t {
+struct NlpKvCacheLoadSliceInputs {
     Tensor input;
     std::optional<Tensor> preallocated_output;
 };

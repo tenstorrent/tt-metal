@@ -8,12 +8,12 @@
 
 namespace ttnn::operations::experimental::plusone {
 
-struct operation_attributes_t {
+struct PlusoneParams {
     const std::optional<CoreRangeSet> sub_core_grids;
     const bool skip_negative_entries;
 };
 
-struct tensor_args_t {
+struct PlusoneInputs {
     const Tensor& input;
 };
 

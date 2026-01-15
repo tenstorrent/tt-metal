@@ -17,8 +17,8 @@
 namespace ttnn::operations::experimental::paged_cache::fused_update {
 
 struct PagedFusedUpdateCacheDeviceOperation {
-    using operation_attributes_t = fused_update::operation_attributes_t;
-    using tensor_args_t = fused_update::tensor_args_t;
+    using operation_attributes_t = FusedUpdateParams;
+    using tensor_args_t = FusedUpdateInputs;
     using spec_return_value_t = fused_update::spec_return_value_t;
     using tensor_return_value_t = fused_update::tensor_return_value_t;
     using program_factory_t = std::variant<
