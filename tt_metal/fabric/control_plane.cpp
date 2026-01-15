@@ -1954,9 +1954,10 @@ void ControlPlane::print_ethernet_channels() const {
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
-void ControlPlane::initialize_fabric_context(tt_fabric::FabricConfig fabric_config) {
+void ControlPlane::initialize_fabric_context(
+    tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
-    this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
+    this->fabric_context_ = std::make_unique<FabricContext>(fabric_config, router_config);
 }
 
 FabricContext& ControlPlane::get_fabric_context() const {
