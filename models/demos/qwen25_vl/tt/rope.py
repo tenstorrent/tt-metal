@@ -26,6 +26,7 @@ class RotarySetup(LightweightModule):
         max_seq_len: int,
         rope_theta: float,
         rope_scaling: Optional[RopeScaling],
+        use_qk_fused: bool = False,  # For Qwen2.5 VL, we do not use qk fused ops (rotary embedding + paged cache update)
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
