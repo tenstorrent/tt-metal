@@ -231,18 +231,15 @@ Tensor BcastDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t BcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const program_factory_t program_factory = select_program_factory(operation_attributes, tensor_args);
+    log_trace(tt::LogOp, "BcastDeviceOperation::compute_program_hash is called");
+
     const bool bcast_scalar = (tensor_args.input_b.padded_shape()[-2] * tensor_args.input_b.padded_shape()[-1] == 1) &&
                               operation_attributes.dim == BcastOpDim::HW;
+
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
     return operation::hash_operation<BcastDeviceOperation>(
-        operation_attributes,
-        program_factory.index(),
-        tensor_args.input_a.memory_config(),
-        tensor_args.input_a.dtype(),
-        tensor_args.input_b.memory_config(),
-        tensor_args.input_b.dtype(),
-        bcast_scalar,
-        operation_attributes.in_place);
+        operation_attributes, tensor_args, bcast_scalar, program_factory.index());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> BcastDeviceOperation::create_op_performance_model(
