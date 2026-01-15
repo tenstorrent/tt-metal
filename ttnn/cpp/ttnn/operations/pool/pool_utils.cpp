@@ -332,7 +332,6 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     const Layout& input_layout,
     CoreCoord compute_grid_size,
     const SlidingWindowConfig& sliding_window_config,
-    uint32_t channels,
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
@@ -341,6 +340,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     const DataType& output_dtype,
     bool config_tensor_in_dram) {
     uint32_t batch_size = sliding_window_config.batch_size;
+    uint32_t channels = sliding_window_config.channels;
     auto output_shape = sliding_window_config.get_output_shape();
 
     struct l1_usage_config {
@@ -511,27 +511,21 @@ void validate_input_params(
 }
 
 pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    uint32_t output_height,
-    uint32_t output_width,
-    uint32_t channels,
-    const std::array<uint32_t, 2>& kernel_size,
-    const std::array<uint32_t, 2>& stride,
-    const std::array<uint32_t, 4>& padding,
-    const std::array<uint32_t, 2>& dilation,
-    const std::array<uint32_t, 2>& ceil_pad,
-    bool ceil_mode,
+    uint32_t slice_input_height,
+    uint32_t slice_input_width,
+    uint32_t slice_output_height,
+    uint32_t slice_output_width,
+    const std::array<uint32_t, 4>& slice_padding,
+    const std::array<uint32_t, 2>& slice_ceil_pad,
     bool return_indices,
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     DataType dtype,
-    Layout /*input_layout*/,
     Layout output_layout,
     const tt::tt_metal::MemoryConfig& input_memory_config,
-    const sliding_window::SlidingWindowConfig& sliding_window_config) {
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
+    bool config_tensor_in_dram) {
     // Calculate halo input size (input shard size)
     auto input_shard_shape = input_memory_config.shard_spec().value().shape;
     const tt::tt_metal::DataType pool_input_dtype =
@@ -542,15 +536,10 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     // Calculate halo output size using sliding window calculation
     // Create a sliding window config with proper core distribution for halo calculation
     sliding_window::SlidingWindowConfig halo_config = sliding_window_config;
-    halo_config.batch_size = batch_size;
-    halo_config.input_hw = {input_height, input_width};
-    halo_config.window_hw = {kernel_size[0], kernel_size[1]};
-    halo_config.stride_hw = {stride[0], stride[1]};
-    halo_config.padding = padding;
-    halo_config.dilation_hw = {dilation[0], dilation[1]};
+    halo_config.input_hw = {slice_input_height, slice_input_width};
+    halo_config.padding = slice_padding;
     halo_config.core_range_set = input_memory_config.shard_spec().value().grid;
     halo_config.snap_to_tile = (output_layout == tt::tt_metal::Layout::TILE);
-    halo_config.ceil_mode = ceil_mode;
 
     // Get num_cores from parallel config
     uint32_t num_cores_nhw = 1;
@@ -579,24 +568,25 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
 
     uint32_t pool_cb_usage = calculate_L1_usage(
         dtype,
-        channels,
-        padding[0],  // pad_h (top)
-        padding[2],  // pad_w (left)
-        ceil_pad[0],
-        ceil_pad[1],
-        ceil_mode,
+        sliding_window_config.channels,
+        slice_padding[0],  // pad_h (top)
+        slice_padding[2],  // pad_w (left)
+        slice_ceil_pad[0],
+        slice_ceil_pad[1],
+        sliding_window_config.ceil_mode,
         return_indices,
-        kernel_size[0],
-        kernel_size[1],
-        output_height,
-        output_width,
+        sliding_window_config.window_hw.first,
+        sliding_window_config.window_hw.second,
+        slice_output_height,
+        slice_output_width,
         input_memory_config,
         output_memory_config,
         pool_type,
         count_include_pad,
         divisor_override,
         output_layout,
-        dtype);
+        dtype,
+        config_tensor_in_dram);
 
     // Calculate output tensor allocation size
     // Output is allocated per core, similar to input

@@ -81,7 +81,6 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
             input_layout,
             core_grid,
             sliding_window_config,
-            channels,
             pool_type,
             count_include_pad,
             divisor_override,
@@ -511,27 +510,21 @@ public:
 
         // Calculate complete L1 usage for this slice
         auto pool_l1_usage = pool::calculate_L1_usage_for_pool2d_slice(
-            batch_size,
             input_slice_height,
             input_slice_width,
             output_slice_height,
             this_output_width,
-            channels,
-            kernel_size,
-            stride,
             this_slice_padding,
-            dilation,
             this_ceil_pad,
-            ceil_mode,
             return_indices,
             pool_type,
             count_include_pad,
             divisor_override,
             dtype,
-            input_layout,
             output_layout,
             sliced_input_memory_config,
-            sliding_window_config);
+            sliding_window_config,
+            config_tensor_in_dram);
 
         log_trace(
             tt::LogOp,
