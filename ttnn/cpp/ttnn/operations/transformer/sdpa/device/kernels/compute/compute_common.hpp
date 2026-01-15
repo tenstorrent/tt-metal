@@ -464,8 +464,14 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_scalar_cb has 1 produced
 
+#ifdef STATS_GRANULARITY
     constexpr uint32_t dst_tiles = STATS_GRANULARITY;
     constexpr uint32_t granularity = num_tiles >> LOG2_STATS_GRANULARITY;
+#else
+    constexpr uint32_t dst_tiles = 1;
+    constexpr uint32_t granularity = num_tiles;
+#endif
+
     reconfig_data_format(in0_cb, in1_scalar_cb);
     mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
     cb_wait_front(in0_cb, num_tiles);
@@ -1019,8 +1025,13 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     constexpr uint32_t in0_block_w = N;
     constexpr uint32_t subblock_w = N;
     // Reuse the Sq_chunk_t granularity chosen for sub_exp_block
+#ifdef STATS_GRANULARITY
     constexpr uint32_t subblock_h = STATS_GRANULARITY;
     constexpr uint32_t in0_num_subblocks = M >> LOG2_STATS_GRANULARITY;
+#else
+    constexpr uint32_t subblock_h = 1;
+    constexpr uint32_t in0_num_subblocks = M;
+#endif
 
     /**
      * Use matmul on Mx1 input to reduce rows within tile to produce Mx1 output.
