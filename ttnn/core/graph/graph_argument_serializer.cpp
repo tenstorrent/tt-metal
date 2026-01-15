@@ -310,10 +310,10 @@ void GraphArgumentSerializer::register_optional_type() {
             // std::reference_wrapper<std::optional<
             // std::vector<std::optional<tt::tt_metal::Tensor>, std::allocator<std::optional<tt::tt_metal::Tensor> > > >
             // > It gets tricky to do a generic solution.
-            // Try all array sizes from 1 to 16
+            // Try all array sizes from 1 to 8 (reduced from 16 to improve compile time)
             bool handled = [&]<std::size_t... Is>(std::index_sequence<Is...>) {
                 return (handle_optional_array.template operator()<(Is + 1)>() || ...);
-            }(std::make_index_sequence<16>{});
+            }(std::make_index_sequence<8>{});
 
             if (!handled) {
                 oss << "Unable to parse" << graph_demangle(value.type().name());
@@ -325,10 +325,10 @@ void GraphArgumentSerializer::register_optional_type() {
 
     registry()[typeid(std::reference_wrapper<OptionalT>)] = register_function;
 
-    // Register array types from 1 to 16
+    // Register array types from 1 to 8 (reduced from 16 to improve compile time)
     [this, &register_function]<std::size_t... Is>(std::index_sequence<Is...>) {
         ((registry()[typeid(std::reference_wrapper<std::array<OptionalT, (Is + 1)>>)] = register_function), ...);
-    }(std::make_index_sequence<16>{});
+    }(std::make_index_sequence<8>{});
 }
 
 template <typename T>
@@ -398,24 +398,24 @@ void GraphArgumentSerializer::register_type() {
     register_optional_reference_type<ttsl::optional_reference<const T>>();
 
     // Handle complex types (feel free to add more in the future)
-    // Register small vectors from 2 to 16
+    // Register small vectors from 1 to 8 (reduced from 16 to improve compile time)
     [this]<std::size_t... Is>(std::index_sequence<Is...>) {
         ((register_small_vector<T, (Is + 1)>()), ...);
-    }(std::make_index_sequence<15>{});  // 15 elements: 2,3,4,...,16
+    }(std::make_index_sequence<8>{});  // 8 elements: 1-8
 
     // Skip array registration for bool type due to std::array<bool, N> serialization issues
     if constexpr (!std::is_same_v<T, bool> && !std::is_abstract_v<T>) {
-        // Register arrays for all sizes from 2 to 16
+        // Register arrays for all sizes from 1 to 8 (reduced from 16 to improve compile time)
         [this]<std::size_t... Is>(std::index_sequence<Is...>) {
             ((register_array<T, (Is + 1)>()), ...);
-        }(std::make_index_sequence<15>{});  // 15 elements: 2,3,4,...,16
+        }(std::make_index_sequence<8>{});  // 8 elements: 1-8
 
         register_vector<T>();
 
-        // Register optional arrays for all sizes from 2 to 16
+        // Register optional arrays for all sizes from 1 to 8 (reduced from 16 to improve compile time)
         [this]<std::size_t... Is>(std::index_sequence<Is...>) {
             ((register_optional_type<std::optional<std::array<T, (Is + 1)>>>()), ...);
-        }(std::make_index_sequence<15>{});  // 15 elements: 2,3,4,...,16
+        }(std::make_index_sequence<8>{});  // 8 elements: 1-8
     }
 
     // register vector of optional (only if T is not abstract)
