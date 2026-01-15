@@ -246,14 +246,74 @@ FORCE_INLINE void write_tile_to_chunk(
 }
 
 /**
+ * Write a block of output to a potentially padded tensor.
+ * Skip writing when M >= logical_M or N >= logical_N
+ */
+template <
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles,
+    uint32_t N_chunks,
+    uint32_t N_tiles_per_chunk,
+    typename... Accessors>
+void write_block_sync_split(
+    const std::tuple<Accessors...>& accessors,
+    const TensorShape2D& chunk_shape,
+    uint32_t read_ptr,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
+
+    for (uint32_t i = d0_start; i < d0_end; i++) {
+        // Assumes that all chunks have same number of tiles on the M-axis
+        if (i >= chunk_shape.logical_d0) {
+            break;
+        }
+
+        uint32_t chunk_idx = d1_start / N_tiles_per_chunk;
+        uint32_t tile_idx_in_chunk = d1_start % N_tiles_per_chunk;
+
+        for (uint32_t j = d1_start; j < d1_end; j++, tile_idx_in_chunk++) {
+            if (tile_idx_in_chunk >= chunk_shape.logical_d1) {
+                tile_idx_in_chunk = 0;
+                chunk_idx++;
+            }
+
+            if (chunk_idx >= N_chunks) {
+                read_ptr += tile_size_bytes;
+                continue;
+            }
+
+            uint32_t tile_id_in_chunk = i * chunk_shape.logical_d1 + tile_idx_in_chunk;
+
+            // Compile-time dispatch preserving concrete types
+            write_tile_to_chunk(
+                accessors, chunk_idx, tile_id_in_chunk, read_ptr, std::index_sequence_for<Accessors...>{});
+            //  noc_async_write_tile(tile_id_in_chunk, std::get<chunk_idx>(accessors), read_ptr);
+            read_ptr += tile_size_bytes;
+        }
+        // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
+        read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
+    }
+    noc_async_writes_flushed();
+}
+
+/**
  * Variadic write method for split operation with N output tensors.
  * Takes the tuple directly, preserving concrete TensorAccessor<DSpec> types for noc_async_write_tile.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename... Accessors>
-void write_block_sync_granular_split_variadic(
+template <
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles,
+    uint32_t N_chunks,
+    uint32_t N_tiles_per_chunk,
+    typename... Accessors>
+void write_block_sync_granular_split(
     const std::tuple<Accessors...>& accessors,
     const TensorShape2D& chunk_shape,
-    uint32_t N_tiles_per_chunk,
     uint32_t cb_id_out,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
@@ -261,30 +321,32 @@ void write_block_sync_granular_split_variadic(
     uint32_t d1_start,
     uint32_t d1_end) {
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
-        // CRITICAL: Always wait for N_block_tiles (compute kernel produces this many)
         cb_wait_front(cb_id_out, N_block_tiles);
-
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < chunk_shape.logical_d0) {
             uint32_t out_read_ptr = get_read_ptr(cb_id_out);
 
-            // Iterate through the actual tiles in the logical range (not padding)
-            for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
-                uint32_t chunk_idx = n_tile_id / N_tiles_per_chunk;
-                uint32_t n_in_chunk = n_tile_id % N_tiles_per_chunk;
+            uint32_t chunk_idx = d1_start / N_tiles_per_chunk;
+            uint32_t tile_idx_in_chunk = d1_start % N_tiles_per_chunk;
 
-                // Only write if within chunk bounds
-                if (n_in_chunk < chunk_shape.logical_d1) {
-                    uint32_t tile_id = m_tile * N_tiles_per_chunk + n_in_chunk;
-
-                    // Compile-time dispatch preserving concrete types
-                    write_tile_to_chunk(
-                        accessors, chunk_idx, tile_id, out_read_ptr, std::index_sequence_for<Accessors...>{});
+            for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++, tile_idx_in_chunk++) {
+                if (tile_idx_in_chunk >= chunk_shape.logical_d1) {
+                    tile_idx_in_chunk = 0;
+                    chunk_idx++;
                 }
+
+                if (chunk_idx >= N_chunks) {
+                    break;
+                }
+
+                uint32_t tile_id = m_tile * chunk_shape.logical_d1 + tile_idx_in_chunk;
+                // Compile-time dispatch preserving concrete types
+                write_tile_to_chunk(
+                    accessors, chunk_idx, tile_id, out_read_ptr, std::index_sequence_for<Accessors...>{});
+
                 out_read_ptr += tile_size_bytes;
             }
         }
-
         cb_pop_front(cb_id_out, N_block_tiles);
     }
     noc_async_writes_flushed();
