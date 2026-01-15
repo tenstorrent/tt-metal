@@ -20,15 +20,13 @@ struct NonZeroIndicesProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const NonzeroParams& operation_attributes,
-        const NonzeroInputs& tensor_args,
-        tensor_return_value_t& output_tensors);
+        const NonzeroParams& operation_attributes, const NonzeroInputs& tensor_args, NonzeroResult& output_tensors);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const NonzeroParams& operation_attributes,
         const NonzeroInputs& tensor_args,
-        tensor_return_value_t& output_tensors);
+        NonzeroResult& output_tensors);
 };
 
 }  // namespace ttnn::prim

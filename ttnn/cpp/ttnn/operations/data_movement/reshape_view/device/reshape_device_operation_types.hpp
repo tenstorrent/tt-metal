@@ -11,7 +11,7 @@
 
 namespace ttnn::prim {
 
-struct ReshapeParams {
+struct ReshapeViewParams {
     ttnn::Shape logical_output_shape;
     ttnn::Shape padded_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -19,7 +19,7 @@ struct ReshapeParams {
     std::optional<CoreRangeSet> sub_core_grid;
 };
 
-struct ReshapeInputs {
+struct ReshapeViewInputs {
     Tensor input;
 };
 

@@ -16,9 +16,7 @@
 namespace ttnn::prim {
 
 CopyProgramFactory::cached_program_t CopyProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const CopyParams& operation_attributes, const CopyInputs& tensor_args, Tensor& output) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
@@ -192,9 +190,9 @@ CopyProgramFactory::cached_program_t CopyProgramFactory::create(
 
 void CopyProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const CopyParams& /*operation_attributes*/,
+    const CopyInputs& tensor_args,
+    Tensor& output) {
     using namespace tt::tt_metal;
 
     Program& program = cached_program.program;

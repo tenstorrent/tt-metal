@@ -12,10 +12,6 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 
-namespace {
-constexpr uint32_t HIDDEN_SIZE = 5120;
-}
-
 RepeatAndInterleaveEltwiseMulDeviceOperation::program_factory_t
 RepeatAndInterleaveEltwiseMulDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {

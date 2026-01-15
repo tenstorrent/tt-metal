@@ -9,7 +9,7 @@
 
 namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct TilizeParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
     bool use_multicore = false;
@@ -19,13 +19,10 @@ struct operation_attributes_t {
     const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
-struct tensor_args_t {
+struct TilizeInputs {
     Tensor input_tensor;
     std::optional<Tensor> optional_input_tensor;
 };
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
 
 struct MultiCoreSharedVariables {
     struct shared_variables_t {

@@ -57,7 +57,7 @@ void ShardedToInterleavedDeviceOperation::validate_on_program_cache_hit(
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-ShardedToInterleavedDeviceOperation::spec_return_value_t ShardedToInterleavedDeviceOperation::compute_output_specs(
+TensorSpec ShardedToInterleavedDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -74,7 +74,7 @@ ShardedToInterleavedDeviceOperation::spec_return_value_t ShardedToInterleavedDev
             input_tensor.padded_shape()));
 }
 
-ShardedToInterleavedDeviceOperation::tensor_return_value_t ShardedToInterleavedDeviceOperation::create_output_tensors(
+Tensor ShardedToInterleavedDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -85,7 +85,7 @@ ShardedToInterleavedDeviceOperation::tensor_return_value_t ShardedToInterleavedD
     return create_device_tensor(spec, input_tensor.device());
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<ShardedToInterleavedDeviceOperation::tensor_return_value_t>
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor>
 ShardedToInterleavedDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
@@ -96,16 +96,14 @@ ShardedToInterleavedDeviceOperation::create_op_performance_model(
     return result;
 }
 
-ttnn::prim::ShardedToInterleavedDeviceOperation::tensor_return_value_t sharded_to_interleaved(
+Tensor sharded_to_interleaved(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::prim::ShardedToInterleavedDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .output_mem_config = output_mem_config, .output_dtype = output_dtype, .num_slices = 1, .slice_index = 0},
-        OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = preallocated_output});
+    return ttnn::device_operation::launch<ShardedToInterleavedDeviceOperation>(
+        ShardedToInterleavedParams{output_mem_config, output_dtype, 1, 0},
+        ShardedToInterleavedInputs{input_tensor, preallocated_output});
 }
 
 }  // namespace ttnn::prim

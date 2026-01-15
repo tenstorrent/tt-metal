@@ -15,12 +15,12 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgramFactory::create(
-    const ttnn::prim::operation_attributes_t& operation_attributes,
-    const ttnn::prim::tensor_args_t& tensor_args,
-    const ttnn::prim::tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::TilizeParams& operation_attributes,
+    const ttnn::prim::TilizeInputs& tensor_args,
+    const Tensor& output_tensor) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     auto a = tensor_args.input_tensor;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
     auto sub_core_grids = operation_attributes.sub_core_grids;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -279,14 +279,14 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
 
 void TilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ttnn::prim::operation_attributes_t& /*operation_attributes*/,
-    const ttnn::prim::tensor_args_t& tensor_args,
-    const ttnn::prim::tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::TilizeParams& /*operation_attributes*/,
+    const ttnn::prim::TilizeInputs& tensor_args,
+    const Tensor& output_tensor) {
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& cores = cached_program.shared_variables.cores;
     auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
+    auto* dst_buffer = output_tensor.buffer();
     auto& program = cached_program.program;
     auto ncores = cached_program.shared_variables.ncores;
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);

@@ -40,8 +40,8 @@ Tensor ExecuteSoftmax::invoke(
     }
 
     // Operation
-    auto output_tensor = ttnn::operations::normalization::softmax::softmax(
-        input_tensor, dim, mem_config, compute_kernel_config, numeric_stable);
+    auto output_tensor = prim::softmax(
+        input_tensor, static_cast<int8_t>(dim_calculated), mem_config, compute_kernel_config, numeric_stable);
 
     return ttnn::reshape(output_tensor, input_shape);
 }
@@ -71,7 +71,7 @@ Tensor ExecuteScaleMaskSoftmax::invoke(
 
     // Operation
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
-    auto output_tensor = ttnn::operations::normalization::softmax::scale_mask_softmax(
+    auto output_tensor = prim::scale_mask_softmax(
         input_tensor_4D,
         scale,
         mask,
@@ -105,8 +105,8 @@ Tensor ExecuteSoftmaxInPlace::invoke(
 
     // Operation
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
-    auto output_tensor = ttnn::operations::normalization::softmax::softmax_in_place(
-        input_tensor_4D, dim_calculated, program_config, compute_kernel_config, numeric_stable);
+    auto output_tensor = prim::softmax_in_place(
+        input_tensor_4D, static_cast<int8_t>(dim_calculated), program_config, compute_kernel_config, numeric_stable);
 
     return ttnn::reshape(output_tensor, input_shape);
 }
@@ -131,7 +131,7 @@ Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
 
     // Operation
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
-    auto output_tensor = ttnn::operations::normalization::softmax::scale_mask_softmax_in_place(
+    auto output_tensor = prim::scale_mask_softmax_in_place(
         input_tensor_4D, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
 
     return ttnn::reshape(output_tensor, input_shape);
@@ -156,7 +156,7 @@ Tensor ExecuteScaleCausalMaskHWSoftmaxInPlace::invoke(
 
     // Operation
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
-    auto output_tensor = ttnn::operations::normalization::softmax::scale_causal_mask_hw_dims_softmax_in_place(
+    auto output_tensor = prim::scale_causal_mask_hw_dims_softmax_in_place(
         input_tensor_4D, scale, mask, program_config, compute_kernel_config, numeric_stable);
 
     return ttnn::reshape(output_tensor, input_shape);

@@ -19,9 +19,9 @@ struct TilizeWithValPaddingMultiCoreShardedFactory {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    using operation_attributes_t = ttnn::prim::operation_attributes_t;
-    using tensor_args_t = ttnn::prim::tensor_args_t;
-    using tensor_return_value_t = ttnn::prim::tensor_return_value_t;
+    using operation_attributes_t = ttnn::prim::TilizeWithValPaddingParams;
+    using tensor_args_t = Tensor;
+    using tensor_return_value_t = Tensor;
 
     static cached_program_t create(
         const operation_attributes_t& operation_attributes,

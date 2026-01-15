@@ -23,15 +23,13 @@ struct ReshardSameHeightFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const ttnn::prim::ReshardParams& operation_attributes,
-        const ttnn::prim::ReshardInputs& tensor_args,
-        ttnn::prim::tensor_return_value_t& tensor_return_value);
+        const ReshardParams& operation_attributes, const ReshardInputs& tensor_args, Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const ttnn::prim::ReshardParams& operation_attributes,
-        const ttnn::prim::ReshardInputs& tensor_args,
-        ttnn::prim::tensor_return_value_t& tensor_return_value);
+        const ReshardParams& operation_attributes,
+        const ReshardInputs& tensor_args,
+        Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim

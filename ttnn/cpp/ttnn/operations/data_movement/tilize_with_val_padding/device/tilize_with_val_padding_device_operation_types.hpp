@@ -8,7 +8,7 @@
 
 namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct TilizeWithValPaddingParams {
     ttnn::Shape output_padded_shape{};
     tt::tt_metal::PadValue pad_value;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -18,12 +18,5 @@ struct operation_attributes_t {
     bool enough_space_height{};
     std::optional<CoreRangeSet> sub_core_grids;
 };
-
-struct tensor_args_t {
-    Tensor input_tensor;
-};
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
 
 }  // namespace ttnn::prim

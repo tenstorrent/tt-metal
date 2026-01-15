@@ -9,6 +9,8 @@
 
 namespace ttnn::experimental::prim {
 
+inline constexpr uint32_t HIDDEN_SIZE = 5120;
+
 struct RepeatMulParams {
     const tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;

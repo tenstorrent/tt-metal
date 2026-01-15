@@ -118,7 +118,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
     const ttnn::prim::ReshapeOnDeviceParams& /*operation_attributes*/,
     const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
-    ttnn::prim::tensor_return_value_t& output_tensor) {
+    tt::tt_metal::Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(
         input_tensor.dtype() == output_tensor.dtype(),
@@ -222,7 +222,7 @@ void ReshapeRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const ttnn::prim::ReshapeOnDeviceParams& /*operation_attributes*/,
     const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
-    ttnn::prim::tensor_return_value_t& output_tensor) {
+    tt::tt_metal::Tensor& output_tensor) {
     const auto& src_tensor = tensor_args.input_tensor;
     auto& dst_tensor = output_tensor;
 

@@ -136,7 +136,7 @@ GatherDeviceOperation::create_op_performance_model(
     return result;
 }
 
-ttnn::prim::tensor_return_value_t gather(
+Tensor gather(
     const Tensor& input_tensor,
     const int8_t dim,
     const Tensor& input_index_tensor,
@@ -144,13 +144,9 @@ ttnn::prim::tensor_return_value_t gather(
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& output_tensors,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::prim::GatherDeviceOperation;
-
-    auto operation_attributes =
-        OperationType::operation_attributes_t{dim, sparse_grad, output_memory_config, sub_core_grids};
-    auto tensor_args = OperationType::tensor_args_t{input_tensor, input_index_tensor, output_tensors};
-
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<GatherDeviceOperation>(
+        GatherParams{dim, sparse_grad, output_memory_config, sub_core_grids},
+        GatherInputs{input_tensor, input_index_tensor, output_tensors});
 }
 
 }  // namespace ttnn::prim

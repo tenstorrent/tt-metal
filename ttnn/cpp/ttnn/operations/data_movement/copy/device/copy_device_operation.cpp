@@ -121,8 +121,7 @@ CopyDeviceOperation::tensor_return_value_t copy(
     const std::optional<Tensor>& preallocated_output,
     bool backwards) {
     return ttnn::device_operation::launch<CopyDeviceOperation>(
-        CopyDeviceOperation::operation_attributes_t{output_mem_config, output_dtype, backwards},
-        CopyDeviceOperation::tensor_args_t{input, preallocated_output});
+        CopyParams{output_mem_config, output_dtype, backwards}, CopyInputs{input, preallocated_output});
 }
 
 }  // namespace ttnn::prim

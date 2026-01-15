@@ -9,18 +9,15 @@
 
 namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct CopyParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
     bool backwards = false;
 };
 
-struct tensor_args_t {
+struct CopyInputs {
     Tensor input;
     std::optional<Tensor> preallocated_output;
 };
-
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
 
 }  // namespace ttnn::prim

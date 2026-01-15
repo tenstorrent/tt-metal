@@ -9,7 +9,7 @@
 
 namespace ttnn::prim {
 
-struct ReshapeTiledProgramFactory {
+struct ReshapeViewTiledProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
@@ -19,12 +19,14 @@ struct ReshapeTiledProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const ReshapeParams& operation_attributes, const ReshapeInputs& tensor_args, Tensor& tensor_return_value);
+        const ReshapeViewParams& operation_attributes,
+        const ReshapeViewInputs& tensor_args,
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const ReshapeParams& operation_attributes,
-        const ReshapeInputs& tensor_args,
+        const ReshapeViewParams& operation_attributes,
+        const ReshapeViewInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 

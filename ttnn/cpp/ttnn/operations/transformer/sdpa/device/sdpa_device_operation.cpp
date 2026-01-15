@@ -349,7 +349,8 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     }
 }
 
-spec_return_value_t SDPAOperation::compute_output_specs(const SDPAParams& attrs, const SDPAInputs& tensors) {
+SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
+    const SDPAParams& attrs, const SDPAInputs& tensors) {
     auto shape = tensors.q.logical_shape();
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
@@ -357,7 +358,8 @@ spec_return_value_t SDPAOperation::compute_output_specs(const SDPAParams& attrs,
     return TensorSpec(shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
 }
 
-tensor_return_value_t SDPAOperation::create_output_tensors(const SDPAParams& attrs, const SDPAInputs& tensors) {
+SDPAOperation::tensor_return_value_t SDPAOperation::create_output_tensors(
+    const SDPAParams& attrs, const SDPAInputs& tensors) {
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
 
@@ -386,7 +388,8 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
     return hash;
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> SDPAOperation::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>
+SDPAOperation::create_op_performance_model(
     const SDPAParams& args, const SDPAInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
@@ -406,7 +409,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> SDPAOp
     }
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
         log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
-        return operation::OpPerformanceModelGeneral<tensor_return_value_t>(input_tensors, output_tensor, 0);
+        return operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>(
+            input_tensors, output_tensor, 0);
     }
 
     // Get main dimensions for Q*K and softmax(QK^T/sqrt) * V matmuls
@@ -468,7 +472,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> SDPAOp
 
     // TODO: somehow account for overhead of fused masking and softmax?
 
-    operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+    operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t> result(
         input_tensors, output_tensor, ideal_dev_clock_cycles);
     return result;
 }

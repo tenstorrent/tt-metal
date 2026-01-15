@@ -18,6 +18,4 @@ struct ReshapeOnDeviceInputs {
     tt::tt_metal::Tensor input_tensor;
 };
 
-using tensor_return_value_t = tt::tt_metal::Tensor;
-
 }  // namespace ttnn::prim

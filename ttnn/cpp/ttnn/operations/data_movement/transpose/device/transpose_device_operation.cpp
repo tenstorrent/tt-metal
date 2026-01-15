@@ -182,7 +182,7 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TransposeDeviceOperation::spec_return_value_t TransposeDeviceOperation::compute_output_specs(
+TensorSpec TransposeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& dim = operation_attributes.dim;
@@ -263,18 +263,16 @@ TransposeDeviceOperation::spec_return_value_t TransposeDeviceOperation::compute_
             output_padded_shape));
 }
 
-TransposeDeviceOperation::tensor_return_value_t TransposeDeviceOperation::create_output_tensors(
+Tensor TransposeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<TransposeDeviceOperation::tensor_return_value_t>
-TransposeDeviceOperation::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> TransposeDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args, const Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
-        {input_tensor}, {output}, ideal_dev_clock_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> result({input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
 }
 
@@ -286,14 +284,13 @@ ttnn::Tensor transpose(
     ttnn::prim::TransposeOpDim dim,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    using OperationType = ttnn::prim::TransposeDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<TransposeDeviceOperation>(
+        TransposeParams{
             .dim = dim,
             .output_mem_config = output_mem_config,
             .pad_value = pad_value,
         },
-        OperationType::tensor_args_t{
+        TransposeInputs{
             .input = input_tensor,
         });
 }

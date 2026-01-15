@@ -22,13 +22,13 @@ struct ReshapeRMProgramFactory {
     static cached_program_t create(
         const ttnn::prim::ReshapeOnDeviceParams& operation_attributes,
         const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
-        ttnn::prim::tensor_return_value_t& output_tensor);
+        tt::tt_metal::Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const ttnn::prim::ReshapeOnDeviceParams& operation_attributes,
         const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
-        ttnn::prim::tensor_return_value_t& output_tensor);
+        tt::tt_metal::Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim

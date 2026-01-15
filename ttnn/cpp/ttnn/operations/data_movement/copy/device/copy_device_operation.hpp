@@ -13,10 +13,10 @@
 namespace ttnn::prim {
 
 struct CopyDeviceOperation {
-    using operation_attributes_t = ttnn::prim::operation_attributes_t;
-    using tensor_args_t = ttnn::prim::tensor_args_t;
-    using spec_return_value_t = ttnn::prim::spec_return_value_t;
-    using tensor_return_value_t = ttnn::prim::tensor_return_value_t;
+    using operation_attributes_t = ttnn::prim::CopyParams;
+    using tensor_args_t = ttnn::prim::CopyInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<CopyProgramFactory>;
 
     static program_factory_t select_program_factory(
@@ -40,7 +40,7 @@ struct CopyDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-CopyDeviceOperation::tensor_return_value_t copy(
+Tensor copy(
     const Tensor& input,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,

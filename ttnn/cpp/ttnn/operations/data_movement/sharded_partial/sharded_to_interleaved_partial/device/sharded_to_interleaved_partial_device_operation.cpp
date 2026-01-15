@@ -59,15 +59,13 @@ void ShardedToInterleavedPartialDeviceOperation::validate_on_program_cache_hit(
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-ShardedToInterleavedPartialDeviceOperation::spec_return_value_t
-ShardedToInterleavedPartialDeviceOperation::compute_output_specs(
+TensorSpec ShardedToInterleavedPartialDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // Return the spec of the cache tensor since we're writing to it
     return tensor_args.cache_tensor.tensor_spec();
 }
 
-ShardedToInterleavedPartialDeviceOperation::tensor_return_value_t
-ShardedToInterleavedPartialDeviceOperation::create_output_tensors(
+Tensor ShardedToInterleavedPartialDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // Return the cache tensor itself - it's preallocated
     return tensor_args.cache_tensor;
@@ -85,21 +83,20 @@ ShardedToInterleavedPartialDeviceOperation::create_op_performance_model(
     return result;
 }
 
-ttnn::prim::ShardedToInterleavedPartialDeviceOperation::tensor_return_value_t sharded_to_interleaved_partial(
+Tensor sharded_to_interleaved_partial(
     const Tensor& input_tensor,
     const Tensor& cache_tensor,
     uint32_t num_slices,
     uint32_t slice_index,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype) {
-    using OperationType = ttnn::prim::ShardedToInterleavedPartialDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<ShardedToInterleavedPartialDeviceOperation>(
+        ShardedToInterleavedPartialParams{
             .num_slices = num_slices,
             .slice_index = slice_index,
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype},
-        OperationType::tensor_args_t{.input_tensor = input_tensor, .cache_tensor = cache_tensor});
+        ShardedToInterleavedPartialInputs{input_tensor, cache_tensor});
 }
 
 }  // namespace ttnn::prim

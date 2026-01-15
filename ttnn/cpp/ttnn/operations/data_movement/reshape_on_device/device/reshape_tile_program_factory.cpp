@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reshape_tile_program_factory.hpp"
+#include "reshape_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -16,7 +17,7 @@ namespace ttnn::prim {
 ReshapeTileProgramFactory::cached_program_t ReshapeTileProgramFactory::create(
     const ttnn::prim::ReshapeOnDeviceParams& /*operation_attributes*/,
     const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
-    ttnn::prim::tensor_return_value_t& output_tensor) {
+    tt::tt_metal::Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -91,7 +92,7 @@ void ReshapeTileProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const ttnn::prim::ReshapeOnDeviceParams& /*operation_attributes*/,
     const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
-    ttnn::prim::tensor_return_value_t& output_tensor) {
+    tt::tt_metal::Tensor& output_tensor) {
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* dst_buffer = output_tensor.buffer();
 

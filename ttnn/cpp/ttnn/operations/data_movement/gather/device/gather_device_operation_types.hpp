@@ -21,7 +21,4 @@ struct GatherInputs {
     std::optional<Tensor> output_tensor;
 };
 
-using spec_return_value_t = ttnn::TensorSpec;
-using tensor_return_value_t = Tensor;
-
 }  // namespace ttnn::prim

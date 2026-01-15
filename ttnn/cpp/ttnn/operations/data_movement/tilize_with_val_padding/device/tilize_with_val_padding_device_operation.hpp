@@ -16,13 +16,13 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 
 struct TilizeWithValPaddingDeviceOperation {
-    using operation_attributes_t = ttnn::prim::operation_attributes_t;
-    using tensor_args_t = ttnn::prim::tensor_args_t;
-    using spec_return_value_t = ttnn::prim::spec_return_value_t;
-    using tensor_return_value_t = ttnn::prim::tensor_return_value_t;
+    using operation_attributes_t = TilizeWithValPaddingParams;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<
         ttnn::prim::TilizeWithValPaddingSingleCoreFactory,
@@ -42,10 +42,7 @@ struct TilizeWithValPaddingDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::data_movement
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation::tensor_return_value_t tilize_with_val_padding(
+Tensor tilize_with_val_padding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
     const tt::tt_metal::PadValue& pad_value,

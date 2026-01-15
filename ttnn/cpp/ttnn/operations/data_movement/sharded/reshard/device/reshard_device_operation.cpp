@@ -175,7 +175,7 @@ void ReshardDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-ReshardDeviceOperation::spec_return_value_t ReshardDeviceOperation::compute_output_specs(
+TensorSpec ReshardDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -192,7 +192,7 @@ ReshardDeviceOperation::spec_return_value_t ReshardDeviceOperation::compute_outp
             input_tensor.padded_shape()));
 }
 
-ReshardDeviceOperation::tensor_return_value_t ReshardDeviceOperation::create_output_tensors(
+Tensor ReshardDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -201,27 +201,23 @@ ReshardDeviceOperation::tensor_return_value_t ReshardDeviceOperation::create_out
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<ReshardDeviceOperation::tensor_return_value_t>
-ReshardDeviceOperation::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> ReshardDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) const {
     int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(tensor_args.input, output_tensor);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+    tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> result(
         {tensor_args.input}, {output_tensor}, ideal_dev_clock_cycles);
     return result;
 }
 
-ttnn::prim::ReshardDeviceOperation::tensor_return_value_t reshard(
+Tensor reshard(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    using OperationType = ttnn::prim::ReshardDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .output_mem_config = memory_config,
-        },
-        OperationType::tensor_args_t{.input = input_tensor, .preallocated_output = optional_output_tensor});
+    const std::optional<Tensor>& preallocated_output) {
+    return ttnn::device_operation::launch<ReshardDeviceOperation>(
+        ReshardParams{.output_mem_config = memory_config},
+        ReshardInputs{.input = input_tensor, .preallocated_output = preallocated_output});
 }
 
 }  // namespace ttnn::prim

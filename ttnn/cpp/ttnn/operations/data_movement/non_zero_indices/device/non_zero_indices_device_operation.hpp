@@ -17,8 +17,8 @@ namespace ttnn::prim {
 struct NonZeroIndicesDeviceOperation {
     using operation_attributes_t = NonzeroParams;
     using tensor_args_t = NonzeroInputs;
-    using spec_return_value_t = ttnn::prim::spec_return_value_t;
-    using tensor_return_value_t = ttnn::prim::tensor_return_value_t;
+    using spec_return_value_t = NonzeroResultSpec;
+    using tensor_return_value_t = NonzeroResult;
     using program_factory_t = std::variant<NonZeroIndicesProgramFactory>;
     using shared_variables_t = NonZeroIndicesProgramFactory::shared_variables_t;
 
@@ -29,6 +29,6 @@ struct NonZeroIndicesDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-tensor_return_value_t nonzero(const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& memory_config);
+NonzeroResult nonzero(const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& memory_config);
 
 }  // namespace ttnn::prim

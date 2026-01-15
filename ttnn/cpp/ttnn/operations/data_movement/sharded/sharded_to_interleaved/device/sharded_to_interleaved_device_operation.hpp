@@ -11,10 +11,10 @@
 namespace ttnn::prim {
 
 struct ShardedToInterleavedDeviceOperation {
-    using operation_attributes_t = ttnn::prim::sharded_to_interleaved_operation_attributes_t;
-    using tensor_args_t = ttnn::prim::sharded_to_interleaved_tensor_args_t;
-    using spec_return_value_t = ttnn::prim::sharded_to_interleaved_spec_return_value_t;
-    using tensor_return_value_t = ttnn::prim::sharded_to_interleaved_tensor_return_value_t;
+    using operation_attributes_t = ShardedToInterleavedParams;
+    using tensor_args_t = ShardedToInterleavedInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<ShardedToInterleavedProgramFactory>;
 
@@ -32,7 +32,7 @@ struct ShardedToInterleavedDeviceOperation {
         tensor_return_value_t& output_tensor) const;
 };
 
-ttnn::prim::ShardedToInterleavedDeviceOperation::tensor_return_value_t sharded_to_interleaved(
+Tensor sharded_to_interleaved(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,

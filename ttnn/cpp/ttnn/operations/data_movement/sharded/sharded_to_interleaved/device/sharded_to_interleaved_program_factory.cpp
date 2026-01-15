@@ -19,10 +19,11 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgramFactory::create(
-    const sharded_to_interleaved_operation_attributes_t& operation_attributes,
-    const sharded_to_interleaved_tensor_args_t& tensor_args,
-    sharded_to_interleaved_tensor_return_value_t& output) {
+    const ShardedToInterleavedParams& operation_attributes,
+    const ShardedToInterleavedInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
+    const auto& output = output_tensor;
     const uint32_t num_slices = operation_attributes.num_slices;
     const uint32_t slice_index = operation_attributes.slice_index;
     const bool is_l1_aligned = true;
@@ -275,9 +276,10 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
 
 void ShardedToInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const sharded_to_interleaved_operation_attributes_t& operation_attributes,
-    const sharded_to_interleaved_tensor_args_t& tensor_args,
-    sharded_to_interleaved_tensor_return_value_t& output) {
+    const ShardedToInterleavedParams& operation_attributes,
+    const ShardedToInterleavedInputs& tensor_args,
+    Tensor& output_tensor) {
+    const auto& output = output_tensor;
     auto& program = cached_program.program;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& cb_src0 = cached_program.shared_variables.cb_src0;

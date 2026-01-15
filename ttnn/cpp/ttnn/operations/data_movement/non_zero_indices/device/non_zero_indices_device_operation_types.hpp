@@ -16,8 +16,7 @@ struct NonzeroInputs {
     Tensor input;
 };
 
-using tensor_return_value_t = std::tuple<Tensor, Tensor>;
-
-using spec_return_value_t = std::tuple<TensorSpec, TensorSpec>;
+using NonzeroResult = std::tuple<Tensor, Tensor>;
+using NonzeroResultSpec = std::tuple<TensorSpec, TensorSpec>;
 
 }  // namespace ttnn::prim

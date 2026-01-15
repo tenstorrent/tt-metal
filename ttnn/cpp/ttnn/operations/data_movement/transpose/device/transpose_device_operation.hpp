@@ -24,8 +24,8 @@ namespace ttnn::prim {
 struct TransposeDeviceOperation {
     using operation_attributes_t = TransposeParams;
     using tensor_args_t = TransposeInputs;
-    using spec_return_value_t = ttnn::prim::spec_return_value_t;
-    using tensor_return_value_t = ttnn::prim::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         TransposeWHProgramFactory,
         TransposeWHShardedProgramFactory,

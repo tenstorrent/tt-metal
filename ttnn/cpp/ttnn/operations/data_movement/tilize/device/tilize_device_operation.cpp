@@ -12,7 +12,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 
 void TilizeDeviceOperation::validate_on_program_cache_hit(
     const TilizeDeviceOperation::operation_attributes_t& args,
@@ -158,9 +158,6 @@ TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-}  // namespace ttnn::operations::data_movement
-
-namespace ttnn::prim {
 ttnn::Tensor tilize(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -170,9 +167,8 @@ ttnn::Tensor tilize(
     bool enough_space_height,
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::operations::data_movement::TilizeDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<TilizeDeviceOperation>(
+        TilizeParams{
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),
             .use_multicore = use_multicore,
@@ -181,6 +177,6 @@ ttnn::Tensor tilize(
             .use_low_perf = use_low_perf,
             .sub_core_grids = sub_core_grids,
         },
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        TilizeInputs{input_tensor, std::nullopt});
 }
 }  // namespace ttnn::prim

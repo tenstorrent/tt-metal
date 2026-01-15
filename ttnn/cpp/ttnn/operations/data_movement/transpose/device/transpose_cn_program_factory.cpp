@@ -15,11 +15,8 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 TransposeCNProgramFactory::cached_program_t TransposeCNProgramFactory::create(
-    const TransposeParams& /*operation_attributes*/,
-    const TransposeInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
-    auto& output_tensor = tensor_return_value;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
@@ -123,12 +120,11 @@ void TransposeCNProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const TransposeParams& /*operation_attributes*/,
     const TransposeInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
     const auto& input_tensor = tensor_args.input;
-    auto& output_tensor = tensor_return_value;
 
     auto* input_buffer = input_tensor.buffer();
     auto* output_buffer = output_tensor.buffer();

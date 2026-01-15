@@ -12,19 +12,19 @@ namespace ttnn::prim {
 
 // Adapter factory that wraps the shared factory
 struct ShardedToInterleavedPartialProgramFactory {
-    using shared_variables_t = ttnn::prim::ShardedToInterleavedSharedVariables;
+    using shared_variables_t = ShardedToInterleavedSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const sharded_to_interleaved_partial_operation_attributes_t& operation_attributes,
-        const sharded_to_interleaved_partial_tensor_args_t& tensor_args,
-        partial_tensor_return_value_t& output);
+        const ShardedToInterleavedPartialParams& params,
+        const ShardedToInterleavedPartialInputs& tensor_args,
+        Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const sharded_to_interleaved_partial_operation_attributes_t& operation_attributes,
-        const sharded_to_interleaved_partial_tensor_args_t& tensor_args,
-        partial_tensor_return_value_t& output);
+        const ShardedToInterleavedPartialParams& params,
+        const ShardedToInterleavedPartialInputs& tensor_args,
+        Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim

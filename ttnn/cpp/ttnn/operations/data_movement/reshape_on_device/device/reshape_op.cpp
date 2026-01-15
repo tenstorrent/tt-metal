@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reshape_op.hpp"
+#include "reshape_on_device/device/reshape_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 
@@ -100,15 +101,14 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
         input_tensor.padded_shape());
 }
 
-ttnn::prim::ReshapeDeviceOperation::tensor_return_value_t reshape_on_device(
+tt::tt_metal::Tensor reshape_on_device(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& logical_output_shape,
     const tt::tt_metal::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
-    using OperationType = ttnn::prim::ReshapeDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{logical_output_shape, padded_output_shape, output_mem_config},
-        OperationType::tensor_args_t{input_tensor});
+    return ttnn::device_operation::launch<ReshapeDeviceOperation>(
+        ReshapeOnDeviceParams{logical_output_shape, padded_output_shape, output_mem_config},
+        ReshapeOnDeviceInputs{input_tensor});
 }
 
 }  // namespace ttnn::prim

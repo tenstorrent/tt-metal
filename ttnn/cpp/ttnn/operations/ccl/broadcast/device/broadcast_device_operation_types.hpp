@@ -12,7 +12,7 @@
 
 namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct BroadcastParams {
     MeshCoordinate sender_coord;  // No default constructor
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
@@ -21,7 +21,7 @@ struct operation_attributes_t {
     std::optional<uint32_t> cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
-    operation_attributes_t(
+    BroadcastParams(
         const MeshCoordinate& sender_coord_,
         uint32_t num_links_,
         uint32_t ring_size_,
@@ -51,7 +51,7 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct BroadcastInputs {
     Tensor input_tensor;
 };
 

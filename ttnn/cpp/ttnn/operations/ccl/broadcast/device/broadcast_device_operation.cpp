@@ -93,7 +93,7 @@ tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-ttnn::prim::BroadcastDeviceOperation::tensor_return_value_t broadcast(
+Tensor broadcast(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
     uint32_t num_links,
@@ -101,8 +101,6 @@ ttnn::prim::BroadcastDeviceOperation::tensor_return_value_t broadcast(
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    using OperationType = ttnn::prim::BroadcastDeviceOperation;
-
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -127,8 +125,8 @@ ttnn::prim::BroadcastDeviceOperation::tensor_return_value_t broadcast(
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t(
+    return ttnn::device_operation::launch<BroadcastDeviceOperation>(
+        BroadcastParams(
             sender_coord,
             num_links,
             num_devices,
@@ -136,6 +134,6 @@ ttnn::prim::BroadcastDeviceOperation::tensor_return_value_t broadcast(
             ccl_topology,
             cluster_axis,
             sub_device_id),
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        BroadcastInputs{.input_tensor = input_tensor});
 }
 }  // namespace ttnn::prim

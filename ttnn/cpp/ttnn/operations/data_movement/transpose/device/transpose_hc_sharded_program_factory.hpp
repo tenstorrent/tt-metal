@@ -25,15 +25,13 @@ struct TransposeHCShardedProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const TransposeParams& operation_attributes,
-        const TransposeInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const TransposeParams& operation_attributes,
         const TransposeInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim
