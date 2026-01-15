@@ -103,10 +103,7 @@ Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto input_shape = tensor_args.input_tensor.padded_shape();
-    auto input_memory_layout = tensor_args.input_tensor.layout();
-    auto input_dtype = tensor_args.input_tensor.dtype();
-    auto input_memory_config = tensor_args.input_tensor.memory_config();
+    log_trace(tt::LogOp, "NeighborPadAsyncDeviceOperation::compute_program_hash is called");
 
     auto program_factory = select_program_factory(args, tensor_args);
 
@@ -115,17 +112,14 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.padding_left,
         args.padding_right,
         args.padding_mode,
+        args.cluster_axis,
         args.num_links,
         args.output_mem_config,
         args.topology,
-        args.cluster_axis,
         args.ring_size,
         args.secondary_cluster_axis,
         args.secondary_mesh_shape,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config,
+        tensor_args,
         program_factory.index());
 }
 
