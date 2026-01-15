@@ -212,8 +212,8 @@ class MasterConfigLoader:
                 if not lead_models_only:
                     normalized.append((config, "unknown", None))
             else:
-                # Fallback: wrap in list with unknown source
-                normalized.append((config if isinstance(config, list) else [config], "unknown"))
+                # Fallback: wrap in list with unknown source and no machine_info
+                normalized.append((config if isinstance(config, list) else [config], "unknown", None))
         return normalized
 
     def parse_dtype(self, dtype_str: str) -> Any:

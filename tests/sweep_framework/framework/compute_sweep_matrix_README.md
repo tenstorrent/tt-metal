@@ -72,13 +72,6 @@ export GITHUB_EVENT_SCHEDULE="0 0 * * 1"
 python3 tests/sweep_framework/framework/compute_sweep_matrix.py | python3 -m json.tool
 ```
 
-### Unit Testing
-
-```bash
-cd tt-metal
-python3 tests/sweep_framework/framework/test_compute_sweep_matrix.py
-```
-
 ## Configuring Lead Models Runner Mapping
 
 To modify which runners handle which mesh shapes, edit `get_lead_models_mesh_runner_config()` in compute_sweep_matrix.py:
