@@ -293,8 +293,13 @@ def generate_reference(
             current_len = input_ids.shape[-1]
             if current_len > self.last_len:
                 if scores is not None:
-                    top5 = torch.topk(scores[0], k=5, dim=-1).indices.to(torch.long).cpu()
-                    self.top5_tokens_full[current_len - 1] = top5
+                    # scores is a list/tuple of per-step logits; use the latest step.
+                    step_scores = scores[-1] if isinstance(scores, (list, tuple)) else scores
+                    if step_scores is not None:
+                        if step_scores.dim() == 2:
+                            step_scores = step_scores[0]
+                        top5 = torch.topk(step_scores, k=5, dim=-1).indices.to(torch.long).cpu()
+                        self.top5_tokens_full[current_len - 1] = top5
                 self.last_len = current_len
                 reference_tokens_tensor = input_ids.detach().cpu()
                 generated_tokens = reference_tokens_tensor[0, self.prompt_len :].tolist()
