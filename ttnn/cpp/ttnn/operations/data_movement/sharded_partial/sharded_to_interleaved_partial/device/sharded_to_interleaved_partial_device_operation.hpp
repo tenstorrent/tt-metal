@@ -8,16 +8,15 @@
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 
 struct ShardedToInterleavedPartialDeviceOperation {
-    using operation_attributes_t =
-        ttnn::operations::data_movement::sharded_to_interleaved_partial_operation_attributes_t;
-    using tensor_args_t = ttnn::operations::data_movement::sharded_to_interleaved_partial_tensor_args_t;
-    using spec_return_value_t = ttnn::operations::data_movement::partial_spec_return_value_t;
-    using tensor_return_value_t = ttnn::operations::data_movement::partial_tensor_return_value_t;
+    using operation_attributes_t = ttnn::prim::sharded_to_interleaved_partial_operation_attributes_t;
+    using tensor_args_t = ttnn::prim::sharded_to_interleaved_partial_tensor_args_t;
+    using spec_return_value_t = ttnn::prim::partial_spec_return_value_t;
+    using tensor_return_value_t = ttnn::prim::partial_tensor_return_value_t;
 
-    using program_factory_t = std::variant<program::ShardedToInterleavedPartialProgramFactory>;
+    using program_factory_t = std::variant<ShardedToInterleavedPartialProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -34,11 +33,10 @@ struct ShardedToInterleavedPartialDeviceOperation {
         tensor_return_value_t& output_tensor) const;
 };
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
-ttnn::operations::data_movement::ShardedToInterleavedPartialDeviceOperation::tensor_return_value_t
-sharded_to_interleaved_partial(
+ttnn::prim::ShardedToInterleavedPartialDeviceOperation::tensor_return_value_t sharded_to_interleaved_partial(
     const Tensor& input_tensor,
     const Tensor& cache_tensor,
     uint32_t num_slices,

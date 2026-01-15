@@ -8,11 +8,11 @@
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 
 // Adapter factory that wraps the shared factory
 struct ShardedToInterleavedPartialProgramFactory {
-    using shared_variables_t = ShardedToInterleavedSharedVariables;
+    using shared_variables_t = ttnn::operations::data_movement::program::ShardedToInterleavedSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
@@ -27,4 +27,4 @@ struct ShardedToInterleavedPartialProgramFactory {
         partial_tensor_return_value_t& output);
 };
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim
