@@ -256,8 +256,6 @@ void kernel_main() {
                     unicast_sem_inc_route_id,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_addr_in_pkt, 0, false});
             }
-
-            noc_async_writes_flushed();
         } else {
             while (tiles_read < tiles_to_read) {
                 cb_wait_front(reduced_cb_id, tile_granularity);
@@ -269,7 +267,7 @@ void kernel_main() {
                     tiles_read++;
                 }
 
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
                 cb_pop_front(reduced_cb_id, tile_granularity);
             }
         }
