@@ -8,7 +8,6 @@
 - [2. Physical Topologies](#2-physical-topologies)
   - [2.1 Closetbox (16 Loudbox)](#21-closetbox-16-loudbox)
   - [2.2 WH Galaxy All-to-All System (5 Galaxies)](#22-wh-galaxy-all-to-all-system-5-galaxies)
-  - [2.3 Blackhole Quietbox Cluster (Planned Topology)](#23-blackhole-quietbox-cluster-planned-topology)
 - [3. Mesh Graph Descriptors](#3-mesh-graph-descriptors)
   - [3.1 The Purpose of MGDs](#31-the-purpose-of-mgds)
   - [3.2 MGD Format Reference](#32-mgd-format-reference)
@@ -106,27 +105,6 @@ The WH Galaxy All-to-All system consists of 5 Galaxy systems in an all-to-all to
 <img src="images/exabox_logical.png" alt="WH Galaxy All-to-All System Logical Topology" style="width:500px;"/>
 
 *Figure 4: WH Galaxy All-to-All System Logical Topology. 5 Galaxy meshes in a single FABRIC graph with all-to-all connectivity.*
-
-### 2.3 Blackhole Quietbox Cluster (Planned Topology)
-
-The Blackhole (BH) Quietbox Cluster represents a next-generation multi-host configuration for Blackhole ASICs. This topology is currently under active development for scale-out testing and software bring-up.
-
-The cluster consists of 4 Quietbox hosts connected to form a 4×4 (TODO: is it 4x4? im seeing some bigger meshes) mesh:
-
-- **4 Quietbox hosts** arranged in a 2×2 host topology
-- **16 P150 boards total**: 4 P150 boards per Quietbox (Tray IDs 1-4)
-- **16 Blackhole ASICs total**: 1 Blackhole ASIC per P150 board
-- **Device topology**: Can be configured as 4×4 mesh, 4×4 torus, or smaller variants (2×4, 2×2)
-
-Each P150 board has 4 QSFP ports for connectivity:
-- **Ports 1 & 4**: External connections between P150 boards on different hosts
-- **Ports 2 & 3**: Internal connections between P150 boards on the same host
-
-<img src="../../tests/scale_out/4x_bh_quietbox/images/cablegen.png" alt="Blackhole Quietbox Cluster Physical Topology" style="width:600px;"/>
-
-<img src="images/4x_bh_logical.png" alt="Blackhole Quietbox Cluster Logical Topology" style="width:500px;"/>
-
-This topology enables testing of Multi-Mesh configurations across multiple Blackhole hosts, supporting both scale-up (Big-Mesh) and scale-out (Multi-Mesh) patterns. For detailed configuration files and bring-up documentation, see [`tests/scale_out/4x_bh_quietbox/`](../../tests/scale_out/4x_bh_quietbox/README.md).
 
 ## 3. Mesh Graph Descriptors
 
