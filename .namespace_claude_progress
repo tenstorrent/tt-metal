@@ -88,3 +88,6 @@
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/matmul/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/normalization/groupnorm/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/pool/grid_sample/device
+upsample
