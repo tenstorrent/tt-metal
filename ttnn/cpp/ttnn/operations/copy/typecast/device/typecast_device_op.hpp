@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "typecast_program_factory.hpp"
 #include "typecast_sharded_program_factory.hpp"
+#include "typecast_rm_chunked_program_factory.hpp"
 #include "typecast_device_op_types.hpp"
 
 namespace ttnn::prim {
@@ -19,8 +20,11 @@ struct TypecastDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    using program_factory_t =
-        std::variant<TypecastProgramFactory, TypecastShardedProgramFactory, TypecastSubgridProgramFactory>;
+    using program_factory_t = std::variant<
+        TypecastProgramFactory,
+        TypecastShardedProgramFactory,
+        TypecastSubgridProgramFactory,
+        TypecastRowMajorChunkedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

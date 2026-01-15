@@ -166,6 +166,7 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     if (input_tensor.layout() == Layout::TILE) {
         hash = operation::hash_operation<UnaryDeviceOperation>(
             args,
+            args.sub_core_grids,
             program_factory.index(),
             input_tensor.dtype(),
             input_tensor.memory_config(),
@@ -174,6 +175,7 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     } else {
         hash = operation::hash_operation<UnaryDeviceOperation>(
             args,
+            args.sub_core_grids,
             program_factory.index(),
             input_tensor.dtype(),
             input_tensor.memory_config(),

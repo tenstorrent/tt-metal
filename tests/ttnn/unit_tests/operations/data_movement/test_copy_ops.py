@@ -228,7 +228,7 @@ def run_typecast_test(N, C, H, W, memory_config, input_dtype, output_dtype, devi
 )
 @pytest.mark.parametrize(
     "N, C, H, W,",
-    ((1, 1, 32, 64),),
+    ((1, 1, 32, 64), (1, 1, 32, 32000)),
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_typecast(N, C, H, W, memory_config, input_dtype, output_dtype, device):
@@ -352,13 +352,23 @@ def run_typecast_row_major_test(shape, memory_config, input_dtype, output_dtype,
     "shape",
     [
         (32, 64),
-        (1, 32, 64),
-        (1, 1, 32, 64),
-    ],  # 2D  # 3D  # 4D
+        (31, 1024 - 32),
+        (32, 1024),
+        (33, 1024 + 32),
+        (1, 2, 2048 - 32),
+        (7, 5, 3, 2048),
+        (7, 5, 65, 2048 + 32),
+        (1, 1, 320032),
+    ],
     ids=[
-        "2D",
-        "3D",
-        "4D",
+        "32x64",
+        "31x1024 - 32",
+        "32x1024",
+        "33x1024 + 32",
+        "1x2x2048 - 32",
+        "7x5x3x2048",
+        "7x5x65x2048 + 32",
+        "1x1x320032",
     ],
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])

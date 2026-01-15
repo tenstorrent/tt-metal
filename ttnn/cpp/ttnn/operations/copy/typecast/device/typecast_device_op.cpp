@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,11 +13,20 @@ namespace ttnn::prim {
 TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_program_factory(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     if (tensor_args.input.is_sharded()) {
+        log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
         return TypecastShardedProgramFactory{};
     }
     if (args.sub_core_grids.has_value()) {
+        log_debug(tt::LogOp, "Using TypecastSubgridProgramFactory");
         return TypecastSubgridProgramFactory{};
     }
+
+    if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
+        log_debug(tt::LogOp, "Using TypecastRowMajorChunkedProgramFactory");
+        return TypecastRowMajorChunkedProgramFactory{};
+    }
+
+    log_debug(tt::LogOp, "Using TypecastProgramFactory");
     return TypecastProgramFactory{};
 }
 
