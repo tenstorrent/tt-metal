@@ -161,7 +161,7 @@ class TTNNConv2dNHWC(TTNNModule):
     @classmethod
     def from_torch(cls, conv: nn.Conv2d, slice_config=None) -> "TTNNConv2d":
         """Create TTNNConv2d from PyTorch Conv2d layer."""
-        new_conv = TTNNConv2dNHWC(
+        new_conv = cls(
             in_channels=conv.in_channels,
             out_channels=conv.out_channels,
             kernel_size=conv.kernel_size,
@@ -265,7 +265,7 @@ class TTNNConv2dBNNHWC(TTNNConv2dNHWC):
     @classmethod
     def from_torch(cls, conv: nn.Conv2d, bn: nn.BatchNorm2d, slice_config=None) -> "TTNNConv2d":
         """Create TTNNConv2d from PyTorch Conv2d layer."""
-        new_conv = TTNNConv2dBNNHWC(
+        new_conv = cls(
             in_channels=conv.in_channels,
             out_channels=conv.out_channels,
             kernel_size=conv.kernel_size,
@@ -318,7 +318,7 @@ class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
     @classmethod
     def from_torch(cls, conv: nn.Conv2d, bn: nn.BatchNorm2d, activation, slice_config=None) -> "TTNNConv2d":
         """Create TTNNConv2d from PyTorch Conv2d layer."""
-        new_conv = TTNNConv2dBNActivationNHWC(
+        new_conv = cls(
             in_channels=conv.in_channels,
             out_channels=conv.out_channels,
             kernel_size=conv.kernel_size,
@@ -409,7 +409,7 @@ class TTNNBottleneck(TTNNModule):
     @classmethod
     def from_torch(cls, bottleneck: "torchvision.models.resnet.Bottleneck") -> "TTNNBottleneck":
         """Create TTNNBottleneck from PyTorch Bottleneck layer."""
-        new_bottleneck = TTNNBottleneck(
+        new_bottleneck = cls(
             downsample=bottleneck.downsample,
         )
         new_bottleneck._fallback_torch_layer = bottleneck
@@ -479,7 +479,7 @@ class TTNNPatchEmbedding(TTNNModule):
     @classmethod
     def from_torch(cls, patch_embedding: "ViTPatchEmbeddings") -> "TTNNPatchEmbedding":
         """Create TTNNPatchEmbedding from PyTorch Conv2d layer."""
-        new_patch_embedding = TTNNPatchEmbedding(
+        new_patch_embedding = cls(
             img_size=patch_embedding.projection.kernel_size[0] * patch_embedding.projection.stride[0],
             patch_size=patch_embedding.projection.kernel_size[0],
             in_channels=patch_embedding.projection.in_channels,
@@ -572,7 +572,7 @@ class TTNNViTEmbeddings(TTNNModule):
     @classmethod
     def from_torch(cls, patch_embeddings: "ViTPatchEmbeddings", cls_token, position_embeddings) -> "TTNNViTEmbeddings":
         """Create TTNNViTEmbeddings from PyTorch ViTEmbeddings layer."""
-        new_embeddings = TTNNViTEmbeddings()
+        new_embeddings = cls()
         new_embeddings.patch_embeddings = TTNNPatchEmbedding.from_torch(patch_embeddings)
         new_embeddings.cls_token = ttnn.from_torch(cls_token, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         new_embeddings.position_embeddings = ttnn.from_torch(
@@ -629,7 +629,7 @@ class TTNNMaxPool2dNHWC(TTNNModule):
     @classmethod
     def from_torch(cls, maxpool: nn.MaxPool2d, slice_config=None) -> "TTNNMaxPool2dNHWC":
         """Create TTNNMaxPool2dNHWC from PyTorch MaxPool2d layer."""
-        new_maxpool = TTNNMaxPool2dNHWC(
+        new_maxpool = cls(
             kernel_size=maxpool.kernel_size,
             stride=maxpool.stride,
             padding=maxpool.padding,
@@ -694,7 +694,7 @@ class TTNNUpsampleNHWC(TTNNModule):
     @classmethod
     def from_torch(cls, upsample: nn.Upsample) -> "TTNNUpsampleNHWC":
         """Create TTNNUpsampleNHWC from PyTorch Upsample layer."""
-        new_upsample = TTNNUpsampleNHWC(
+        new_upsample = cls(
             scale_factor=upsample.scale_factor,
             mode=upsample.mode,
         )
@@ -717,3 +717,28 @@ class TTNNUpsampleNHWC(TTNNModule):
             mode=self.mode,
         )
         return input_tensor
+
+
+class TTNNConv2dNHWCInputMultipleOf16(TTNNConv2dNHWC):
+    """TTNN-accelerated Conv InputMultipleOf16 layer."""
+
+    @classmethod
+    def from_torch(cls, conv: nn.Conv2d, slice_config=None) -> "TTNNConv2dNHWCInputMultipleOf16":
+        """Create TTNNConv2dNHWCInputMultipleOf16 from PyTorch Conv2d layer."""
+        if conv.in_channels > 16 or conv.in_channels % 16 == 0:
+            return TTNNConv2dNHWC.from_torch(conv, slice_config)
+        new_conv = cls(
+            in_channels=16,
+            out_channels=conv.out_channels,
+            kernel_size=conv.kernel_size,
+            stride=conv.stride,
+            padding=conv.padding,
+            dilation=conv.dilation,
+            groups=conv.groups,
+            slice_config=slice_config,
+        )
+        conv.weight = nn.Parameter(
+            torch.nn.functional.pad(conv.weight, (0, 0, 0, 0, 0, (16 - conv.in_channels % 16) % 16))
+        )
+        new_conv._fallback_torch_layer = NHWCConvPytorch(conv)
+        return new_conv
