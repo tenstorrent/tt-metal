@@ -91,3 +91,6 @@
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/pool/grid_sample/device
 upsample
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/reduction/accumulation/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/reduction/accumulation/ema/device

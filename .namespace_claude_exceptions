@@ -5,3 +5,4 @@
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/paged_cache/device/fused_update_cache
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/paged_cache/device/update_cache
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/sparse
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/pool/upsample/device
