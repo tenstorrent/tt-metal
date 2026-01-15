@@ -92,9 +92,3 @@ class MultiHeadAttention(AbstractModuleBase):
             out = ttml.ops.dropout.dropout(out, self.dropout_prob)
 
         return out
-
-    def __call__(
-        self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
-        """Call the forward method."""
-        return self.forward(x, mask)

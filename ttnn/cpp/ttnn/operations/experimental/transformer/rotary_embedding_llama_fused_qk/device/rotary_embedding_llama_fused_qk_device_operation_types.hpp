@@ -9,14 +9,14 @@
 
 namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk {
 
-struct operation_attributes_t {
+struct RotaryEmbeddingLlamaFusedQkParams {
     tt::tt_metal::MemoryConfig q_output_mem_config;
     tt::tt_metal::MemoryConfig k_output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     bool row_major_QK{};
 };
 
-struct tensor_args_t {
+struct RotaryEmbeddingLlamaFusedQkInputs {
     Tensor q_input;
     Tensor k_input;
     Tensor cos;

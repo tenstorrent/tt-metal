@@ -32,8 +32,8 @@ bool enable_fp32_dest_acc(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdateCacheProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const FusedUpdateParams& operation_attributes,
+    const FusedUpdateInputs& tensor_args,
     tensor_return_value_t& /*tensor_return_value*/) {
     Program program{};
 
@@ -441,8 +441,8 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
 
 void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const FusedUpdateParams& operation_attributes,
+    const FusedUpdateInputs& tensor_args,
     tensor_return_value_t& /*tensor_return_value*/) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
@@ -525,9 +525,9 @@ void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
 
 PagedTiledFusedUpdateCacheMeshWorkloadFactory::cached_mesh_workload_t
 PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const FusedUpdateParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
+    const FusedUpdateInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     log_debug(tt::LogOp, "PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload called");
     log_debug(tt::LogOp, "tensor_coords has {} ranges", tensor_coords.ranges().size());
@@ -573,8 +573,8 @@ PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
 
 void PagedTiledFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const FusedUpdateParams& operation_attributes,
+    const FusedUpdateInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     PagedTiledFusedUpdateCacheProgramFactory program_factory;
 

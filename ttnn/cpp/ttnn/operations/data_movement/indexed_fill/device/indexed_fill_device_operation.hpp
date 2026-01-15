@@ -11,8 +11,8 @@
 namespace ttnn::operations::data_movement::indexed_fill {
 
 struct IndexedFillDeviceOperation {
-    using operation_attributes_t = indexed_fill::operation_attributes_t;
-    using tensor_args_t = indexed_fill::tensor_args_t;
+    using operation_attributes_t = IndexedFillParams;
+    using tensor_args_t = IndexedFillInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<indexed_fill::program::IndexedFillProgramFactory>;

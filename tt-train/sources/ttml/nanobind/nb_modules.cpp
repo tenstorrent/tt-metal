@@ -44,13 +44,14 @@ struct PyModuleBase : ttml::modules::ModuleBase {
     using ttml::modules::ModuleBase::register_tensor;
 
     // Override virtual operator() to allow Python implementation
+    // Use NB_OVERRIDE_NAME to map C++ operator() to Python __call__
     ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& tensor) override {
-        NB_OVERRIDE(operator(), tensor);
+        NB_OVERRIDE_NAME("__call__", operator(), tensor);
     }
 
     ttml::autograd::TensorPtr operator()(
         const ttml::autograd::TensorPtr& tensor, const ttml::autograd::TensorPtr& other) override {
-        NB_OVERRIDE(operator(), tensor, other);
+        NB_OVERRIDE_NAME("__call__", operator(), tensor, other);
     }
 };
 

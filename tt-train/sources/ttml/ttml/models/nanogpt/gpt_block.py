@@ -110,9 +110,3 @@ class GPTBlock(AbstractModuleBase):
         x = ttml.ops.binary.add(x, residual)
 
         return x
-
-    def __call__(
-        self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
-        """Call the forward method."""
-        return self.forward(x, mask)

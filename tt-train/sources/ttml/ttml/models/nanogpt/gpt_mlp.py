@@ -64,7 +64,3 @@ class GPTMLP(AbstractModuleBase):
             x = ttml.ops.dropout.dropout(x, self.dropout_prob)
 
         return x
-
-    def __call__(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        """Call the forward method."""
-        return self.forward(x)

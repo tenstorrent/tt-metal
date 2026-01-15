@@ -31,12 +31,13 @@ namespace ttml::nanobind::core {
 void py_module_types(nb::module_& m) {
     m.def_submodule("distributed");
     auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
-    // Rely on TTNN module to own distributed type registrations to avoid duplicates.
-    // Expose SocketManager
+    // Note: TensorToMesh, MeshToTensor, MeshComposerConfig are already registered by ttnn
+    // They are imported and re-exported in the Python __init__.py
+    // Expose SocketManager (ttml-specific type)
     nb::class_<ttml::core::distributed::SocketManager>(py_distributed, "SocketManager");
-    // Expose SocketType enum
+    // Expose SocketType enum (not exposed by ttnn)
     ttml::nanobind::util::export_enum<ttnn::distributed::SocketType>(py_distributed);
-    // Expose multihost DistributedContext under core.distributed as a non-owning type
+    // Expose multihost DistributedContext under core.distributed as a non-owning type (not exposed by ttnn)
     nb::class_<tt::tt_metal::distributed::multihost::DistributedContext>(py_distributed, "DistributedContext");
 }
 

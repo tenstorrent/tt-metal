@@ -46,7 +46,3 @@ class Embedding(AbstractModuleBase):
             Output tensor of embeddings
         """
         return ttml.ops.embedding.embedding(x, self.weight.tensor)
-
-    def __call__(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        """Call the forward method."""
-        return self.forward(x)

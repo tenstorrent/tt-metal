@@ -99,20 +99,6 @@ class LinearRegression(AbstractModuleBase):
         bias_tensor = self.bias.tensor if self.bias is not None else None
         return ttml.ops.linear.linear(x, self.weight.tensor, bias_tensor)
 
-    def __call__(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        """Call the forward method.
-
-        This method is required by AbstractModuleBase (it's abstract in the base class).
-        It provides the standard PyTorch-like interface: `model(input)`.
-
-        Args:
-            x: Input tensor
-
-        Returns:
-            Output tensor from forward pass
-        """
-        return self.forward(x)
-
 
 def create_linear_regression_model(
     in_features: int, out_features: int = 1, bias: bool = True

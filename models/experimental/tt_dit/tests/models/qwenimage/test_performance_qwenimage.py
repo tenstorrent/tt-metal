@@ -8,6 +8,7 @@ import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
+from models.common.utility_functions import is_blackhole
 
 
 @pytest.mark.parametrize(
@@ -252,7 +253,7 @@ def test_qwenimage_pipeline_performance(
                 )
         device_name_map = {
             (2, 4): "WH_T3K",
-            (4, 8): "BH_GLX",
+            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
@@ -266,10 +267,12 @@ def test_qwenimage_pipeline_performance(
                 "cfg_factor": cfg[0],
                 "sp_factor": sp[0],
                 "tp_factor": tp[0],
+                "num_frames": 1,
                 "encoder_tp_factor": encoder_tp[0],
                 "vae_tp_factor": vae_tp[0],
                 "topology": str(topology),
                 "num_links": num_links,
+                "fsdp": pipeline._is_fsdp,
             },
         )
 
