@@ -70,7 +70,6 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
     auto program_factory = select_program_factory(attributes, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<StridedAllGatherMinimalMatmulAsync>(
-        select_program_factory(attributes, tensor_args).index(),
         attributes.strided_all_gather_async_struct.dim,
         attributes.strided_all_gather_async_struct.num_links,
         attributes.strided_all_gather_async_struct.ring_size,
