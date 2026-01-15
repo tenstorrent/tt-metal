@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/hw/inc/experimental/udm/udm_api.hpp"
-#include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 /**
  * @brief Receiver (non-coordinator) kernel for distributed SUM reduction
@@ -72,7 +72,7 @@ void kernel_main() {
     // Phase 1: Generate scaler tile for reduction
     // ============================================================================
     cb_reserve_back(cb_scaler, 1);
-    generate_reduce_scaler(cb_scaler, winv_packed);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_scaler, winv_packed);
     cb_push_back(cb_scaler, 1);
 
     // ============================================================================

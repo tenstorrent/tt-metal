@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 void generate_tile_with_packed_bfloat16_values(uint32_t cb_id, uint32_t packed_bf16_value) {
@@ -105,7 +105,7 @@ void kernel_main() {
             if (i == 0 and b == 0) {
                 constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
                 const uint32_t scalar_w = get_arg_val<uint32_t>(1);
-                generate_reduce_scaler(cb_in_2, scalar_w);
+                dataflow_kernel_lib::generate_reduce_scaler(cb_in_2, scalar_w);
 
                 constexpr uint32_t ones = 0x3F803F80;  // 2 packed bfloat16 into 1 uint32_t of value 1.0
                 generate_tile_with_packed_bfloat16_values(cb_ones, ones);
@@ -113,7 +113,7 @@ void kernel_main() {
                 if constexpr (is_mcast_sender) {
                     constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
                     const uint32_t scalar_c = get_arg_val<uint32_t>(0);
-                    generate_reduce_scaler(cb_in_4, scalar_c);
+                    dataflow_kernel_lib::generate_reduce_scaler(cb_in_4, scalar_c);
                 }
 
                 constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;

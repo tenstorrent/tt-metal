@@ -13,6 +13,7 @@
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
 ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
