@@ -11,6 +11,7 @@ import os
 import pathlib
 import random
 import sys
+import ast
 from collections import defaultdict
 
 from framework.constants import LEAD_MODELS
@@ -52,8 +53,6 @@ def get_mesh_shape_from_vector(vector):
             if isinstance(mesh_shape_str, str):
                 # Parse "[2, 4]" format
                 try:
-                    import ast
-
                     mesh_shape = ast.literal_eval(mesh_shape_str)
                     if isinstance(mesh_shape, list) and len(mesh_shape) == 2:
                         return tuple(mesh_shape)
