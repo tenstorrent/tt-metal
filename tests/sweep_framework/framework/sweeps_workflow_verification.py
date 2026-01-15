@@ -24,5 +24,5 @@ with open(".github/workflows/ttnn-run-sweeps.yaml") as file:
     multi_sweep_option_count = len(multi_sweep_options)
     assert (
         file_count + multi_sweep_option_count == workflow_count
-    ), f"Sweeps workflow options does not match expected number of sweep files ({workflow_count} exist, expected {file_count + 3}). Expected: {file_count} sweep files + 3 'ALL SWEEPS' options. If you added a new sweep file, please add it to the options in the .github/workflows/ttnn-run-sweeps.yaml workflow file."
+    ), f"Sweeps workflow options does not match expected number of sweep files ({workflow_count} exist, expected {file_count} sweep files + {multi_sweep_option_count} 'multi-sweep' options. If you added a new sweep file, please add it to the options in the .github/workflows/ttnn-run-sweeps.yaml workflow file."
     print("Sweeps workflow options match expected number of sweep files.")
