@@ -9,6 +9,8 @@ uses ttml's C++ operations (via _ttml) for computation while maintaining
 a Python-friendly interface.
 """
 
+from __future__ import annotations
+
 import math
 from typing import Optional
 

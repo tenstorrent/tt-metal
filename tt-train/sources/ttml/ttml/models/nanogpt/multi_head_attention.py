@@ -4,6 +4,8 @@
 
 """Multi-head attention layer for NanoGPT."""
 
+from __future__ import annotations
+
 from typing import Optional
 
 import ttml
@@ -42,11 +44,8 @@ class MultiHeadAttention(AbstractModuleBase):
         # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
         # Note: scaling by 1/sqrt(head_dim) is handled inside scaled_dot_product_attention
 
-        # QKV projection: embedding_dim -> embedding_dim * 3 (no bias for attention projections)
-        self.qkv = LinearLayer(embedding_dim, embedding_dim * 3, False)
-
-        # Output projection: embedding_dim -> embedding_dim (no bias)
-        self.out_proj = LinearLayer(embedding_dim, embedding_dim, False)
+        self.qkv_linear = LinearLayer(embedding_dim, embedding_dim * 3, False)
+        self.out_linear = LinearLayer(embedding_dim, embedding_dim, False)
 
     # train() and eval() are inherited from AbstractModuleBase
 
@@ -62,8 +61,8 @@ class MultiHeadAttention(AbstractModuleBase):
         Returns:
             Output tensor after attention
         """
-        # QKV projection using C++ LinearLayer
-        qkv = self.qkv(x)
+        # QKV projection (matching C++ qkv = (*m_qkv_linear)(x))
+        qkv = self.qkv_linear(x)
 
         # Split into heads using ttml's heads_creation
         # Output: query, key, value each have shape (B, H, S, head_dim)
@@ -71,12 +70,7 @@ class MultiHeadAttention(AbstractModuleBase):
             qkv, self.num_heads
         )
 
-        # Use the C++ scaled_dot_product_attention which handles:
-        # - Scaling by 1/sqrt(head_dim)
-        # - Q @ K^T
-        # - Softmax
-        # - Attention @ V
-        # - Proper backward pass for 4D tensors
+        # Scaled dot product attention
         attn_out = ttml.ops.attention.scaled_dot_product_attention(
             query, key, value, mask
         )
@@ -84,8 +78,8 @@ class MultiHeadAttention(AbstractModuleBase):
         # Fuse heads back
         attention_out = ttml.ops.multi_head_utils.heads_fusion(attn_out)
 
-        # Output projection using C++ LinearLayer
-        out = self.out_proj(attention_out)
+        # Output projection
+        out = self.out_linear(attention_out)
 
         # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:

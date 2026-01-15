@@ -4,6 +4,8 @@
 
 """GPT transformer block for NanoGPT."""
 
+from __future__ import annotations
+
 from typing import Optional
 
 import numpy as np
@@ -76,6 +78,8 @@ class GPTBlock(AbstractModuleBase):
 
         # Attention and MLP
         self.attention = MultiHeadAttention(embedding_dim, num_heads, dropout)
+
+        # MLP (matching C++ mlp = GPTMLP(embedding_size, dropout_prob))
         self.mlp = GPTMLP(embedding_dim, dropout)
 
     # train() and eval() are inherited from AbstractModuleBase
@@ -93,17 +97,21 @@ class GPTBlock(AbstractModuleBase):
         Returns:
             Output tensor after transformer block
         """
-        # Pre-norm attention with residual
+        # Pre-norm attention with residual (matching C++)
+        # residual = input; x = (*ln1)(input); x = (*attention)(x, mask); x = ops::add(x, residual)
         residual = x
-        x = ttml.ops.layernorm.composite_layernorm(
+        # Use fused layernorm (not composite) for better performance
+        x = ttml.ops.layernorm.layernorm(
             x, self.ln1_gamma.tensor, self.ln1_beta.tensor if self.ln1_beta else None
         )
         x = self.attention(x, mask)
         x = ttml.ops.binary.add(x, residual)
 
-        # Pre-norm MLP with residual
+        # Pre-norm MLP with residual (matching C++)
+        # residual = x; x = (*ln2)(x); x = (*mlp)(x); x = ops::add(x, residual)
         residual = x
-        x = ttml.ops.layernorm.composite_layernorm(
+        # Use fused layernorm (not composite) for better performance
+        x = ttml.ops.layernorm.layernorm(
             x, self.ln2_gamma.tensor, self.ln2_beta.tensor if self.ln2_beta else None
         )
         x = self.mlp(x)
