@@ -35,7 +35,7 @@ class TestMetadataLoader:
             arch: The architecture name (e.g., "blackhole", "wormhole_b0")
 
         Returns:
-            Dictionary containing metadata fields: memory, mechanism, pattern, architecture, num_peers (optional)
+            Dictionary containing metadata fields: memory_type, mechanism, pattern, architecture, and other optional fields
 
         Raises:
             KeyError: If test_id not found or doesn't have required metadata fields

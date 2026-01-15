@@ -18,7 +18,7 @@
 #   - mechanism: How data is transmitted over NOC
 #       Values: "unicast" | "multicast"
 #   - pattern: Communication pattern between cores
-#       Values: "one_to_one" | "one_from_one" | "one_to_all" | "one_from_all" | "all_to_all"
+#       Values: "one_to_one" | "one_from_one" | "one_to_all" | "one_from_all" | "all_to_all" | "all_from_all"
 #
 # Optional fields supported by the estimator:
 #   - num_peers: Number of destination cores (for *_to_all patterns with fixed grid sizes)
@@ -135,7 +135,7 @@ tests:
 
   16:
     name: "Loopback Packet Sizes"
-    # TO DO
+    # TODO
 
   17:
     name: "Reshard Hardcoded Small"
@@ -201,7 +201,7 @@ tests:
 
   40:
     name: "DRAM Packet Sizes 2.0"
-    # TO DO
+    # TODO
 
   50:
     name: "One to One Directed Ideal"
@@ -265,11 +265,11 @@ tests:
 
   80:
     name: "One Packet Read Sizes"
-    # TO DO
+    # TODO
 
   81:
     name: "One Packet Write Sizes"
-    # TO DO
+    # TODO
 
   82:
     name: "One Packet Read Directed Ideal"
@@ -303,7 +303,7 @@ tests:
 
   111:
     name: "Multi Interleaved Sizes"
-    # TO DO
+    # TODO
 
   112:
     name: "Multi Interleaved Read Directed Ideal"
@@ -319,49 +319,49 @@ tests:
 
   115:
     name: "Multi Interleaved Write Sizes"
-    # TO DO
+    # TODO
 
   116:
     name: "Multi Interleaved 2x2 Directed Ideal"
 
   117:
     name: "Multi Interleaved 2x2 Sizes"
-    # TO DO
+    # TODO
 
   118:
     name: "Multi Interleaved 2x2 Read Directed Ideal"
 
   119:
     name: "Multi Interleaved 2x2 Read Sizes"
-    # TO DO
+    # TODO
 
   120:
     name: "Multi Interleaved 2x2 Write Directed Ideal"
 
   121:
     name: "Multi Interleaved 2x2 Write Sizes"
-    # TO DO
+    # TODO
 
   122:
     name: "Multi Interleaved 6x6 Directed Ideal"
 
   123:
     name: "Multi Interleaved 6x6 Sizes"
-    # TO DO
+    # TODO
 
   124:
     name: "Multi Interleaved 6x6 Read Directed Ideal"
 
   125:
     name: "Multi Interleaved 6x6 Read Sizes"
-    # TO DO
+    # TODO
 
   126:
     name: "Multi Interleaved 6x6 Write Directed Ideal"
 
   127:
     name: "Multi Interleaved 6x6 Write Sizes"
-    # TO DO
+    # TODO
 
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
@@ -383,11 +383,11 @@ tests:
 
   146:
     name: "Core Bidirectional Packet Sizes Same Kernel"
-    # TO DO
+    # TODO
 
   147:
     name: "Core Bidirectional Packet Sizes Different Kernels"
-    # TO DO
+    # TODO
 
   148:
     name: "Core Bidirectional Custom"
@@ -499,7 +499,9 @@ tests:
 
   311:
     name: "All from All Packet Sizes"
-    # TO DO
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_from_all"
 
   312:
     name: "All from All 2x2 From 1x1 Directed Ideal"

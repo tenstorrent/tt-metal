@@ -168,6 +168,11 @@ Examples:
 
     args = parser.parse_args()
 
+    if "TT_METAL_HOME" not in os.environ:
+        print("WARNING: TT_METAL_HOME environment variable is not set.")
+        print("Please run this script from the TT-Metal home directory.")
+        print("Attempting to use current directory as TT_METAL_HOME...\n")
+
     # Get script directory and locate test_information.yaml
     script_dir = Path(__file__).parent
     yaml_path = script_dir / "python" / "test_mappings" / "test_information.yaml"
