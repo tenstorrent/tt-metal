@@ -45,20 +45,27 @@ class BackendTenstorrent(Backend):
         self.ttnn_available = False
         self.ttnn_device = None
 
+        print("Skip")
+
         if skip_ttnn:
             print("Skipping ttnn initialization (TT_SKIP_TTNN_INIT=1)")
         else:
             try:
-                import ttnn  # noqa: F401
-
-                self.ttnn_available = True
-
-                # Set environment for Blackhole
-                os.environ.setdefault("ARCH_NAME", "blackhole")
-                print(f"✓ ttnn imported successfully (ARCH_NAME={os.environ.get('ARCH_NAME')})")
+                # import ttnn  # noqa: F401
+                # if "blackhole" in ttnn.get_arch_name():
+                #     self.total_memory = 24 * (1024 ** 3)
+                #     self.free_memory =  22 * (1024 ** 3)
+                # else:
+                # Wormhole
+                self.total_memory = 12 * (1024**3)
+                self.free_memory = 10 * (1024**3)
+                print(
+                    f"TTNN initialized: total_memory={self.total_memory/(1024**3)}GB, free_memory={self.free_memory/(1024**3)}GB"
+                )
             except ImportError as e:
                 print(f"Warning: ttnn not available, falling back to CPU: {e}")
                 pass
+        print("TTNN available:", self.ttnn_available)
 
     def __del__(self):
         if self.numa_rank == 0:
@@ -79,7 +86,10 @@ class BackendTenstorrent(Backend):
     def get_device_name(self, index=0):
         """Get Tenstorrent device name"""
         if self.ttnn_available:
-            return f"Tenstorrent Blackhole {index}"
+            import ttnn
+
+            arch_string = "Blackhole" if "blackhole" in ttnn.get_arch_name() else "Wormhole"
+            return f"Tenstorrent {arch_string}"
         else:
             return f"Tenstorrent Device {index} (Simulated)"
 
@@ -89,65 +99,22 @@ class BackendTenstorrent(Backend):
         # Create a named tuple-like object for compatibility
         class DeviceProperties:
             def __init__(self):
-                self.name = "Tenstorrent Blackhole"
-                self.total_memory = 24 * (1024**3)  # Assume 24GB, adjust based on actual HW
+                self.name = "Tenstorrentttnn.g"
+                self.total_memory = 12 * (1024**3)  # Assume 12GB for Wormhole, adjust based on actual HW
                 self.multi_processor_count = 80  # Placeholder
 
         return DeviceProperties()
 
     def get_mem_info(self, index=0):
         """Return (free_memory, total_memory) in bytes"""
-        if self.ttnn_available:
-            try:
-                # TODO: Query actual TT device memory
-                # For now, use placeholder values
-                total_memory = 24 * (1024**3)  # 24GB
-                # Estimate free memory (would need actual API call)
-                free_memory = 20 * (1024**3)  # Conservative estimate
-                return (free_memory, total_memory)
-            except:
-                pass
-
-        # Fallback to CPU memory
-        import psutil
-
-        mem = psutil.virtual_memory()
-        return (mem.available, mem.total)
+        return self.free_memory, self.total_memory
 
     def get_device_count(self):
         """Return (device_count, list_of_device_indices)"""
         # Always check environment variable first to support CCL subprocess mode
         # This allows consistent device count even when ttnn is not initialized
-        device_count_env = os.environ.get("TT_METAL_DEVICE_COUNT")
-        if device_count_env:
-            device_count = int(device_count_env)
-            device_ids = list(range(device_count))
-            return device_count, device_ids
-
-        # Use tt-smi to get device count without opening device locks
-        # This avoids the lock contention issue with ttnn.get_device_ids()
-        try:
-            import subprocess
-
-            result = subprocess.run(["tt-smi", "-l"], capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                # Count lines that contain device info (typically start with device index)
-                lines = result.stdout.strip().split("\n")
-                # Parse tt-smi output to count devices
-                device_count = 0
-                for line in lines:
-                    # tt-smi -l outputs device IDs like "0", "1", "2", "3"
-                    line = line.strip()
-                    if line.isdigit():
-                        device_count += 1
-                if device_count > 0:
-                    device_ids = list(range(device_count))
-                    return device_count, device_ids
-        except Exception:
-            pass
-
-        # Fallback - default to 4 devices for Blackhole systems
-        return 4, [0, 1, 2, 3]
+        device_ids = [1]
+        return len(device_ids), device_ids
 
     def set_device(self, device_index: int):
         """Set current TT device"""
@@ -166,15 +133,10 @@ class BackendTenstorrent(Backend):
         except:
             return 0
 
-    def device_synchronize(self):
+    def device_synchronize(self, device):
         """Synchronize TT device execution"""
         if self.ttnn_available:
-            try:
-                # TODO: Call TT device synchronization
-                # self.tt_lib.device.Synchronize()
-                pass
-            except:
-                pass
+            ttnn.synchronize_device(device)
         # For CPU fallback, no sync needed
 
     def empty_cache(self):
@@ -336,7 +298,7 @@ class BackendTenstorrent(Backend):
                     index = random.randint(0, len(tensor_list) - 1)
                     op_instance.core_run(tensor_list[index])
 
-                self.device_synchronize()
+                self.device_synchronize(op_instance.device)
                 self.op_group_barrier(op_group=op_group, group_size=group_size)
 
                 # Use ttnn events for precise timing
@@ -347,7 +309,7 @@ class BackendTenstorrent(Backend):
                 for i in range(prefer_iterations):
                     op_instance.core_run(tensor_list[i % len(tensor_list)])
 
-                self.device_synchronize()
+                self.device_synchronize(op_instance.device)
                 end_time = time.perf_counter_ns()
 
                 latency_us = (end_time - start_time) / 1e3 / prefer_iterations
@@ -362,7 +324,7 @@ class BackendTenstorrent(Backend):
             index = random.randint(0, len(tensor_list) - 1)
             op_instance.core_run(tensor_list[index])
 
-        self.device_synchronize()
+        self.device_synchronize(op_instance.device)
         self.op_group_barrier(op_group=op_group, group_size=group_size)
 
         import time
@@ -370,7 +332,7 @@ class BackendTenstorrent(Backend):
         start_time = time.perf_counter_ns()
         for i in range(prefer_iterations):
             op_instance.core_run(tensor_list[i % len(tensor_list)])
-        self.device_synchronize()
+        self.device_synchronize(op_instance.device)
         end_time = time.perf_counter_ns()
 
         latency_us = (end_time - start_time) / 1e3 / prefer_iterations

@@ -241,6 +241,7 @@ class Scheduler:
             instance_num = 1
         else:
             instance_num = len(self.backend.target_devices)
+        print("Instance num for subprocesses:", instance_num)
         input_queues = mp.Queue()
         output_queues = mp.Queue()
         try:

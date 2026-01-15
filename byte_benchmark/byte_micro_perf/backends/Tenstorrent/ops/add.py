@@ -38,6 +38,7 @@ class TenstorrentAddOp(BasicOp):
         if cls._device is None:
             import ttnn
 
+            print("Opening Tenstorrent device")
             cls._device = ttnn.open_device(device_id=0)
         return cls._device
 
@@ -101,6 +102,7 @@ class TenstorrentAddOp(BasicOp):
         import ttnn
 
         all_tensor_list = []
+        print(f"Creating tensor on Tenstorrent device shape = ({self.height}, {self.width}), {instance_num} times")
         for _ in range(instance_num):
             torch_a = torch.randn(1, 1, self.height, self.width, dtype=self.torch_dtype)
             torch_b = torch.randn(1, 1, self.height, self.width, dtype=self.torch_dtype)
@@ -109,11 +111,13 @@ class TenstorrentAddOp(BasicOp):
             ttnn_b = ttnn.from_torch(torch_b, dtype=self.ttnn_dtype, device=self.device, layout=ttnn.TILE_LAYOUT)
 
             all_tensor_list.append({"a": ttnn_a, "b": ttnn_b})
+        print("Done creating tensors on Tenstorrent device")
         return all_tensor_list
 
     def add_run(self, tensor_mapping):
         import ttnn
 
+        print("Running add operation on Tenstorrent device" "")
         a, b = tensor_mapping["a"], tensor_mapping["b"]
         c = ttnn.add(a, b)
         ttnn.synchronize_device(self.device)
