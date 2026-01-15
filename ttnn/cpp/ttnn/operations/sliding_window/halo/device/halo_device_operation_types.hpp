@@ -7,11 +7,11 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 
-namespace ttnn::operations::sliding_window::halo {
+namespace ttnn::prim {
 
 struct HaloParams {
-    SlidingWindowConfig config{};
-    ParallelConfig parallel_config{};
+    ttnn::operations::sliding_window::SlidingWindowConfig config{};
+    ttnn::operations::sliding_window::ParallelConfig parallel_config{};
     uint32_t pad_val = 0;
     bool remote_read = false;
     bool transpose_mcast = false;
@@ -22,11 +22,4 @@ struct HaloParams {
     bool config_tensors_in_dram = false;
 };
 
-struct HaloInputs {
-    Tensor input_tensor;
-};
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::sliding_window::halo
+}  // namespace ttnn::prim
