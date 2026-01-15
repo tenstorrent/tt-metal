@@ -7,7 +7,7 @@
 #include "embedding_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::embedding::program {
+namespace ttnn::prim {
 
 struct EmbeddingsFusedProgramFactory {
     struct shared_variables_t {
@@ -19,14 +19,12 @@ struct EmbeddingsFusedProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const embedding::EmbeddingParams& operation_attributes,
-        const embedding::EmbeddingInputs& tensor_args,
-        embedding::tensor_return_value_t& tensor_return_value);
+        const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const embedding::EmbeddingParams& operation_attributes,
-        const embedding::EmbeddingInputs& tensor_args,
-        embedding::tensor_return_value_t& tensor_return_value);
+        const EmbeddingParams& operation_attributes,
+        const EmbeddingInputs& tensor_args,
+        Tensor& tensor_return_value);
 };
-}  // namespace ttnn::operations::embedding::program
+}  // namespace ttnn::prim
