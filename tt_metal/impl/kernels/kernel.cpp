@@ -767,14 +767,6 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0]);
-    // std::vector<JitBuildState> build_states;
-    // for (const DataMovementProcessor& processor : this->dm_cores_) {
-    //     const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
-    //     build_states.push_back(BuildEnvManager::get_instance().get_kernel_build_state(
-    //         device->build_id(), tensix_core_type, dm_class_idx, riscv_id));
-    // }
-    // jit_build_subset(build_states, this);
-    // log_info(tt::LogMetal, "Building kernel for processor {}", riscv_id);
     const JitBuildState& orig_processor_build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     jit_build(orig_processor_build_state, this);
@@ -788,7 +780,6 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
 
 void QuasarDataMovementKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
-    log_info(tt::LogMetal, "Reading binaries for kernel {}", this->kernel_full_name_);
     std::vector<const ll_api::memory*> binaries;
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -797,30 +788,12 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
         const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
-        log_info(
-            tt::LogMetal,
-            "Reading binary for processor {} at path {}",
-            processor,
-            build_state.get_target_out_path(this->kernel_full_name_));
         auto load_type =
             MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
         const ll_api::memory& binary_mem =
             llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
         binaries.push_back(&binary_mem);
     }
-    // const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0]);
-    // const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-    //     device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
-    // auto load_type =
-    //     MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
-    // log_info(
-    //     tt::LogMetal,
-    //     "Reading binary for processor {} with path {}",
-    //     riscv_id,
-    //     build_state.get_target_out_path(this->kernel_full_name_));
-    // const ll_api::memory& binary_mem =
-    //     llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
-    // binaries.push_back(&binary_mem);
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
 }
@@ -844,12 +817,6 @@ bool QuasarDataMovementKernel::configure(
     const std::vector<const ll_api::memory*>& binaries =
         this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
     for (int i = 0; i < this->expected_num_binaries(); i++) {
-        log_info(
-            tt::LogMetal,
-            "Writing binary for processor {} at offset {}. Binary size: {}",
-            this->dm_cores_[i],
-            offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[i])],
-            binaries[i]->get_packed_size());
         llrt::write_binary_to_address(
             *binaries[i],
             device_id,
