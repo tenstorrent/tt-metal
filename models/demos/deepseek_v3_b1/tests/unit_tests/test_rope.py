@@ -49,7 +49,7 @@ def test_rope_decode(device, batch, num_heads, head_dim, pcc):
     x = torch.randn(batch, num_heads, seq_len, head_dim, dtype=torch.bfloat16).float()
 
     # Create position IDs [batch] - use fixed position for reproducibility
-    position_ids = torch.arange(batch)  # positions 0, 1, 2, ...
+    position_ids = torch.tensor([5])  # positions 0, 1, 2, ...
 
     # Create cos/sin matrices in Meta-style format
     base = 10000.0
@@ -226,7 +226,7 @@ def test_rope_decode_yarn(device, batch, num_heads, pcc):
     cos, sin = yarn_rope(x, seq_len=max_seq_len, meta_style=True)
 
     # Fixed position IDs for reproducibility
-    position_ids = torch.arange(batch)
+    position_ids = torch.tensor([5])
     position_ids_expanded = position_ids.unsqueeze(1)
 
     # Reference output

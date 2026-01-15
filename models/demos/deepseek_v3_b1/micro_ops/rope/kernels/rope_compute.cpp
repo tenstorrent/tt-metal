@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 // RoPE compute kernel
@@ -12,21 +12,23 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/matmul.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+namespace NAMESPACE {
+void MAIN {
+    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t Wt = get_compile_time_arg_val(8);  // head_dim in tiles
+    constexpr uint32_t Ht = get_compile_time_arg_val(9);  // n_heads in tiles
 
-template <
-    uint32_t in_cb,
-    uint32_t cos_cb,
-    uint32_t sin_cb,
-    uint32_t trans_mat_cb,
-    uint32_t rotated_in_interm_cb,
-    uint32_t cos_interm_cb,
-    uint32_t sin_interm_cb,
-    uint32_t out_cb,
-    uint32_t Wt,
-    uint32_t Ht>
-void compute_rope() {
+    // Initialize matmul and binary ops (done once)
+    mm_init(in_cb, trans_mat_cb, out_cb);
+    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);
+
     constexpr uint32_t onetile = 1;
 
     // ========================================================================
@@ -64,12 +66,12 @@ void compute_rope() {
         // Step 1: rotated = input @ trans_mat (matmul for rotate_half)
         // ====================================================================
         mm_init_short(in_cb, trans_mat_cb);
-        ACQ();
+        acquire_dst();
         for (uint32_t j = 0; j < Wt; ++j) {
             matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
             pack_tile(j, rotated_in_interm_cb, j);
         }
-        REL();
+        release_dst();
         cb_push_back(rotated_in_interm_cb, Wt);
         cb_wait_front(rotated_in_interm_cb, Wt);
 
@@ -77,24 +79,24 @@ void compute_rope() {
         // Step 2: sin_interm = rotated * sin (broadcast multiply)
         // ====================================================================
         mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
-        ACQ();
+        acquire_dst();
         for (uint32_t j = 0; j < Wt; ++j) {
             mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
             pack_tile(j, sin_interm_cb, j);
         }
-        REL();
+        release_dst();
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 
         // ====================================================================
         // Step 3: cos_interm = input * cos (broadcast multiply)
         // ====================================================================
-        ACQ();
+        acquire_dst();
         for (uint32_t j = 0; j < Wt; ++j) {
             mul_tiles_bcast<BroadcastType::ROW>(in_cb, cos_cb, j, j, j);
             pack_tile(j, cos_interm_cb, j);
         }
-        REL();
+        release_dst();
         cb_push_back(cos_interm_cb, Wt);
         cb_pop_front(in_cb, Wt);
 
@@ -104,12 +106,12 @@ void compute_rope() {
         cb_wait_front(sin_interm_cb, Wt);
         cb_wait_front(cos_interm_cb, Wt);
         add_tiles_init(cos_interm_cb, sin_interm_cb);
-        ACQ();
+        acquire_dst();
         for (uint32_t j = 0; j < Wt; ++j) {
             add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
             pack_tile(j, out_cb, j);
         }
-        REL();
+        release_dst();
         cb_push_back(out_cb, Wt);
         cb_pop_front(sin_interm_cb, Wt);
         cb_pop_front(cos_interm_cb, Wt);
@@ -121,35 +123,5 @@ void compute_rope() {
     cb_pop_front(sin_cb, Wt);
     cb_pop_front(cos_cb, Wt);
     cb_pop_front(trans_mat_cb, onetile);
-}
-
-namespace NAMESPACE {
-void MAIN {
-    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
-    constexpr uint32_t Wt = get_compile_time_arg_val(8);  // head_dim in tiles
-    constexpr uint32_t Ht = get_compile_time_arg_val(9);  // n_heads in tiles
-
-    // Initialize matmul and binary ops (done once)
-    mm_init(in_cb, trans_mat_cb, out_cb);
-    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);
-
-    compute_rope<
-        in_cb,
-        cos_cb,
-        sin_cb,
-        trans_mat_cb,
-        rotated_in_interm_cb,
-        cos_interm_cb,
-        sin_interm_cb,
-        out_cb,
-        Wt,
-        Ht>();
 }
 }  // namespace NAMESPACE
