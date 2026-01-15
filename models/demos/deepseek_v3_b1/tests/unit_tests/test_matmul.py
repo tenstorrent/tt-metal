@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import MatmulSingleCore
     "M, K, N",
     [
         (1, 7168, 32),  # Single core: 1x7K x 7Kx32 -> 1x32
+        (1, 1536, 128),  # Single core: 1x1536 x 1536x128 -> 1x128
     ],
 )
 def test_matmul_single_core(device, M, K, N):
