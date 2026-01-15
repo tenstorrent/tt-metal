@@ -11,16 +11,14 @@
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding_llama {
+namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingLlamaDeviceOperation {
     using operation_attributes_t = RotaryEmbeddingLlamaParams;
     using tensor_args_t = RotaryEmbeddingLlamaInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = tt::tt_metal::Tensor;
-    using program_factory_t = std::variant<
-        rotary_embedding_llama::program::RotaryEmbeddingLlamaMultiCore,
-        rotary_embedding_llama::program::RotaryEmbeddingLlamaMultiCoreSharded>;
+    using program_factory_t = std::variant<RotaryEmbeddingLlamaMultiCore, RotaryEmbeddingLlamaMultiCoreSharded>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -30,7 +28,7 @@ struct RotaryEmbeddingLlamaDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 tt::tt_metal::Tensor rotary_embedding_llama(
