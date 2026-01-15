@@ -109,6 +109,7 @@ class QwenImageTransformer(Module):
             inner_dim,
             norm_eps=1e-6,
             norm_elementwise_affine=False,
+            bias=False,
             mesh_device=device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
