@@ -18,7 +18,7 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::program {
+namespace ttnn::experimental::prim {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -51,7 +51,7 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGatherProgramFactory::create(
     const FusedRmsnormPostAllGatherParams& operation_attributes,
     const FusedRmsnormPostAllGatherInputs& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using namespace tt::constants;
     using namespace tt::tt_metal;
@@ -409,7 +409,7 @@ void FusedRMSNormPostAllGatherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const FusedRmsnormPostAllGatherParams& /*operation_attributes*/,
     const FusedRmsnormPostAllGatherInputs& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
     const auto& cores = shared_vars.cores;
@@ -453,4 +453,4 @@ void FusedRMSNormPostAllGatherProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::program
+}  // namespace ttnn::experimental::prim
