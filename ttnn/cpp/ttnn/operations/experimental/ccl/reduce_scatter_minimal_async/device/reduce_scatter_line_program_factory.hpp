@@ -11,7 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
+namespace ttnn::experimental::prim {
 
 // Use ReduceScatterProgramArtifacts as the shared variables type for consistency
 using LineReduceScatterSharedVariables = ReduceScatterProgramArtifacts;
@@ -21,22 +21,22 @@ struct LineReduceScatterMeshWorkloadFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& operation_attributes,
+        const ReduceScatterMinimalAsyncParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const ReduceScatterMinimalAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 
     static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const operation_attributes_t& operation_attributes,
+        const ReduceScatterMinimalAsyncParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const ReduceScatterMinimalAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const ReduceScatterMinimalAsyncParams& operation_attributes,
+        const ReduceScatterMinimalAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 };
 
 // Builder function for line topology - creates program artifacts
@@ -80,4 +80,4 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const Tensor& intermed,
     const Tensor& output);
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
+}  // namespace ttnn::experimental::prim

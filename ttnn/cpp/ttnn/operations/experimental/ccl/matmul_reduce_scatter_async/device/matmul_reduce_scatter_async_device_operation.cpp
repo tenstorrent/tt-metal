@@ -71,9 +71,8 @@ MatmulReduceScatterAsyncDeviceOperation::compute_output_specs(
         args.matmul_struct, {.input_tensors = input_tensors})[0];
 
     // Reduce Scatter shape - use the device operation's compute_output_specs
-    using ReduceScatterOp = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
-        ReduceScatterMinimalAsyncDeviceOperation;
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::tensor_args_t reduce_scatter_tensor_args{
+    using ReduceScatterOp = ttnn::experimental::prim::ReduceScatterMinimalAsyncDeviceOperation;
+    ttnn::experimental::prim::ReduceScatterMinimalAsyncInputs reduce_scatter_tensor_args{
         input_tensors[0], std::nullopt, std::nullopt};
 
     auto reduce_scatter_output_specs =

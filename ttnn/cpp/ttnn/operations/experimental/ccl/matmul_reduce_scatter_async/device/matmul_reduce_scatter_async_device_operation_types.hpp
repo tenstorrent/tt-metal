@@ -14,8 +14,7 @@
 namespace ttnn::experimental::prim {
 
 // Type alias for the reduce scatter operation attributes used in fusion
-using ReduceScatterMinimalAsyncParams =
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::operation_attributes_t;
+using ReduceScatterMinimalAsyncParams = ttnn::experimental::prim::ReduceScatterMinimalAsyncParams;
 
 struct MatmulReduceScatterAsyncParams {
     ReduceScatterMinimalAsyncParams reduce_scatter_params;

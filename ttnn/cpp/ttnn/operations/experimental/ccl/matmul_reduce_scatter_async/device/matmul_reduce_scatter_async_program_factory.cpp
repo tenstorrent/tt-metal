@@ -80,29 +80,28 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
     reduce_scatter_fused_op_signaler->init_fused_op();
 
     // Reduce Scatter - use the new artifacts-based helper
-    auto reduce_scatter_artifacts = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
-        build_ring_reduce_scatter_minimal_async_program_artifacts(
-            program,
-            output_tensors.mm,
-            tensor_args.persistent_intermediate,
-            mesh_coord,
-            forward_coord,
-            backward_coord,
-            output_tensors.reduce_scatter,
-            dim,
-            num_links,
-            ring_size,
-            ring_index,
-            topology,
-            semaphore,
-            barrier_semaphore,
-            using_persistent_buffers,
-            sub_device_id,
-            reduce_scatter_fused_op_signaler,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            args.reduce_scatter_core_grid_offset);
+    auto reduce_scatter_artifacts = ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
+        program,
+        output_tensors.mm,
+        tensor_args.persistent_intermediate,
+        mesh_coord,
+        forward_coord,
+        backward_coord,
+        output_tensors.reduce_scatter,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        reduce_scatter_fused_op_signaler,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        args.reduce_scatter_core_grid_offset);
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
@@ -152,22 +151,21 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             matmul_output_tensors);
 
         // Call reduce scatter runtime arguments override directly using artifacts
-        ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
-            ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
-                program,
-                shared_vars.reduce_scatter_artifacts.reader_kernel_id,
-                shared_vars.reduce_scatter_artifacts.writer_kernel_id,
-                shared_vars.reduce_scatter_artifacts.all_cores,
-                args.reduce_scatter_params.num_links,
-                shared_vars.reduce_scatter_artifacts.num_directions_per_link,
-                shared_vars.reduce_scatter_artifacts.num_workers_per_direction,
-                shared_vars.reduce_scatter_artifacts.num_mux_cores_per_direction_per_link,
-                shared_vars.reduce_scatter_artifacts.num_cores_per_link,
-                args.reduce_scatter_params.barrier_semaphore,
-                args.reduce_scatter_params.semaphore,
-                output_tensors.mm,
-                tensor_args.persistent_intermediate,
-                output_tensors.reduce_scatter);
+        ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+            program,
+            shared_vars.reduce_scatter_artifacts.reader_kernel_id,
+            shared_vars.reduce_scatter_artifacts.writer_kernel_id,
+            shared_vars.reduce_scatter_artifacts.all_cores,
+            args.reduce_scatter_params.num_links,
+            shared_vars.reduce_scatter_artifacts.num_directions_per_link,
+            shared_vars.reduce_scatter_artifacts.num_workers_per_direction,
+            shared_vars.reduce_scatter_artifacts.num_mux_cores_per_direction_per_link,
+            shared_vars.reduce_scatter_artifacts.num_cores_per_link,
+            args.reduce_scatter_params.barrier_semaphore,
+            args.reduce_scatter_params.semaphore,
+            output_tensors.mm,
+            tensor_args.persistent_intermediate,
+            output_tensors.reduce_scatter);
     }
 }
 

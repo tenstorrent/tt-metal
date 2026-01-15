@@ -143,6 +143,8 @@ In program factory files (*_program_factory.hpp/cpp):
 - Do NOT modify files outside the device/ directory (nanobind files, public API files)
 - Keep struct/class names the same, only change namespaces and type aliases
 - The public API function in ttnn::prim namespace should stay as-is
+- Do NOT add backward compatibility aliases - if something references the old types, update that code too
+- If tests reference old types, update the tests to use new types
 
 After making changes, verify the code compiles by running: ./build_metal.sh -c -e --debug --build-all
 

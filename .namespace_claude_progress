@@ -27,3 +27,12 @@
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/embedding_backward/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/embedding/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device
