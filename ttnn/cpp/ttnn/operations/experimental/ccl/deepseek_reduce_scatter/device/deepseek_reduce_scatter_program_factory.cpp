@@ -71,13 +71,14 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     }
     CoreRangeSet worker_core_range_set = CoreRangeSet(worker_core_ranges);
 
-    // L1 Scratch CB Creation
+    // L1 scratch CB creation
     const uint32_t page_size = input_tensors.at(0).buffer()->page_size();
     const uint32_t tile_granularity = 2;  // NOTE: writer kernel hardcoded to always use scatter_write with 2 tiles
 
-    // TODO: (GR) double buffering (enough to hold all tiles for a given slice), test/check if we should use more
-    // TODO: (GR) this should be updated to hold the entire shard, only debate is for the compute CB
-    const uint32_t cb_num_pages = 2 * tile_granularity;
+    const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
+    const uint32_t compute_input_cb_num_pages =
+        input_nd_shard_spec.shard_shape.volume() / num_tile_elements;  // entire shard
+    const uint32_t compute_ouput_cb_num_pages = 2 * tile_granularity;  // double buffer
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
 
@@ -103,56 +104,56 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
 
     // input CBs
     tt::tt_metal::CircularBufferConfig input_slice_0_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_slice_0_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(compute_input_cb_num_pages * page_size, {{input_slice_0_cb_id, data_format}})
             .set_page_size(input_slice_0_cb_id, page_size)
             .set_globally_allocated_address(*input_tensors.at(0).buffer());
     tt::tt_metal::CBHandle input_slice_0_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, input_slice_0_cb_config);
 
     tt::tt_metal::CircularBufferConfig input_slice_1_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_slice_1_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(compute_input_cb_num_pages * page_size, {{input_slice_1_cb_id, data_format}})
             .set_page_size(input_slice_1_cb_id, page_size)
             .set_globally_allocated_address(*input_tensors.at(1).buffer());
     tt::tt_metal::CBHandle input_slice_1_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, input_slice_1_cb_config);
 
     tt::tt_metal::CircularBufferConfig input_slice_2_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_slice_2_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(compute_input_cb_num_pages * page_size, {{input_slice_2_cb_id, data_format}})
             .set_page_size(input_slice_2_cb_id, page_size)
             .set_globally_allocated_address(*input_tensors.at(2).buffer());
     tt::tt_metal::CBHandle input_slice_2_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, input_slice_2_cb_config);
 
     tt::tt_metal::CircularBufferConfig input_slice_3_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_slice_3_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(compute_input_cb_num_pages * page_size, {{input_slice_3_cb_id, data_format}})
             .set_page_size(input_slice_3_cb_id, page_size)
             .set_globally_allocated_address(*input_tensors.at(3).buffer());
     tt::tt_metal::CBHandle input_slice_3_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, input_slice_3_cb_config);
 
     tt::tt_metal::CircularBufferConfig input_slice_4_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_slice_4_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(compute_input_cb_num_pages * page_size, {{input_slice_4_cb_id, data_format}})
             .set_page_size(input_slice_4_cb_id, page_size)
             .set_globally_allocated_address(*input_tensors.at(4).buffer());
     tt::tt_metal::CBHandle input_slice_4_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, input_slice_4_cb_config);
 
     tt::tt_metal::CircularBufferConfig input_slice_5_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_slice_5_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(compute_input_cb_num_pages * page_size, {{input_slice_5_cb_id, data_format}})
             .set_page_size(input_slice_5_cb_id, page_size)
             .set_globally_allocated_address(*input_tensors.at(5).buffer());
     tt::tt_metal::CBHandle input_slice_5_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, input_slice_5_cb_config);
 
     tt::tt_metal::CircularBufferConfig input_slice_6_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_slice_6_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(compute_input_cb_num_pages * page_size, {{input_slice_6_cb_id, data_format}})
             .set_page_size(input_slice_6_cb_id, page_size)
             .set_globally_allocated_address(*input_tensors.at(6).buffer());
     tt::tt_metal::CBHandle input_slice_6_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, input_slice_6_cb_config);
 
     tt::tt_metal::CircularBufferConfig input_slice_7_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_slice_7_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(compute_input_cb_num_pages * page_size, {{input_slice_7_cb_id, data_format}})
             .set_page_size(input_slice_7_cb_id, page_size)
             .set_globally_allocated_address(*input_tensors.at(7).buffer());
     tt::tt_metal::CBHandle input_slice_7_cb_handle =
@@ -171,56 +172,64 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
 
     // intermediate CBs
     tt::tt_metal::CircularBufferConfig intermediate_slice_0_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_slice_0_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            compute_input_cb_num_pages * page_size, {{intermediate_slice_0_cb_id, data_format}})
             .set_page_size(intermediate_slice_0_cb_id, page_size)
             .set_globally_allocated_address(*intermediate_slice_tensors.at(0).buffer());
     tt::tt_metal::CBHandle intermediate_slice_0_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, intermediate_slice_0_cb_config);
 
     tt::tt_metal::CircularBufferConfig intermediate_slice_1_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_slice_1_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            compute_input_cb_num_pages * page_size, {{intermediate_slice_1_cb_id, data_format}})
             .set_page_size(intermediate_slice_1_cb_id, page_size)
             .set_globally_allocated_address(*intermediate_slice_tensors.at(1).buffer());
     tt::tt_metal::CBHandle intermediate_slice_1_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, intermediate_slice_1_cb_config);
 
     tt::tt_metal::CircularBufferConfig intermediate_slice_2_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_slice_2_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            compute_input_cb_num_pages * page_size, {{intermediate_slice_2_cb_id, data_format}})
             .set_page_size(intermediate_slice_2_cb_id, page_size)
             .set_globally_allocated_address(*intermediate_slice_tensors.at(2).buffer());
     tt::tt_metal::CBHandle intermediate_slice_2_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, intermediate_slice_2_cb_config);
 
     tt::tt_metal::CircularBufferConfig intermediate_slice_3_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_slice_3_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            compute_input_cb_num_pages * page_size, {{intermediate_slice_3_cb_id, data_format}})
             .set_page_size(intermediate_slice_3_cb_id, page_size)
             .set_globally_allocated_address(*intermediate_slice_tensors.at(3).buffer());
     tt::tt_metal::CBHandle intermediate_slice_3_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, intermediate_slice_3_cb_config);
 
     tt::tt_metal::CircularBufferConfig intermediate_slice_4_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_slice_4_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            compute_input_cb_num_pages * page_size, {{intermediate_slice_4_cb_id, data_format}})
             .set_page_size(intermediate_slice_4_cb_id, page_size)
             .set_globally_allocated_address(*intermediate_slice_tensors.at(4).buffer());
     tt::tt_metal::CBHandle intermediate_slice_4_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, intermediate_slice_4_cb_config);
 
     tt::tt_metal::CircularBufferConfig intermediate_slice_5_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_slice_5_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            compute_input_cb_num_pages * page_size, {{intermediate_slice_5_cb_id, data_format}})
             .set_page_size(intermediate_slice_5_cb_id, page_size)
             .set_globally_allocated_address(*intermediate_slice_tensors.at(5).buffer());
     tt::tt_metal::CBHandle intermediate_slice_5_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, intermediate_slice_5_cb_config);
 
     tt::tt_metal::CircularBufferConfig intermediate_slice_6_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_slice_6_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            compute_input_cb_num_pages * page_size, {{intermediate_slice_6_cb_id, data_format}})
             .set_page_size(intermediate_slice_6_cb_id, page_size)
             .set_globally_allocated_address(*intermediate_slice_tensors.at(6).buffer());
     tt::tt_metal::CBHandle intermediate_slice_6_cb_handle =
         CreateCircularBuffer(program, worker_core_range_set, intermediate_slice_6_cb_config);
 
     tt::tt_metal::CircularBufferConfig intermediate_slice_7_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{intermediate_slice_7_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            compute_input_cb_num_pages * page_size, {{intermediate_slice_7_cb_id, data_format}})
             .set_page_size(intermediate_slice_7_cb_id, page_size)
             .set_globally_allocated_address(*intermediate_slice_tensors.at(7).buffer());
     tt::tt_metal::CBHandle intermediate_slice_7_cb_handle =
@@ -239,7 +248,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
 
     // compute CB
     tt::tt_metal::CircularBufferConfig cb_compute_output_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{compute_cb_id, data_format}})
+        tt::tt_metal::CircularBufferConfig(compute_ouput_cb_num_pages * page_size, {{compute_cb_id, data_format}})
             .set_page_size(compute_cb_id, page_size);
     CreateCircularBuffer(program, worker_core_range_set, cb_compute_output_config);
 
