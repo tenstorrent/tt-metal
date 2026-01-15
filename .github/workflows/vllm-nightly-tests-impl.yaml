@@ -369,6 +369,7 @@ jobs:
       - ${{ matrix.test-group.arch }}
       - in-service
       - pipeline-functional
+      - pipeline-perf
     container:
       image: ${{ inputs.docker-image }}
       env:
