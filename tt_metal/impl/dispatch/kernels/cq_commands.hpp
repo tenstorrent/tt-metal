@@ -97,8 +97,8 @@ struct CQPrefetchRelayLinearCmd {
 // Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH). Must be only
 // command in fetchq entry.
 struct CQPrefetchRelayLinearHCmd {
-    uint16_t pad1;
-    uint64_t length;
+    uint8_t pad1;
+    uint16_t pad2;
     uint32_t noc_xy_addr;
     uint64_t addr;
     uint64_t length;
