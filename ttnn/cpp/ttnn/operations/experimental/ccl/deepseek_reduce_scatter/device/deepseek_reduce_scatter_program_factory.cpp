@@ -53,7 +53,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const std::optional<MeshCoordinate>& backward_coord,
     uint32_t ring_index,
     const tt::tt_metal::GlobalSemaphore& op_semaphore,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores,
+    const tt::tt_metal::GlobalSemaphore& pre_op_barrier_semaphore,
     uint32_t num_links) {
     auto* mesh_device = input_tensors.at(0).device();
 
@@ -385,8 +385,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
                 virtual_core.x,                                        // semaphore_noc0_x
                 virtual_core.y,                                        // semaphore_noc0_y
                 op_semaphore.address(),                                // op_semaphore
-                barrier_semaphores.at(0).address(),                    // pre_op_barrier_semaphore
-                barrier_semaphores.at(1).address(),                    // post_op_barrier_semaphore
+                pre_op_barrier_semaphore.address(),                    // pre_op_barrier_semaphore
                 direction,                                             // direction
                 start_tiles_read,                                      // start_tiles_read
                 start_tiles_to_read,                                   // tiles_to_read
@@ -436,7 +435,7 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     const std::vector<tt::tt_metal::CBHandle>& input_cb_handles,
     const std::vector<tt::tt_metal::CBHandle>& intermediate_cb_handles,
     const tt::tt_metal::GlobalSemaphore& op_semaphore,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores,
+    const tt::tt_metal::GlobalSemaphore& pre_op_barrier_semaphore,
     uint32_t num_links,
     const std::vector<ttnn::Tensor>& input_tensors,
     const std::vector<ttnn::Tensor>& intermediate_slice_tensors,
@@ -492,8 +491,7 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
             writer_rt_args[7] = intermediate_slice_tensors.at(7).buffer()->address();
             writer_rt_args[8] = output_tensor.buffer()->address();
             writer_rt_args[11] = op_semaphore.address();
-            writer_rt_args[12] = barrier_semaphores.at(0).address();
-            writer_rt_args[13] = barrier_semaphores.at(1).address();
+            writer_rt_args[12] = pre_op_barrier_semaphore.address();
         }
     }
 }
@@ -516,19 +514,16 @@ DeepseekReduceScatterMeshWorkloadFactory::create_mesh_workload(
     tt::tt_metal::GlobalSemaphore op_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
 
-    // 2 barrier semaphores used for pre/post op synchronization
-    // pre: remote tensors are allocated, post: all incoming data received
-    std::vector<tt::tt_metal::GlobalSemaphore> barrier_semaphores = {
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0),
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0),
-    };
+    // 1 semaphore used for pre op synchronization to ensure intermediate/output tensors are allocated
+    tt::tt_metal::GlobalSemaphore pre_op_semaphore_barrier =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
 
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> sub_device_ids = {sd_id};
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, sub_device_ids);
 
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program =
-            create_at(operation_attributes, coord, tensor_args, tensor_return_value, op_semaphore, barrier_semaphores);
+        auto cached_program = create_at(
+            operation_attributes, coord, tensor_args, tensor_return_value, op_semaphore, pre_op_semaphore_barrier);
         mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -543,7 +538,7 @@ DeepseekReduceScatterMeshWorkloadFactory::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const tt::tt_metal::GlobalSemaphore& op_semaphore,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& barrier_semaphores) {
+    const tt::tt_metal::GlobalSemaphore& pre_op_barrier_semaphore) {
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
     const std::vector<ttnn::Tensor> intermediate_slice_tensors(
         tensor_return_value.begin(), tensor_return_value.end() - 1);  // first 8 are intermediate tensors
@@ -574,12 +569,12 @@ DeepseekReduceScatterMeshWorkloadFactory::create_at(
         backward_coordinate,
         device_index,
         op_semaphore,
-        barrier_semaphores,
+        pre_op_barrier_semaphore,
         operation_attributes.num_links);
 
     shared_variables_t shared_vars{
         .op_semaphore = op_semaphore,
-        .barrier_semaphores = barrier_semaphores,
+        .pre_op_barrier_semaphore = pre_op_barrier_semaphore,
         .program_artifacts = deepseek_reduce_scatter_program_artifacts};
 
     return {std::move(program), std::move(shared_vars)};
@@ -607,7 +602,7 @@ void DeepseekReduceScatterMeshWorkloadFactory::override_runtime_arguments(
             shared_vars.program_artifacts.input_cb_handles,
             shared_vars.program_artifacts.intermediate_cb_handles,
             shared_vars.op_semaphore,
-            shared_vars.barrier_semaphores,
+            shared_vars.pre_op_barrier_semaphore,
             operation_attributes.num_links,
             input_tensors,
             intermediate_slice_tensors,

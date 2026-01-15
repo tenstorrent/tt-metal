@@ -63,7 +63,6 @@ void kernel_main() {
     const uint8_t semaphore_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t op_semaphore = get_arg_val<uint32_t>(arg_idx++);
     size_t pre_op_barrier_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    size_t post_op_barrier_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
@@ -288,16 +287,6 @@ void kernel_main() {
             slice_idx++;
         }
     }
-
-    // end barrier
-    uint64_t post_op_barrier_semaphore_noc_addr_in_pkt =
-        safe_get_noc_addr(semaphore_noc0_x, semaphore_noc0_y, post_op_barrier_semaphore, 0);
-    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        fabric_connection,
-        multicast_sem_inc_route_id,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{post_op_barrier_semaphore_noc_addr_in_pkt, 0});
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_op_barrier_semaphore), ring_size - 1);
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_op_barrier_semaphore), 0);
 
     close_connections(fabric_connection);
 
