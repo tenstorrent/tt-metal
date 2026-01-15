@@ -13,8 +13,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
 
 using tt::tt_metal::distributed::MeshCoordinateRange;
 
@@ -100,7 +98,7 @@ tt::tt_metal::Tensor ring_shift(
         "cluster_axis must be either > 0 and < {} for 2D mesh, got {} or nullopt for 1D mesh and linear topology, the "
         "actual "
         "fabric config is {}",
-        mesh_shape.dims() - 1,
+        mesh_shape.dims(),
         cluster_axis.value(),
         tt::tt_fabric::GetFabricConfig());
 
