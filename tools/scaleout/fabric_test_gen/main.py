@@ -22,6 +22,12 @@ class TorusTopology(Enum):
     RING = 2
 
 
+class Architecture(Enum):
+    INVALID_TYPE = 0
+    WORMHOLE = 1
+    BLACKHOLE = 2
+
+
 def create_test(
     name: str,
     topology: str,
@@ -33,6 +39,7 @@ def create_test(
     dst_core: list[int],
     ntype: str,
     mode: str,
+    num_links: int,
 ):
     """Create a test configuration.
 
@@ -47,12 +54,13 @@ def create_test(
         dst_core: Destination core coordinates
         ntype: Network type (unicast_write, atomic_inc, etc.)
         mode: 'latency' or 'bandwidth'
+        num_links: Number of links (1-4)
     """
     return {
-        "name": f"{name}_{mode}",
+        "name": f"{name}_{mode}_{num_links}links",
         "latency_test_mode": mode == "latency",
         "benchmark_mode": mode == "bandwidth",
-        "fabric_setup": {"topology": topology},
+        "fabric_setup": {"topology": topology, "num_links": num_links},
         "defaults": {
             "size": 1024,
             "num_packets": 10,
@@ -76,27 +84,57 @@ def create_test(
     }
 
 
-def line_test(dir: int, idx: int, dim: int, src_core: list[int], dst_core: list[int], ntype: str):
+def line_test(
+    dir: int,
+    idx: int,
+    dim: int,
+    src_core: list[int],
+    dst_core: list[int],
+    ntype: str,
+    test_modes: list[str],
+    num_links: list[int],
+):
     tests = []
     for i in range(dim - 1):
         base_name = f"x_{idx}_{i}_{i+1}" if dir == 0 else f"y_{idx}_{i}_{i+1}"
-        # Generate both latency and bandwidth tests
-        tests.append(create_test(base_name, "Linear", dir, idx, i, i + 1, src_core, dst_core, ntype, "latency"))
-        tests.append(create_test(base_name, "Linear", dir, idx, i, i + 1, src_core, dst_core, ntype, "bandwidth"))
+        # Generate test for each mode
+        for mode in test_modes:
+            # Latency tests always use num_link=1, bandwidth tests parametrize across num_links
+            links_to_test = [1] if mode == "latency" else num_links
+            for num_link in links_to_test:
+                tests.append(
+                    create_test(base_name, "Linear", dir, idx, i, i + 1, src_core, dst_core, ntype, mode, num_link)
+                )
     return tests
 
 
-def ring_test(dir: int, idx: int, dim: int, src_core: list[int], dst_core: list[int], ntype: str):
+def ring_test(
+    dir: int,
+    idx: int,
+    dim: int,
+    src_core: list[int],
+    dst_core: list[int],
+    ntype: str,
+    test_modes: list[str],
+    num_links: list[int],
+):
     tests = []
     for i in range(dim):
         base_name = f"x_{idx}_{i}_{(i+1) % dim}" if dir == 0 else f"y_{idx}_{i}_{(i+1) % dim}"
-        # Generate both latency and bandwidth tests
-        tests.append(create_test(base_name, "Ring", dir, idx, i, (i + 1) % dim, src_core, dst_core, ntype, "latency"))
-        tests.append(create_test(base_name, "Ring", dir, idx, i, (i + 1) % dim, src_core, dst_core, ntype, "bandwidth"))
+        # Generate test for each mode
+        for mode in test_modes:
+            # Latency tests always use num_link=1, bandwidth tests parametrize across num_links
+            links_to_test = [1] if mode == "latency" else num_links
+            for num_link in links_to_test:
+                tests.append(
+                    create_test(
+                        base_name, "Ring", dir, idx, i, (i + 1) % dim, src_core, dst_core, ntype, mode, num_link
+                    )
+                )
     return tests
 
 
-def gen_tests(dev_dims: list[int], dim_types: list[int], args):
+def gen_tests(dev_dims: list[int], dim_types: list[int], architecture: str, args):
     # Assume 2D for now
     if not dim_types:
         # For empty dim_types assume LINE for both
@@ -108,21 +146,43 @@ def gen_tests(dev_dims: list[int], dim_types: list[int], args):
 
     ROWS, COLS = dev_dims[0], dev_dims[1]
 
+    # This is a lot of tests to generate, double check this
+    if architecture == Architecture.WORMHOLE:
+        pass
+    elif architecture == Architecture.BLACKHOLE:
+        pass
+
     # iterate rows
     for row in range(ROWS):
         if dim_types[0] == TorusTopology.LINE.value:
-            tests.extend(line_test(0, row, COLS, list(args.src_core), list(args.dst_core), args.ntype))
+            tests.extend(
+                line_test(
+                    0, row, COLS, list(args.src_core), list(args.dst_core), args.ntype, args.test_modes, args.num_links
+                )
+            )
         elif dim_types[0] == TorusTopology.RING.value:
-            tests.extend(ring_test(0, row, COLS, list(args.src_core), list(args.dst_core), args.ntype))
+            tests.extend(
+                ring_test(
+                    0, row, COLS, list(args.src_core), list(args.dst_core), args.ntype, args.test_modes, args.num_links
+                )
+            )
         else:
             raise ValueError("Bad Topology")
 
     # iterate cols
     for col in range(COLS):
         if dim_types[1] == TorusTopology.LINE.value:
-            tests.extend(line_test(1, col, ROWS, list(args.src_core), list(args.dst_core), args.ntype))
+            tests.extend(
+                line_test(
+                    1, col, ROWS, list(args.src_core), list(args.dst_core), args.ntype, args.test_modes, args.num_links
+                )
+            )
         elif dim_types[1] == TorusTopology.RING.value:
-            tests.extend(ring_test(1, col, ROWS, list(args.src_core), list(args.dst_core), args.ntype))
+            tests.extend(
+                ring_test(
+                    1, col, ROWS, list(args.src_core), list(args.dst_core), args.ntype, args.test_modes, args.num_links
+                )
+            )
         else:
             raise ValueError("Bad Topology")
 
@@ -138,6 +198,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ntype", type=str, choices=["unicast_write", "atomic_inc", "fused_atomic_inc"], default="unicast_write"
     )
+    parser.add_argument(
+        "--test_modes",
+        type=str,
+        nargs="+",
+        choices=["latency", "bandwidth"],
+        default=["latency", "bandwidth"],
+        help="Test modes to generate (latency, bandwidth, or both)",
+    )
+    parser.add_argument(
+        "--num_links",
+        type=int,
+        nargs="+",
+        default=[1, 2, 3, 4],
+        help="Number of links to test (e.g., 1 2 3 4). Latency tests ignore this option (1 link)",
+    )
     args = parser.parse_args()
 
     with open(args.filename, "r") as f:
@@ -148,7 +223,7 @@ if __name__ == "__main__":
 
     tests = []
     for m in cfg.mesh_descriptors:
-        tests.extend(gen_tests(m.device_topology.dims, m.device_topology.dim_types, args))
+        tests.extend(gen_tests(m.device_topology.dims, m.device_topology.dim_types, m.arch, args))
 
     out = {"Tests": tests}
     with open(args.output, "w") as f:
