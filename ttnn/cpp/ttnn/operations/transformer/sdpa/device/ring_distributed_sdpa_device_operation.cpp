@@ -13,20 +13,20 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::ring_distributed_sdpa {
+namespace ttnn::prim {
 
 RingDistributedSdpaDeviceOperation::program_factory_t RingDistributedSdpaDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return program::RingDistributedSdpaMeshWorkloadFactory{};
+    const RingDistributedSDPAParams&, const RingDistributedSDPAInputs&) {
+    return RingDistributedSdpaMeshWorkloadFactory{};
 }
 
 void RingDistributedSdpaDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
     validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
     std::vector<Tensor> input_tensors = {tensor_args.q, tensor_args.k, tensor_args.v};
 
     const auto& input_tensor_q = tensor_args.q;
@@ -171,8 +171,8 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-RingDistributedSdpaDeviceOperation::spec_return_value_t RingDistributedSdpaDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+TensorSpec RingDistributedSdpaDeviceOperation::compute_output_specs(
+    const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& q_shape = input_tensor_q.logical_shape();
 
@@ -190,17 +190,16 @@ RingDistributedSdpaDeviceOperation::spec_return_value_t RingDistributedSdpaDevic
         TensorLayout(input_tensor_q.dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config));
 }
 
-RingDistributedSdpaDeviceOperation::tensor_return_value_t RingDistributedSdpaDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+Tensor RingDistributedSdpaDeviceOperation::create_output_tensors(
+    const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
 
-}  // namespace ttnn::operations::transformer::ring_distributed_sdpa
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::transformer::ring_distributed_sdpa::RingDistributedSdpaDeviceOperation::tensor_return_value_t
-ring_distributed_sdpa(
+Tensor ring_distributed_sdpa(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -210,8 +209,7 @@ ring_distributed_sdpa(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    using OperationType =
-        ttnn::operations::transformer::ring_distributed_sdpa::RingDistributedSdpaDeviceOperation;
+    using OperationType = ttnn::prim::RingDistributedSdpaDeviceOperation;
 
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));

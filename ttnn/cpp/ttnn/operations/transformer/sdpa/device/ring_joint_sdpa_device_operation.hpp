@@ -13,14 +13,14 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 
-namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa {
+namespace ttnn::prim {
 
 struct RingJointSDPADeviceOperation {
-    using operation_attributes_t = ring_joint_sdpa::operation_attributes_t;
-    using tensor_args_t = ring_joint_sdpa::tensor_args_t;
-    using spec_return_value_t = ring_joint_sdpa::spec_return_value_t;
-    using tensor_return_value_t = ring_joint_sdpa::tensor_return_value_t;
-    using program_factory_t = std::variant<program::RingJointSDPAProgramFactory>;
+    using operation_attributes_t = RingJointSDPAParams;
+    using tensor_args_t = RingJointSDPAInputs;
+    using spec_return_value_t = RingJointSDPAResultSpec;
+    using tensor_return_value_t = RingJointSDPAResult;
+    using program_factory_t = std::variant<RingJointSDPAProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -30,12 +30,7 @@ struct RingJointSDPADeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa
-
-namespace ttnn::prim {
-
-ttnn::operations::transformer::sdpa::ring_joint_sdpa::RingJointSDPADeviceOperation::tensor_return_value_t
-ring_joint_scaled_dot_product_attention(
+RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,

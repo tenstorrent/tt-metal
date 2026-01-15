@@ -9,7 +9,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::prim {
 
 struct RingSDPAFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
@@ -40,4 +40,4 @@ struct RingSDPAFusedOpSignaler {
     void push_ring_sdpa_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
 };
 
-}  // namespace ttnn::operations::transformer::detail
+}  // namespace ttnn::prim

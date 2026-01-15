@@ -13,7 +13,7 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 
-namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program {
+namespace ttnn::prim {
 
 struct RingJointSDPASharedVariables {
     uint32_t num_cores = 0;
@@ -30,25 +30,25 @@ struct RingJointSDPAProgramFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& args,
+        const RingJointSDPAParams& args,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensors);
+        const RingJointSDPAInputs& tensor_args,
+        RingJointSDPAResult& output_tensors);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& args,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensors);
+        const RingJointSDPAParams& args,
+        const RingJointSDPAInputs& tensor_args,
+        RingJointSDPAResult& output_tensors);
 
 private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create_at(
-        const operation_attributes_t& args,
+        const RingJointSDPAParams& args,
         const ttnn::MeshCoordinate& coord,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensors);
+        const RingJointSDPAInputs& tensor_args,
+        RingJointSDPAResult& output_tensors);
 };
 
-}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program
+}  // namespace ttnn::prim
