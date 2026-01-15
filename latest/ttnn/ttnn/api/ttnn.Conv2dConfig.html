@@ -25,7 +25,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="ttnn.Conv2dSliceConfig" href="ttnn.Conv2dSliceConfig.html" />
-    <link rel="prev" title="ttnn.prepare_conv_transpose2d_bias" href="ttnn.prepare_conv_transpose2d_bias.html" /> 
+    <link rel="prev" title="ttnn.prepare_conv_weights" href="ttnn.prepare_conv_weights.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -68,6 +68,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#quantization">Quantization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
@@ -79,19 +80,22 @@
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#convolution">Convolution</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="ttnn.conv1d.html">ttnn.conv1d</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.conv2d.html">ttnn.conv2d</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.conv3d.html">ttnn.experimental.conv3d</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.conv_transpose2d.html">ttnn.conv_transpose2d</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_weights.html">ttnn.prepare_conv_weights</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.conv3d.html">ttnn.experimental.conv3d</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_bias.html">ttnn.prepare_conv_bias</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_transpose2d_weights.html">ttnn.prepare_conv_transpose2d_weights</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_transpose2d_bias.html">ttnn.prepare_conv_transpose2d_bias</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_transpose2d_weights.html">ttnn.prepare_conv_transpose2d_weights</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_weights.html">ttnn.prepare_conv_weights</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.Conv2dConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.Conv2dSliceConfig.html">ttnn.Conv2dSliceConfig</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#prefetcher">Prefetcher</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#generic">Generic</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#backward-operations">Backward operations</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
@@ -146,7 +150,7 @@
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">Conv2dConfig</span></span><a class="headerlink" href="#ttnn.Conv2dConfig" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">pybind11_object</span></code></p>
+<p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
 <p>Conv2DConfig is a structure that contains all the Tenstorrent device specific &amp; implementation specific flags for the <a class="reference internal" href="ttnn.conv1d.html#ttnn.conv1d" title="ttnn.conv1d"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.conv1d()</span></code></a>, <a class="reference internal" href="ttnn.conv2d.html#ttnn.conv2d" title="ttnn.conv2d"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.conv2d()</span></code></a> and <a class="reference internal" href="ttnn.conv_transpose2d.html#ttnn.conv_transpose2d" title="ttnn.conv_transpose2d"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.conv_transpose2d()</span></code></a> ops</p>
 <dl class="py property">
 <dt class="sig sig-object py" id="ttnn.Conv2dConfig.act_block_h_override">
@@ -436,7 +440,7 @@ If ttnn.bfloat8_b is selected, then the weights should be passed in as ttnn.bflo
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.prepare_conv_transpose2d_bias.html" class="btn btn-neutral float-left" title="ttnn.prepare_conv_transpose2d_bias" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.prepare_conv_weights.html" class="btn btn-neutral float-left" title="ttnn.prepare_conv_weights" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="ttnn.Conv2dSliceConfig.html" class="btn btn-neutral float-right" title="ttnn.Conv2dSliceConfig" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

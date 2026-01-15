@@ -27,7 +27,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="ttnn.layer_norm" href="ttnn.layer_norm.html" />
-    <link rel="prev" title="ttnn.sort" href="ttnn.sort.html" /> 
+    <link rel="prev" title="ttnn.batch_norm" href="ttnn.batch_norm.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -70,23 +70,24 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#quantization">Quantization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#normalization">Normalization</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.batch_norm.html">ttnn.batch_norm</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.group_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm.html">ttnn.layer_norm</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_pre_all_gather.html">ttnn.layer_norm_pre_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_post_all_gather.html">ttnn.layer_norm_post_all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_pre_all_gather.html">ttnn.layer_norm_pre_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm.html">ttnn.rms_norm</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_pre_all_gather.html">ttnn.rms_norm_pre_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_post_all_gather.html">ttnn.rms_norm_post_all_gather</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.batch_norm.html">ttnn.batch_norm</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax.html">ttnn.softmax</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax_in_place.html">ttnn.softmax_in_place</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax_in_place.html">ttnn.scale_mask_softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_pre_all_gather.html">ttnn.rms_norm_pre_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.scale_causal_mask_hw_dims_softmax_in_place.html">ttnn.scale_causal_mask_hw_dims_softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax_in_place.html">ttnn.scale_mask_softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax.html">ttnn.softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax_in_place.html">ttnn.softmax_in_place</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
@@ -95,8 +96,11 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#prefetcher">Prefetcher</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#generic">Generic</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#backward-operations">Backward operations</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
@@ -284,7 +288,7 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <dd>
 <ul class="simple">
 <li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device</p></li>
-<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, N*H*W must be a multiple of the tile size (32) and C must divide evenly into <code class="xref py py-attr docutils literal notranslate"><span class="pre">num_groups</span></code>.</p></li>
+<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, H*W must be a multiple of the tile size (32) and C must be a multiple of the tile size and divide evenly into <code class="xref py py-attr docutils literal notranslate"><span class="pre">num_groups</span></code>.</p></li>
 <li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_mask</span></code>, C must match the number of groups, H must match a tile’s height, and W must be a multiple of a tile’s width.</p></li>
 <li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">gamma</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">beta</span></code> must be provided</p></li>
 <li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">inplace</span></code> is not supported for TILE-layout inputs and requires input and output layouts to be identical.</p></li>
@@ -451,7 +455,7 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.sort.html" class="btn btn-neutral float-left" title="ttnn.sort" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.batch_norm.html" class="btn btn-neutral float-left" title="ttnn.batch_norm" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="ttnn.layer_norm.html" class="btn btn-neutral float-right" title="ttnn.layer_norm" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

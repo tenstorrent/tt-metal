@@ -25,7 +25,7 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="tt-triage" href="triage.html" />
-    <link rel="prev" title="Lightweight Kernel Asserts" href="lightweight_kernel_asserts.html" /> 
+    <link rel="prev" title="LLK Asserts" href="llk_asserts.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -69,6 +69,7 @@
 <li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
 <li class="toctree-l2"><a class="reference internal" href="device_program_profiler.html">Device Program Profiler</a></li>
 <li class="toctree-l2"><a class="reference internal" href="lightweight_kernel_asserts.html">Lightweight Kernel Asserts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="llk_asserts.html">LLK Asserts</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Inspector</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#enabling">Enabling</a></li>
@@ -132,7 +133,6 @@ and query Metal host runtime data.</p>
 <p>Configure the Inspector by setting the following environment variables:</p>
 <div class="highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">TT_METAL_INSPECTOR</span><span class="o">=</span><span class="mi">1</span>                                  <span class="c1"># optional: enable/disable the Inspector. Default is `1` (enabled).</span>
-<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_LOG_PATH</span><span class="o">=</span><span class="n">logging_path</span>              <span class="c1"># optional: set logging path. Default is `$TT_METAL_HOME/generated/inspector`</span>
 <span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT</span><span class="o">=</span><span class="mi">1</span>      <span class="c1"># optional: enable/disable stopping execution if the Inspector is not initialized properly. Default is `0` (disabled).</span>
 <span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS</span><span class="o">=</span><span class="mi">0</span>         <span class="c1"># optional: enable/disable warnings on logging write exceptions (like disk out of space). Default is `1` (enabled).</span>
 <span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS</span><span class="o">=</span><span class="n">localhost</span><span class="p">:</span><span class="mi">50051</span> <span class="c1"># optional: set the address of the Inspector RPC server. Default is `localhost:50051`.</span>
@@ -228,7 +228,7 @@ If you run a <code class="docutils literal notranslate"><span class="pre">tt-tri
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="lightweight_kernel_asserts.html" class="btn btn-neutral float-left" title="Lightweight Kernel Asserts" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="llk_asserts.html" class="btn btn-neutral float-left" title="LLK Asserts" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="triage.html" class="btn btn-neutral float-right" title="tt-triage" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

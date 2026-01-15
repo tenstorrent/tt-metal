@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.kv_cache.fill_cache_for_user_" href="ttnn.kv_cache.fill_cache_for_user_.html" />
-    <link rel="prev" title="ttnn.avg_pool2d" href="ttnn.avg_pool2d.html" /> 
+    <link rel="next" title="ttnn.generic_op" href="ttnn.generic_op.html" />
+    <link rel="prev" title="ttnn.grid_sample" href="ttnn.grid_sample.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -68,6 +68,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#quantization">Quantization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
@@ -78,11 +79,15 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#prefetcher">Prefetcher</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#vision">Vision</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.grid_sample.html">ttnn.grid_sample</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.upsample</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#generic">Generic</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#backward-operations">Backward operations</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
@@ -134,25 +139,38 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.upsample">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">upsample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale_factor:</span> <span class="pre">int</span> <span class="pre">or</span> <span class="pre">tt::tt_metal::Array2D</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.upsample" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">upsample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">scale_factor:</span> <span class="pre">int,</span> <span class="pre">float,</span> <span class="pre">[int,</span> <span class="pre">int],</span> <span class="pre">or</span> <span class="pre">[float,</span> <span class="pre">float],</span> <span class="pre">*,</span> <span class="pre">mode:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">nearest,</span> <span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">ttnn.DeviceComputeKernelConfig</span> <span class="pre">=</span> <span class="pre">None</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.upsample" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Upsamples a given multi-channel 2D (spatial) data.
 The input data is assumed to be of the form [N, H, W, C].</p>
-<p>The algorithms available for upsampling are ‘nearest’ for now.</p>
+<p>Supports both integer and floating-point scale factors with automatic routing
+to optimized implementations:
+- Integer scales: Optimized path with reader/writer replication (fastest)
+- Float scales: General path with coordinate mapping (supports fractional scales)</p>
+<p>The algorithms available for upsampling are ‘nearest’ and ‘bilinear’.
+Note: ‘bilinear’ mode requires integer scale factors.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
 <li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
-<li><p><strong>scale_factor</strong> (<em>int</em><em> or </em><em>tt::tt_metal::Array2D</em>) – multiplier for spatial size.</p></li>
+<li><p><strong>scale_factor</strong> (<em>int</em><em>, </em><em>float</em><em>, </em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em><em>, or </em><em>[</em><em>float</em><em>, </em><em>float</em><em>]</em>) – multiplier for spatial size.
+- int: uniform integer scale for both H and W
+- float: uniform float scale for both H and W
+- [int, int]: separate integer scales for [H, W]
+- [float, float]: separate float scales for [H, W]</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p>
+<ul class="simple">
+<li><p><strong>mode</strong> (<em>str</em><em>, </em><em>optional</em>) – upsampling mode - ‘nearest’ or ‘bilinear’. Defaults to ‘nearest’.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration. Defaults to <cite>None</cite>.</p></li>
+</ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
@@ -160,6 +178,26 @@ The input data is assumed to be of the form [N, H, W, C].</p>
 <p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
+<div class="admonition-examples admonition">
+<p class="admonition-title">Examples</p>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Integer scale (optimized path)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">upsample</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">upsample</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+</pre></div>
+</div>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Float scale (general path)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">upsample</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="mf">1.5</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">upsample</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="p">[</span><span class="mf">1.5</span><span class="p">,</span> <span class="mf">2.5</span><span class="p">])</span>
+</pre></div>
+</div>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Bilinear mode (integer scales only)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">upsample</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">"bilinear"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 
@@ -170,8 +208,8 @@ The input data is assumed to be of the form [N, H, W, C].</p>
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.avg_pool2d.html" class="btn btn-neutral float-left" title="ttnn.avg_pool2d" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.kv_cache.fill_cache_for_user_.html" class="btn btn-neutral float-right" title="ttnn.kv_cache.fill_cache_for_user_" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.grid_sample.html" class="btn btn-neutral float-left" title="ttnn.grid_sample" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.generic_op.html" class="btn btn-neutral float-right" title="ttnn.generic_op" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

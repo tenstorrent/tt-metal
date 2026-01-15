@@ -26,7 +26,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.layer_norm_pre_all_gather" href="ttnn.layer_norm_pre_all_gather.html" />
+    <link rel="next" title="ttnn.layer_norm_post_all_gather" href="ttnn.layer_norm_post_all_gather.html" />
     <link rel="prev" title="ttnn.group_norm" href="ttnn.group_norm.html" /> 
 </head>
 
@@ -70,23 +70,24 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#quantization">Quantization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#normalization">Normalization</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.batch_norm.html">ttnn.batch_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.group_norm.html">ttnn.group_norm</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.layer_norm</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_pre_all_gather.html">ttnn.layer_norm_pre_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_post_all_gather.html">ttnn.layer_norm_post_all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_pre_all_gather.html">ttnn.layer_norm_pre_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm.html">ttnn.rms_norm</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_pre_all_gather.html">ttnn.rms_norm_pre_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_post_all_gather.html">ttnn.rms_norm_post_all_gather</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.batch_norm.html">ttnn.batch_norm</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax.html">ttnn.softmax</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax_in_place.html">ttnn.softmax_in_place</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax_in_place.html">ttnn.scale_mask_softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_pre_all_gather.html">ttnn.rms_norm_pre_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.scale_causal_mask_hw_dims_softmax_in_place.html">ttnn.scale_causal_mask_hw_dims_softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax_in_place.html">ttnn.scale_mask_softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax.html">ttnn.softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax_in_place.html">ttnn.softmax_in_place</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
@@ -95,8 +96,11 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#prefetcher">Prefetcher</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#generic">Generic</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#backward-operations">Backward operations</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
@@ -273,7 +277,7 @@ See <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer 
 <dd>
 <ul class="simple">
 <li><p>Interleaved: DRAM and L1</p></li>
-<li><p>Sharded (L1): Block sharded</p></li>
+<li><p>Sharded (L1): Width and Block sharded</p></li>
 </ul>
 </dd>
 <dt>Limitations:</dt>
@@ -311,7 +315,7 @@ See <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer 
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="ttnn.group_norm.html" class="btn btn-neutral float-left" title="ttnn.group_norm" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.layer_norm_pre_all_gather.html" class="btn btn-neutral float-right" title="ttnn.layer_norm_pre_all_gather" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.layer_norm_post_all_gather.html" class="btn btn-neutral float-right" title="ttnn.layer_norm_post_all_gather" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

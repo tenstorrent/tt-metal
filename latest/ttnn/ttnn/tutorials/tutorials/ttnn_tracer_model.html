@@ -141,16 +141,16 @@
 <div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate">
-<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
-<span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">"TTNN_CONFIG_OVERRIDES"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"{</span><span class="se">\"</span><span class="s2">enable_fast_runtime_mode</span><span class="se">\"</span><span class="s2">: false}"</span>
+<div class="input_area highlight-none notranslate">
+<div class="highlight"><pre><span></span>import os
+from pathlib import Path
+os.environ["TTNN_CONFIG_OVERRIDES"] = "{\"enable_fast_runtime_mode\": false}"
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">transformers</span>
+import torch
+import transformers
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">ttnn.tracer</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace</span><span class="p">,</span> <span class="n">visualize</span>
+import ttnn
+from ttnn.tracer import trace, visualize
 </pre></div>
 </div>
 </div>
@@ -164,8 +164,8 @@
 <div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate">
-<div class="highlight"><pre><span></span><span class="n">transformers</span><span class="o">.</span><span class="n">logging</span><span class="o">.</span><span class="n">set_verbosity_error</span><span class="p">()</span>
+<div class="input_area highlight-none notranslate">
+<div class="highlight"><pre><span></span>transformers.logging.set_verbosity_error()
 </pre></div>
 </div>
 </div>
@@ -182,17 +182,17 @@
 <div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate">
-<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
-    <span class="c1"># Create a random integer tensor of shape (1, 64) with values between 0-99</span>
-    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">))</span>
-    <span class="c1"># Apply exponential function element-wise</span>
-    <span class="c1"># This demonstrates how mathematical operations are captured</span>
-    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+<div class="input_area highlight-none notranslate">
+<div class="highlight"><pre><span></span>with trace():
+    # Create a random integer tensor of shape (1, 64) with values between 0-99
+    tensor = torch.randint(0, 100, (1, 64), dtype=torch.int32)
+    # Apply exponential function element-wise
+    # This demonstrates how mathematical operations are captured
+    tensor = torch.exp(tensor)
 
-<span class="c1"># Visualize the computational graph of the traced operations</span>
-<span class="c1"># This will show the flow from random tensor creation to exp operation</span>
-<span class="n">visualize</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+# Visualize the computational graph of the traced operations
+# This will show the flow from random tensor creation to exp operation
+visualize(tensor)
 </pre></div>
 </div>
 </div>
@@ -207,24 +207,24 @@
 <div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate">
-<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
-    <span class="c1"># Create a PyTorch tensor with shape (4, 64)</span>
-    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">64</span><span class="p">))</span>
+<div class="input_area highlight-none notranslate">
+<div class="highlight"><pre><span></span>with trace():
+    # Create a PyTorch tensor with shape (4, 64)
+    tensor = torch.randint(0, 100, (4, 64), dtype=torch.int32)
 
-    <span class="c1"># Convert PyTorch tensor to TT-NN format</span>
-    <span class="c1"># This operation moves data to the TT-NN representation</span>
-    <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+    # Convert PyTorch tensor to TT-NN format
+    # This operation moves data to the TT-NN representation
+    tensor = ttnn.from_torch(tensor)
 
-    <span class="c1"># Reshape the tensor from (4, 64) to (2, 4, 32)</span>
-    <span class="c1"># This demonstrates how reshape operations are handled in TT-NN</span>
-    <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+    # Reshape the tensor from (4, 64) to (2, 4, 32)
+    # This demonstrates how reshape operations are handled in TT-NN
+    tensor = ttnn.reshape(tensor, (2, 4, 32))
 
-    <span class="c1"># Convert back to PyTorch for visualization</span>
-    <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+    # Convert back to PyTorch for visualization
+    tensor = ttnn.to_torch(tensor)
 
-<span class="c1"># Visualize the graph showing PyTorch → TT-NN → reshape → PyTorch conversion</span>
-<span class="n">visualize</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+# Visualize the graph showing PyTorch → TT-NN → reshape → PyTorch conversion
+visualize(tensor)
 </pre></div>
 </div>
 </div>
@@ -238,50 +238,50 @@
 <div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate">
-<div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">download_google_bert_model_and_config</span><span class="p">(</span>
-    <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">transformers</span><span class="o">.</span><span class="n">models</span><span class="o">.</span><span class="n">bert</span><span class="o">.</span><span class="n">modeling_bert</span><span class="o">.</span><span class="n">BertSelfOutput</span><span class="p">,</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="p">]:</span>
-    <span class="n">model_location</span> <span class="o">=</span> <span class="n">model_name</span>  <span class="c1"># By default, download from Hugging Face</span>
+<div class="input_area highlight-none notranslate">
+<div class="highlight"><pre><span></span>def download_google_bert_model_and_config(
+    model_name: str,
+) -&gt; tuple[transformers.models.bert.modeling_bert.BertSelfOutput, transformers.BertConfig]:
+    model_location = model_name  # By default, download from Hugging Face
 
-    <span class="c1"># If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face</span>
-    <span class="n">cache_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"TTNN_TUTORIALS_MODELS_TRACER_PATH"</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">cache_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">model_location</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">cache_dir</span><span class="p">)</span> <span class="o">/</span> <span class="n">Path</span><span class="p">(</span><span class="s2">"config_google_bert.json"</span><span class="p">)</span>
+    # If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face
+    cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_TRACER_PATH")
+    if cache_dir is not None:
+        model_location = Path(cache_dir) / Path("config_google_bert.json")
 
-    <span class="c1"># Load model weights (download if cache_dir was not set)</span>
-    <span class="n">config</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">model_location</span><span class="p">)</span>
-    <span class="n">model</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">models</span><span class="o">.</span><span class="n">bert</span><span class="o">.</span><span class="n">modeling_bert</span><span class="o">.</span><span class="n">BertSelfOutput</span><span class="p">(</span><span class="n">config</span><span class="p">)</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+    # Load model weights (download if cache_dir was not set)
+    config = transformers.BertConfig.from_pretrained(model_location)
+    model = transformers.models.bert.modeling_bert.BertSelfOutput(config).eval()
 
-    <span class="k">return</span> <span class="n">model</span><span class="p">,</span> <span class="n">config</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">download_ttnn_bert_config</span><span class="p">(</span><span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="p">:</span>
-    <span class="n">config_location</span> <span class="o">=</span> <span class="n">model_name</span>  <span class="c1"># By default, download from Hugging Face</span>
-
-    <span class="c1"># If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face</span>
-    <span class="n">cache_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"TTNN_TUTORIALS_MODELS_TRACER_PATH"</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">cache_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">config_location</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">cache_dir</span><span class="p">)</span> <span class="o">/</span> <span class="n">Path</span><span class="p">(</span><span class="s2">"config_ttnn_bert.json"</span><span class="p">)</span>
-
-    <span class="c1"># Load config (download if cache_dir was not set)</span>
-    <span class="n">config</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">config_location</span><span class="p">)</span>
-
-    <span class="k">return</span> <span class="n">config</span>
+    return model, config
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">download_ttnn_bert_model</span><span class="p">(</span><span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertForQuestionAnswering</span><span class="p">:</span>
-    <span class="n">model_location</span> <span class="o">=</span> <span class="n">model_name</span>  <span class="c1"># By default, download from Hugging Face</span>
+def download_ttnn_bert_config(model_name: str) -&gt; transformers.BertConfig:
+    config_location = model_name  # By default, download from Hugging Face
 
-    <span class="c1"># If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face</span>
-    <span class="n">cache_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"TTNN_TUTORIALS_MODELS_TRACER_PATH"</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">cache_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">model_location</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">cache_dir</span><span class="p">)</span>
+    # If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face
+    cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_TRACER_PATH")
+    if cache_dir is not None:
+        config_location = Path(cache_dir) / Path("config_ttnn_bert.json")
 
-    <span class="c1"># Load model weights (download if cache_dir was not set)</span>
-    <span class="n">model</span> <span class="o">=</span> <span class="n">transformers</span><span class="o">.</span><span class="n">BertForQuestionAnswering</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">model_location</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+    # Load config (download if cache_dir was not set)
+    config = transformers.BertConfig.from_pretrained(config_location)
 
-    <span class="k">return</span> <span class="n">model</span>
+    return config
+
+
+def download_ttnn_bert_model(model_name: str, config: transformers.BertConfig) -&gt; transformers.BertForQuestionAnswering:
+    model_location = model_name  # By default, download from Hugging Face
+
+    # If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face
+    cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_TRACER_PATH")
+    if cache_dir is not None:
+        model_location = Path(cache_dir)
+
+    # Load model weights (download if cache_dir was not set)
+    model = transformers.BertForQuestionAnswering.from_pretrained(model_location, config=config).eval()
+
+    return model
 </pre></div>
 </div>
 </div>
@@ -297,26 +297,23 @@
 <div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate">
-<div class="highlight"><pre><span></span><span class="n">model_name</span> <span class="o">=</span> <span class="s2">"google/bert_uncased_L-4_H-256_A-4"</span>
-<span class="n">model</span><span class="p">,</span> <span class="n">config</span> <span class="o">=</span> <span class="n">download_google_bert_model_and_config</span><span class="p">(</span><span class="n">model_name</span><span class="p">)</span>
+<div class="input_area highlight-none notranslate">
+<div class="highlight"><pre><span></span>model_name = "google/bert_uncased_L-4_H-256_A-4"
+model, config = download_google_bert_model_and_config(model_name)
 
-<span class="c1"># Trace the BERT self-output layer operations</span>
-<span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
-    <span class="c1"># Create dummy inputs matching the expected dimensions</span>
-    <span class="c1"># hidden_states: output from self-attention (batch=1, seq_len=64, hidden_size=256)</span>
-    <span class="n">hidden_states</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">hidden_size</span><span class="p">))</span>
-    <span class="c1"># input_tensor: residual connection input</span>
-    <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">hidden_size</span><span class="p">))</span>
+# Trace the BERT self-output layer operations
+with trace():
+    # Create dummy inputs matching the expected dimensions
+    # hidden_states: output from self-attention (batch=1, seq_len=64, hidden_size=256)
+    hidden_states = torch.rand((1, 64, config.hidden_size))
+    # input_tensor: residual connection input
+    input_tensor = torch.rand((1, 64, config.hidden_size))
 
-    <span class="c1"># Run the layer forward pass</span>
-    <span class="n">hidden_states</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">hidden_states</span><span class="p">,</span> <span class="n">input_tensor</span><span class="p">)</span>
+    # Run the layer forward pass
+    output = model(hidden_states, input_tensor)
 
-    <span class="c1"># Convert output to TT-NN format for visualization</span>
-    <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">hidden_states</span><span class="p">)</span>
-
-<span class="c1"># Visualize the BERT layer computation graph</span>
-<span class="n">visualize</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+# Visualize the BERT layer computation graph
+visualize(output)
 </pre></div>
 </div>
 </div>
@@ -328,21 +325,21 @@
 <div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># Configure the dispatch core type based on the architecture</span>
-<span class="c1"># ETH cores are used on newer architectures, WORKER cores on Grayskull</span>
-<span class="n">dispatch_core_type</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreType</span><span class="o">.</span><span class="n">ETH</span>
-<span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"ARCH_NAME"</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">"grayskull"</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"ARCH_NAME"</span><span class="p">):</span>
-    <span class="n">dispatch_core_type</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreType</span><span class="o">.</span><span class="n">WORKER</span>
+<div class="input_area highlight-none notranslate">
+<div class="highlight"><pre><span></span># Configure the dispatch core type based on the architecture
+# ETH cores are used on newer architectures, WORKER cores on Grayskull
+dispatch_core_type = ttnn.device.DispatchCoreType.ETH
+if os.environ.get("ARCH_NAME") and "grayskull" in os.environ.get("ARCH_NAME"):
+    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
 
-<span class="c1"># Open device with custom configuration</span>
-<span class="c1"># - l1_small_size: Set L1 memory allocation to 8KB for small tensors</span>
-<span class="c1"># - dispatch_core_config: Configure which cores handle dispatch operations</span>
-<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span>
-    <span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
-    <span class="n">l1_small_size</span><span class="o">=</span><span class="mi">8192</span><span class="p">,</span>
-    <span class="n">dispatch_core_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreConfig</span><span class="p">(</span><span class="n">dispatch_core_type</span><span class="p">)</span>
-<span class="p">)</span>
+# Open device with custom configuration
+# - l1_small_size: Set L1 memory allocation to 8KB for small tensors
+# - dispatch_core_config: Configure which cores handle dispatch operations
+device = ttnn.open_device(
+    device_id=0,
+    l1_small_size=8192,
+    dispatch_core_config=ttnn.device.DispatchCoreConfig(dispatch_core_type)
+)
 </pre></div>
 </div>
 </div>
@@ -351,85 +348,85 @@
 <div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate">
-<div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">models.demos.bert.tt</span><span class="w"> </span><span class="kn">import</span> <span class="n">ttnn_bert</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">models.demos.bert.tt</span><span class="w"> </span><span class="kn">import</span> <span class="n">ttnn_optimized_bert</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">ttnn.model_preprocessing</span><span class="w"> </span><span class="kn">import</span> <span class="n">preprocess_model_parameters</span>
+<div class="input_area highlight-none notranslate">
+<div class="highlight"><pre><span></span>from models.demos.bert.tt import ttnn_bert
+from models.demos.bert.tt import ttnn_optimized_bert
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">ttnn_bert</span><span class="p">(</span><span class="n">bert</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">"""</span>
-<span class="sd">    Run and trace a complete BERT model for question answering.</span>
+def ttnn_bert(bert):
+    """
+    Run and trace a complete BERT model for question answering.
 
-<span class="sd">    Args:</span>
-<span class="sd">        bert: Either ttnn_bert or ttnn_optimized_bert module</span>
-<span class="sd">    """</span>
-    <span class="c1"># Use a larger BERT model fine-tuned for question answering</span>
-    <span class="n">model_name</span> <span class="o">=</span> <span class="s2">"phiyodr/bert-large-finetuned-squad2"</span>
-    <span class="n">config</span> <span class="o">=</span> <span class="n">download_ttnn_bert_config</span><span class="p">(</span><span class="n">model_name</span><span class="p">)</span>
+    Args:
+        bert: Either ttnn_bert or ttnn_optimized_bert module
+    """
+    # Use a larger BERT model fine-tuned for question answering
+    model_name = "phiyodr/bert-large-finetuned-squad2"
+    config = download_ttnn_bert_config(model_name)
 
-    <span class="c1"># Limit to 1 layer for faster execution in this demo</span>
-    <span class="c1"># Full BERT-large has 24 layers</span>
-    <span class="n">config</span><span class="o">.</span><span class="n">num_hidden_layers</span> <span class="o">=</span> <span class="mi">1</span>
+    # Limit to 1 layer for faster execution in this demo
+    # Full BERT-large has 24 layers
+    config.num_hidden_layers = 1
 
-    <span class="c1"># Set batch size and sequence length for input</span>
-    <span class="n">batch_size</span> <span class="o">=</span> <span class="mi">8</span>
-    <span class="n">sequence_size</span> <span class="o">=</span> <span class="mi">384</span>  <span class="c1"># Standard for question answering tasks</span>
+    # Set batch size and sequence length for input
+    batch_size = 8
+    sequence_size = 384  # Standard for question answering tasks
 
-    <span class="c1"># ===== Model Parameter Preprocessing =====</span>
-    <span class="c1"># Convert model parameters to TT-NN format and optimize for device</span>
-    <span class="c1"># This includes weight packing, layout conversion, and memory placement</span>
-    <span class="n">model</span> <span class="o">=</span> <span class="n">download_ttnn_bert_model</span><span class="p">(</span><span class="n">model_name</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span>
-    <span class="n">parameters</span> <span class="o">=</span> <span class="n">preprocess_model_parameters</span><span class="p">(</span>
-        <span class="n">initialize_model</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">model</span><span class="p">,</span>
-        <span class="n">custom_preprocessor</span><span class="o">=</span><span class="n">bert</span><span class="o">.</span><span class="n">custom_preprocessor</span><span class="p">,</span>
-        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-    <span class="p">)</span>
+    # ===== Model Parameter Preprocessing =====
+    # Convert model parameters to TT-NN format and optimize for device
+    # This includes weight packing, layout conversion, and memory placement
+    model = download_ttnn_bert_model(model_name, config)
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        custom_preprocessor=bert.custom_preprocessor,
+        device=device,
+    )
 
-    <span class="c1"># ===== Trace BERT Inference =====</span>
-    <span class="k">with</span> <span class="n">trace</span><span class="p">():</span>
-        <span class="c1"># Create dummy input tensors</span>
-        <span class="c1"># input_ids: Token IDs from vocabulary</span>
-        <span class="n">input_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">vocab_size</span><span class="p">,</span> <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">))</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+    # ===== Trace BERT Inference =====
+    with trace():
+        # Create dummy input tensors
+        # input_ids: Token IDs from vocabulary
+        input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.uint32)
 
-        <span class="c1"># token_type_ids: Segment IDs (0 for question, 1 for context in QA)</span>
-        <span class="n">torch_token_type_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+        # token_type_ids: Segment IDs (0 for question, 1 for context in QA)
+        torch_token_type_ids = torch.ones((batch_size, sequence_size), dtype=torch.uint32)
 
-        <span class="c1"># position_ids: Position embeddings (usually just 0 to sequence_length-1)</span>
-        <span class="n">torch_position_ids</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+        # position_ids: Position embeddings (usually just 0 to sequence_length-1)
+        torch_position_ids = torch.ones((batch_size, sequence_size), dtype=torch.uint32)
 
-        <span class="c1"># attention_mask: Mask for padding tokens (only for optimized version)</span>
-        <span class="c1"># Shape differs between regular and optimized BERT implementations</span>
-        <span class="n">torch_attention_mask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">sequence_size</span><span class="p">)</span> <span class="k">if</span> <span class="n">bert</span> <span class="o">==</span> <span class="n">ttnn_optimized_bert</span> <span class="k">else</span> <span class="kc">None</span>
+        # attention_mask: Mask for padding tokens (only for optimized version)
+        # Shape differs between regular and optimized BERT implementations
+        torch_attention_mask = torch.zeros(1, sequence_size, dtype=torch.bfloat16) if bert == ttnn_optimized_bert else None
 
-        <span class="c1"># Preprocess inputs for TT-NN format</span>
-        <span class="c1"># This converts PyTorch tensors to device tensors with appropriate layout</span>
-        <span class="n">ttnn_bert_inputs</span> <span class="o">=</span> <span class="n">bert</span><span class="o">.</span><span class="n">preprocess_inputs</span><span class="p">(</span>
-            <span class="n">input_ids</span><span class="p">,</span>
-            <span class="n">torch_token_type_ids</span><span class="p">,</span>
-            <span class="n">torch_position_ids</span><span class="p">,</span>
-            <span class="n">torch_attention_mask</span><span class="p">,</span>
-            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-        <span class="p">)</span>
+        # Preprocess inputs for TT-NN format
+        # This converts PyTorch tensors to device tensors with appropriate layout
+        ttnn_bert_inputs = bert.preprocess_inputs(
+            input_ids,
+            torch_token_type_ids,
+            torch_position_ids,
+            torch_attention_mask,
+            device=device,
+        )
 
-        <span class="c1"># Run BERT model for question answering</span>
-        <span class="c1"># Returns start and end logits for answer span prediction</span>
-        <span class="n">output</span> <span class="o">=</span> <span class="n">bert</span><span class="o">.</span><span class="n">bert_for_question_answering</span><span class="p">(</span>
-            <span class="n">config</span><span class="p">,</span>
-            <span class="o">*</span><span class="n">ttnn_bert_inputs</span><span class="p">,</span>
-            <span class="n">parameters</span><span class="o">=</span><span class="n">parameters</span><span class="p">,</span>
-        <span class="p">)</span>
+        # Run BERT model for question answering
+        # Returns start and end logits for answer span prediction
+        output = bert.bert_for_question_answering(
+            config,
+            *ttnn_bert_inputs,
+            parameters=parameters,
+        )
 
-        <span class="c1"># Move output back from device to host for visualization</span>
-        <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_device</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+        # Move output back from device to host for visualization
+        output = ttnn.from_device(output)
 
-    <span class="c1"># Visualize the complete BERT computation graph</span>
-    <span class="k">return</span> <span class="n">visualize</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+    # Visualize the complete BERT computation graph
+    return visualize(output)
 
 
-<span class="c1"># Run the optimized BERT implementation</span>
-<span class="c1"># This version includes TT-NN specific optimizations for better performance</span>
-<span class="n">ttnn_bert</span><span class="p">(</span><span class="n">ttnn_optimized_bert</span><span class="p">)</span>
+# Run the optimized BERT implementation
+# This version includes TT-NN specific optimizations for better performance
+ttnn_bert(ttnn_optimized_bert)
 </pre></div>
 </div>
 </div>
@@ -442,8 +439,8 @@
 <div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate">
-<div class="highlight"><pre><span></span><span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<div class="input_area highlight-none notranslate">
+<div class="highlight"><pre><span></span>ttnn.close_device(device)
 </pre></div>
 </div>
 </div>

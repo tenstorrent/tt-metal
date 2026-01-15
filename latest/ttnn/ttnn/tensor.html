@@ -68,7 +68,7 @@
 <li class="toctree-l2"><a class="reference internal" href="#apis">APIs</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#ttnn.Shape"><code class="docutils literal notranslate"><span class="pre">Shape</span></code></a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#ttnn.Shape.rank"><code class="docutils literal notranslate"><span class="pre">Shape.rank</span></code></a></li>
-<li class="toctree-l4"><a class="reference internal" href="#ttnn.Shape.to_rank"><code class="docutils literal notranslate"><span class="pre">Shape.to_rank()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#ttnn.Shape.to_rank"><code class="docutils literal notranslate"><span class="pre">Shape.to_rank</span></code></a></li>
 </ul>
 </li>
 </ul>
@@ -372,17 +372,19 @@ Use <a class="reference internal" href="api/ttnn.create_sharded_memory_config.ht
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">Shape</span></span><a class="headerlink" href="#ttnn.Shape" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">pybind11_object</span></code></p>
+<p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
 <dl class="py property">
 <dt class="sig sig-object py" id="ttnn.Shape.rank">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">rank</span></span><a class="headerlink" href="#ttnn.Shape.rank" title="Permalink to this definition"></a>
 </dt>
-<dd></dd>
+<dd>
+<p>(self) -&gt; int</p>
+</dd>
 </dl>
 
-<dl class="py method">
+<dl class="py attribute">
 <dt class="sig sig-object py" id="ttnn.Shape.to_rank">
-<span class="sig-name descname"><span class="pre">to_rank</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Shape" title="ttnn._ttnn.types.Shape"><span class="pre">ttnn._ttnn.types.Shape</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg0</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="#ttnn.Shape" title="ttnn._ttnn.types.Shape"><span class="pre">ttnn._ttnn.types.Shape</span></a></span></span><a class="headerlink" href="#ttnn.Shape.to_rank" title="Permalink to this definition"></a>
+<span class="sig-name descname"><span class="pre">to_rank</span></span><a class="headerlink" href="#ttnn.Shape.to_rank" title="Permalink to this definition"></a>
 </dt>
 <dd></dd>
 </dl>

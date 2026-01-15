@@ -61,7 +61,7 @@
 <li class="toctree-l1 current"><a class="reference internal" href="../api.html">APIs</a><ul class="current">
 <li class="toctree-l2 current"><a class="reference internal" href="../api.html#device">Device</a><ul class="current">
 <li class="toctree-l3 current"><a class="current reference internal" href="#">ttnn.open_device</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#ttnn.open_device"><code class="docutils literal notranslate"><span class="pre">open_device()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#ttnn.open_device"><code class="docutils literal notranslate"><span class="pre">open_device</span></code></a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="ttnn.close_device.html">ttnn.close_device</a></li>
@@ -121,11 +121,12 @@
   <section id="ttnn-open-device">
 <h1>ttnn.open_device<a class="headerlink" href="#ttnn-open-device" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py function">
+<span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.open_device">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">open_device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device_id:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">l1_small_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">trace_region_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_command_queues:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dispatch_core_config:</span> <span class="pre">ttnn._ttnn.device.DispatchCoreConfig</span> <span class="pre">=</span> <span class="pre">&lt;ttnn._ttnn.device.DispatchCoreConfig</span> <span class="pre">object</span> <span class="pre">at</span> <span class="pre">0x7fe94266ebf0&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">worker_l1_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.multi_device.MeshDevice</span></span></span><a class="headerlink" href="#ttnn.open_device" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">open_device</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">&lt;nanobind.nb_func</span> <span class="pre">object&gt;</span></em><a class="headerlink" href="#ttnn.open_device" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p>int, l1_small_size: int, trace_region_size: int, dispatch_core_config: ttnn.device.DispatchCoreConfig, worker_l1_size: int)</p>
 <p>Open a device with the given device_id. If the device is already open, return the existing device.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Keyword Arguments<span class="colon">:</span>
@@ -156,6 +157,13 @@
 </pre></div>
 </div>
 </div>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p>open_device(*, device_id</p>
+</dd>
+</dl>
 </dd>
 </dl>
 

@@ -78,6 +78,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#quantization">Quantization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
@@ -88,8 +89,11 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#prefetcher">Prefetcher</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#generic">Generic</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#backward-operations">Backward operations</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
@@ -144,11 +148,11 @@
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">pybind11_object</span></code></p>
+<p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
 <p>This program config is a specialized config for very narrow tensors stored in DRAM.</p>
-<dl class="py method">
+<dl class="py attribute">
 <dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.from_json">
-<span class="sig-name descname"><span class="pre">from_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" title="ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"><span class="pre">ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</span></a></span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.from_json" title="Permalink to this definition"></a>
+<span class="sig-name descname"><span class="pre">from_json</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.from_json" title="Permalink to this definition"></a>
 </dt>
 <dd></dd>
 </dl>
@@ -202,9 +206,9 @@ compatible with the DRAM sharding configuration.</p>
 </dd>
 </dl>
 
-<dl class="py method">
+<dl class="py attribute">
 <dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.to_json">
-<span class="sig-name descname"><span class="pre">to_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" title="ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"><span class="pre">ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.to_json" title="Permalink to this definition"></a>
+<span class="sig-name descname"><span class="pre">to_json</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.to_json" title="Permalink to this definition"></a>
 </dt>
 <dd></dd>
 </dl>

@@ -5,4 +5,4 @@
 
 .. _ttnn.set_printoptions:
 
-.. autofunction:: ttnn.set_printoptions
+.. autodata:: ttnn.set_printoptions

@@ -5,4 +5,4 @@
 
 .. _ttnn.split_work_to_cores:
 
-.. autofunction:: ttnn.split_work_to_cores
+.. autodata:: ttnn.split_work_to_cores

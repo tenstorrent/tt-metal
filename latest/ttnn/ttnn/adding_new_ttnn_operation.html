@@ -140,9 +140,9 @@ Wormhole, or others).</p>
 <h3>What steps are needed to add TT-NN operation in C++?<a class="headerlink" href="#what-steps-are-needed-to-add-tt-nn-operation-in-c" title="Permalink to this heading"></a>
 </h3>
 <ol class="arabic simple">
-<li><p>There are 2 options for writing a new operation. Optiona <code class="docutils literal notranslate"><span class="pre">a</span></code> is to write a device operation and option <code class="docutils literal notranslate"><span class="pre">b</span></code> is to write a composite operation
-a. Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device.
-b. Implement a composite operation in C++. Composite operation simply defines <code class="docutils literal notranslate"><span class="pre">operator()</span></code> method that calls other operations.</p></li>
+<li><p>There are 2 options for writing a new operation. Option <code class="docutils literal notranslate"><span class="pre">a</span></code> is to write a device operation and option <code class="docutils literal notranslate"><span class="pre">b</span></code> is to write an operation that calls other operations
+a. Implement device operation in C++. Device operation is a struct that satisfies <cite>DeviceOperationConcept</cite> and specifies how to create output tensors and a program to run on the device.
+b. Implement an operation in C++ that calls other operations. This type of operation simply defines an <code class="docutils literal notranslate"><span class="pre">invoke()</span></code> method that calls other operations.</p></li>
 <li><p>Register the struct using <cite>ttnn::register_operation</cite>.</p></li>
 </ol>
 </section>
@@ -305,36 +305,13 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos">123</span>
 <span class="linenos">124</span><span class="w">    </span><span class="c1">// Create the output tensors based on the operation attributes and tensor args</span>
 <span class="linenos">125</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">tensor_return_value_t</span><span class="w"> </span><span class="nf">create_output_tensors</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="p">);</span>
-<span class="linenos">126</span>
-<span class="linenos">127</span><span class="w">    </span><span class="c1">// API call to map user arguments to operation attributes and tensor args.</span>
-<span class="linenos">128</span><span class="w">    </span><span class="c1">// This is the only method that is called by the user</span>
-<span class="linenos">129</span><span class="w">    </span><span class="c1">// The user will be able to call the operation using `tensor_return_value_t output =</span>
-<span class="linenos">130</span><span class="w">    </span><span class="c1">// ttnn::prim::example(input_tensor)` after the op is registered</span>
-<span class="linenos">131</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">tuple</span><span class="o">&lt;</span><span class="n">operation_attributes_t</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">invoke</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">);</span>
-<span class="linenos">132</span>
-<span class="linenos">133</span><span class="w">    </span><span class="c1">// Optional methods</span>
-<span class="linenos">134</span>
-<span class="linenos">135</span><span class="w">    </span><span class="c1">// In case the operation need a custom hash function, the following method can be implemented</span>
-<span class="linenos">136</span><span class="w">    </span><span class="cm">/* static tt::stl::hash::hash_t compute_program_hash(</span>
-<span class="linenos">137</span><span class="cm">        const operation_attributes_t&amp;, const tensor_args_t&amp;);</span>
-<span class="linenos">138</span><span class="cm">    */</span>
-<span class="linenos">139</span>
-<span class="linenos">140</span><span class="w">    </span><span class="c1">// In case the operation needs a custom create_op_performance_model, this method can be implemented</span>
-<span class="linenos">141</span><span class="w">    </span><span class="cm">/*</span>
-<span class="linenos">142</span><span class="cm">    static tt::tt_metal::tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(</span>
-<span class="linenos">143</span><span class="cm">        const operation_attributes_t&amp;,</span>
-<span class="linenos">144</span><span class="cm">        const tensor_args_t&amp;,</span>
-<span class="linenos">145</span><span class="cm">        tensor_return_value_t&amp;);</span>
-<span class="linenos">146</span><span class="cm">    */</span>
-<span class="linenos">147</span><span class="p">};</span>
-<span class="linenos">148</span>
-<span class="linenos">149</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
-<span class="linenos">150</span>
-<span class="linenos">151</span><span class="c1">// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example</span>
-<span class="linenos">152</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">prim</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">153</span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">example</span><span class="w"> </span><span class="o">=</span>
-<span class="linenos">154</span><span class="w">    </span><span class="n">ttnn</span><span class="o">::</span><span class="n">register_operation</span><span class="o">&lt;</span><span class="s">"ttnn::prim::example"</span><span class="p">,</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">operations</span><span class="o">::</span><span class="n">examples</span><span class="o">::</span><span class="n">ExampleDeviceOperation</span><span class="o">&gt;</span><span class="p">();</span>
-<span class="linenos">155</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::prim</span>
+<span class="linenos">126</span><span class="p">};</span>
+<span class="linenos">127</span>
+<span class="linenos">128</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+<span class="linenos">129</span>
+<span class="linenos">130</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">prim</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">131</span><span class="n">ttnn</span><span class="o">::</span><span class="n">operations</span><span class="o">::</span><span class="n">examples</span><span class="o">::</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">tensor_return_value_t</span><span class="w"> </span><span class="nf">example</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">);</span>
+<span class="linenos">132</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::prim</span>
 </pre></div>
 </div>
 </div>
@@ -348,45 +325,51 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
 <span class="linenos"> 4</span>
 <span class="linenos"> 5</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"example_device_operation.hpp"</span>
-<span class="linenos"> 6</span>
-<span class="linenos"> 7</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos"> 8</span>
-<span class="linenos"> 9</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">program_factory_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::select_program_factory</span><span class="p">(</span>
-<span class="linenos">10</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">11</span><span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">some_condition_based_on_operation_attributes_and_or_tensor_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
-<span class="linenos">12</span><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">some_condition_based_on_operation_attributes_and_or_tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">13</span><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">SingleCore</span><span class="p">{};</span>
-<span class="linenos">14</span><span class="w">    </span><span class="p">}</span>
-<span class="linenos">15</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">MultiCore</span><span class="p">{};</span>
-<span class="linenos">16</span><span class="p">}</span>
-<span class="linenos">17</span>
-<span class="linenos">18</span><span class="kt">void</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::validate_on_program_cache_miss</span><span class="p">(</span>
-<span class="linenos">19</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">attributes</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
-<span class="linenos">20</span>
-<span class="linenos">21</span><span class="kt">void</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::validate_on_program_cache_hit</span><span class="p">(</span>
-<span class="linenos">22</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">attributes</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
-<span class="linenos">23</span>
-<span class="linenos">24</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">spec_return_value_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::compute_output_specs</span><span class="p">(</span>
-<span class="linenos">25</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">26</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">;</span>
-<span class="linenos">27</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">TensorSpec</span><span class="p">(</span>
-<span class="linenos">28</span><span class="w">        </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">logical_shape</span><span class="p">(),</span>
-<span class="linenos">29</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">TensorLayout</span><span class="p">(</span>
-<span class="linenos">30</span><span class="w">            </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">(),</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">PageConfig</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">layout</span><span class="p">()),</span><span class="w"> </span><span class="n">MemoryConfig</span><span class="p">{}));</span>
-<span class="linenos">31</span><span class="p">}</span>
-<span class="linenos">32</span>
-<span class="linenos">33</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">tensor_return_value_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::create_output_tensors</span><span class="p">(</span>
-<span class="linenos">34</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">35</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">output_spec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_output_specs</span><span class="p">(</span><span class="n">operation_attributes</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">);</span>
-<span class="linenos">36</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">create_device_tensor</span><span class="p">(</span><span class="n">output_spec</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">device</span><span class="p">());</span>
-<span class="linenos">37</span><span class="p">}</span>
-<span class="linenos">38</span>
-<span class="linenos">39</span><span class="n">std</span><span class="o">::</span><span class="n">tuple</span><span class="o">&lt;</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">operation_attributes_t</span><span class="p">,</span><span class="w"> </span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">tensor_args_t</span><span class="o">&gt;</span>
-<span class="linenos">40</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">invoke</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">41</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="n">operation_attributes_t</span><span class="p">{</span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="mi">42</span><span class="p">},</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="p">{</span><span class="n">input_tensor</span><span class="p">}};</span>
-<span class="linenos">42</span><span class="p">}</span>
-<span class="linenos">43</span>
-<span class="linenos">44</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+<span class="linenos"> 6</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/device_operation.hpp"</span>
+<span class="linenos"> 7</span>
+<span class="linenos"> 8</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 9</span>
+<span class="linenos">10</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">program_factory_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::select_program_factory</span><span class="p">(</span>
+<span class="linenos">11</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*operation_attributes*/</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*tensor_args*/</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">12</span><span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">some_condition_based_on_operation_attributes_and_or_tensor_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
+<span class="linenos">13</span><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">some_condition_based_on_operation_attributes_and_or_tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">14</span><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">SingleCore</span><span class="p">{};</span>
+<span class="linenos">15</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">16</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">MultiCore</span><span class="p">{};</span>
+<span class="linenos">17</span><span class="p">}</span>
+<span class="linenos">18</span>
+<span class="linenos">19</span><span class="kt">void</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::validate_on_program_cache_miss</span><span class="p">(</span>
+<span class="linenos">20</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*attributes*/</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*tensor_args*/</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
+<span class="linenos">21</span>
+<span class="linenos">22</span><span class="kt">void</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::validate_on_program_cache_hit</span><span class="p">(</span>
+<span class="linenos">23</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*attributes*/</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*tensor_args*/</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
+<span class="linenos">24</span>
+<span class="linenos">25</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">spec_return_value_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::compute_output_specs</span><span class="p">(</span>
+<span class="linenos">26</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">27</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">;</span>
+<span class="linenos">28</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">TensorSpec</span><span class="p">(</span>
+<span class="linenos">29</span><span class="w">        </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">logical_shape</span><span class="p">(),</span>
+<span class="linenos">30</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">TensorLayout</span><span class="p">(</span>
+<span class="linenos">31</span><span class="w">            </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">(),</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">PageConfig</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">layout</span><span class="p">()),</span><span class="w"> </span><span class="n">MemoryConfig</span><span class="p">{}));</span>
+<span class="linenos">32</span><span class="p">}</span>
+<span class="linenos">33</span>
+<span class="linenos">34</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">tensor_return_value_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::create_output_tensors</span><span class="p">(</span>
+<span class="linenos">35</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">36</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">output_spec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_output_specs</span><span class="p">(</span><span class="n">operation_attributes</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">);</span>
+<span class="linenos">37</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">create_device_tensor</span><span class="p">(</span><span class="n">output_spec</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">device</span><span class="p">());</span>
+<span class="linenos">38</span><span class="p">}</span>
+<span class="linenos">39</span>
+<span class="linenos">40</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+<span class="linenos">41</span>
+<span class="linenos">42</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">prim</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">43</span><span class="n">ttnn</span><span class="o">::</span><span class="n">operations</span><span class="o">::</span><span class="n">examples</span><span class="o">::</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">tensor_return_value_t</span><span class="w"> </span><span class="nf">example</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">44</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="n">OperationType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">operations</span><span class="o">::</span><span class="n">examples</span><span class="o">::</span><span class="n">ExampleDeviceOperation</span><span class="p">;</span>
+<span class="linenos">45</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">operation_attributes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">OperationType</span><span class="o">::</span><span class="n">operation_attributes_t</span><span class="p">{</span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="mi">42</span><span class="p">};</span>
+<span class="linenos">46</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">tensor_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">OperationType</span><span class="o">::</span><span class="n">tensor_args_t</span><span class="p">{</span><span class="n">input_tensor</span><span class="p">};</span>
+<span class="linenos">47</span>
+<span class="linenos">48</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">device_operation</span><span class="o">::</span><span class="n">launch</span><span class="o">&lt;</span><span class="n">OperationType</span><span class="o">&gt;</span><span class="p">(</span><span class="n">operation_attributes</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">);</span>
+<span class="linenos">49</span><span class="p">}</span>
+<span class="linenos">50</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::prim</span>
 </pre></div>
 </div>
 </div>
@@ -405,7 +388,7 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos">  8</span>
 <span class="linenos">  9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos"> 10</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">SingleCore</span><span class="o">::</span><span class="n">cached_program_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::SingleCore::create</span><span class="p">(</span>
-<span class="linenos"> 11</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos"> 11</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*operation_attributes*/</span><span class="p">,</span>
 <span class="linenos"> 12</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
 <span class="linenos"> 13</span><span class="w">    </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos"> 14</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">tt</span><span class="p">;</span>
@@ -520,7 +503,7 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos">123</span>
 <span class="linenos">124</span><span class="kt">void</span><span class="w"> </span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">SingleCore</span><span class="o">::</span><span class="n">override_runtime_arguments</span><span class="p">(</span>
 <span class="linenos">125</span><span class="w">    </span><span class="n">cached_program_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cached_program</span><span class="p">,</span>
-<span class="linenos">126</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos">126</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*operation_attributes*/</span><span class="p">,</span>
 <span class="linenos">127</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
 <span class="linenos">128</span><span class="w">    </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos">129</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cached_program</span><span class="p">.</span><span class="n">program</span><span class="p">;</span>
@@ -563,7 +546,7 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos">  8</span>
 <span class="linenos">  9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos"> 10</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">MultiCore</span><span class="o">::</span><span class="n">cached_program_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::MultiCore::create</span><span class="p">(</span>
-<span class="linenos"> 11</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos"> 11</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*operation_attributes*/</span><span class="p">,</span>
 <span class="linenos"> 12</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
 <span class="linenos"> 13</span><span class="w">    </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos"> 14</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">tt</span><span class="p">;</span>
@@ -683,7 +666,7 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos">128</span>
 <span class="linenos">129</span><span class="kt">void</span><span class="w"> </span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">MultiCore</span><span class="o">::</span><span class="n">override_runtime_arguments</span><span class="p">(</span>
 <span class="linenos">130</span><span class="w">    </span><span class="n">cached_program_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cached_program</span><span class="p">,</span>
-<span class="linenos">131</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos">131</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*operation_attributes*/</span><span class="p">,</span>
 <span class="linenos">132</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
 <span class="linenos">133</span><span class="w">    </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos">134</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cached_program</span><span class="p">.</span><span class="n">program</span><span class="p">;</span>
@@ -769,86 +752,52 @@ The operation will be auto-registered in python. If the operation is called <cit
 <h4>Step 1: Add Python binding<a class="headerlink" href="#step-1-add-python-binding" title="Permalink to this heading"></a>
 </h4>
 <p>In order to add a python binding for the operation, follow the directory structure shown below:</p>
-<p><cite>ttnn/python/ttnn/operations/&lt;category&gt;/&lt;operation_name&gt;/&lt;operation_name&gt;_pybind.hpp</cite>
-<cite>ttnn/python/ttnn/operations/&lt;category&gt;/&lt;category&gt;_pybind.hpp</cite></p>
+<p><cite>ttnn/python/ttnn/operations/&lt;category&gt;/&lt;operation_name&gt;/&lt;operation_name&gt;_nanobind.hpp</cite>
+<cite>ttnn/python/ttnn/operations/&lt;category&gt;/&lt;category&gt;_nanobind.hpp</cite></p>
 <p>A concrete example:</p>
 <div class="literal-block-wrapper docutils container" id="id6">
 <div class="code-block-caption">
-<span class="caption-text">ttnn/cpp/ttnn/operations/examples/example/example_pybind.hpp</span><a class="headerlink" href="#id6" title="Permalink to this code"></a>
+<span class="caption-text">ttnn/cpp/ttnn/operations/examples/example/example_nanobind.hpp</span><a class="headerlink" href="#id6" title="Permalink to this code"></a>
 </div>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC</span>
 <span class="linenos"> 2</span><span class="c1">//</span>
 <span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
 <span class="linenos"> 4</span>
 <span class="linenos"> 5</span><span class="cp">#pragma once</span>
 <span class="linenos"> 6</span>
-<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn-pybind/pybind_fwd.hpp"</span>
+<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn-nanobind/nanobind_fwd.hpp"</span>
 <span class="linenos"> 8</span>
 <span class="linenos"> 9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">10</span><span class="k">namespace</span><span class="w"> </span><span class="nn">py</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">pybind11</span><span class="p">;</span>
-<span class="linenos">11</span>
-<span class="linenos">12</span><span class="kt">void</span><span class="w"> </span><span class="nf">bind_example_operation</span><span class="p">(</span><span class="n">py</span><span class="o">::</span><span class="k">module</span><span class="o">&amp;</span><span class="w"> </span><span class="k">module</span><span class="p">);</span>
-<span class="linenos">13</span>
-<span class="linenos">14</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
-<span class="linenos">15</span>
-<span class="linenos">16</span><span class="cm">/*</span>
-<span class="linenos">17</span><span class="cm">void bind_example_operation(py::module&amp; module) {</span>
-<span class="linenos">18</span><span class="cm">    bind_registered_operation(</span>
-<span class="linenos">19</span><span class="cm">        module,</span>
-<span class="linenos">20</span><span class="cm">        ttnn::prim::example,</span>
-<span class="linenos">21</span><span class="cm">        R"doc(example(input_tensor: ttnn.Tensor) -&gt; ttnn.Tensor)doc",</span>
-<span class="linenos">22</span>
-<span class="linenos">23</span><span class="cm">        // Add pybind overloads for the C++ APIs that should be exposed to python</span>
-<span class="linenos">24</span><span class="cm">        // There should be no logic here, just a call to `self` with the correct arguments</span>
-<span class="linenos">25</span><span class="cm">        // This specific function can be called from python as `ttnn.prim.example(input_tensor)` or</span>
-<span class="linenos">26</span><span class="cm">        // `ttnn.prim.example(input_tensor)`</span>
-<span class="linenos">27</span><span class="cm">        ttnn::pybind_overload_t{</span>
-<span class="linenos">28</span><span class="cm">            [](const decltype(ttnn::prim::example)&amp; self, const ttnn::Tensor&amp; input_tensor) -&gt; ttnn::Tensor {</span>
-<span class="linenos">29</span><span class="cm">                return self(input_tensor);</span>
-<span class="linenos">30</span><span class="cm">            },</span>
-<span class="linenos">31</span><span class="cm">            py::arg("input_tensor")});</span>
-<span class="linenos">32</span>
-<span class="linenos">33</span><span class="cm">    bind_registered_operation(</span>
-<span class="linenos">34</span><span class="cm">        module,</span>
-<span class="linenos">35</span><span class="cm">        ttnn::composite_example,</span>
-<span class="linenos">36</span><span class="cm">        R"doc(composite_example(input_tensor: ttnn.Tensor) -&gt; ttnn.Tensor)doc",</span>
-<span class="linenos">37</span>
-<span class="linenos">38</span><span class="cm">        // Add pybind overloads for the C++ APIs that should be exposed to python</span>
-<span class="linenos">39</span><span class="cm">        // There should be no logic here, just a call to `self` with the correct arguments</span>
-<span class="linenos">40</span><span class="cm">        ttnn::pybind_overload_t{</span>
-<span class="linenos">41</span><span class="cm">            [](const decltype(ttnn::composite_example)&amp; self, const ttnn::Tensor&amp; input_tensor) -&gt; ttnn::Tensor {</span>
-<span class="linenos">42</span><span class="cm">                return self(input_tensor);</span>
-<span class="linenos">43</span><span class="cm">            },</span>
-<span class="linenos">44</span><span class="cm">            py::arg("input_tensor")});</span>
-<span class="linenos">45</span><span class="cm">}</span>
-<span class="linenos">46</span><span class="cm">*/</span>
+<span class="linenos">10</span><span class="k">namespace</span><span class="w"> </span><span class="nn">nb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">nanobind</span><span class="p">;</span>
+<span class="linenos">11</span><span class="kt">void</span><span class="w"> </span><span class="nf">bind_example_operation</span><span class="p">(</span><span class="n">nb</span><span class="o">::</span><span class="n">module_</span><span class="o">&amp;</span><span class="w"> </span><span class="n">mod</span><span class="p">);</span>
+<span class="linenos">12</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
 </pre></div>
 </div>
 </div>
 <div class="literal-block-wrapper docutils container" id="id7">
 <div class="code-block-caption">
-<span class="caption-text">ttnn/cpp/ttnn/operations/examples/examples_pybind.hpp</span><a class="headerlink" href="#id7" title="Permalink to this code"></a>
+<span class="caption-text">ttnn/cpp/ttnn/operations/examples/examples_nanobind.hpp</span><a class="headerlink" href="#id7" title="Permalink to this code"></a>
 </div>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC</span>
 <span class="linenos"> 2</span><span class="c1">//</span>
 <span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
 <span class="linenos"> 4</span>
 <span class="linenos"> 5</span><span class="cp">#pragma once</span>
 <span class="linenos"> 6</span>
-<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn-pybind/pybind_fwd.hpp"</span>
+<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn-nanobind/nanobind_fwd.hpp"</span>
 <span class="linenos"> 8</span>
 <span class="linenos"> 9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">10</span><span class="k">namespace</span><span class="w"> </span><span class="nn">py</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">pybind11</span><span class="p">;</span>
-<span class="linenos">11</span>
-<span class="linenos">12</span><span class="kt">void</span><span class="w"> </span><span class="nf">py_module</span><span class="p">(</span><span class="n">py</span><span class="o">::</span><span class="k">module</span><span class="o">&amp;</span><span class="w"> </span><span class="k">module</span><span class="p">);</span>
+<span class="linenos">10</span>
+<span class="linenos">11</span><span class="k">namespace</span><span class="w"> </span><span class="nn">nb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">nanobind</span><span class="p">;</span>
+<span class="linenos">12</span><span class="kt">void</span><span class="w"> </span><span class="nf">py_module</span><span class="p">(</span><span class="n">nb</span><span class="o">::</span><span class="n">module_</span><span class="o">&amp;</span><span class="w"> </span><span class="n">mod</span><span class="p">);</span>
 <span class="linenos">13</span>
 <span class="linenos">14</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
 </pre></div>
 </div>
 </div>
-<p>Finally, call the module defined in <cite>examples/example/example_pybind.hpp</cite> wherever you want it to be added.</p>
+<p>Finally, call the module defined in <cite>examples/example/example_nanobind.hpp</cite> wherever you want it to be added.</p>
 </section>
 <section id="step-2-optional-add-golden-function-for-the-operation-in-python">
 <h4>Step 2: (Optional) Add golden function for the operation in Python<a class="headerlink" href="#step-2-optional-add-golden-function-for-the-operation-in-python" title="Permalink to this heading"></a>

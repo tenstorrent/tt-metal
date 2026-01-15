@@ -29,12 +29,12 @@ Note that the core coordinates are logical coordinates, so worker cores and ethe
     export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0   # optional, enabled by default. Prepends prints with <device id>:(<core x>, <core y>):<RISC>:.
     export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1          # optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.
 
-To generate kernel debug prints on the device, include the ``debug/dprint.h`` header and use the APIs defined there.
+To generate kernel debug prints on the device, include the ``api/debug/dprint.h`` header and use the APIs defined there.
 An example with the different features available is shown below:
 
 .. code-block:: c++
 
-    #include "debug/dprint.h"  // required in all kernels using DPRINT
+    #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
     void kernel_main() {
         // Direct printing is supported for const char*/char/uint32_t/float
@@ -93,7 +93,7 @@ formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16
 
 .. code-block:: c++
 
-    #include "debug/dprint.h"  // required in all kernels using DPRINT
+    #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
     void kernel_main() {
         // Assuming the tile we want to print from CBIndex::c_25 is from the front the CB, print must happen after

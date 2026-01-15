@@ -128,11 +128,11 @@
 <h2>Left Shift<a class="headerlink" href="#left-shift" title="Permalink to this heading"></a>
 </h2>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel22binary_left_shift_tileE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a133442ff4abc4c9e18dc496d6a1008e3"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_left_shift_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel22binary_left_shift_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_10DataFormatEN7ckernel22binary_left_shift_tileEv8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">DataFormat</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">data_format</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a02e95457b3248a48f0d0d83c6c1b6202"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_left_shift_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_10DataFormatEN7ckernel22binary_left_shift_tileEv8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs an elementwise shift operation to the left on the input at idst0, by input at idst1: y = x0 &lt;&lt; x1 Both inputs must be of Int32 data type only. Output overwrites odst in DST.</p>
+<p>Performs an elementwise shift operation to the left on the input at idst0, by input at idst1: y = x0 &lt;&lt; x1 Both inputs must be of Int32 or UInt32 or UInt16 data type only. Output overwrites odst in DST.</p>
 <p>The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine. A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles, when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.</p>
 <p>Return value: None</p>
 <p></p>
@@ -172,20 +172,6 @@
 </table>
 
 </dd>
-</dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel29binary_left_shift_uint32_tileEv8uint32_t8uint32_t8uint32_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">sign_magnitude_format</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a38ee2603768d929053a781f68f3995ae"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_left_shift_uint32_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel29binary_left_shift_uint32_tileEv8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
-</dt>
-<dd></dd>
-</dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel28binary_left_shift_int32_tileE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1aeec3abc7df79fbb27630573f67b0da6c"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_left_shift_int32_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel28binary_left_shift_int32_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
-</dt>
-<dd></dd>
 </dl>
 
 </section>
@@ -193,11 +179,11 @@
 <h2>Right Shift<a class="headerlink" href="#right-shift" title="Permalink to this heading"></a>
 </h2>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel23binary_right_shift_tileE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1af3517755018331a7457f193bb98bc9ed"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_right_shift_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel23binary_right_shift_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_10DataFormatEN7ckernel23binary_right_shift_tileEv8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">DataFormat</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">data_format</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a7649f64c084bdcdabc04e429f9c9885a"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_right_shift_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_10DataFormatEN7ckernel23binary_right_shift_tileEv8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs an elementwise shift operation to the right on the input at idst0, by input at idst1: y = x0 &gt;&gt; x1 Both inputs must be of Int32 data type only. Output overwrites odst in DST.</p>
+<p>Performs an elementwise shift operation to the right on the input at idst0, by input at idst1: y = x0 &gt;&gt; x1 Both inputs must be of Int32 or UInt32 or UInt16 data type only. Output overwrites odst in DST.</p>
 <p>The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine. A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles, when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.</p>
 <p>Return value: None</p>
 <p></p>
@@ -237,20 +223,6 @@
 </table>
 
 </dd>
-</dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel30binary_right_shift_uint32_tileEv8uint32_t8uint32_t8uint32_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">sign_magnitude_format</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a70c565379abe621cd5e170eeb7edd901"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_right_shift_uint32_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel30binary_right_shift_uint32_tileEv8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
-</dt>
-<dd></dd>
-</dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel29binary_right_shift_int32_tileE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1aa00b955b2da219debae4c604fe9bc7e3"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_right_shift_int32_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel29binary_right_shift_int32_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
-</dt>
-<dd></dd>
 </dl>
 
 </section>

@@ -73,6 +73,7 @@
 <li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
 <li class="toctree-l2"><a class="reference internal" href="device_program_profiler.html">Device Program Profiler</a></li>
 <li class="toctree-l2"><a class="reference internal" href="lightweight_kernel_asserts.html">Lightweight Kernel Asserts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="llk_asserts.html">LLK Asserts</a></li>
 <li class="toctree-l2"><a class="reference internal" href="inspector.html">Inspector</a></li>
 <li class="toctree-l2"><a class="reference internal" href="triage.html">tt-triage</a></li>
 </ul>
@@ -140,10 +141,10 @@ Note that the core coordinates are logical coordinates, so worker cores and ethe
 <span class="n">export</span> <span class="n">TT_METAL_DPRINT_ONE_FILE_PER_RISC</span><span class="o">=</span><span class="mi">1</span>          <span class="c1"># optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.</span>
 </pre></div>
 </div>
-<p>To generate kernel debug prints on the device, include the <code class="docutils literal notranslate"><span class="pre">debug/dprint.h</span></code> header and use the APIs defined there.
+<p>To generate kernel debug prints on the device, include the <code class="docutils literal notranslate"><span class="pre">api/debug/dprint.h</span></code> header and use the APIs defined there.
 An example with the different features available is shown below:</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/dprint.h"</span><span class="c1">  // required in all kernels using DPRINT</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span><span class="c1">  // required in all kernels using DPRINT</span>
 
 <span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// Direct printing is supported for const char*/char/uint32_t/float</span>
@@ -228,7 +229,7 @@ back of the CB, the <code class="docutils literal notranslate"><span class="pre"
 formats for printing from CBs are <code class="docutils literal notranslate"><span class="pre">DataFormat::Float32</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Float16_b</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Bfp8_b</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Bfp4_b</span></code>,
 <code class="docutils literal notranslate"><span class="pre">DataFormat::Int8</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt8</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt16</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Int32</span></code>, and <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt832</span></code>.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/dprint.h"</span><span class="c1">  // required in all kernels using DPRINT</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span><span class="c1">  // required in all kernels using DPRINT</span>
 
 <span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// Assuming the tile we want to print from CBIndex::c_25 is from the front the CB, print must happen after</span>

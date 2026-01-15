@@ -5,4 +5,4 @@
 
 .. _ttnn.GetDefaultDevice:
 
-.. autofunction:: ttnn.GetDefaultDevice
+.. autodata:: ttnn.GetDefaultDevice

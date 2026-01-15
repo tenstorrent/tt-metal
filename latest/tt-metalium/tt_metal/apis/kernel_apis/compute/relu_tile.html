@@ -204,6 +204,13 @@
 <td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
+<td><p>tile_index   </p></td>
+<td><p>The index of the tile in DST register buffer to perform the computation on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the DST register buffer   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
 <td><p>upper_limit   </p></td>
 <td><p>Upper limit of relu_min   </p></td>
 <td><p>uint32_t   </p></td>
@@ -264,6 +271,13 @@
 <td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
+<td><p>tile_index   </p></td>
+<td><p>The index of the tile in DST register buffer to perform the computation on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the DST register buffer   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
 <td><p>lower_limit   </p></td>
 <td><p>Upper limit of relu_min   </p></td>
 <td><p>uint32_t   </p></td>
@@ -299,7 +313,7 @@
 
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N7ckernel15leaky_relu_tileE8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a8f979e18403c78aab904f362ec748f7e"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">leaky_relu_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">slope</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel15leaky_relu_tileE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<span class="target" id="namespaceckernel_1a5d7638b5d0bc57926375ed28a3546e56"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">leaky_relu_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">slope</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel15leaky_relu_tileE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Performs element-wise computation of leaky relu (relu(x) + slope*-relu(-x)) on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
@@ -324,6 +338,13 @@
 <td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
+<td><p>tile_index   </p></td>
+<td><p>The index of the tile in DST register buffer to perform the computation on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the DST register buffer   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
 <td><p>slope   </p></td>
 <td><p>slope used in leaky relu - will reinterpret unsigned int to float   </p></td>
 <td><p>uint32_t   </p></td>

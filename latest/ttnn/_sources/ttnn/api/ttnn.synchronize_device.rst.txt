@@ -5,4 +5,4 @@
 
 .. _ttnn.synchronize_device:
 
-.. autofunction:: ttnn.synchronize_device
+.. autodata:: ttnn.synchronize_device
