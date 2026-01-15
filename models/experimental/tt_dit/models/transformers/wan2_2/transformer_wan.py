@@ -619,6 +619,8 @@ class WanTransformer3DModel:
             spatial_1BND, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
         )
 
+        spatial_1BND = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0])
+
         spatial_BCFHW = self.postprocess_spatial_output_host(spatial_1BND, F, H, W, N)
         return spatial_BCFHW
 
