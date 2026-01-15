@@ -19,7 +19,7 @@
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::transformer::dit_layernorm::program {
+namespace ttnn::experimental::prim {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -60,12 +60,10 @@ std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
 }  // namespace
 
 PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFactory::create(
-    const PreAllGatherOperationAttributes& operation_attributes,
-    const PreAllGatherTensorArgs& tensor_args,
-    Tensor& output) {
+    const DitLayernormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    const auto& a = tensor_args.input;
+    const auto& a = tensor_args;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
@@ -207,13 +205,13 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
 
 void PreAllGatherWelfordProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const PreAllGatherOperationAttributes&,
-    const PreAllGatherTensorArgs& tensor_args,
+    const DitLayernormPreAllGatherParams&,
+    const Tensor& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.input.buffer()->address();
+    const auto input_addr = tensor_args.buffer()->address();
     const auto output_addr = output.buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
@@ -234,4 +232,4 @@ void PreAllGatherWelfordProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::dit_layernorm::program
+}  // namespace ttnn::experimental::prim

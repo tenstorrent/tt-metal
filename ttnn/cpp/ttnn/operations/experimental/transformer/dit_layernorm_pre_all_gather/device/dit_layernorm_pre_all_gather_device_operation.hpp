@@ -12,14 +12,14 @@
 #include "dit_layernorm_pre_all_gather_device_operation_types.hpp"
 #include "dit_layernorm_pre_all_gather_welford_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer::dit_layernorm {
+namespace ttnn::experimental::prim {
 
 struct PreAllGatherDeviceOperation {
-    using operation_attributes_t = PreAllGatherOperationAttributes;
-    using tensor_args_t = PreAllGatherTensorArgs;
+    using operation_attributes_t = DitLayernormPreAllGatherParams;
+    using tensor_args_t = Tensor;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::PreAllGatherWelfordProgramFactory>;
+    using program_factory_t = std::variant<PreAllGatherWelfordProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -31,7 +31,7 @@ struct PreAllGatherDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::dit_layernorm
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
