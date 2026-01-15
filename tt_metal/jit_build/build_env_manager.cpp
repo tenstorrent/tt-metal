@@ -140,21 +140,21 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw
 
     // Prepare the container for build states
     const auto& hal = MetalContext::instance().hal();
-    uint32_t num_build_states = 0;
+    uint32_t total_num_build_states = 0;
     if (is_fw) {
         for (uint32_t programmable_core = 0; programmable_core < hal.get_programmable_core_type_count();
              programmable_core++) {
             const uint32_t processor_class_count =
                 hal.get_processor_classes_count(hal.get_programmable_core_type(programmable_core));
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                num_build_states += hal.get_processor_class_num_fw_binaries(programmable_core, processor_class);
+                total_num_build_states += hal.get_processor_class_num_fw_binaries(programmable_core, processor_class);
             }
         }
     } else {
-        num_build_states = hal.get_total_num_risc_processors();
+        total_num_build_states = hal.get_total_num_risc_processors();
     }
     std::vector<JitBuildState> build_states;
-    build_states.reserve(num_build_states);
+    build_states.reserve(total_num_build_states);
 
     // Loop through programmable core types and their processor classes/types.
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
@@ -170,25 +170,17 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw
                 .is_cooperative = hal.get_eth_fw_is_cooperative(),
             };
 
-            if (is_fw) {
-                const uint32_t processor_class_num_fw_binaries =
-                    hal.get_processor_class_num_fw_binaries(programmable_core, processor_class);
-                for (uint32_t processor_type = 0; processor_type < processor_class_num_fw_binaries; processor_type++) {
-                    config.processor_id = processor_type;
-                    build_states.emplace_back(build_env, config);
-                }
-            } else {
-                const uint32_t processor_types_count =
-                    hal.get_processor_types_count(programmable_core, processor_class);
-                for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
-                    config.processor_id = processor_type;
-                    build_states.emplace_back(build_env, config);
-                }
+            const uint32_t num_build_states =
+                is_fw ? hal.get_processor_class_num_fw_binaries(programmable_core, processor_class)
+                      : hal.get_processor_types_count(programmable_core, processor_class);
+            for (uint32_t build_state_idx = 0; build_state_idx < num_build_states; build_state_idx++) {
+                config.processor_id = build_state_idx;
+                build_states.emplace_back(build_env, config);
             }
         }
     }
 
-    TT_ASSERT(build_states.size() == num_build_states);
+    TT_ASSERT(build_states.size() == total_num_build_states);
     return build_states;
 }
 
@@ -217,20 +209,20 @@ const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
 const JitBuildState& BuildEnvManager::get_firmware_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
     const uint32_t state_idx =
-        get_build_index_and_state_count(programmable_core, processor_class, true).first + processor_id;
+        get_firmware_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
     return get_device_build_env(device_id).firmware_build_states[state_idx];
 }
 
 const JitBuildState& BuildEnvManager::get_kernel_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
     const uint32_t state_idx =
-        get_build_index_and_state_count(programmable_core, processor_class, false).first + processor_id;
+        get_kernel_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
     return get_device_build_env(device_id).kernel_build_states[state_idx];
 }
 
 JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class) {
-    auto [b_id, count] = get_build_index_and_state_count(programmable_core, processor_class, false);
+    auto [b_id, count] = get_kernel_build_index_and_state_count(programmable_core, processor_class);
     const auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
     return {kernel_build_states.begin() + b_id, static_cast<size_t>(count)};
 }
