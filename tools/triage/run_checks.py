@@ -26,6 +26,7 @@ Owner:
 """
 
 from collections.abc import Callable
+import threading
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
@@ -34,6 +35,8 @@ from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, 
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.umd_device import TimeoutDeviceRegisterError
+from ttexalens.risc_debug import RiscHaltError
 import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
@@ -199,6 +202,9 @@ class RunChecks:
         }
         # Pre-compute unique_id to device mapping for fast lookup
         self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
+        self._devices_to_skip: set[Device] = set()
+        self._cores_to_skip: set[tuple[OnChipCoordinate, str]] = set()
+        self._skip_lock = threading.Lock()
 
     def get_device_by_unique_id(self, unique_id: int) -> Device | None:
         return self._unique_id_to_device.get(unique_id)
@@ -231,7 +237,19 @@ class RunChecks:
             )
             try:
                 for device in self.devices:
-                    check_result = check(device)
+                    # Skipping broken devices
+                    with self._skip_lock:
+                        if device in self._devices_to_skip:
+                            continue
+                    try:
+                        check_result = check(device)
+                    except TimeoutDeviceRegisterError as e:
+                        with self._skip_lock:
+                            self._devices_to_skip.add(device)
+                            if device.is_local:
+                                for remote_device in device.remote_devices:
+                                    self._devices_to_skip.add(remote_device)
+                        continue
                     # Use the common result collection helper
                     self._collect_results(
                         result,
@@ -311,7 +329,17 @@ class RunChecks:
                 if risc_name not in cores_to_check:
                     continue
 
-                check_result = check(location, risc_name)
+                # Skipping broken cores
+                with self._skip_lock:
+                    if (location, risc_name) in self._cores_to_skip:
+                        continue
+                try:
+                    check_result = check(location, risc_name)
+                except RiscHaltError as e:
+                    with self._skip_lock:
+                        self._cores_to_skip.add((location, risc_name))
+                    continue
+
                 # Use the common result collection helper
                 self._collect_results(
                     result,
