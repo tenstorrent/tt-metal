@@ -32,7 +32,9 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     std::size_t q_chunk_size,
     std::size_t k_chunk_size,
     DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config) {
+    std::optional<SDPAProgramConfig> program_config,
+    const std::optional<Tensor>& page_table,
+    std::optional<int64_t> chunk_start_idx) {
     /*
     Q: B x NQH x S*ring_size x DH
     K: B x NKH x DH x S
@@ -76,7 +78,36 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     const uint32_t chunk_1 = ring_id;
     const uint32_t chunk_2 = (2 * ring_size) - ring_id - 1;
 
-    const uint32_t Sk = k_shape[2];
+    bool is_chunked = chunk_start_idx.has_value();
+
+    // Extract paged KV cache parameters first, before calculating Sk
+    uint32_t block_size = 0;
+    uint32_t block_size_t = 0;
+    [[maybe_unused]] uint32_t max_blocks_per_seq = 0;
+    uint32_t page_table_stick_size = 0;
+    tt::DataFormat page_table_df = tt::DataFormat::Int32;
+
+    // Calculate KV sequence length: when using paged KV, k_shape[2] is block_size, not sequence length
+    // The full KV sequence length is: chunk_start_idx + full_Q_seq_len
+    // In ring distributed, q_shape[2] is the full Q sequence length (before ring distribution)
+    // So full_Q_seq_len = q_shape[2] = Sq * 2 * ring_size
+    uint32_t Sk;
+    if (is_chunked) {
+        const auto& page_table_tensor = page_table.value();
+        block_size = k_shape[2];  // K's sequence dimension represents block size
+        block_size_t = block_size / TILE_HEIGHT;
+        max_blocks_per_seq = page_table_tensor.padded_shape()[1];
+        page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+        TT_FATAL(
+            page_table_stick_size % 32 == 0,
+            "page table page size in bytes must be a multiple of 32 due to address alignment");
+
+        // Full KV sequence length = chunk_start_idx + full_Q_seq_len
+        // q_shape[2] is the full Q sequence length (before ring distribution)
+        Sk = chunk_start_idx.value() + q_shape[2];
+    } else {
+        Sk = k_shape[2];
+    }
 
     // Calculate padded sequence length
     const uint32_t padded_Sq = std::ceil((float)Sq / q_chunk_size) * q_chunk_size;
@@ -95,9 +126,16 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     const uint32_t q_num_chunks = padded_Sq / q_chunk_size;
     const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
 
-    // In chunked prefill mode, the offset of Q in terms of Q chunks
+    // Calculate chunk offsets for ring distribution
     uint32_t chunked_q_chunk_offset_phase_1 = (chunk_1 * Sq) / q_chunk_size;
     uint32_t chunked_q_chunk_offset_phase_2 = (chunk_2 * Sq) / q_chunk_size;
+
+    // Add chunk_start_idx offset for prefix caching
+    // The offset should be relative to the full Q sequence, so we add chunk_start_idx / q_chunk_size
+    if (is_chunked) {
+        chunked_q_chunk_offset_phase_1 += chunk_start_idx.value() / q_chunk_size;
+        chunked_q_chunk_offset_phase_2 += chunk_start_idx.value() / q_chunk_size;
+    }
 
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
@@ -209,22 +247,35 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
-        B,          NQH,          NKH,        Sqt,          Skt,       valid_Sqt * 2 * ring_size, valid_Skt, DHt, vDHt,
-        Sq_chunk_t, q_num_chunks, Sk_chunk_t, k_num_chunks, num_cores,
-        true,   //(std::uint32_t)is_causal,
-        false,  //(std::uint32_t)use_provided_mask,
-        false,  //(std::uint32_t)broadcast_provided_mask_heads,
-        false,  //(std::uint32_t)use_padded_mask,
-        false,  //(uint32_t)is_chunked,
-        0,      // block_size_t,
-        0,      // page_table_stick_size
-        0       // use_attention_sink
+        B,
+        NQH,
+        NKH,
+        Sqt,
+        Skt,
+        valid_Sqt * 2 * ring_size,
+        valid_Skt,
+        DHt,
+        vDHt,
+        Sq_chunk_t,
+        q_num_chunks,
+        Sk_chunk_t,
+        k_num_chunks,
+        num_cores,
+        true,                  //(std::uint32_t)is_causal,
+        false,                 //(std::uint32_t)use_provided_mask,
+        false,                 //(std::uint32_t)broadcast_provided_mask_heads,
+        false,                 //(std::uint32_t)use_padded_mask,
+        (uint32_t)is_chunked,  //(uint32_t)is_chunked,
+        block_size_t,
+        page_table_stick_size,
+        0  // use_attention_sink
     };
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs().append_to(reader_compile_time_args);  // mask tensor (not used in ring)
-    TensorAccessorArgs().append_to(reader_compile_time_args);  // page table (not used in ring)
+    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr)
+        .append_to(reader_compile_time_args);                  // page table
     TensorAccessorArgs().append_to(reader_compile_time_args);  // attention sink (not used in ring)
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -377,6 +428,13 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
                             .set_page_size(tt::CBIndex::c_7, scalar_tile_size);
     CreateCircularBuffer(program, core_grid, c_in7_config);
 
+    // page table circular buffer (only when using paged KV)
+    if (is_chunked) {
+        auto c_in6_config = CircularBufferConfig(page_table_stick_size, {{tt::CBIndex::c_6, page_table_df}})
+                                .set_page_size(tt::CBIndex::c_6, page_table_stick_size);
+        CreateCircularBuffer(program, core_grid, c_in6_config);
+    }
+
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
                                   .set_page_size(tt::CBIndex::c_24, im_tile_size);
@@ -453,6 +511,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         local_q_start = std::min(local_q_start, q_num_chunks);
         local_q_end = std::min(local_q_end, q_num_chunks);
 
+        uint32_t page_table_addr = page_table.has_value() ? page_table->buffer()->address() : 0;
         SetRuntimeArgs(
             program,
             reader_kernels_id,
@@ -461,7 +520,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
              k_addr,
              v_addr,
              0,  // mask_addr,
-             0,
+             page_table_addr,
              0,  // attention sink addr,
              i,
              local_batch_start,
@@ -591,7 +650,9 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
                 q_chunk_size,
                 k_chunk_size,
                 operation_attributes.compute_kernel_config,
-                operation_attributes.program_config);
+                operation_attributes.program_config,
+                tensor_args.page_table,
+                operation_attributes.chunk_start_idx);
             shared_variables[single_coord_range] = cached_program.shared_variables;
             mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
         }
@@ -623,6 +684,7 @@ void RingDistributedSdpaMeshWorkloadFactory::override_runtime_arguments(
         uint32_t k_addr = k_buffer->address();
         uint32_t v_addr = v_buffer->address();
         uint32_t out_addr = out0_buffer->address();
+        uint32_t page_table_addr = tensor_args.page_table.has_value() ? tensor_args.page_table->buffer()->address() : 0;
 
         auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
@@ -636,6 +698,7 @@ void RingDistributedSdpaMeshWorkloadFactory::override_runtime_arguments(
             reader_args[0] = q_addr;
             reader_args[1] = k_addr;
             reader_args[2] = v_addr;
+            reader_args[4] = page_table_addr;  // Update page_table_addr (index 4 is after mask_addr)
 
             writer_args[0] = out_addr;
         }

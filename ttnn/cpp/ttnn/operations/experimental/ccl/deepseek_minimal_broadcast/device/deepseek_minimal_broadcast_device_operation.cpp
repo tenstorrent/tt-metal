@@ -74,7 +74,7 @@ void DeepseekMinimalBroadcastDeviceOperation::validate_on_program_cache_miss(
         input_shape[1]);
 }
 
-spec_return_value_t DeepseekMinimalBroadcastDeviceOperation::compute_output_specs(
+TensorSpec DeepseekMinimalBroadcastDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& shape = input_tensor.logical_shape();
@@ -84,7 +84,7 @@ spec_return_value_t DeepseekMinimalBroadcastDeviceOperation::compute_output_spec
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));
 }
 
-tensor_return_value_t DeepseekMinimalBroadcastDeviceOperation::create_output_tensors(
+Tensor DeepseekMinimalBroadcastDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());

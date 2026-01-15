@@ -36,7 +36,7 @@ Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_f
     return program::Conv2dShardedProgramFactory{};
 }
 
-spec_return_value_t Conv2dDeviceOperation::compute_output_specs(
+TensorSpec Conv2dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     const auto& input_tensor_a_shape = args.input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
@@ -85,7 +85,7 @@ spec_return_value_t Conv2dDeviceOperation::compute_output_specs(
             padded_output_shape));
 }
 
-tensor_return_value_t Conv2dDeviceOperation::create_output_tensors(
+Tensor Conv2dDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.a.device());
 }
@@ -161,8 +161,7 @@ tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
     return tt::stl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
-Conv2dDeviceOperation::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation::create_op_performance_model(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     const auto& input_tensor_a_shape = args.input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
