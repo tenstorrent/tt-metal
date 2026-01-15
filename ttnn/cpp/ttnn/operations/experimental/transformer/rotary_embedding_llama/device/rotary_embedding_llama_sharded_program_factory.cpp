@@ -10,8 +10,8 @@
 namespace ttnn::operations::experimental::transformer::rotary_embedding_llama::program {
 
 RotaryEmbeddingLlamaMultiCoreSharded::cached_program_t RotaryEmbeddingLlamaMultiCoreSharded::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const RotaryEmbeddingLlamaParams& operation_attributes,
+    const RotaryEmbeddingLlamaInputs& tensor_args,
     tt::tt_metal::Tensor& output) {
     using namespace tt::constants;
     using namespace tt;
@@ -170,8 +170,8 @@ RotaryEmbeddingLlamaMultiCoreSharded::cached_program_t RotaryEmbeddingLlamaMulti
 
 void RotaryEmbeddingLlamaMultiCoreSharded::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const RotaryEmbeddingLlamaParams& /*operation_attributes*/,
+    const RotaryEmbeddingLlamaInputs& tensor_args,
     tt::tt_metal::Tensor& output) {
     using namespace tt::constants;
     using namespace tt::tt_metal;

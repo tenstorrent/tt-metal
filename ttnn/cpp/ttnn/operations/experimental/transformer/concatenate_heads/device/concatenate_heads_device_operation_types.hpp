@@ -9,12 +9,12 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-struct operation_attributes_t {
+struct TransformerParams {
     const CoreCoord compute_with_storage_grid_size;
     const tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct TransformerInputs {
     const Tensor input;
     const std::optional<Tensor> preallocated_output;
 };

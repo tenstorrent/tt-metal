@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 BcastShardedHProgramFactory::cached_program_t BcastShardedHProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const BcastParams& operation_attributes, const BcastInputs& tensor_args, Tensor& tensor_return_value) {
     const Tensor& a = tensor_args.input_a;
     const Tensor& b = tensor_args.input_b;
     Tensor& output = tensor_return_value;
@@ -181,8 +181,8 @@ BcastShardedHProgramFactory::cached_program_t BcastShardedHProgramFactory::creat
 
 void BcastShardedHProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const BcastParams& /*operation_attributes*/,
+    const BcastInputs& tensor_args,
     Tensor& tensor_return_value) {
     Buffer* src_buffer = tensor_args.input_a.buffer();
     Buffer* dst_buffer = tensor_return_value.buffer();

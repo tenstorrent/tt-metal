@@ -18,8 +18,8 @@
 namespace ttnn::operations::experimental::paged_cache::fill {
 
 struct PagedFillCacheDeviceOperation {
-    using operation_attributes_t = fill::operation_attributes_t;
-    using tensor_args_t = fill::tensor_args_t;
+    using operation_attributes_t = FillParams;
+    using tensor_args_t = FillInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t =
