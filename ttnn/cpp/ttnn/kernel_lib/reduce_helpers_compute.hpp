@@ -35,7 +35,7 @@
  * IMPORTANT: The scaler CB must contain the scaling factor tile BEFORE calling reduce().
  *
  * Usage:
- *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+ *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
  *
  *   compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
  *

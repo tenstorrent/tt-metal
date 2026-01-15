@@ -8,7 +8,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/softmax.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "tt_metal/hw/inc/api/debug/dprint.h"
 
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
