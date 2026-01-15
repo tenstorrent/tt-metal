@@ -86,13 +86,8 @@ cxx_compiler_path=""
 cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
-toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
 
-# Requested handling for 20.04 -> 22.04 migration
-if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
-    echo "WARNING: You are using Ubuntu 20.04 which is end of life. Default toolchain is set to libcpp, which is an unsupported configuration. This default behavior will be removed by June 2025."
-    toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-fi
 
 configure_only="OFF"
 enable_distributed="ON"
