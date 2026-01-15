@@ -469,7 +469,9 @@ tests:
 
   301:
     name: "All to All Packet Sizes"
-    # TO DO
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_to_all"
 
   302:
     name: "All to All 2x2 To 1x1 Directed Ideal"
