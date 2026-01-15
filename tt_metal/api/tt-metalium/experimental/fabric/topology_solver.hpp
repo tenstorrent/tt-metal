@@ -340,6 +340,7 @@ void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result);
  * @param global_graph The global graph (larger host graph that contains the target)
  * @param constraints The mapping constraints to satisfy
  * @param connection_validation_mode How to validate connection counts (default: RELAXED)
+ * @param quiet_mode If true, log errors at debug level instead of error level (useful for auto-discovery)
  * @return MappingResult containing success status, bidirectional mappings, and warnings
  */
 template <typename TargetNode, typename GlobalNode>
@@ -347,7 +348,8 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const AdjacencyGraph<TargetNode>& target_graph,
     const AdjacencyGraph<GlobalNode>& global_graph,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
-    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED);
+    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false);
 
 }  // namespace tt::tt_fabric
 

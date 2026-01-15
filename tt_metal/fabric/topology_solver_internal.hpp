@@ -337,7 +337,8 @@ public:
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
         const MappingConstraints<TargetNode, GlobalNode>& constraints,
-        ConnectionValidationMode validation_mode);
+        ConnectionValidationMode validation_mode,
+        bool quiet_mode = false);
 
     /**
      * @brief Get the current search state
@@ -398,7 +399,8 @@ struct MappingValidator {
         const std::vector<int>& mapping,
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         ConnectionValidationMode validation_mode,
-        std::vector<std::string>* warnings = nullptr);
+        std::vector<std::string>* warnings = nullptr,
+        bool quiet_mode = false);
 
     /**
      * @brief Validate connection counts for all edges
@@ -409,12 +411,14 @@ struct MappingValidator {
      * @param graph_data Indexed graph data
      * @param validation_mode Connection validation mode
      * @param warnings Vector to collect warnings (must not be nullptr)
+     * @param quiet_mode If true, log errors at debug level instead of error level
      */
     static void validate_connection_counts(
         const std::vector<int>& mapping,
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         ConnectionValidationMode validation_mode,
-        std::vector<std::string>* warnings);
+        std::vector<std::string>* warnings,
+        bool quiet_mode = false);
 
     /**
      * @brief Print mapping for debugging
@@ -451,7 +455,8 @@ struct MappingValidator {
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const DFSSearchEngine<TargetNode, GlobalNode>::SearchState& state,
         const MappingConstraints<TargetNode, GlobalNode>& constraints,
-        ConnectionValidationMode validation_mode);
+        ConnectionValidationMode validation_mode,
+        bool quiet_mode = false);
 };
 
 }  // namespace tt::tt_fabric::detail

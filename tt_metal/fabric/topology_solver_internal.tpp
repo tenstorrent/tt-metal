@@ -245,7 +245,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
                         missing_nodes_str << ", ";
                     }
                     first = false;
-                    missing_nodes_str << node;
+                    missing_nodes_str << fmt::format("{}", node);
                 }
 
                 log_warning(
@@ -295,7 +295,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
                         missing_nodes_str << ", ";
                     }
                     first = false;
-                    missing_nodes_str << node;
+                    missing_nodes_str << fmt::format("{}", node);
                 }
 
                 log_warning(
@@ -840,7 +840,8 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
-    ConnectionValidationMode validation_mode) {
+    ConnectionValidationMode validation_mode,
+    bool quiet_mode) {
     // Reset internal state
     state_ = SearchState();
     state_.mapping.resize(graph_data.n_target, -1);
@@ -884,7 +885,11 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
             "Cannot map target graph to global graph: target graph has {} nodes, but global graph only has {} nodes",
             graph_data.n_target,
             graph_data.n_global);
-        log_error(tt::LogFabric, "{}", error_msg);
+        if (quiet_mode) {
+            log_debug(tt::LogFabric, "{}", error_msg);
+        } else {
+            log_error(tt::LogFabric, "{}", error_msg);
+        }
         state_.error_message = error_msg;
         return false;
     }
@@ -923,7 +928,11 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
                                 graph_data.global_nodes[neighbor_global_idx],
                                 required_global,
                                 graph_data.global_nodes[neighbor_global_idx]);
-                            log_error(tt::LogFabric, "{}", error_msg);
+                            if (quiet_mode) {
+                                log_debug(tt::LogFabric, "{}", error_msg);
+                            } else {
+                                log_error(tt::LogFabric, "{}", error_msg);
+                            }
                             state_.error_message = error_msg;
                             return false;
                         }
@@ -950,7 +959,11 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
             "Cannot complete mapping: {} target nodes still need to be placed, but only {} unused nodes remain in global graph",
             remaining_targets,
             unused_count);
-        log_error(tt::LogFabric, "{}", error_msg);
+        if (quiet_mode) {
+            log_debug(tt::LogFabric, "{}", error_msg);
+        } else {
+            log_error(tt::LogFabric, "{}", error_msg);
+        }
         state_.error_message = error_msg;
         return false;
     }
@@ -964,7 +977,11 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
             "Failed to find mapping: target graph with {} nodes cannot be placed in global graph with {} nodes under given constraints",
             graph_data.n_target,
             graph_data.n_global);
-        log_error(tt::LogFabric, "{}", error_msg);
+        if (quiet_mode) {
+            log_debug(tt::LogFabric, "{}", error_msg);
+        } else {
+            log_error(tt::LogFabric, "{}", error_msg);
+        }
         if (state_.error_message.empty()) {
             state_.error_message = error_msg;
         }
@@ -982,7 +999,8 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
     const std::vector<int>& mapping,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     ConnectionValidationMode validation_mode,
-    std::vector<std::string>* warnings) {
+    std::vector<std::string>* warnings,
+    bool quiet_mode) {
     // Check all edges in the mapping
     for (size_t i = 0; i < mapping.size(); ++i) {
         if (mapping[i] == -1) {
@@ -1019,7 +1037,11 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
                         neighbor_target,
                         global_node,
                         neighbor_global);
-                    log_error(tt::LogFabric, "{}", error_msg);
+                    if (quiet_mode) {
+                        log_debug(tt::LogFabric, "{}", error_msg);
+                    } else {
+                        log_error(tt::LogFabric, "{}", error_msg);
+                    }
                     warnings->push_back(error_msg);
                 }
                 continue;
@@ -1040,7 +1062,11 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
                         global_node,
                         neighbor_global,
                         actual);
-                    log_error(tt::LogFabric, "{}", error_msg);
+                    if (quiet_mode) {
+                        log_debug(tt::LogFabric, "{}", error_msg);
+                    } else {
+                        log_error(tt::LogFabric, "{}", error_msg);
+                    }
                     warnings->push_back(error_msg);
                 } else if (validation_mode == ConnectionValidationMode::RELAXED) {
                     std::string warning_msg = fmt::format(
@@ -1066,7 +1092,8 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
     const std::vector<int>& mapping,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     ConnectionValidationMode validation_mode,
-    std::vector<std::string>* warnings) {
+    std::vector<std::string>* warnings,
+    bool quiet_mode) {
     // First, validate that all target nodes are mapped
     std::vector<size_t> unmapped_targets;
     for (size_t i = 0; i < mapping.size(); ++i) {
@@ -1087,7 +1114,11 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
             "Mapping validation failed: {} target node(s) are not mapped to any global node: {}",
             unmapped_targets.size(),
             unmapped_list);
-        log_error(tt::LogFabric, "{}", error_msg);
+        if (quiet_mode) {
+            log_debug(tt::LogFabric, "{}", error_msg);
+        } else {
+            log_error(tt::LogFabric, "{}", error_msg);
+        }
         if (warnings != nullptr) {
             warnings->push_back(error_msg);
         }
@@ -1121,7 +1152,11 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
                     neighbor_target,
                     global_node,
                     neighbor_global);
-                log_error(tt::LogFabric, "{}", error_msg);
+                if (quiet_mode) {
+                    log_debug(tt::LogFabric, "{}", error_msg);
+                } else {
+                    log_error(tt::LogFabric, "{}", error_msg);
+                }
                 if (warnings != nullptr) {
                     warnings->push_back(error_msg);
                 }
@@ -1182,7 +1217,8 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const DFSSearchEngine<TargetNode, GlobalNode>::SearchState& state,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
-    ConnectionValidationMode validation_mode) {
+    ConnectionValidationMode validation_mode,
+    bool quiet_mode) {
     MappingResult<TargetNode, GlobalNode> result;
 
     // Always build bidirectional mappings, even if validation fails
@@ -1202,41 +1238,69 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
 
     // Validate mapping and collect detailed error messages
     std::vector<std::string> validation_warnings;
-    bool valid = validate_mapping(mapping, graph_data, validation_mode, &validation_warnings);
+    bool valid = validate_mapping(mapping, graph_data, validation_mode, &validation_warnings, quiet_mode);
 
     if (!valid) {
         result.success = false;
         if (!validation_warnings.empty()) {
             // Use first validation error as main error message
             result.error_message = validation_warnings[0];
-            log_error(
-                tt::LogFabric,
-                "Mapping validation failed: {} validation error(s) detected. First error: {}. "
-                "Saving partial mapping: {} of {} target nodes mapped",
-                validation_warnings.size(),
-                validation_warnings[0],
-                mapped_count,
-                graph_data.n_target);
+            if (quiet_mode) {
+                log_debug(
+                    tt::LogFabric,
+                    "Mapping validation failed: {} validation error(s) detected. First error: {}. "
+                    "Saving partial mapping: {} of {} target nodes mapped",
+                    validation_warnings.size(),
+                    validation_warnings[0],
+                    mapped_count,
+                    graph_data.n_target);
+            } else {
+                log_error(
+                    tt::LogFabric,
+                    "Mapping validation failed: {} validation error(s) detected. First error: {}. "
+                    "Saving partial mapping: {} of {} target nodes mapped",
+                    validation_warnings.size(),
+                    validation_warnings[0],
+                    mapped_count,
+                    graph_data.n_target);
+            }
             // Add remaining as warnings
             for (size_t i = 1; i < validation_warnings.size(); ++i) {
                 result.warnings.push_back(validation_warnings[i]);
-                log_error(tt::LogFabric, "Additional validation error: {}", validation_warnings[i]);
+                if (quiet_mode) {
+                    log_debug(tt::LogFabric, "Additional validation error: {}", validation_warnings[i]);
+                } else {
+                    log_error(tt::LogFabric, "Additional validation error: {}", validation_warnings[i]);
+                }
             }
         } else if (!state.error_message.empty()) {
             // Fall back to search state error message
             result.error_message = state.error_message;
-            log_error(
-                tt::LogFabric,
-                "Mapping failed during search: {}. Saving partial mapping: {} of {} target nodes mapped",
-                state.error_message,
-                mapped_count,
-                graph_data.n_target);
+            if (quiet_mode) {
+                log_debug(
+                    tt::LogFabric,
+                    "Mapping failed during search: {}. Saving partial mapping: {} of {} target nodes mapped",
+                    state.error_message,
+                    mapped_count,
+                    graph_data.n_target);
+            } else {
+                log_error(
+                    tt::LogFabric,
+                    "Mapping failed during search: {}. Saving partial mapping: {} of {} target nodes mapped",
+                    state.error_message,
+                    mapped_count,
+                    graph_data.n_target);
+            }
         } else {
             result.error_message = fmt::format(
                 "Mapping validation failed: incomplete or invalid mapping. {} of {} target nodes mapped",
                 mapped_count,
                 graph_data.n_target);
-            log_error(tt::LogFabric, "{}", result.error_message);
+            if (quiet_mode) {
+                log_debug(tt::LogFabric, "{}", result.error_message);
+            } else {
+                log_error(tt::LogFabric, "{}", result.error_message);
+            }
         }
 
         // Still compute statistics and copy search stats even if validation failed
