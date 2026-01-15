@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 import pathlib
 import shutil
 import sys
@@ -21,6 +22,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.database
+import ttnn.operation_tracer
 
 
 def compare_tensors_using_pcc(
@@ -942,9 +944,13 @@ def create_module_if_not_exists(module_name):
 def register_cpp_operation(target_module: types.ModuleType, func_name: str, function: Callable):
     operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 
+    # Wrap the function to capture and serialize parameters (if tracing enabled)
+    operation_name = function.python_fully_qualified_name
+    wrapped_function = ttnn.operation_tracer.wrap_function_for_tracing(function, operation_name)
+
     operation = operation_class(
         python_fully_qualified_name=function.python_fully_qualified_name,
-        function=function,
+        function=wrapped_function,
         golden_function=None,
         preprocess_golden_function_inputs=None,
         postprocess_golden_function_outputs=None,
@@ -981,6 +987,9 @@ def register_python_operation(
 
         operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 
+        # Wrap the function to capture and serialize parameters (if tracing enabled)
+        wrapped_function = ttnn.operation_tracer.wrap_function_for_tracing(function, python_fully_qualified_name)
+
         if not ttnn.CONFIG.enable_fast_runtime_mode:
             # Wrap function before attaching documentation to avoid errors
             if doc is not None:
@@ -992,12 +1001,12 @@ def register_python_operation(
 
                     return wrapper
 
-                function = doc_decorator(function)
-                function.__doc__ = doc
+                wrapped_function = doc_decorator(wrapped_function)
+                wrapped_function.__doc__ = doc
 
         operation = operation_class(
             python_fully_qualified_name=python_fully_qualified_name,
-            function=function,
+            function=wrapped_function,
             golden_function=golden_function,
             preprocess_golden_function_inputs=preprocess_golden_function_inputs,
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,

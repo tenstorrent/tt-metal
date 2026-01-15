@@ -833,6 +833,27 @@ def pytest_addoption(parser):
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
+    parser.addoption(
+        "--trace-params",
+        action="store_true",
+        default=False,
+        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files)",
+    )
+    parser.addoption(
+        "--trace-debug",
+        action="store_true",
+        default=False,
+        help="Enable debug output for operation tracing (prints trace file locations)",
+    )
+
+
+def pytest_configure(config):
+    """Set a flag in ttnn.decorators when --trace-params is enabled."""
+    if config.getoption("--trace-params", default=False):
+        # Set a module-level flag that can be checked by decorators
+        import ttnn.decorators
+
+        ttnn.operation_tracer._ENABLE_TRACE = True
 
 
 @pytest.fixture
