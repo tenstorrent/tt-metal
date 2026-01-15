@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Main PI0 model - TTNN Implementation (Inference Only)
+Main PI0 model - TTNN Implementation (Optimized).
 
 This module assembles all PI0 components into a complete model:
     - PrefixEmbedding: Images + language → embeddings
@@ -13,10 +13,11 @@ Architecture:
     1. Process images through SigLIP vision tower
     2. Embed language tokens through Gemma embeddings
     3. Concatenate to form prefix embeddings
-    4. Prefill prefix, cache KV, denoise actions iteratively
+    4. (Training) Process prefix + suffix through shared attention
+    5. (Inference) Prefill prefix, cache KV, denoise actions iteratively
 
 Optimizations:
-    1. Pre-computed timesteps
+    1. Pre-computed timesteps (saves 9 device transfers per inference)
     2. Denoising loop stays entirely on device
     3. Single transfer at the end for final actions
 """
@@ -113,6 +114,38 @@ class PI0ModelTTNN:
             embed_language_fn=self.backbone.embed_language_tokens,
         )
 
+        # OPTIMIZATION: Pre-compute timesteps for trace compatibility
+        # This avoids ttnn.arange during forward pass
+        self._precompute_timesteps()
+
+    def _precompute_timesteps(self):
+        """
+        Pre-compute timestep tensor for trace compatibility.
+
+        Creates a tensor of shape [1, pad_steps] with values [1.0, 0.9, 0.8, ..., 0.0]
+        This is done once in __init__ to avoid ttnn.arange during forward.
+        """
+        num_steps = self.denoise_config.num_steps
+        pad_steps = ((num_steps + 31) // 32) * 32
+
+        # Compute timesteps on CPU: [1.0, 0.9, 0.8, ..., 0.0, 0, 0, ...] (padded)
+        timestep_values = torch.zeros(1, pad_steps)
+        for i in range(num_steps + 1):
+            if i < pad_steps:
+                timestep_values[0, i] = 1.0 - i / num_steps
+
+        # Transfer to device (only done once)
+        self._timesteps_ttnn = ttnn.from_torch(
+            timestep_values,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Also store Python list for control flow
+        self._timesteps_list = [1.0 - i / num_steps for i in range(num_steps + 1)]
+
     def embed_prefix(
         self,
         images: List[torch.Tensor],
@@ -152,6 +185,104 @@ class PI0ModelTTNN:
             Tuple of (embeddings, padding_mask, attention_mask, adarms_cond)
         """
         return self.suffix_embedding.embed_suffix(state, noisy_actions, timestep)
+
+    def forward_training(
+        self,
+        images: List[torch.Tensor],
+        img_masks: List[torch.Tensor],
+        lang_tokens: torch.Tensor,
+        lang_masks: torch.Tensor,
+        state: torch.Tensor,
+        actions: torch.Tensor,
+        timestep: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Forward pass for training using TTNN (computes velocity for loss).
+
+        Args:
+            images: List of input images
+            img_masks: Image validity masks
+            lang_tokens: Language token IDs
+            lang_masks: Language masks
+            state: Robot state
+            actions: Noisy actions
+            timestep: Sampled timestep
+
+        Returns:
+            Predicted velocity (batch_size, action_horizon, action_dim) as PyTorch tensor
+        """
+        # Convert inputs to TTNN where needed
+        state_ttnn = ttnn.from_torch(
+            state.float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        actions_ttnn = ttnn.from_torch(
+            actions.float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        # Convert timestep - handle 1D [batch] by reshaping on device
+        timestep_float = timestep.float()
+        if timestep.dim() == 1:
+            timestep_ttnn = ttnn.from_torch(
+                timestep_float,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+            timestep_ttnn = ttnn.reshape(timestep_ttnn, (timestep_float.shape[0], 1))
+            timestep_ttnn = ttnn.to_layout(timestep_ttnn, ttnn.TILE_LAYOUT)
+        else:
+            timestep_ttnn = ttnn.from_torch(
+                timestep_float,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+
+        # Convert language tokens to TTNN (uint32 for embedding lookup)
+        lang_tokens_ttnn = ttnn.from_torch(
+            lang_tokens,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+        lang_masks_ttnn = ttnn.from_torch(
+            lang_masks.float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+
+        # Embed prefix using TTNN
+        prefix_embs, prefix_pad, prefix_att = self.embed_prefix(images, img_masks, lang_tokens_ttnn, lang_masks_ttnn)
+
+        # Embed suffix using TTNN (pass TTNN tensors)
+        suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(state_ttnn, actions_ttnn, timestep_ttnn)
+
+        # Forward through backbone using TTNN
+        vlm_output, expert_output = self.backbone.forward_shared_attention(
+            prefix_embs,
+            suffix_embs,
+            prefix_mask=None,
+            suffix_mask=None,
+        )
+
+        # Project expert output to velocity
+        if not self.config.pi05:
+            action_output = ttnn.slice(
+                expert_output, [0, 1, 0], [expert_output.shape[0], expert_output.shape[1], expert_output.shape[2]]
+            )
+        else:
+            action_output = expert_output
+
+        velocity = self.suffix_embedding.project_output(action_output)
+
+        # Convert back to PyTorch for loss computation
+        return ttnn.to_torch(velocity)
 
     def sample_actions(
         self,
@@ -208,30 +339,14 @@ class PI0ModelTTNN:
         # Step 2: Forward prefix through VLM and cache KV
         _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
 
-        # Get timesteps using pure Python list (for control flow on host)
+        # Get timesteps using pre-computed values (from __init__)
         num_steps = self.denoise_config.num_steps
-        # Create timesteps as Python list: [1.0, 0.9, 0.8, ..., 0.0]
-        timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
-
-        # OPTIMIZATION: Pre-compute all timestep tensors on device using TTNN
-        pad_steps = ((num_steps + 31) // 32) * 32
-
-        # Create timestep indices on device using ttnn.arange
-        timestep_indices = ttnn.arange(0, pad_steps, 1, device=self.device, dtype=ttnn.bfloat16)
-        timestep_indices = ttnn.to_layout(timestep_indices, ttnn.TILE_LAYOUT)
-
-        # Convert to timestep values: 1.0 - index / num_steps
-        timestep_values = ttnn.multiply(timestep_indices, -1.0 / num_steps)
-        timesteps_ttnn = ttnn.add(timestep_values, 1.0)
-        timesteps_ttnn = ttnn.reshape(timesteps_ttnn, (1, pad_steps))
-
-        # Cleanup
-        ttnn.deallocate(timestep_indices)
-        ttnn.deallocate(timestep_values)
+        timesteps = self._timesteps_list  # Python list for control flow
+        timesteps_ttnn = self._timesteps_ttnn  # Pre-computed TTNN tensor
 
         # Step 3: Sample initial noise (small tensor - host generation is fine)
         # Note: Using torch.randn ensures PCC compatibility with PyTorch reference
-        # The tensor is small (batch * 50 * 32 = 1600 floats), so transfer is negligible
+        # The tensor is tiny (batch * 50 * 7 = 350 floats), so transfer is negligible
         x_t_torch = torch.randn(batch_size, self.config.action_horizon, self.config.action_dim)
         x_t_ttnn = ttnn.from_torch(
             x_t_torch,

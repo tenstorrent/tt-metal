@@ -103,6 +103,11 @@ pi0/
 │   ├── ttnn_prefix.py          # Prefix embedding (TTNN)
 │   ├── ttnn_suffix.py          # Suffix embedding (TTNN)
 │   └── ttnn_common.py          # Common TTNN utilities
+├── runner/                     # Optimized execution (Trace + 2CQ)
+│   ├── __init__.py             # Package exports
+│   └── performant_runner.py    # Full model trace + 2CQ executor
+├── docs/                       # Documentation
+│   └── TRACE_2CQ_OPTIMIZATION.md  # Trace + 2CQ guide
 ├── tests/
 │   ├── pcc/                    # PCC (accuracy) tests
 │   ├── perf/                   # Performance benchmarks
@@ -321,11 +326,79 @@ python models/experimental/pi0/tests/download_pretrained_weights.py
 | Action Dimension | 32 |
 | Action Horizon | 50 |
 
-## Future Optimizations
+## Performance Optimizations
 
 ### Trace + 2CQ (Two Command Queue)
 
-**Status:** Not yet implemented
+**Status:** ✅ Implemented
+
+The PI0 model supports optimized inference using full model tracing and two
+command queue (2CQ) pipelining for up to **40% latency improvement**.
+
+#### Quick Start
+
+```python
+from models.experimental.pi0.tt.ttnn_pi0_model import PI0ModelTTNN
+from models.experimental.pi0.runner import PerformantRunner, PI0TraceConfig
+
+# Create device with 2CQ enabled
+config = PI0TraceConfig()
+device = ttnn.open_device(device_id=0, num_command_queues=2, trace_region_size=8*1024*1024)
+
+# Load model
+model = PI0ModelTTNN.from_pretrained("weights/pi0_base", device)
+
+# Create and compile runner (captures trace ~5s one-time)
+runner = PerformantRunner(model, device, config)
+runner.compile()
+
+# Run inference (optimized!)
+actions = runner.execute(images, img_masks, lang_tokens, lang_masks, state)
+
+runner.cleanup()
+```
+
+#### Fixed Configuration Requirements
+
+The full model trace requires FIXED configuration (baked into trace):
+
+| Parameter | Fixed Value |
+|-----------|-------------|
+| `batch_size` | 1 |
+| `num_images` | 3 |
+| `denoising_steps` | 10 |
+| `max_lang_tokens` | 512 |
+
+⚠️ If you need variable image count or denoising steps, use the baseline
+`PI0ModelTTNN.sample_actions()` directly instead.
+
+#### Performance Test
+
+```bash
+# Run performance comparison
+pytest models/experimental/pi0/tests/perf/test_e2e_performant.py -v
+
+# Direct execution
+python models/experimental/pi0/tests/perf/test_e2e_performant.py
+```
+
+#### Documentation
+
+For full details, limitations, and alternative approaches, see:
+- **[docs/TRACE_2CQ_OPTIMIZATION.md](docs/TRACE_2CQ_OPTIMIZATION.md)** - Complete guide
+
+#### Alternative: Denoising-Only Trace
+
+For use cases requiring flexibility (variable images, steps), an alternative
+approach traces only the denoising step (following the Flux1 pattern):
+
+| Approach | Flexibility | Improvement |
+|----------|-------------|-------------|
+| Full Model Trace | Fixed config only | ~40% |
+| Denoising-Only Trace | Variable | ~25% |
+
+See [docs/TRACE_2CQ_OPTIMIZATION.md](docs/TRACE_2CQ_OPTIMIZATION.md) for
+implementation details.
 
 ## License
 

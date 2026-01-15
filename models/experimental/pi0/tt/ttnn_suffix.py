@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Suffix Embedding module - TTNN Implementation
+Suffix Embedding module - TTNN Implementation (Optimized).
 
 This module handles embedding of state, noisy actions, and timestep to create
 the suffix part of the sequence for expert transformer processing.
@@ -18,12 +18,13 @@ Optimizations:
 """
 
 from typing import Dict, Optional, Tuple
+import math
 
 import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import SuffixConfig
-from .ttnn_common import create_sinusoidal_pos_embedding_ttnn, tensor_1d_to_2d_ttnn
+from .ttnn_common import tensor_1d_to_2d_ttnn
 
 
 class SuffixEmbeddingTTNN:
@@ -64,6 +65,7 @@ class SuffixEmbeddingTTNN:
         # Pad to tile-aligned size (suffix_len typically ~51 -> 64)
         suffix_len = len(att_mask_pattern)
         pad_len = ((suffix_len + 31) // 32) * 32
+        att_mask_padded = att_mask_pattern + [0] * (pad_len - suffix_len)
 
         # Create attention mask using ttnn (avoid torch.tensor)
         # Use ttnn.zeros and fill with ones at specific positions
@@ -84,6 +86,68 @@ class SuffixEmbeddingTTNN:
 
         self._att_mask_pattern = att_mask_ttnn
         self._att_mask_suffix_len = suffix_len
+
+        # OPTIMIZATION: Pre-compute padding mask (all ones, for trace compatibility)
+        # Suffix padding mask is always all ones (no padding in suffix)
+        # Pad to tile alignment just like attention mask
+        self._suffix_pad_mask = ttnn.ones(
+            (1, pad_len),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # OPTIMIZATION: Pre-compute timestep embedding scaling factor (for trace compatibility)
+        # This avoids creating tensors with ttnn.arange during forward pass
+        self._timestep_scaling_factor = self._precompute_timestep_scaling_factor(
+            dimension=config.expert_width,
+            min_period=4e-3,
+            max_period=4.0,
+        )
+
+    def _precompute_timestep_scaling_factor(
+        self,
+        dimension: int,
+        min_period: float,
+        max_period: float,
+    ) -> ttnn.Tensor:
+        """
+        Pre-compute the scaling factor for sinusoidal timestep embeddings.
+
+        This is a CONSTANT that only depends on dimension, min_period, max_period.
+        Pre-computing it allows the forward pass to be traced without writes.
+
+        Returns:
+            TTNN tensor [1, half_dim] with scaling factors
+        """
+        half_dim = dimension // 2
+
+        # Compute on CPU then transfer to device (only done once in init)
+        indices = torch.arange(0, half_dim, dtype=torch.float32)
+        if half_dim > 1:
+            fraction = indices / (half_dim - 1)
+        else:
+            fraction = indices
+
+        # period = min_period * (max_period / min_period) ** fraction
+        log_ratio = math.log(max_period / min_period)
+        period = min_period * torch.exp(fraction * log_ratio)
+
+        # scaling_factor = (1.0 / period) * 2 * pi
+        scaling_factor = (1.0 / period) * 2 * math.pi
+
+        # Reshape to [1, half_dim] for broadcasting
+        scaling_factor = scaling_factor.unsqueeze(0)
+
+        # Transfer to device
+        return ttnn.from_torch(
+            scaling_factor,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def embed_actions(self, noisy_actions: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -128,21 +192,39 @@ class SuffixEmbeddingTTNN:
 
     def embed_timestep(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Create timestep embedding.
+        Create timestep embedding using pre-computed scaling factor.
+
+        OPTIMIZATION: Uses pre-computed scaling factor from __init__ to avoid
+        creating new tensors during forward pass. This enables trace capture.
 
         Args:
-            timestep: TTNN tensor (batch_size,)
+            timestep: TTNN tensor (batch_size, 1) or (batch_size,)
 
         Returns:
             TTNN tensor (batch_size, expert_width)
         """
-        return create_sinusoidal_pos_embedding_ttnn(
-            timestep,
-            self.config.expert_width,
-            min_period=4e-3,
-            max_period=4.0,
-            device=self.device,
-        )
+        # Reshape time for broadcasting: [batch, 1] if not already
+        if len(timestep.shape) == 1:
+            time_reshaped = ttnn.reshape(timestep, (-1, 1))
+        else:
+            time_reshaped = timestep
+
+        # Compute sin input: time * scaling_factor (broadcasts to [batch, half_dim])
+        sin_input = ttnn.matmul(time_reshaped, self._timestep_scaling_factor)
+
+        # Compute sin and cos
+        sin_emb = ttnn.sin(sin_input)
+        cos_emb = ttnn.cos(sin_input)
+
+        # Concatenate to get [batch, dimension]
+        embeddings = ttnn.concat([sin_emb, cos_emb], dim=-1)
+
+        # Clean up intermediates
+        ttnn.deallocate(sin_input)
+        ttnn.deallocate(sin_emb)
+        ttnn.deallocate(cos_emb)
+
+        return embeddings
 
     def fuse_action_time(
         self,
@@ -241,17 +323,27 @@ class SuffixEmbeddingTTNN:
         else:
             suffix_embs = embs[0]
 
-        # Create masks on device
+        # Create masks on device using pre-computed templates
         suffix_len = suffix_embs.shape[1]
 
-        # Padding mask: all ones (no padding)
-        suffix_pad_masks = ttnn.ones(
-            (batch_size, suffix_len),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # OPTIMIZATION: Use pre-computed padding mask (no tensor creation during trace!)
+        if batch_size == 1:
+            suffix_pad_masks = ttnn.slice(
+                self._suffix_pad_mask,
+                [0, 0],
+                [1, suffix_len],
+            )
+        else:
+            pad_mask_sliced = ttnn.slice(
+                self._suffix_pad_mask,
+                [0, 0],
+                [1, suffix_len],
+            )
+            suffix_pad_masks = ttnn.repeat(
+                pad_mask_sliced,
+                (batch_size, 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # OPTIMIZATION: Use pre-computed attention mask pattern (no transfer per step!)
         # Pattern is pre-computed in __init__, just repeat for batch_size

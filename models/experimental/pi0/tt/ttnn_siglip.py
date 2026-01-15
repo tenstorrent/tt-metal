@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-SigLIP Vision Tower - TTNN Implementation
+SigLIP Vision Tower - TTNN Implementation (Optimized).
 
 This module implements the SigLIP vision encoder using TTNN operations.
 
@@ -24,7 +24,7 @@ from typing import Dict
 
 import torch
 import ttnn
-import tt_lib.fallback_ops as fallback_ops  # For position embedding interpolation (native TTNN interpolate not available)
+import tt_lib.fallback_ops as fallback_ops  # Implemented tt_lib.fallback_ops.interpolate to replace torch.nn.functional.interpolate (Native TTNN interpolate does not exist)
 
 from models.experimental.pi0.common.configs import SigLIPConfig
 from models.experimental.pi0.tt.ttnn_common import tensor_1d_to_2d_ttnn
@@ -181,11 +181,7 @@ class PatchEmbeddingTTNN:
         Returns:
             TTNN tensor (batch_size, num_patches, hidden_size)
         """
-        # Convert to PyTorch if needed (shouldn't happen in normal flow)
-        if isinstance(pixel_values, ttnn.Tensor):
-            pixel_values = ttnn.to_torch(pixel_values)
-
-        # Step 1: Transfer to device in TILE layout directly (B, C, H, W)
+        # Transfer to device in TILE layout directly (B, C, H, W)
         x = ttnn.from_torch(
             pixel_values,
             dtype=ttnn.bfloat16,
