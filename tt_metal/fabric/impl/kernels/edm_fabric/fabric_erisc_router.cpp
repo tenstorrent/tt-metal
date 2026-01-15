@@ -562,22 +562,22 @@ template <
     bool SKIP_CONNECTION_LIVENESS_CHECK,
     typename SenderChannelT,
     typename WorkerInterfaceT,
-    typename ReceiverPointersT,
-    typename ReceiverChannelT>
+    typename ReceiverPointersT
+>
 FORCE_INLINE void send_next_data(
     SenderChannelT& sender_buffer_channel,
     WorkerInterfaceT& sender_worker_interface,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
-    ReceiverChannelT& receiver_buffer_channel,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
-    auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
-    auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
 
+    auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
-    size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
-    auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
+    size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
+
+    auto const dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
+
     if constexpr (!skip_src_ch_id_update) {
         pkt_header->src_ch_id = sender_channel_index;
     }
@@ -593,19 +593,16 @@ FORCE_INLINE void send_next_data(
     sender_worker_interface.template update_write_counter_for_send<SKIP_CONNECTION_LIVENESS_CHECK>();
 
     // Advance receiver buffer pointers
-    outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_index();
-    receiver_buffer_channel.set_cached_next_buffer_slot_addr(
-        receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
+    outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_pointer();
     sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
     remote_receiver_num_free_slots--;
     // update the remote reg
-    static constexpr uint32_t packets_to_forward = 1;
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(packets_to_forward);
+    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
 }
 
 /////////////////////////////////////////////
@@ -1633,7 +1630,6 @@ FORCE_INLINE
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
-            remote_receiver_channel,
             perf_telemetry_recorder);
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -1977,6 +1973,21 @@ FORCE_INLINE bool run_receiver_channel_step(
     return false;
 }
 
+template<
+    typename OutboundReceiverChannelPointers,
+    typename RemoteEthReceiverChannels>
+FORCE_INLINE void configure_outbound_to_receiver_channel_pointers(
+    OutboundReceiverChannelPointers& outbound_to_receiver_channel_pointers,
+    RemoteEthReceiverChannels& remote_receiver_channels) {
+    static_assert(OutboundReceiverChannelPointers::N == RemoteEthReceiverChannels::num_channels);
+
+    [&]<size_t... Is>(std::index_sequence<Is...>) {
+        ((outbound_to_receiver_channel_pointers.template get<Is>().init(
+            reinterpret_cast<uint32_t>(remote_receiver_channels.template get<Is>().channel_base_address()),
+            remote_receiver_channels.template get<Is>().get_max_eth_payload_size())), ...);
+    }(std::make_index_sequence<OutboundReceiverChannelPointers::N>{});
+}
+
 /*
  * Main control loop for fabric EDM. Run indefinitely until a termination signal is received
  *
@@ -2030,6 +2041,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     //       math ops on single individual words (or half words)
     auto outbound_to_receiver_channel_pointers =
         ChannelPointersTuple<OutboundReceiverChannelPointers, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make();
+
+    configure_outbound_to_receiver_channel_pointers(outbound_to_receiver_channel_pointers, remote_receiver_channels);
+
     // Workaround the perf regression in RingAsLinear test.
     auto outbound_to_receiver_channel_pointer_ch0 =
         outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>();
