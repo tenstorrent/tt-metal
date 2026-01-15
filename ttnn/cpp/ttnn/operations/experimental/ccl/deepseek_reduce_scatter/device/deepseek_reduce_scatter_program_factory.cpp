@@ -76,6 +76,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const uint32_t tile_granularity = 2;  // NOTE: writer kernel hardcoded to always use scatter_write with 2 tiles
 
     // TODO: (GR) double buffering (enough to hold all tiles for a given slice), test/check if we should use more
+    // TODO: (GR) this should be updated to hold the entire shard, only debate is for the compute CB
     const uint32_t cb_num_pages = 2 * tile_granularity;
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
