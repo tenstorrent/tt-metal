@@ -135,7 +135,7 @@ tests:
 
   16:
     name: "Loopback Packet Sizes"
-    # TODO
+    # TODO issue #35917 issue #35917
 
   17:
     name: "Reshard Hardcoded Small"
@@ -201,7 +201,7 @@ tests:
 
   40:
     name: "DRAM Packet Sizes 2.0"
-    # TODO
+    # TODO issue #35917
 
   50:
     name: "One to One Directed Ideal"
@@ -265,11 +265,11 @@ tests:
 
   80:
     name: "One Packet Read Sizes"
-    # TODO
+    # TODO issue #35917
 
   81:
     name: "One Packet Write Sizes"
-    # TODO
+    # TODO issue #35917
 
   82:
     name: "One Packet Read Directed Ideal"
@@ -303,7 +303,7 @@ tests:
 
   111:
     name: "Multi Interleaved Sizes"
-    # TODO
+    # TODO issue #35917
 
   112:
     name: "Multi Interleaved Read Directed Ideal"
@@ -319,49 +319,49 @@ tests:
 
   115:
     name: "Multi Interleaved Write Sizes"
-    # TODO
+    # TODO issue #35917
 
   116:
     name: "Multi Interleaved 2x2 Directed Ideal"
 
   117:
     name: "Multi Interleaved 2x2 Sizes"
-    # TODO
+    # TODO issue #35917
 
   118:
     name: "Multi Interleaved 2x2 Read Directed Ideal"
 
   119:
     name: "Multi Interleaved 2x2 Read Sizes"
-    # TODO
+    # TODO issue #35917
 
   120:
     name: "Multi Interleaved 2x2 Write Directed Ideal"
 
   121:
     name: "Multi Interleaved 2x2 Write Sizes"
-    # TODO
+    # TODO issue #35917
 
   122:
     name: "Multi Interleaved 6x6 Directed Ideal"
 
   123:
     name: "Multi Interleaved 6x6 Sizes"
-    # TODO
+    # TODO issue #35917
 
   124:
     name: "Multi Interleaved 6x6 Read Directed Ideal"
 
   125:
     name: "Multi Interleaved 6x6 Read Sizes"
-    # TODO
+    # TODO issue #35917
 
   126:
     name: "Multi Interleaved 6x6 Write Directed Ideal"
 
   127:
     name: "Multi Interleaved 6x6 Write Sizes"
-    # TODO
+    # TODO issue #35917
 
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
@@ -383,11 +383,11 @@ tests:
 
   146:
     name: "Core Bidirectional Packet Sizes Same Kernel"
-    # TODO
+    # TODO issue #35917
 
   147:
     name: "Core Bidirectional Packet Sizes Different Kernels"
-    # TODO
+    # TODO issue #35917
 
   148:
     name: "Core Bidirectional Custom"
