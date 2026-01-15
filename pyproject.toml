@@ -67,3 +67,6 @@ fallback_version = "0.0.0.dev0"
 [tool.cibuildwheel]
 skip = "*-musllinux_*"
 build-verbosity = 2
+
+[tool.uv]
+link-mode = "copy"
