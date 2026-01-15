@@ -20,6 +20,7 @@ on:
           - sentence_bert
           - wan2-2
           - mochi
+          - qwenimage
   schedule:
     - cron: "0 10 * * *"  # Every day at 10:00 UTC
 

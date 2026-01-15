@@ -100,7 +100,7 @@
   sku: wh_llmbox
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
-  timeout: 30
+  timeout: 20
 
 - name: t3k_flux1_tests
   cmd: run_t3000_flux1_tests
@@ -136,3 +136,10 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   timeout: 60
+
+- name: t3k_qwenimage_tests
+  cmd: run_t3000_qwenimage_tests
+  sku: wh_llmbox
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  timeout: 10

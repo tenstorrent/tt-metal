@@ -335,6 +335,10 @@ run_t3000_motif_tests() {
   run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg0sp0tp1"
 }
 
+run_t3000_qwenimage_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k 2x4"
+}
+
 
 run_t3000_gemma3_tests() {
   # Record the start time
@@ -478,6 +482,9 @@ run_t3000_tests() {
 
   # Run motif tests
   run_t3000_motif_tests
+
+  # Run qwenimage tests
+  run_t3000_qwenimage_tests
 
   # Run gemma3 tests
   run_t3000_gemma3_tests
