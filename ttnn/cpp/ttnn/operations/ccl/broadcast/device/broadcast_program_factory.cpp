@@ -19,7 +19,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <algorithm>
 
-namespace ttnn::operations::ccl::broadcast::program {
+namespace ttnn::prim {
 
 BroadcastProgramFactory::cached_mesh_workload_t BroadcastProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -350,4 +350,4 @@ void BroadcastProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::ccl::broadcast::program
+}  // namespace ttnn::prim

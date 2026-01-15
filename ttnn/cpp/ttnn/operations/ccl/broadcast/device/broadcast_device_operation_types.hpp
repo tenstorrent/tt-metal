@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt_stl/reflection.hpp>
 
-namespace ttnn::operations::ccl::broadcast {
+namespace ttnn::prim {
 
 struct operation_attributes_t {
     MeshCoordinate sender_coord;  // No default constructor
@@ -55,4 +55,4 @@ struct tensor_args_t {
     Tensor input_tensor;
 };
 
-}  // namespace ttnn::operations::ccl::broadcast
+}  // namespace ttnn::prim

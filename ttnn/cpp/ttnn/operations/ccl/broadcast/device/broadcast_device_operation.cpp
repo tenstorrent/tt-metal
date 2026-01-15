@@ -8,11 +8,11 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::ccl::broadcast {
+namespace ttnn::prim {
 
 BroadcastDeviceOperation::program_factory_t BroadcastDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::BroadcastProgramFactory{};
+    return BroadcastProgramFactory{};
 }
 
 void BroadcastDeviceOperation::validate_on_program_cache_hit(
@@ -93,10 +93,7 @@ tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-}  // namespace ttnn::operations::ccl::broadcast
-
-namespace ttnn::prim {
-ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_t broadcast(
+ttnn::prim::BroadcastDeviceOperation::tensor_return_value_t broadcast(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
     uint32_t num_links,
@@ -104,7 +101,7 @@ ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    using OperationType = ttnn::operations::ccl::broadcast::BroadcastDeviceOperation;
+    using OperationType = ttnn::prim::BroadcastDeviceOperation;
 
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();

@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 
-namespace ttnn::operations::ccl::broadcast::program {
+namespace ttnn::prim {
 
 struct BroadcastProgramFactory {
     struct shared_variables_t {
@@ -46,4 +46,4 @@ private:
         const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
 };
 
-}  // namespace ttnn::operations::ccl::broadcast::program
+}  // namespace ttnn::prim
