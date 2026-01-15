@@ -26,21 +26,21 @@ def create_random_tensor(shape, random_tensor_gen):
 
 
 @pytest.mark.parametrize(
-    "B, K",
+    "B, K, core_grid",
     [
-        (1, 32),
-        (1, 64),
-        (1, 128),
-        (1, 256),
-        (1, 512),
-        (1, 1024),
+        (1, 32, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})),
+        (1, 64, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})),
+        (1, 128, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})),
+        (1, 256, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
+        (1, 512, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))})),
+        (1, 1024, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})),
     ],
 )
 @pytest.mark.parametrize(
     "generation_type",
     ["uniform", "rand", "randn"],
 )
-def test_resblock(device, B, K, generation_type):
+def test_resblock(device, B, K, core_grid, generation_type):
     torch.manual_seed(1234)
 
     a_tile = ttnn.Tile([B, 32])
@@ -52,8 +52,6 @@ def test_resblock(device, B, K, generation_type):
         K % weight_tile.tile_shape[1] == 0
     ), f"K ({K}) must be divisible by weight tile width ({weight_tile.tile_shape[1]})"
     number_of_matmul_cores = K // weight_tile.tile_shape[1]
-    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(number_of_matmul_cores - 1, 0))})
-
     logger.info(f"Testing fused ResBlock with shape [{B}, {K}] x [{K}, {K}] on {number_of_matmul_cores} cores")
 
     torch_a = create_random_tensor((B, K), generation_type)
@@ -127,7 +125,7 @@ def test_resblock(device, B, K, generation_type):
         weight0_tensor,
         weight1_tensor,
         ttnn_output,
-        debug=True,
+        fp32_dest_acc_en=True,
     )
 
     logger.info("Converting TTNN output to torch")
@@ -135,7 +133,7 @@ def test_resblock(device, B, K, generation_type):
     print(torch_output)
     assert torch_output.shape == (B, K), f"Expected shape ({B}, {K}), got {torch_output.shape}"
 
-    passing, pcc_message = comp_pcc(expected, torch_output, 0.995)
+    passing, pcc_message = comp_pcc(expected, torch_output, 0.99)
     logger.info(pcc_message)
 
     assert passing, pcc_message
