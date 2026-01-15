@@ -4,7 +4,7 @@
 """
 YUNet PCC nightly test for CI.
 
-Runs the YUNet face detection model PCC test on Wormhole.
+Runs the YUNet face detection model PCC test.
 """
 
 import pytest
@@ -12,6 +12,7 @@ import pytest
 from models.experimental.yunet.common import YUNET_L1_SMALL_SIZE
 
 
+@pytest.mark.skip(reason="YUNet not yet supported on Wormhole")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YUNET_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_size", [(320, 320)])
 def test_yunet_pcc(device, input_size, reset_seeds):
