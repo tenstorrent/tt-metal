@@ -65,10 +65,12 @@ struct BilinearWeightsLUT {
         };
         WeightArray arr{};
 
-        constexpr int32_t scale_h_inv = FIXED_ONE / ScaleH;
-        constexpr int32_t scale_w_inv = FIXED_ONE / ScaleW;
-        constexpr int32_t y_start = (FIXED_ONE / (2 * ScaleH)) - FIXED_HALF;
-        constexpr int32_t x_start = (FIXED_ONE / (2 * ScaleW)) - FIXED_HALF;
+        constexpr int32_t scale_h_inv = fixed_point_arithmetic::FIXED_ONE / ScaleH;
+        constexpr int32_t scale_w_inv = fixed_point_arithmetic::FIXED_ONE / ScaleW;
+        constexpr int32_t y_start =
+            (fixed_point_arithmetic::FIXED_ONE / (2 * ScaleH)) - fixed_point_arithmetic::FIXED_HALF;
+        constexpr int32_t x_start =
+            (fixed_point_arithmetic::FIXED_ONE / (2 * ScaleW)) - fixed_point_arithmetic::FIXED_HALF;
 
         uint32_t idx = 0;
         for (uint32_t i = 0; i < ScaleH; ++i) {
@@ -76,28 +78,30 @@ struct BilinearWeightsLUT {
                 int32_t src_y_fixed = y_start + static_cast<int32_t>(i) * scale_h_inv;
                 int32_t src_x_fixed = x_start + static_cast<int32_t>(j) * scale_w_inv;
 
-                int32_t dy_fixed = src_y_fixed - ((src_y_fixed >> FIXED_POINT_SHIFT) << FIXED_POINT_SHIFT);
-                int32_t dx_fixed = src_x_fixed - ((src_x_fixed >> FIXED_POINT_SHIFT) << FIXED_POINT_SHIFT);
+                int32_t dy_fixed = src_y_fixed - ((src_y_fixed >> fixed_point_arithmetic::FIXED_POINT_SHIFT)
+                                                  << fixed_point_arithmetic::FIXED_POINT_SHIFT);
+                int32_t dx_fixed = src_x_fixed - ((src_x_fixed >> fixed_point_arithmetic::FIXED_POINT_SHIFT)
+                                                  << fixed_point_arithmetic::FIXED_POINT_SHIFT);
 
                 if (dy_fixed < 0) {
-                    dy_fixed += FIXED_ONE;
+                    dy_fixed += fixed_point_arithmetic::FIXED_ONE;
                 }
                 if (dx_fixed < 0) {
-                    dx_fixed += FIXED_ONE;
+                    dx_fixed += fixed_point_arithmetic::FIXED_ONE;
                 }
 
-                int32_t one_minus_dy = FIXED_ONE - dy_fixed;
-                int32_t one_minus_dx = FIXED_ONE - dx_fixed;
+                int32_t one_minus_dy = fixed_point_arithmetic::FIXED_ONE - dy_fixed;
+                int32_t one_minus_dx = fixed_point_arithmetic::FIXED_ONE - dx_fixed;
 
-                int32_t w1_fixed = fixed_mul(one_minus_dx, one_minus_dy);
-                int32_t w2_fixed = fixed_mul(dx_fixed, one_minus_dy);
-                int32_t w3_fixed = fixed_mul(one_minus_dx, dy_fixed);
-                int32_t w4_fixed = fixed_mul(dx_fixed, dy_fixed);
+                int32_t w1_fixed = fixed_point_arithmetic::fixed_mul(one_minus_dx, one_minus_dy);
+                int32_t w2_fixed = fixed_point_arithmetic::fixed_mul(dx_fixed, one_minus_dy);
+                int32_t w3_fixed = fixed_point_arithmetic::fixed_mul(one_minus_dx, dy_fixed);
+                int32_t w4_fixed = fixed_point_arithmetic::fixed_mul(dx_fixed, dy_fixed);
 
-                uint16_t bf16_w1 = fixed_to_bf16(w1_fixed);
-                uint16_t bf16_w2 = fixed_to_bf16(w2_fixed);
-                uint16_t bf16_w3 = fixed_to_bf16(w3_fixed);
-                uint16_t bf16_w4 = fixed_to_bf16(w4_fixed);
+                uint16_t bf16_w1 = fixed_point_arithmetic::fixed_to_bf16(w1_fixed);
+                uint16_t bf16_w2 = fixed_point_arithmetic::fixed_to_bf16(w2_fixed);
+                uint16_t bf16_w3 = fixed_point_arithmetic::fixed_to_bf16(w3_fixed);
+                uint16_t bf16_w4 = fixed_point_arithmetic::fixed_to_bf16(w4_fixed);
 
                 arr.data[idx++] = (static_cast<uint32_t>(bf16_w2) << 16) | bf16_w1;
                 arr.data[idx++] = (static_cast<uint32_t>(bf16_w4) << 16) | bf16_w3;
