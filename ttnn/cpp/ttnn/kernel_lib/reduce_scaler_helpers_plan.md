@@ -13,6 +13,8 @@ This document outlines the plan to migrate the `generate_reduce_scaler` function
 | Phase 1 | ✅ Complete | Create library & migrate first batch |
 | Phase 2 | ✅ Complete | Migrate SDPA, reduction, softmax, moreh kernels |
 | Phase 3 | ✅ Complete | Migrate remaining 20 files |
+| Phase 4 | 🔄 In Progress | Migrate DIT LayerNorm (✅ 2/2) & UDM test files (⚠️ 0/3) |
+| Phase 5 | 🔲 Pending | Deprecate old header |
 
 ## Analysis Summary
 
@@ -110,9 +112,16 @@ Face layout (each face is 16x16 elements):
 - ✅ `rms_pre_allgather_reader.cpp` - `experimental/transformer/fused_distributed_rmsnorm/device/kernels/dataflow/`
 - ✅ `rms_writer.cpp` - `experimental/ccl/rms_allgather/device/kernels/dataflow/`
 
-#### ⚠️ Still Using Deprecated Helper (0 files)
+#### ⚠️ Still Using Deprecated Helper (3 files)
 
-All files have been successfully migrated to the new helper library!
+**UDM Test Files (3 files):**
+- ⚠️ `dataflow_reduce.cpp` - `tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/kernels/`
+- ⚠️ `reader_receiver_unary_sharded_reduce.cpp` - `tests/ttnn/unit_tests/gtests/udm/reduction/sharded/kernels/`
+- ⚠️ `reader_sender_unary_sharded_reduce.cpp` - `tests/ttnn/unit_tests/gtests/udm/reduction/sharded/kernels/`
+
+**DIT LayerNorm Operations (2 files) - ✅ MIGRATED:**
+- ✅ `reader_layernorm_preallgather_dit.cpp` - `experimental/transformer/dit_layernorm_pre_all_gather/device/kernels/dataflow/`
+- ✅ `reader_layernorm_postallgather_dit.cpp` - `experimental/transformer/dit_layernorm_post_all_gather/device/kernels/dataflow/`
 
 ---
 
@@ -296,7 +305,44 @@ All migrations followed the same pattern:
 
 Tests have been run and are passing successfully.
 
-### 🔲 Phase 4: Deprecate Old Header
+### 🔄 Phase 4: Migrate DIT LayerNorm & UDM Test Files (In Progress)
+
+**DIT LayerNorm Operations (2 files) - ✅ COMPLETED:**
+
+1. **✅ `ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/device/kernels/dataflow/reader_layernorm_preallgather_dit.cpp`**
+   - ✅ Migrated: Replaced deprecated include with `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp`
+   - ✅ Added using declaration: `using ttnn::kernel_lib::dataflow::generate_reduce_scaler;`
+   - Previously called: `generate_reduce_scaler(cb_reduce, scaler)` at line 30
+
+2. **✅ `ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/dataflow/reader_layernorm_postallgather_dit.cpp`**
+   - ✅ Migrated: Replaced deprecated include with `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp`
+   - ✅ Added using declaration: `using ttnn::kernel_lib::dataflow::generate_reduce_scaler;`
+   - Note: Included for consistency (doesn't directly call the function)
+
+**UDM Test Files (3 files):**
+
+3. **`tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/kernels/dataflow_reduce.cpp`**
+   - Currently includes deprecated header
+   - **Migration:** Replace include with new helper and add using declaration
+
+4. **`tests/ttnn/unit_tests/gtests/udm/reduction/sharded/kernels/reader_receiver_unary_sharded_reduce.cpp`**
+   - Currently includes deprecated header
+   - **Migration:** Replace include with new helper and add using declaration
+
+5. **`tests/ttnn/unit_tests/gtests/udm/reduction/sharded/kernels/reader_sender_unary_sharded_reduce.cpp`**
+   - Currently includes deprecated header
+   - **Migration:** Replace include with new helper and add using declaration
+
+**Testing:**
+```bash
+# DIT LayerNorm tests
+pytest tests/ttnn/unit_tests/operations/experimental/transformer/ -v -k dit_layernorm
+
+# UDM reduction tests
+pytest tests/ttnn/unit_tests/gtests/udm/reduction/ -v
+```
+
+### 🔲 Phase 5: Deprecate Old Header
 
 1. **Add deprecation warning to old helper**
     ```cpp
@@ -349,9 +395,20 @@ pytest tests/ttnn/unit_tests/operations/normalization/test_softmax.py -v
 ### New Files (Created)
 - ✅ `ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp`
 
-### Files Migrated (36 total)
-- ✅ All kernel files have been successfully migrated
+### Files Migrated (38 total)
+- ✅ 36 kernel files successfully migrated to new helper library (Phase 1-3)
+- ✅ 2 DIT LayerNorm kernels successfully migrated (Phase 4)
 - See "✅ Migrated to New Library" section above for complete list
 
-### Files to Deprecate (Phase 4)
+### Files Pending Migration (3 total)
+- ⚠️ 3 UDM test files (tests/ttnn/unit_tests/gtests/udm/reduction)
+- See "⚠️ Still Using Deprecated Helper" section above for complete list
+
+### Files to Deprecate (Phase 5)
 - `ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp`
+
+### Note: Alternative Implementation
+- ⚠️ **Deepseek v3 B1** has a custom implementation at `models/demos/deepseek_v3_b1/kernel_includes/tt_metal/dm_utils.hpp`
+  - Different signature: `template <uint32_t num_faces = 4, uint32_t num_cols_per_face = 16> void generate_reduce_scaler(const uint32_t cb_id, const uint16_t scaler)`
+  - Takes `uint16_t` instead of `uint32_t` for scaler parameter
+  - This is a specialized variant and may not need migration
