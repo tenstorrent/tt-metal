@@ -21,13 +21,13 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded tilize does not support sub core grid specification");
-        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory{};
+        return ttnn::prim::TilizeWithValPaddingMultiCoreShardedFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
+        return ttnn::prim::TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
     }
     if (!operation_attributes.use_multicore) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreFactory{};
+        return ttnn::prim::TilizeWithValPaddingSingleCoreFactory{};
     }
     auto* device = input_tensor.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -50,10 +50,10 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
                                     (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
-            return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
+            return ttnn::prim::TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
         }
     }
-    return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedFactory{};
+    return ttnn::prim::TilizeWithValPaddingMultiCoreInterleavedFactory{};
 }
 
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_hit(

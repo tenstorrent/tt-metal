@@ -16,7 +16,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
+namespace ttnn::prim {
 
 TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSingleCoreFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -210,4 +210,4 @@ void TilizeWithValPaddingSingleCoreFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding::program
+}  // namespace ttnn::prim

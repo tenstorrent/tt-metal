@@ -17,7 +17,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
+namespace ttnn::prim {
 
 TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddingMultiCoreShardedFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -160,4 +160,4 @@ void TilizeWithValPaddingMultiCoreShardedFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
 }
 
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding::program
+}  // namespace ttnn::prim

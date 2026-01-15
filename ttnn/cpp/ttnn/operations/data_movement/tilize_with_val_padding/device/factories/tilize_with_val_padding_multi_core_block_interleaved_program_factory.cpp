@@ -18,7 +18,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
+namespace ttnn::prim {
 
 TilizeWithValPaddingMultiCoreBlockInterleavedFactory::cached_program_t
 TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
@@ -318,4 +318,4 @@ void TilizeWithValPaddingMultiCoreBlockInterleavedFactory::override_runtime_argu
     }
 }
 
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding::program
+}  // namespace ttnn::prim

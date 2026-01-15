@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding {
+namespace ttnn::prim {
 
 struct operation_attributes_t {
     ttnn::Shape output_padded_shape{};
@@ -26,4 +26,4 @@ struct tensor_args_t {
 using tensor_return_value_t = Tensor;
 using spec_return_value_t = TensorSpec;
 
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding
+}  // namespace ttnn::prim

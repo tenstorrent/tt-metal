@@ -19,16 +19,16 @@
 namespace ttnn::operations::data_movement {
 
 struct TilizeWithValPaddingDeviceOperation {
-    using operation_attributes_t = tilize_with_val_padding::operation_attributes_t;
-    using tensor_args_t = tilize_with_val_padding::tensor_args_t;
-    using spec_return_value_t = tilize_with_val_padding::spec_return_value_t;
-    using tensor_return_value_t = tilize_with_val_padding::tensor_return_value_t;
+    using operation_attributes_t = ttnn::prim::operation_attributes_t;
+    using tensor_args_t = ttnn::prim::tensor_args_t;
+    using spec_return_value_t = ttnn::prim::spec_return_value_t;
+    using tensor_return_value_t = ttnn::prim::tensor_return_value_t;
 
     using program_factory_t = std::variant<
-        tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory>;
+        ttnn::prim::TilizeWithValPaddingSingleCoreFactory,
+        ttnn::prim::TilizeWithValPaddingMultiCoreBlockInterleavedFactory,
+        ttnn::prim::TilizeWithValPaddingMultiCoreInterleavedFactory,
+        ttnn::prim::TilizeWithValPaddingMultiCoreShardedFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
