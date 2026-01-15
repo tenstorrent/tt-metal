@@ -41,8 +41,8 @@ def get_num_links(mesh_device, cluster_axis=None):
         "P150x8": (2, 2),
         "P300": (2, 2),
         "P300x2": (2, 2),
-        "BHGLX": (3, 4),
-        "TG": (3, 4),
+        "BHGLX": (4, 3),
+        "TG": (4, 3),
     }
     device_links = link_dict[device_name]
     # When cluster_axis is None, query links across all axes and return the minimum.
