@@ -8,7 +8,7 @@ set_target_properties(
     test_lab_eltwise_binary
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
-            ${CMAKE_BINARY_DIR}/tests/ttnn/lab_examples
+            ${CMAKE_BINARY_DIR}/test/ttnn/lab_examples
 )
 
 target_sources(
