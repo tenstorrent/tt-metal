@@ -9,9 +9,9 @@
 #include <tt-metalium/sub_device.hpp>
 #include <optional>
 
-namespace ttnn::operations::experimental::ccl::all_to_all_async_generic {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct AllToAllAsyncGenericParams {
     const uint32_t in_dim;
     const uint32_t out_dim;
     const uint32_t num_links;
@@ -22,9 +22,9 @@ struct operation_attributes_t {
     const std::optional<uint32_t> cluster_axis;
 };
 
-struct tensor_args_t {
+struct AllToAllAsyncGenericInputs {
     Tensor input_tensor;
     std::optional<Tensor> persistent_output_buffer;
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_to_all_async_generic
+}  // namespace ttnn::experimental::prim

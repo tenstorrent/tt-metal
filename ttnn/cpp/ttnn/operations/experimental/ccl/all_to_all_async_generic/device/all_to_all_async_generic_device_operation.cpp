@@ -5,7 +5,7 @@
 #include "all_to_all_async_generic_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental::prim {
 
 AllToAllAsyncGenericDeviceOperation::program_factory_t AllToAllAsyncGenericDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
@@ -153,12 +153,7 @@ tt::stl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::ccl::AllToAllAsyncGenericDeviceOperation::tensor_return_value_t
-all_to_all_async_generic(
+Tensor all_to_all_async_generic(
     const ttnn::Tensor& input_tensor,
     const std::optional<Tensor>& persistent_output_buffer,
     int32_t in_dim,
@@ -168,7 +163,7 @@ all_to_all_async_generic(
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     std::optional<uint32_t> cluster_axis) {
-    using OperationType = ttnn::operations::experimental::ccl::AllToAllAsyncGenericDeviceOperation;
+    using OperationType = AllToAllAsyncGenericDeviceOperation;
     uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1,
@@ -188,6 +183,32 @@ all_to_all_async_generic(
         .input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+Tensor all_to_all_async_generic(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<Tensor>& persistent_output_buffer,
+    int32_t in_dim,
+    int32_t out_dim,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    std::optional<uint32_t> cluster_axis) {
+    return ttnn::experimental::prim::all_to_all_async_generic(
+        input_tensor,
+        persistent_output_buffer,
+        in_dim,
+        out_dim,
+        num_links,
+        memory_config,
+        topology,
+        sub_device_id,
+        cluster_axis);
 }
 
 }  // namespace ttnn::prim
