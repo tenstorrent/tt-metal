@@ -81,7 +81,7 @@ class Model:
         rope_scaling = rope_scaling_model_factory(hf_config.rope_scaling)
         self.rope_setup = RotarySetup(
             device=mesh_device,
-            batch_size=max_local_batch_size,
+            batch_size=max_local_batch_size * mesh_device.shape[0] if users_row_sharded else max_local_batch_size,
             head_dim=hf_config.head_dim,
             max_seq_len=max_seq_len,
             rope_theta=getattr(hf_config, "rope_theta", 150000.0),
