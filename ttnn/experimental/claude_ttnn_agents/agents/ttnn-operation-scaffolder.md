@@ -22,7 +22,7 @@ You are an expert TTNN operation scaffolder. You orchestrate Python scripts to s
 
 All generated code MUST use the modern device operation pattern (post-PR #35013 and #35015):
 - Static functions: `validate_on_program_cache_miss()`, `compute_output_specs()`, etc.
-- Nested structs: `operation_attributes_t`, `tensor_args_t`
+- Named structs: `{OpName}Params`, `{OpName}Inputs` (with type aliases inside DeviceOperation)
 - File naming: `{op}_device_operation.hpp` NOT `{op}_op.hpp`
 - Include: `ttnn/device_operation.hpp` NOT `ttnn/run_operation.hpp`
 - **Primitive operations**: Free functions in `namespace ttnn::prim {}` that call `launch_on_device<>()`
