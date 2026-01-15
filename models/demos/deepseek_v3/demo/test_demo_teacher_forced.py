@@ -24,7 +24,8 @@ CACHE_DIR = Path(
 )
 
 # Must match the path used in generate_teacher_forced_file.py
-REFERENCE_FILE = Path(__file__).with_name("deepseek_v3_teacher_forcing.refpt")
+# REFERENCE_FILE = Path(__file__).with_name("deepseek_v3_teacher_forcing.refpt")
+REFERENCE_FILE = Path(__file__).with_name("gpqa_diamond_racemic_short.refpt")
 
 
 @pytest.mark.parametrize("reference_file", [REFERENCE_FILE])
@@ -74,7 +75,7 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path):
     generated_tokens = payload["generated_tokens"]  # [1, gen_len]
     top5_tokens = payload["top5_tokens"]  # [L, 5] HF model's predictions
     tf_prompt_len = int(payload["tf_prompt_len"])
-    saved_max_new_tokens = int(payload.get("max_new_tokens", 32))
+    saved_max_new_tokens = int(payload.get("max_new_tokens"))
 
     # Print token ID metadata if available
     if "token_ids_meta" in payload:
