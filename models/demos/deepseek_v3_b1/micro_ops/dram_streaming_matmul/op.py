@@ -130,12 +130,11 @@ class DRAMStreamingMatmul:
         # in1 is WIDTH_SHARDED on [K, N], shard shape is [K, per_core_N]
         in1_shard_shape = input_b.memory_config().shard_spec.shape
         K_from_in1 = in1_shard_shape[0]
-        per_core_N_from_shard = in1_shard_shape[1]
 
         # Calculate dimensions in tiles
         Mt = M // in0_tile_shape[0]
         Kt = K // in0_tile_shape[1]
-        per_core_N_tiles = per_core_N_from_shard // in1_tile_shape[1]
+        per_core_N = in1_shard_shape[1] // in1_tile_shape[1]
 
         # Validate
         assert Mt == 1, f"Mt must be 1 for simplified matmul, got {Mt}"
@@ -150,9 +149,6 @@ class DRAMStreamingMatmul:
         in1_noc = ttnn.NOC.NOC_0
         all_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(in1_noc)
         num_cores = len(all_worker_cores)
-
-        # per_core_N is already determined from in1 shard shape
-        per_core_N = per_core_N_tiles
 
         logger.debug(f"num_cores={num_cores}, Mt={Mt}, Kt={Kt}, per_core_N={per_core_N}")
 
