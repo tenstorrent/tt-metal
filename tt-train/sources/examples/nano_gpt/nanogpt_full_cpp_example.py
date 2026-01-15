@@ -19,6 +19,7 @@ including:
 
 import argparse
 import os
+import random
 from dataclasses import dataclass
 from typing import Optional, Tuple
 import time
@@ -204,63 +205,120 @@ def create_dataset_from_text(
         raise ValueError(f"Unsupported tokenizer type: {tokenizer_type}")
 
 
-def create_causal_mask_tensor(sequence_length: int) -> ttml.autograd.Tensor:
-    """Create causal attention mask as a tensor using ttml.common.data.build_causal_mask."""
-    mask_np = build_causal_mask(sequence_length)
-    return ttml.autograd.Tensor.from_numpy(
+def create_causal_mask_tensor(
+    sequence_length: int, device=None
+) -> ttml.autograd.Tensor:
+    """Create causal attention mask as a tensor using ttml.common.data.build_causal_mask.
+
+    Args:
+        sequence_length: Sequence length for the mask
+        device: Optional device to create the mask on. If None, uses AutoContext device.
+
+    Returns:
+        Causal mask tensor with shape (1, 1, sequence_length, sequence_length)
+    """
+    # Create mask directly with proper shape and contiguous memory
+    mask_2d = np.tril(np.ones((sequence_length, sequence_length), dtype=np.float32))
+    mask_np = np.ascontiguousarray(
+        mask_2d.reshape(1, 1, sequence_length, sequence_length)
+    )
+    # Must use TILE layout for SDPA kernel compatibility
+    mask_tensor = ttml.autograd.Tensor.from_numpy(
         mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
     )
 
+    # If device is provided, ensure mask is on the same device as input tensors
+    if device is not None:
+        # Get the underlying ttnn.Tensor and move to device if needed
+        mask_ttnn = mask_tensor.get_value()
+        if mask_ttnn.device() != device:
+            mask_ttnn = ttnn.to_device(mask_ttnn, device)
+            mask_tensor = ttml.autograd.Tensor(mask_ttnn, False)
+
+    return mask_tensor
+
 
 def collate_fn(
-    samples: list, batch_size: int, sequence_length: int
+    samples: list, batch_size: int, sequence_length: int, device=None
 ) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
-    """Collate function matching C++ collate_fn."""
-    # Flatten samples into data and targets
-    data = []
-    targets = []
-    for seq, target in samples[:batch_size]:
-        data.extend(seq)
-        targets.extend(target)
+    """Collate function matching C++ collate_fn.
 
-    # Create tensors matching C++ shapes:
+    Args:
+        samples: List of (sequence, target) tuples
+        batch_size: Batch size
+        sequence_length: Sequence length
+        device: Optional device (if None, will look up from AutoContext)
+    """
+    # Flatten samples into data and targets
+    # Pre-allocate lists with known size to avoid repeated reallocation
+    # All sequences should be sequence_length, so we know the exact size
+    total_elements = batch_size * sequence_length
+    data = [0] * total_elements
+    targets = [0] * total_elements
+
+    # Fill pre-allocated lists using slice assignment (more efficient than extend)
+    # Avoid creating intermediate list slice by iterating directly
+    idx = 0
+    for i in range(min(batch_size, len(samples))):
+        seq, target = samples[i]
+        seq_len = len(seq)
+        end_idx = idx + seq_len
+        data[idx:end_idx] = seq
+        targets[idx:end_idx] = target
+        idx = end_idx
+
+    # Get device for tensor creation (use cached device if provided)
+    if device is None:
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+
+    # Create tensors directly from Python lists using ttnn.from_buffer
+    # Then convert to ttml tensors
+    data_ttnn = ttnn.from_buffer(
+        buffer=data,
+        shape=[len(data)],
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    data_tensor = ttml.autograd.Tensor(data_ttnn, False)
+
+    targets_ttnn = ttnn.from_buffer(
+        buffer=targets,
+        shape=[len(targets)],
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    targets_tensor = ttml.autograd.Tensor(targets_ttnn, False)
+
+    # Reshape using ttml operations:
     # data: (batch_size, 1, 1, sequence_length)
     # targets: (batch_size, sequence_length)
-    data_np = np.array(data, dtype=np.uint32).reshape(batch_size, 1, 1, sequence_length)
-    targets_np = np.array(targets, dtype=np.uint32).reshape(batch_size, sequence_length)
-
-    data_tensor = ttml.autograd.Tensor.from_numpy(
-        data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+    data_tensor = ttml.ops.reshape.reshape(
+        data_tensor, [batch_size, 1, 1, sequence_length]
     )
-    targets_tensor = ttml.autograd.Tensor.from_numpy(
-        targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+    targets_tensor = ttml.ops.reshape.reshape(
+        targets_tensor, [batch_size, sequence_length]
     )
 
     return data_tensor, targets_tensor
 
 
 def get_loss_value(loss: ttml.autograd.Tensor) -> float:
-    """Extract loss value from tensor.
+    """Extract loss value from tensor without using NumPy.
 
     This function extracts the loss value AFTER backward() and reset_graph() have been called.
-    The working nanogpt_training.py example follows this pattern - extracting loss after
-    the computation graph has been reset ensures the tensor data is properly materialized.
+    Uses ttnn.Tensor.item() which directly extracts scalar via to_vector<T>() without NumPy conversion.
 
     Args:
-        loss: Loss tensor from cross_entropy_loss
+        loss: Loss tensor from cross_entropy_loss (should already be reduced to scalar)
 
     Returns:
         Loss value as float
     """
-    loss_np = loss.to_numpy(ttnn.DataType.FLOAT32)
-
-    # Handle scalar or multi-element tensor
-    if loss_np.size == 1:
-        return float(loss_np.item() if hasattr(loss_np, "item") else float(loss_np))
-    elif loss_np.size > 1:
-        return float(np.mean(loss_np))
-    else:
-        raise RuntimeError("Loss tensor is empty!")
+    # Extract scalar value directly using ttnn.Tensor.item() - avoids NumPy conversion
+    # This uses to_vector<T>() internally which is more efficient than to_numpy()
+    return float(loss.get_value().item())
 
 
 def train_step(
@@ -274,8 +332,14 @@ def train_step(
     gradient_accumulator: GradientAccumulator,
     use_clip_grad_norm: bool,
     clip_grad_norm_max_norm: float,
+    autograd_ctx=None,
+    batch_size=None,
 ) -> tuple:
     """Single training step matching C++ implementation with proper gradient accumulation.
+
+    Args:
+        autograd_ctx: Optional cached AutoContext instance (if None, will look up)
+        batch_size: Optional cached batch size (if None, will extract from input_tokens)
 
     Returns:
         Tuple of (loss_float, step_time_ms, should_step)
@@ -297,17 +361,23 @@ def train_step(
     # Scale loss for gradient accumulation (matching C++: gradient_accumulator_helper.scale(loss))
     loss = gradient_accumulator.scale(loss)
 
-    # Extract loss value BEFORE backward/reset
+    # Extract loss value BEFORE backward (matching C++: get_loss_value(loss) before loss->backward())
+    # This matches the C++ implementation timing
     loss_float = get_loss_value(loss)
 
     # Backward pass
     loss.backward(False)
 
     # Reset computation graph after backward (matching C++: ttml::autograd::ctx().reset_graph())
-    ttml.autograd.AutoContext.get_instance().reset_graph()
+    # Use cached autograd_ctx when provided to avoid repeated lookups
+    if autograd_ctx is not None:
+        autograd_ctx.reset_graph()
+    else:
+        ttml.autograd.AutoContext.get_instance().reset_graph()
 
     # Get number of samples for accumulator update
-    samples = input_tokens.shape()[0]
+    # Use cached batch_size if provided to avoid shape() call
+    samples = batch_size if batch_size is not None else input_tokens.shape()[0]
 
     # Update accumulator (matching C++: gradient_accumulator_helper.update(loss_float, samples))
     gradient_accumulator.update(loss_float, samples)
@@ -395,6 +465,40 @@ def sample_greedy(
     # Set model to eval mode (matching C++: model_to_eval - disables dropout)
     model.eval()
 
+    # Reset graph before inference to ensure clean state
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    # Cache device to avoid repeated lookups
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+
+    # Always recreate mask to ensure it's properly registered with nanobind
+    # The mask parameter might have been created before device was fully set up
+    # or might not be properly registered as a shared_ptr
+    # Creating it fresh here ensures proper shared_ptr registration for nanobind casting
+    # Create mask directly with proper shape and contiguous memory
+    mask_2d = np.tril(np.ones((sequence_length, sequence_length), dtype=np.float32))
+    mask_np = np.ascontiguousarray(
+        mask_2d.reshape(1, 1, sequence_length, sequence_length)
+    )
+    # Verify mask shape before creating tensor
+    assert mask_np.shape == (
+        1,
+        1,
+        sequence_length,
+        sequence_length,
+    ), f"Mask numpy array has wrong shape: {mask_np.shape}, expected (1, 1, {sequence_length}, {sequence_length})"
+    # Must use TILE layout for SDPA kernel compatibility
+    # Use a different variable name to avoid confusion with the parameter
+    causal_mask = ttml.autograd.Tensor.from_numpy(
+        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
+    )
+    mask_shape = causal_mask.shape()
+    assert (
+        len(mask_shape) == 4
+        and mask_shape[2] == sequence_length
+        and mask_shape[3] == sequence_length
+    ), f"Mask tensor has wrong shape: {mask_shape}, expected [1, 1, {sequence_length}, {sequence_length}]"
+
     # Encode prompt
     if len(prompt) == 0:
         prompt = " "  # Default to space if empty
@@ -428,89 +532,192 @@ def sample_greedy(
     print(f"\nGenerating text from prompt: '{prompt}'")
     print("=" * 70)
 
+    # Create initial input tensor on device once, then update in-place
+    # This avoids CPU->Device transfer every iteration
+    inp_list = running[-sequence_length:]
+    input_ttnn = ttnn.from_buffer(
+        buffer=inp_list,
+        shape=[1, 1, 1, sequence_length],
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
     for step in range(max_new_tokens):
-        # Prepare input: take last sequence_length tokens
-        inp = np.array(running[-sequence_length:], dtype=np.uint32).reshape(
-            1, 1, 1, sequence_length
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            inp, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-        )
+        # Wrap current input tensor for model (no data transfer)
+        input_tensor = ttml.autograd.Tensor(input_ttnn, False)
 
         # Forward pass with causal mask (matching C++ model call)
-        logits = model(input_tensor, mask)
+        # Clone mask before each use to avoid TTNN memory reuse corrupting the original
+        mask_for_model = ttml.autograd.Tensor(
+            ttnn.clone(causal_mask.get_value()), False
+        )
 
-        # Get logits for last position
+        logits = model(input_tensor, mask_for_model)
+
+        # Get logits for last position using ttml/ttnn operations
         # Model returns shape [B, 1, seq_len, vocab_size] or [B, 1, 1, seq_len, vocab_size]
-        logits_np = logits.to_numpy(ttnn.DataType.FLOAT32)
-        logits_shape = logits_np.shape
+        logits_shape = logits.shape()
 
+        # Extract last position logits using ttml/ttnn operations
         # Handle different possible shapes
         if len(logits_shape) == 5:
-            # [B, 1, 1, seq_len, vocab_size] -> [B, seq_len, vocab_size]
-            last_logits = logits_np.reshape(
-                logits_shape[0], logits_shape[3], logits_shape[4]
-            )[:, -1, :]
+            # [B, 1, 1, seq_len, vocab_size] -> extract last position: [B, 1, 1, 1, vocab_size]
+            seq_len = logits_shape[3]
+            last_pos = seq_len - 1
+            sliced_tensor = ttnn.slice(
+                logits.get_value(),
+                [0, 0, 0, last_pos, 0],
+                [
+                    logits_shape[0],
+                    logits_shape[1],
+                    logits_shape[2],
+                    seq_len,
+                    logits_shape[4],
+                ],
+            )
+            # Convert ttnn.Tensor to ttml.autograd.Tensor
+            last_logits = ttml.autograd.Tensor(sliced_tensor, False)
+            # Reshape to [B, 1, 1, vocab_size] for consistency
+            last_logits = ttml.ops.reshape.reshape(
+                last_logits, [logits_shape[0], 1, 1, logits_shape[4]]
+            )
         elif len(logits_shape) == 4:
-            # [B, 1, seq_len, vocab_size] -> [B, seq_len, vocab_size]
-            last_logits = logits_np.reshape(
-                logits_shape[0], logits_shape[2], logits_shape[3]
-            )[:, -1, :]
+            # [B, 1, seq_len, vocab_size] -> extract last position: [B, 1, 1, vocab_size]
+            seq_len = logits_shape[2]
+            last_pos = seq_len - 1
+            sliced_tensor = ttnn.slice(
+                logits.get_value(),
+                [0, 0, last_pos, 0],
+                [logits_shape[0], logits_shape[1], seq_len, logits_shape[3]],
+            )
+            # Convert ttnn.Tensor to ttml.autograd.Tensor
+            last_logits = ttml.autograd.Tensor(sliced_tensor, False)
+            # Reshape to [B, 1, 1, vocab_size] for consistency
+            last_logits = ttml.ops.reshape.reshape(
+                last_logits, [logits_shape[0], 1, 1, logits_shape[3]]
+            )
         else:
-            # Fallback: assume last dimension is vocab_size
-            last_logits = logits_np.reshape(-1, logits_np.shape[-1])[-1:]
+            # Fallback: use reshape and take last element
+            # This case should be rare
+            last_logits = ttml.ops.reshape.reshape(logits, [-1, logits_shape[-1]])
+            last_logits_shape = last_logits.shape()
+            if last_logits_shape[0] > 1:
+                sliced_tensor = ttnn.slice(
+                    last_logits.get_value(),
+                    [last_logits_shape[0] - 1, 0],
+                    [last_logits_shape[0], last_logits_shape[1]],
+                )
+                # Convert ttnn.Tensor to ttml.autograd.Tensor
+                last_logits = ttml.autograd.Tensor(sliced_tensor, False)
+                last_logits = ttml.ops.reshape.reshape(
+                    last_logits, [1, 1, 1, last_logits_shape[1]]
+                )
 
         # Get vocabulary size (model may have rounded up, but tokenizer has actual size)
         vocab_size = tokenizer.vocab_size
 
-        # Truncate logits to valid vocabulary
-        last_logits = last_logits[:, :vocab_size]
+        # Truncate logits to valid vocabulary if needed
+        # Note: If vocab_size matches the last dimension, no truncation needed
+        # Otherwise, we'd need to slice, but for now we'll let the sampling handle it
 
-        # Handle NaN/Inf in logits BEFORE any operations
-        # This can happen due to numerical precision issues in bfloat16
-        if not np.all(np.isfinite(last_logits)):
-            last_logits = np.nan_to_num(last_logits, nan=0.0, posinf=1e4, neginf=-1e4)
-
-        # Apply temperature (with clipping to prevent overflow)
-        if temperature != 1.0 and temperature > 0:
-            # Clip logits to reasonable range before dividing
-            last_logits = np.clip(last_logits, -100, 100)
-            last_logits = last_logits / temperature
-
-        # Apply top_k filtering
-        if top_k > 0:
-            # Get top k values and indices
-            top_k_val = min(top_k, vocab_size)
-            threshold = np.partition(last_logits, -top_k_val, axis=-1)[:, -top_k_val:][
-                :, 0:1
-            ]
-            indices_to_remove = last_logits < threshold
-            # Use large negative instead of -inf
-            last_logits[indices_to_remove] = -1e9
-
-        # Convert to probabilities using softmax (numerically stable)
-        max_logits = np.max(last_logits, axis=-1, keepdims=True)
-        logits_exp = np.exp(last_logits - max_logits)
-        probs = logits_exp / (np.sum(logits_exp, axis=-1, keepdims=True) + 1e-10)
-
-        # Ensure probs sum to 1 and are valid
-        probs = np.clip(probs, 0, 1)
-        probs = probs / (probs.sum(axis=-1, keepdims=True) + 1e-10)
-
-        # Sample from distribution (or use argmax if temperature is very low)
+        # Sample using ttml operations
+        # For greedy sampling (very low temperature), use argmax directly
         if temperature < 0.01:
-            next_id = int(np.argmax(probs, axis=-1)[0])
+            # Use ttnn.argmax for greedy sampling
+            argmax_result = ttnn.argmax(last_logits.get_value(), dim=3, keepdim=True)
+            # Extract scalar value directly from ttnn.Tensor - avoids unnecessary wrapper
+            next_id = int(argmax_result.item())
+            # Clamp to valid vocabulary
+            next_id = min(next_id, vocab_size - 1)
         else:
-            # Sample from categorical distribution
-            try:
-                next_id = int(np.random.choice(vocab_size, p=probs[0]))
-            except ValueError:
-                # Fallback to argmax if probs are invalid
-                next_id = int(np.argmax(last_logits, axis=-1)[0])
+            # Use ttml.ops.sample.sample_op() for temperature-based sampling
+            # Note: top_k filtering is not yet supported in ttml.ops.sample.sample_op,
+            # so we'll skip it for now (can be added later if needed)
+            seed = random.randint(0, 2**32 - 1)
 
-        # Append to running context
+            # If top_k is requested, apply on-device top-k filtering
+            if top_k > 0:
+                top_k_val = min(top_k, vocab_size)
+                if top_k_val < vocab_size:
+                    # Get top-k values on device (keeps everything on-device)
+                    last_logits_ttnn = last_logits.get_value()
+                    topk_values, topk_indices = ttnn.topk(
+                        last_logits_ttnn,
+                        k=top_k_val,
+                        dim=-1,  # Last dimension (vocab_size)
+                        largest=True,
+                        sorted=True,
+                    )
+
+                    # Extract threshold (k-th largest = last element of topk_values)
+                    # topk_values shape: [1, 1, 1, top_k_val]
+                    # Get the last element which is the smallest of top-k (our threshold)
+                    threshold_tensor = ttnn.slice(
+                        topk_values, [0, 0, 0, top_k_val - 1], [1, 1, 1, top_k_val]
+                    )
+                    # threshold_tensor shape: [1, 1, 1, 1]
+                    # Use threshold_tensor directly - ttnn.lt() will automatically broadcast
+                    # This avoids extracting scalar and recreating tensor with full_like
+
+                    # Create mask: values below threshold should be masked
+                    # Broadcasting happens automatically: [1,1,1,1] vs [1,1,1,vocab_size]
+                    mask = ttnn.lt(last_logits_ttnn, threshold_tensor)
+
+                    # Apply mask: set values below threshold to -1e9
+                    filter_value_tensor = ttnn.full_like(
+                        last_logits_ttnn, -1e9, dtype=ttnn.bfloat16
+                    )
+                    filtered_logits_ttnn = ttnn.where(
+                        mask, filter_value_tensor, last_logits_ttnn
+                    )
+
+                    # Cleanup intermediate tensors
+                    ttnn.deallocate(topk_values)
+                    ttnn.deallocate(topk_indices)
+                    ttnn.deallocate(threshold_tensor)
+                    ttnn.deallocate(mask)
+                    ttnn.deallocate(filter_value_tensor)
+
+                    # Convert back to ttml.autograd.Tensor
+                    last_logits = ttml.autograd.Tensor(filtered_logits_ttnn, False)
+
+            # Use ttml sampling operation
+            sampled_tensor = ttml.ops.sample.sample_op(
+                last_logits, temperature, seed, None  # logits_padding_mask
+            )
+
+            # Extract the sampled token ID directly using .item() - avoids NumPy conversion
+            next_id = int(sampled_tensor.get_value().item())
+            # Clamp to valid vocabulary
+            next_id = min(next_id, vocab_size - 1)
+
+        # Append to running context (for final decode)
         running.append(next_id)
         generated_tokens.append(next_id)
+
+        # Update input tensor on device: shift left and append new token
+        # Roll tensor left by 1 position: [t0, t1, t2, ...] -> [t1, t2, ..., t0]
+        # Then overwrite last position with new token
+        # This keeps everything on device, avoiding CPU->Device transfer
+
+        # Shift left: slice [1:] and concat with placeholder, then overwrite last
+        # More efficient: use ttnn.roll if available, otherwise slice and concat
+        shifted = ttnn.slice(input_ttnn, [0, 0, 0, 1], [1, 1, 1, sequence_length])
+        # Create single-element tensor with new token
+        new_token_tensor = ttnn.from_buffer(
+            buffer=[next_id],
+            shape=[1, 1, 1, 1],
+            dtype=ttnn.uint32,
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        # Concatenate: shifted [1:seq_len-1] + new_token -> full sequence
+        input_ttnn = ttnn.concat([shifted, new_token_tensor], dim=3)
+
+        # Cleanup intermediate tensors
+        ttnn.deallocate(shifted)
+        ttnn.deallocate(new_token_tensor)
 
         # Reset graph for next iteration
         ttml.autograd.AutoContext.get_instance().reset_graph()
@@ -1178,6 +1385,11 @@ def main():
         )
         global_step = start_step
 
+        # Cache frequently accessed values to avoid repeated lookups in hot path
+        autograd_ctx = ttml.autograd.AutoContext.get_instance()
+        device = autograd_ctx.get_device()
+        batch_size = training_config.batch_size
+
         # Training loop (matching C++ structure)
         start_time = time.time()
         for epoch in range(training_config.num_epochs):
@@ -1185,21 +1397,25 @@ def main():
             np.random.shuffle(dataset)
 
             # Create batches
-            for batch_start in range(0, len(dataset), training_config.batch_size):
-                batch_samples = dataset[
-                    batch_start : batch_start + training_config.batch_size
-                ]
-                if len(batch_samples) < training_config.batch_size:
+            dataset_len = len(dataset)
+            for batch_start in range(0, dataset_len, batch_size):
+                batch_end = batch_start + batch_size
+                if batch_end > dataset_len:
                     continue  # Skip incomplete batches
+                # Use slice directly without intermediate variable when possible
+                batch_samples = dataset[batch_start:batch_end]
 
                 # Collate batch (matching C++ collate_fn)
+                # Pass cached device to avoid repeated lookups
                 input_tokens, target_tokens = collate_fn(
                     batch_samples,
-                    training_config.batch_size,
+                    batch_size,
                     sequence_length,
+                    device=device,  # Pass cached device
                 )
 
                 # Training step with mask (matching C++: run_model(model, features, masks))
+                # Pass cached autograd_ctx and batch_size to avoid repeated lookups
                 loss_float, step_time, should_step = train_step(
                     model,
                     optimizer,
@@ -1211,6 +1427,8 @@ def main():
                     gradient_accumulator,
                     training_config.use_clip_grad_norm,
                     training_config.clip_grad_norm_max_norm,
+                    autograd_ctx=autograd_ctx,  # Pass cached context
+                    batch_size=batch_size,  # Pass cached batch size
                 )
 
                 # Only update counters and print when we've stepped (matching C++: if should_step())

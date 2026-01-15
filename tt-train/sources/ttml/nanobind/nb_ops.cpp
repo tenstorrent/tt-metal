@@ -215,22 +215,37 @@ void py_module(nb::module_& m) {
 
     {
         auto py_attention = static_cast<nb::module_>(m.attr("attention"));
+        // Overload 1: mask as ttml.autograd.Tensor (or None)
         py_attention.def(
             "scaled_dot_product_attention",
             [](const autograd::TensorPtr& query,
                const autograd::TensorPtr& key,
                const autograd::TensorPtr& value,
-               nb::object mask_obj) -> autograd::TensorPtr {
-                std::optional<autograd::TensorPtr> mask = std::nullopt;
-                if (!mask_obj.is_none()) {
-                    mask = nb::cast<autograd::TensorPtr>(mask_obj);
-                }
+               const std::optional<autograd::TensorPtr>& mask) -> autograd::TensorPtr {
                 return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
             },
             nb::arg("query"),
             nb::arg("key"),
             nb::arg("value"),
-            nb::arg("mask") = nb::none());
+            nb::arg("mask") = std::nullopt);
+        // Overload 2: mask as ttnn.Tensor (or None) - wrap it in autograd::Tensor
+        // ttnn.Tensor wraps tt::tt_metal::Tensor, so we accept that type
+        py_attention.def(
+            "scaled_dot_product_attention",
+            [](const autograd::TensorPtr& query,
+               const autograd::TensorPtr& key,
+               const autograd::TensorPtr& value,
+               const std::optional<tt::tt_metal::Tensor>& mask) -> autograd::TensorPtr {
+                std::optional<autograd::TensorPtr> mask_ptr = std::nullopt;
+                if (mask.has_value()) {
+                    mask_ptr = autograd::create_tensor(mask.value(), false);
+                }
+                return ttml::ops::scaled_dot_product_attention(query, key, value, mask_ptr);
+            },
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = std::nullopt);
     }
 
     {
