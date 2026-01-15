@@ -17,3 +17,9 @@
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/slice/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/sort/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/split/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/tilize/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/transpose/device
