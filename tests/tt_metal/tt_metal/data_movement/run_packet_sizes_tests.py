@@ -16,38 +16,42 @@ import subprocess
 from pathlib import Path
 
 
-# Static mapping of test IDs to exact C++ test names
-# This ensures exact matching with gtest filters
-TEST_ID_TO_GTEST_NAME = {
-    0: "TensixDataMovementDRAMPacketSizes",
-    4: "TensixDataMovementOneToOnePacketSizes",
-    5: "TensixDataMovementOneFromOnePacketSizes",
-    6: "TensixDataMovementOneToAllUnicast2x2PacketSizes",
-    7: "TensixDataMovementOneToAllUnicast5x5PacketSizes",
-    8: "TensixDataMovementOneToAllUnicastPacketSizes",
-    9: "TensixDataMovementOneToAllMulticast2x2PacketSizes",
-    10: "TensixDataMovementOneToAllMulticast5x5PacketSizes",
-    11: "TensixDataMovementOneToAllMulticastPacketSizes",
-    12: "TensixDataMovementOneToAllMulticastLinked2x2PacketSizes",
-    13: "TensixDataMovementOneToAllMulticastLinked5x5PacketSizes",
-    14: "TensixDataMovementOneToAllMulticastLinkedPacketSizes",
-    15: "TensixDataMovementOneFromAllPacketSizes",
-    16: "TensixDataMovementLoopbackPacketSizes",
-    80: "TensixDataMovementOnePacketReadSizes",
-    81: "TensixDataMovementOnePacketWriteSizes",
-    113: "TensixDataMovementMultiInterleavedReadSizes",
-    115: "TensixDataMovementMultiInterleavedWriteSizes",
-    117: "TensixDataMovementMultiInterleaved2x2Sizes",
-    119: "TensixDataMovementMultiInterleaved2x2ReadSizes",
-    121: "TensixDataMovementMultiInterleaved2x2WriteSizes",
-    123: "TensixDataMovementMultiInterleaved6x6Sizes",
-    125: "TensixDataMovementMultiInterleaved6x6ReadSizes",
-    127: "TensixDataMovementMultiInterleaved6x6WriteSizes",
-    146: "TensixDataMovementCoreBidirectionalPacketSizesSameKernel",
-    147: "TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels",
-    301: "TensixDataMovementAllToAllPacketSizes",
-    311: "TensixDataMovementAllFromAllPacketSizes",
-}
+def convert_test_name_to_gtest_filter(test_name: str) -> str:
+    """
+    Convert test name to gtest filter format.
+
+    Args:
+        test_name: Test name from YAML (e.g., "DRAM Packet Sizes")
+
+    Returns:
+        Gtest filter name with exclusion suffix
+        (e.g., "TensixDataMovementDRAMPacketSizes:-2_0")
+
+    Examples:
+        "DRAM Packet Sizes" -> "TensixDataMovementDRAMPacketSizes:-2_0"
+        "One to One Packet Sizes" -> "TensixDataMovementOneToOnePacketSizes:-2_0"
+        "One from All Packet Sizes" -> "TensixDataMovementOneFromAllPacketSizes:-2_0"
+        "Multi Interleaved 2x2 Sizes" -> "TensixDataMovementMultiInterleaved2x2Sizes:-2_0"
+    """
+    # Split by spaces and capitalize each word, preserving acronyms
+    words = test_name.split()
+    capitalized_words = []
+    for word in words:
+        # If word is all uppercase (acronym like DRAM, I2S), keep it
+        if word.isupper():
+            capitalized_words.append(word)
+        else:
+            capitalized_words.append(word.capitalize())
+
+    # Join words and replace periods with underscores (for 2.0 -> 2_0)
+    gtest_name = "".join(capitalized_words)
+    gtest_name = gtest_name.replace(".", "_")
+    # Prepend standard prefix
+    gtest_filter = f"TensixDataMovement{gtest_name}"
+    # Add suffix to exclude 2.0 API tests (they give same results)
+    gtest_filter += ":-2_0"
+
+    return gtest_filter
 
 
 def load_test_information(yaml_path):
@@ -58,23 +62,21 @@ def load_test_information(yaml_path):
 
 def get_tests_with_metadata(test_info):
     """
-    Extract test IDs and names for tests that have metadata defined.
+    Extract test IDs and names for tests that:
+    1. Have "Sizes" in the name (packet sizes tests)
+    2. Have metadata defined (pattern field present)
+
     Returns list of tuples: (test_id, test_name, gtest_filter_name)
     """
     tests_with_metadata = []
 
     for test_id, test_data in test_info.get("tests", {}).items():
-        # Check if test has metadata (pattern field indicates complete metadata)
-        if "pattern" in test_data:
-            test_name = test_data["name"]
-            # Get the exact C++ test name from static mapping
-            gtest_name = TEST_ID_TO_GTEST_NAME.get(test_id)
+        test_name = test_data.get("name", "")
 
-            if gtest_name is None:
-                print(f"Warning: Test ID {test_id} has metadata but no gtest mapping. Skipping.")
-                continue
-            gtest_name += ":-2_0"  # exclude the 2_0 tests, since they are giving the same results
-            tests_with_metadata.append((test_id, test_name, gtest_name))
+        # Check if test name contains "Sizes" and has metadata
+        if "Sizes" in test_name and "pattern" in test_data:
+            gtest_filter = convert_test_name_to_gtest_filter(test_name)
+            tests_with_metadata.append((test_id, test_name, gtest_filter))
 
     return sorted(tests_with_metadata, key=lambda x: x[0])
 
