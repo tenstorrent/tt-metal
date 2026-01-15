@@ -22,10 +22,9 @@ class TorusTopology(Enum):
     RING = 2
 
 
-class Architecture(Enum):
-    INVALID_TYPE = 0
-    WORMHOLE = 1
-    BLACKHOLE = 2
+class Architecture(str, Enum):
+    WORMHOLE_B0 = "WORMHOLE_B0"
+    BLACKHOLE = "BLACKHOLE"
 
 
 def create_test(
@@ -146,45 +145,71 @@ def gen_tests(dev_dims: list[int], dim_types: list[int], architecture: str, args
 
     ROWS, COLS = dev_dims[0], dev_dims[1]
 
-    # This is a lot of tests to generate, double check this
-    if architecture == Architecture.WORMHOLE:
-        pass
-    elif architecture == Architecture.BLACKHOLE:
-        pass
+    # For now assume that we are only performing hops between the same chip WH <-> WH or BH <-> BH
+    arch_name = mesh_graph_descriptor_pb2.Architecture.Name(architecture)
+    worker_core_dims = [0, 0]
+    # Wormhole is arranged as a 10x8 Tensix cores
+    # https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/NoC
+    if arch_name == Architecture.WORMHOLE_B0:
+        worker_core_dims = [10, 8]
+    # Blackhole is arranged as a 10x14 Tensix cores
+    # https://github.com/tenstorrent/tt-isa-documentation/tree/main/BlackholeA0/NoC
+    elif arch_name == Architecture.BLACKHOLE:
+        worker_core_dims = [10, 14]
+    else:
+        raise ValueError(f"Unknown architecture: {arch_name}")
 
-    # iterate rows
-    for row in range(ROWS):
-        if dim_types[0] == TorusTopology.LINE.value:
-            tests.extend(
-                line_test(
-                    0, row, COLS, list(args.src_core), list(args.dst_core), args.ntype, args.test_modes, args.num_links
-                )
-            )
-        elif dim_types[0] == TorusTopology.RING.value:
-            tests.extend(
-                ring_test(
-                    0, row, COLS, list(args.src_core), list(args.dst_core), args.ntype, args.test_modes, args.num_links
-                )
-            )
+    # Determine which cores to test (sweep independently for src and dst)
+    src_cores = []
+    if args.src_core is None:
+        if args.sweep_cores:
+            # Sweep over all source cores
+            for src_x in range(worker_core_dims[0]):
+                for src_y in range(worker_core_dims[1]):
+                    src_cores.append([src_x, src_y])
         else:
-            raise ValueError("Bad Topology")
+            # Default to [0, 0]
+            src_cores = [[0, 0]]
+    else:
+        # Use specific source core provided
+        src_cores = [list(args.src_core)]
 
-    # iterate cols
-    for col in range(COLS):
-        if dim_types[1] == TorusTopology.LINE.value:
-            tests.extend(
-                line_test(
-                    1, col, ROWS, list(args.src_core), list(args.dst_core), args.ntype, args.test_modes, args.num_links
-                )
-            )
-        elif dim_types[1] == TorusTopology.RING.value:
-            tests.extend(
-                ring_test(
-                    1, col, ROWS, list(args.src_core), list(args.dst_core), args.ntype, args.test_modes, args.num_links
-                )
-            )
+    dst_cores = []
+    if args.dst_core is None:
+        if args.sweep_cores:
+            # Sweep over all destination cores
+            for dst_x in range(worker_core_dims[0]):
+                for dst_y in range(worker_core_dims[1]):
+                    dst_cores.append([dst_x, dst_y])
         else:
-            raise ValueError("Bad Topology")
+            # Default to [0, 0]
+            dst_cores = [[0, 0]]
+    else:
+        # Use specific destination core provided
+        dst_cores = [list(args.dst_core)]
+
+    # Generate all combinations of core pairs
+    core_pairs = [(src, dst) for src in src_cores for dst in dst_cores]
+
+    # Generate tests for each core pair
+    for src_core, dst_core in core_pairs:
+        # iterate rows
+        for row in range(ROWS):
+            if dim_types[0] == TorusTopology.LINE.value:
+                tests.extend(line_test(0, row, COLS, src_core, dst_core, args.ntype, args.test_modes, args.num_links))
+            elif dim_types[0] == TorusTopology.RING.value:
+                tests.extend(ring_test(0, row, COLS, src_core, dst_core, args.ntype, args.test_modes, args.num_links))
+            else:
+                raise ValueError("Bad Topology")
+
+        # iterate cols
+        for col in range(COLS):
+            if dim_types[1] == TorusTopology.LINE.value:
+                tests.extend(line_test(1, col, ROWS, src_core, dst_core, args.ntype, args.test_modes, args.num_links))
+            elif dim_types[1] == TorusTopology.RING.value:
+                tests.extend(ring_test(1, col, ROWS, src_core, dst_core, args.ntype, args.test_modes, args.num_links))
+            else:
+                raise ValueError("Bad Topology")
 
     return tests
 
@@ -193,8 +218,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-f", "--filename", required=True)
     parser.add_argument("-o", "--output", default="test_fabric_parametrized.yaml")
-    parser.add_argument("--src_core", type=int, nargs=2, default=[0, 0])
-    parser.add_argument("--dst_core", type=int, nargs=2, default=[0, 0])
+    parser.add_argument("--src_core", type=int, nargs=2, default=None)
+    parser.add_argument("--dst_core", type=int, nargs=2, default=None)
+    parser.add_argument(
+        "--sweep_cores",
+        action="store_true",
+        help="Sweep over all core pairs. Without this flag, defaults to [0,0] -> [0,0] if no cores specified.",
+    )
     parser.add_argument(
         "--ntype", type=str, choices=["unicast_write", "atomic_inc", "fused_atomic_inc"], default="unicast_write"
     )
