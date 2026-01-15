@@ -8,7 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::reduction::detail::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
@@ -50,7 +50,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 }  // namespace
 
 FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
-    const DetailParams& operation_attributes, const DetailInputs& tensor_args, Tensor& tensor_return_value) {
+    const FastReduceNCParams& operation_attributes,
+    const FastReduceNCInputs& tensor_args,
+    Tensor& tensor_return_value) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -291,8 +293,8 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
 
 void FastReduceNCProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const DetailParams&,
-    const DetailInputs& tensor_args,
+    const FastReduceNCParams&,
+    const FastReduceNCInputs& tensor_args,
     Tensor& tensor_return_value) {
     const auto* input_buffer = tensor_args.input.buffer();
     const auto* output_buffer = tensor_return_value.buffer();
@@ -313,4 +315,4 @@ void FastReduceNCProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail::program
+}  // namespace ttnn::experimental::prim
