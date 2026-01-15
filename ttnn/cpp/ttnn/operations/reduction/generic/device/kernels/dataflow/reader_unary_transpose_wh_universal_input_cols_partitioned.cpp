@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
@@ -29,7 +29,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     constexpr uint32_t scalar = get_compile_time_arg_val(3);  // Now arg 3 instead of 4
-    generate_reduce_scaler(cb_id_in2, scalar);
+    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_id_in2, scalar);
 
     constexpr auto tensor_args = TensorAccessorArgs<4>();  // 4 args now (removed row_chunk)
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
