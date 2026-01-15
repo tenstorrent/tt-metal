@@ -13,7 +13,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::reshard {
+namespace ttnn::prim {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig& out_mem_config) {
@@ -57,9 +57,9 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
         if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
             out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             if (out_mem_config.buffer_type() == BufferType::L1) {
-                return program::ReshardSameWidthFactory</*local_is_output*/ true>{};
+                return ReshardSameWidthFactory</*local_is_output*/ true>{};
             }
-            return program::ReshardSameWidthFactory</*local_is_output*/ false>{};
+            return ReshardSameWidthFactory</*local_is_output*/ false>{};
         }
         if (input_tensor.layout() == Layout::ROW_MAJOR &&
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
@@ -76,13 +76,13 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
                 has_padding =
                     has_padding || output_num_shard_cores * output_shard_width > input_tensor.logical_shape()[-1];
                 if (has_padding) {
-                    return program::ReshardGenericFactory{};
+                    return ReshardGenericFactory{};
                 }
-                return program::ReshardSameHeightFactory</*local_is_output*/ true>{};
+                return ReshardSameHeightFactory</*local_is_output*/ true>{};
             }
-            return program::ReshardSameHeightFactory</*local_is_output*/ false>{};
+            return ReshardSameHeightFactory</*local_is_output*/ false>{};
         }
-        return program::ReshardGenericFactory{};
+        return ReshardGenericFactory{};
     }
     auto input_buffer_type = input_tensor.memory_config().buffer_type();
     auto output_buffer_type = out_mem_config.buffer_type();
@@ -97,17 +97,17 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
         "Output buffer type must be DRAM or L1");
 
     if (input_buffer_type == BufferType::DRAM && output_buffer_type == BufferType::DRAM) {
-        return program::NdReshardCopyPagesFactory{};
+        return NdReshardCopyPagesFactory{};
     }
     if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
         input_page_size != output_page_size) {
-        return program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
+        return NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
     }
 
     if (input_buffer_type == BufferType::DRAM) {
-        return program::NdReshardCopyLocalShardFactory</*local_is_input*/ false>{};
+        return NdReshardCopyLocalShardFactory</*local_is_input*/ false>{};
     }
-    return program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
+    return NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
 }
 
 void ReshardDeviceOperation::validate_on_program_cache_hit(
@@ -206,24 +206,22 @@ ReshardDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) const {
-    int ideal_dev_clock_cycles = common_tm_bw_model(tensor_args.input, output_tensor);
+    int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(tensor_args.input, output_tensor);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {tensor_args.input}, {output_tensor}, ideal_dev_clock_cycles);
     return result;
 }
 
-}  // namespace ttnn::operations::data_movement::reshard
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::reshard::ReshardDeviceOperation::tensor_return_value_t reshard(
+ttnn::prim::ReshardDeviceOperation::tensor_return_value_t reshard(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    using OperationType = ttnn::operations::data_movement::reshard::ReshardDeviceOperation;
+    using OperationType = ttnn::prim::ReshardDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_mem_config = memory_config,
         },
         OperationType::tensor_args_t{.input = input_tensor, .preallocated_output = optional_output_tensor});
 }
+
 }  // namespace ttnn::prim

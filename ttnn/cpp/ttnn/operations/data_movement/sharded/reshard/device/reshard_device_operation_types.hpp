@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::reshard {
+namespace ttnn::prim {
 
 struct ReshardParams {
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -21,4 +21,4 @@ using tensor_return_value_t = Tensor;
 
 using spec_return_value_t = TensorSpec;
 
-}  // namespace ttnn::operations::data_movement::reshard
+}  // namespace ttnn::prim

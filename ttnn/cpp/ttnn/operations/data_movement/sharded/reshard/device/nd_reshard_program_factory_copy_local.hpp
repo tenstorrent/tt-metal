@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "reshard_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::reshard::program {
+namespace ttnn::prim {
 
 // Factory for L1<->DRAM or L1->L1 nd reshard (read into local pages in L1)
 template <bool local_is_input>
@@ -23,15 +23,15 @@ struct NdReshardCopyLocalShardFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const reshard::ReshardParams& operation_attributes,
-        const reshard::ReshardInputs& tensor_args,
-        reshard::tensor_return_value_t& tensor_return_value);
+        const ttnn::prim::ReshardParams& operation_attributes,
+        const ttnn::prim::ReshardInputs& tensor_args,
+        ttnn::prim::tensor_return_value_t& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const reshard::ReshardParams& operation_attributes,
-        const reshard::ReshardInputs& tensor_args,
-        reshard::tensor_return_value_t& tensor_return_value);
+        const ttnn::prim::ReshardParams& operation_attributes,
+        const ttnn::prim::ReshardInputs& tensor_args,
+        ttnn::prim::tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::reshard::program
+}  // namespace ttnn::prim

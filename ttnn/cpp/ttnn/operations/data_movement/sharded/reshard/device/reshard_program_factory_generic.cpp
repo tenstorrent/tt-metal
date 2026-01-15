@@ -10,7 +10,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::reshard {
+namespace ttnn::prim {
 
 namespace detail {
 // start is inclusive, end is exclusive
@@ -632,11 +632,10 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
 
 }  // namespace detail
 
-namespace program {
 ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
-    const reshard::ReshardParams& /*operation_attributes*/,
-    const reshard::ReshardInputs& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::ReshardParams& /*operation_attributes*/,
+    const ttnn::prim::ReshardInputs& tensor_args,
+    ttnn::prim::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;
     auto& output = tensor_return_value;
 
@@ -763,9 +762,9 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
 
 void ReshardGenericFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshard::ReshardParams& /*operation_attributes*/,
-    const reshard::ReshardInputs& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::ReshardParams& /*operation_attributes*/,
+    const ttnn::prim::ReshardInputs& tensor_args,
+    ttnn::prim::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     uint32_t input_addr = input.buffer()->address();
@@ -781,5 +780,5 @@ void ReshardGenericFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(
         cached_program.program, cached_program.shared_variables.cb_dst0, *output.buffer());
 }
-}  // namespace program
-}  // namespace ttnn::operations::data_movement::reshard
+
+}  // namespace ttnn::prim
