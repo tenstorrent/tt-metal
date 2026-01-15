@@ -11,8 +11,8 @@
 namespace ttnn::operations::pool::upsample {
 
 struct UpsampleParams {
-    int scale_factor_h = 0;
-    int scale_factor_w = 0;
+    float scale_factor_h = 1.0f;
+    float scale_factor_w = 1.0f;
     std::string mode = "nearest";
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;

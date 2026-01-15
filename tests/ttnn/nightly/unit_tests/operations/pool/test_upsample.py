@@ -290,3 +290,37 @@ def test_panoptic_upsample_sliced(
     passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch_nhwc, pcc=0.99)
     logger.info(pcc_message)
     assert passed, f"PCC check failed. {pcc_message}"
+
+
+# ============================================================================
+# Float scale factor tests with sharded memory
+# ============================================================================
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 64, 8, 8],
+        [1, 128, 16, 16],
+        [2, 64, 8, 8],
+        [1, 32, 4, 4],
+        [1, 64, 32, 32],
+        [1, 128, 56, 56],
+        [1, 32, 8, 8],
+        [1, 256, 8, 8],
+        [1, 512, 8, 8],
+    ],
+)
+@pytest.mark.parametrize("scale_h, scale_w", [(2.0, 2.0), (1.5, 1.5), (2.5, 2.5), (0.5, 0.5), (0.75, 0.75), (2.0, 1.5)])
+@pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
+def test_upsample_nearest_float_sharded(device, input_shape, scale_h, scale_w, shard_strategy):
+    """Test upsample with float scale factors using sharded memory."""
+    torch_result, output_tensor = upsample_multicore_common(
+        device, input_shape, scale_h, scale_w, shard_strategy, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    torch_result = torch_result.permute(0, 2, 3, 1)
+
+    passing, pcc_msg = assert_with_pcc(torch_result, output_tensor, pcc=0.9999)
+    logger.info(pcc_msg)
+    assert passing
