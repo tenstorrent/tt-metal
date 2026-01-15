@@ -325,21 +325,21 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         tt::DataFormat::UInt32);
 
     // Tilizer output buffer: holds tilized output from compute kernel
-    // page_size is the tile size, num_pages is tiles_per_chunk (based on max subtoken size)
+    // page_size is the tile size, num_pages is max_tiles_per_chunk (based on max subtoken size)
     // Tile dimensions: height = tokens_per_chunk, width = 32
     // tile_width_bytes = TILE_WIDTH * element_size
-    // tiles_per_chunk = max_tilizer_subtoken_size / tile_width_bytes
+    // max_tiles_per_chunk = max_tilizer_subtoken_size / tile_width_bytes
     constexpr uint32_t TILE_WIDTH = 32;
     // uint32_t element_size = input_tensor.element_size();
     // uint32_t bfp8_tile_size = 1088 * sizeof(uint8_t);
     uint32_t tile_width_bytes = TILE_WIDTH * input_tensor.element_size();
-    uint32_t tiles_per_chunk = max_tilizer_subtoken_size / tile_width_bytes;
+    uint32_t max_tiles_per_chunk = max_tilizer_subtoken_size / tile_width_bytes;
     tt::tt_metal::create_cb(
         tilizer_output_cb_id,
         program,
         selective_tilize_core_range_set,
         tokens_per_chunk * tile_width_bytes,
-        tiles_per_chunk * buffering_factor,  // double-buffered
+        max_tiles_per_chunk * buffering_factor,  // double-buffered
         input_data_format);
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
@@ -401,7 +401,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"num_tilizer_cores", num_tilizer_cores},
         {"num_mm_cores", operation_attributes.matmul_core_range_set.value().num_cores()},
         {"num_combine_cores", operation_attributes.combine_core_range_set.value().num_cores()},
-        {"tiles_per_chunk", tiles_per_chunk},
+        {"max_tiles_per_chunk", max_tiles_per_chunk},
         {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
         {"e_t_buffer_ready_semaphore_id", e_t_buffer_ready_semaphore_id},
     };
@@ -428,12 +428,12 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         tt::tt_metal::WriterDataMovementConfig(compile_time_args, {}, named_compile_time_args));
 
     // Compute kernel compile-time args for tilization
-    // These are positional args: tilizer_input_cb_id, tilizer_output_cb_id, tiles_per_chunk,
+    // These are positional args: tilizer_input_cb_id, tilizer_output_cb_id, max_tiles_per_chunk,
     //   tokens_per_chunk, total_chunks_cb_id
     std::unordered_map<std::string, uint32_t> compute_tilizer_named_compile_time_args = {
         {"tilizer_input_cb_id", tilizer_input_cb_id},
         {"tilizer_output_cb_id", tilizer_output_cb_id},
-        {"tiles_per_chunk", tiles_per_chunk},
+        {"max_tiles_per_chunk", max_tiles_per_chunk},
         {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
         {"total_chunks_cb_id", total_chunks_cb_id},
         {"experts_per_device", experts_per_device},
@@ -468,7 +468,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t tilizer_subtoken_offset = 0;
 
     // Compute kernel runtime args (separate from reader/writer)
-    std::vector<uint32_t> compute_tilizer_runtime_args = {0};  // [0]: tiles_per_chunk (set per-core below)
+    std::vector<uint32_t> compute_tilizer_runtime_args = {0};  // [0]: max_tiles_per_chunk (set per-core below)
 
     for (uint32_t i = 0; i < num_tilizer_cores; i++) {
         // Set work split parameters based on which group the core is in
@@ -493,7 +493,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             tilizer_subtoken_offset += tilizer_subtoken_size;
         }
 
-        // Set compute kernel runtime args - tiles_per_chunk based on tilizer_subtoken_size
+        // Set compute kernel runtime args - max_tiles_per_chunk based on tilizer_subtoken_size
         compute_tilizer_runtime_args.at(0) = tilizer_subtoken_size / tile_width_bytes;
 
         tt::tt_metal::SetRuntimeArgs(

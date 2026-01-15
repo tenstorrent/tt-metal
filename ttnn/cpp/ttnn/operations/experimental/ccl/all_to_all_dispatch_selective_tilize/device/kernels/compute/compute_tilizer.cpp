@@ -77,6 +77,7 @@ void MAIN {
     constexpr uint32_t tilizer_output_cb_id = get_named_compile_time_arg_val("tilizer_output_cb_id");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
     constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
+    constexpr uint32_t max_tiles_per_chunk = get_named_compile_time_arg_val("max_tiles_per_chunk");
 
     // get_runtime args
     uint32_t rt_args_idx = 0;
@@ -90,7 +91,7 @@ void MAIN {
     // // Read total_chunks from the CB
     uint32_t total_chunks = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(total_chunks_cb_id, 0));
 
-    fast_tilize_init(tilizer_input_cb_id, tiles_per_chunk, tilizer_output_cb_id);
+    fast_tilize_init(tilizer_input_cb_id, max_tiles_per_chunk, tilizer_output_cb_id);
     // Process each chunk
     for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
         // Wait for reader to push tokens_per_chunk pages (row-major data)
