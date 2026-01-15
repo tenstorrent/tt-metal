@@ -671,7 +671,6 @@ void kernel_main() {
                 get_read_ptr(total_chunks_cb_id));
 
             // Multicast e_t buffer to all tilizer cores
-            DPRINT << "Start multicasting e_t buffer to all tilizer cores" << ENDL();
             noc_async_write_multicast(
                 get_write_ptr(e_t_buffer_id), e_t_mcast_addr, e_t_buffer_total_size, num_tilizer_cores - 1);
 
@@ -686,9 +685,7 @@ void kernel_main() {
             noc_async_write_multicast(
                 get_read_ptr(total_chunks_cb_id), total_chunks_mcast_addr, sizeof(uint32_t), num_tilizer_cores - 1);
 
-            DPRINT << "Finished multicasting per_expert_counts to all tilizer cores" << ENDL();
             noc_async_write_barrier();
-            DPRINT << "Finished multicasting e_t buffer to all tilizer cores" << ENDL();
 
             // Signal non-drain cores via semaphore multicast
             // First, set the local semaphore to 1 - this is the value that will be multicast
@@ -706,9 +703,7 @@ void kernel_main() {
             // Multicast the value 1 to all non-drain tilizer cores
             noc_semaphore_set_multicast(
                 get_semaphore(e_t_buffer_ready_semaphore_id), semaphore_mcast_addr, num_tilizer_cores - 1);
-            DPRINT << "Finished multicasting semaphore to all tilizer cores" << ENDL();
             noc_async_write_barrier();
-            DPRINT << "Finished writing barrier" << ENDL();
         }
     }  // End of is_drain_tilizer_core block
     else {
@@ -716,9 +711,7 @@ void kernel_main() {
         // Wait for the semaphore signal from drain core
         volatile tt_l1_ptr uint32_t* semaphore_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(e_t_buffer_ready_semaphore_id));
-        DPRINT << "Waiting for semaphore signal from drain core" << ENDL();
         noc_semaphore_wait(semaphore_addr, 1);
-        DPRINT << "Finished waiting for semaphore signal from drain core" << ENDL();
 
         // Read per-expert counts from the CB (multicast by drain core)
         // The data was written directly to our CB by the multicast
@@ -735,7 +728,6 @@ void kernel_main() {
         cb_reserve_back(total_chunks_cb_id, 1);
         cb_push_back(total_chunks_cb_id, 1);
     }
-    DPRINT << "Start reading activated tokens from sparse buffer and packing into tilizer input CB" << ENDL();
     // ========== ALL CORES: Read activated tokens from sparse buffer and pack into tilizer input CB ==========
     // The e_t buffer contains sparse token IDs for each expert, terminated by -1
     for (uint32_t e = 0; e < experts_per_device; e++) {
