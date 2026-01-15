@@ -33,7 +33,7 @@ class PI0Model:
     """
     Complete PI0 model implementation (PyTorch).
 
-    This class orchestrates all components for training and inference.
+    This class orchestrates all components for inference.
     """
 
     def __init__(
@@ -155,44 +155,6 @@ class PI0Model:
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         """Embed state and actions to form suffix."""
         return self.suffix_embedding.embed_suffix(state, noisy_actions, timestep)
-
-    def forward_training(
-        self,
-        images: List[torch.Tensor],
-        img_masks: List[torch.Tensor],
-        lang_tokens: torch.Tensor,
-        lang_masks: torch.Tensor,
-        state: torch.Tensor,
-        actions: torch.Tensor,
-        timestep: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Forward pass for training (computes velocity for loss).
-
-        Returns:
-            Predicted velocity (batch_size, action_horizon, action_dim)
-        """
-        # Embed prefix
-        prefix_embs, _, _ = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
-
-        # Embed suffix
-        suffix_embs, _, _, _ = self.embed_suffix(state, actions, timestep)
-
-        # Forward through backbone
-        _, expert_output = self.backbone.forward_shared_attention(
-            prefix_embs,
-            suffix_embs,
-        )
-
-        # Project to actions
-        if not self.config.pi05:
-            action_output = expert_output[:, 1:, :]
-        else:
-            action_output = expert_output
-
-        velocity = self.suffix_embedding.project_output(action_output)
-
-        return velocity
 
     def forward_inference(
         self,

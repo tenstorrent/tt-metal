@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-SigLIP Vision Tower - TTNN Implementation (Optimized).
+SigLIP Vision Tower - TTNN Implementation
 
 This module implements the SigLIP vision encoder using TTNN operations.
 

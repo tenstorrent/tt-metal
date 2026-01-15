@@ -247,53 +247,6 @@ def compute_position_ids_ttnn(
     return position_ids
 
 
-def sample_noise_torch(
-    shape: tuple,
-    device: torch.device = None,
-    dtype: torch.dtype = torch.float32,
-) -> torch.Tensor:
-    """
-    Sample Gaussian noise for flow matching.
-
-    Args:
-        shape: Shape tuple for the noise tensor
-        device: Device to create tensor on
-        dtype: Data type for tensor
-
-    Returns:
-        Tensor of standard normal noise
-    """
-    return torch.randn(shape, device=device, dtype=dtype)
-
-
-def sample_time_torch(
-    batch_size: int,
-    device: torch.device = None,
-    alpha: float = 1.5,
-    beta: float = 1.0,
-) -> torch.Tensor:
-    """
-    Sample timesteps from Beta distribution for training.
-
-    Args:
-        batch_size: Number of timesteps to sample
-        device: Device to create tensor on
-        alpha: Alpha parameter of Beta distribution
-        beta: Beta parameter of Beta distribution
-
-    Returns:
-        Tensor of shape (batch_size,) with timesteps in [0.001, 0.999]
-    """
-    alpha_t = torch.tensor(alpha, dtype=torch.float32, device=device)
-    beta_t = torch.tensor(beta, dtype=torch.float32, device=device)
-    dist = torch.distributions.Beta(alpha_t, beta_t)
-    time_beta = dist.sample((batch_size,))
-
-    # Scale to [0.001, 0.999] to avoid edge cases
-    time = time_beta * 0.999 + 0.001
-    return time
-
-
 def ttnn_to_torch(tensor: "ttnn.Tensor") -> torch.Tensor:
     """
     Convert TTNN tensor to PyTorch tensor.

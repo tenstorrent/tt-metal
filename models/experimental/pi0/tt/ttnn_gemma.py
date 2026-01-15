@@ -16,11 +16,11 @@ Architecture configurations:
 
 Optimizations over baseline:
     1. Fused QKV projection (1 linear instead of 3)
-    2. Native ttnn.experimental.nlp_create_qkv_heads (no PyTorch transfers)
+    2. Native ttnn.experimental.nlp_create_qkv_heads
     3. Native ttnn.experimental.rotary_embedding (split-half pattern)
     4. Native ttnn.experimental.nlp_concat_heads for output
     5. Native ttnn.rms_norm (single fused kernel)
-    6. Pure TTNN RoPE precomputation (no torch dependency)
+    6. Pure TTNN RoPE precomputation
 """
 
 import math
@@ -162,7 +162,7 @@ class GemmaAttentionTTNN:
 
     OPTIMIZED:
     1. Fused QKV projection (1 linear instead of 3)
-    2. Native ttnn.experimental.nlp_create_qkv_heads (no PyTorch transfers)
+    2. Native ttnn.experimental.nlp_create_qkv_heads
     3. Native ttnn.experimental.rotary_embedding (split-half pattern)
     4. Native ttnn.experimental.nlp_concat_heads for output
     """
@@ -236,7 +236,7 @@ class GemmaAttentionTTNN:
 
         Key optimizations:
         1. Single fused QKV linear (3x fewer linear ops)
-        2. Native ttnn.experimental.nlp_create_qkv_heads (no PyTorch transfers)
+        2. Native ttnn.experimental.nlp_create_qkv_heads
         3. Native ttnn.experimental.rotary_embedding (split-half pattern)
         4. Native ttnn.experimental.nlp_concat_heads for output
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PaliGemma backbone wrapper - TTNN Implementation (Optimized).
+PaliGemma backbone wrapper - TTNN Implementation
 
 This module combines vision, language, and action expert components:
     - SigLIP Vision Tower: Processes images to embeddings

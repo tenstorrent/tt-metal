@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Main PI0 model - TTNN Implementation (Optimized).
+Main PI0 model - TTNN Implementation (Inference Only)
 
 This module assembles all PI0 components into a complete model:
     - PrefixEmbedding: Images + language → embeddings
@@ -13,11 +13,10 @@ Architecture:
     1. Process images through SigLIP vision tower
     2. Embed language tokens through Gemma embeddings
     3. Concatenate to form prefix embeddings
-    4. (Training) Process prefix + suffix through shared attention
-    5. (Inference) Prefill prefix, cache KV, denoise actions iteratively
+    4. Prefill prefix, cache KV, denoise actions iteratively
 
 Optimizations:
-    1. Pre-computed timesteps (saves 9 device transfers per inference)
+    1. Pre-computed timesteps
     2. Denoising loop stays entirely on device
     3. Single transfer at the end for final actions
 """
@@ -153,104 +152,6 @@ class PI0ModelTTNN:
             Tuple of (embeddings, padding_mask, attention_mask, adarms_cond)
         """
         return self.suffix_embedding.embed_suffix(state, noisy_actions, timestep)
-
-    def forward_training(
-        self,
-        images: List[torch.Tensor],
-        img_masks: List[torch.Tensor],
-        lang_tokens: torch.Tensor,
-        lang_masks: torch.Tensor,
-        state: torch.Tensor,
-        actions: torch.Tensor,
-        timestep: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Forward pass for training using TTNN (computes velocity for loss).
-
-        Args:
-            images: List of input images
-            img_masks: Image validity masks
-            lang_tokens: Language token IDs
-            lang_masks: Language masks
-            state: Robot state
-            actions: Noisy actions
-            timestep: Sampled timestep
-
-        Returns:
-            Predicted velocity (batch_size, action_horizon, action_dim) as PyTorch tensor
-        """
-        # Convert inputs to TTNN where needed
-        state_ttnn = ttnn.from_torch(
-            state.float(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        actions_ttnn = ttnn.from_torch(
-            actions.float(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        # Convert timestep - handle 1D [batch] by reshaping on device
-        timestep_float = timestep.float()
-        if timestep.dim() == 1:
-            timestep_ttnn = ttnn.from_torch(
-                timestep_float,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-            )
-            timestep_ttnn = ttnn.reshape(timestep_ttnn, (timestep_float.shape[0], 1))
-            timestep_ttnn = ttnn.to_layout(timestep_ttnn, ttnn.TILE_LAYOUT)
-        else:
-            timestep_ttnn = ttnn.from_torch(
-                timestep_float,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-
-        # Convert language tokens to TTNN (uint32 for embedding lookup)
-        lang_tokens_ttnn = ttnn.from_torch(
-            lang_tokens,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
-        lang_masks_ttnn = ttnn.from_torch(
-            lang_masks.float(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-
-        # Embed prefix using TTNN
-        prefix_embs, prefix_pad, prefix_att = self.embed_prefix(images, img_masks, lang_tokens_ttnn, lang_masks_ttnn)
-
-        # Embed suffix using TTNN (pass TTNN tensors)
-        suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(state_ttnn, actions_ttnn, timestep_ttnn)
-
-        # Forward through backbone using TTNN
-        vlm_output, expert_output = self.backbone.forward_shared_attention(
-            prefix_embs,
-            suffix_embs,
-            prefix_mask=None,
-            suffix_mask=None,
-        )
-
-        # Project expert output to velocity
-        if not self.config.pi05:
-            action_output = ttnn.slice(
-                expert_output, [0, 1, 0], [expert_output.shape[0], expert_output.shape[1], expert_output.shape[2]]
-            )
-        else:
-            action_output = expert_output
-
-        velocity = self.suffix_embedding.project_output(action_output)
-
-        # Convert back to PyTorch for loss computation
-        return ttnn.to_torch(velocity)
 
     def sample_actions(
         self,

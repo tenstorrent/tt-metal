@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Prefix Embedding module - TTNN Implementation (Optimized).
+Prefix Embedding module - TTNN Implementation
 
 This module handles embedding of images and language tokens to create the
 prefix part of the sequence for transformer processing.

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Suffix Embedding module - TTNN Implementation (Optimized).
+Suffix Embedding module - TTNN Implementation
 
 This module handles embedding of state, noisy actions, and timestep to create
 the suffix part of the sequence for expert transformer processing.
