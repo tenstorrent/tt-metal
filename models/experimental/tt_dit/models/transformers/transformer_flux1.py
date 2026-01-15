@@ -145,12 +145,13 @@ class Flux1SingleTransformerBlock(Module):
             time_embed = ttnn.silu(time_embed)
         time = self.time_embed(time_embed)
 
-        spatial_normed = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0)), 0)
-        prompt_normed = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0)), 0)
-
         shift_msa, scale_msa, gate_msa = _chunk_time3d(time, 3)
-        norm_spatial = spatial_normed * (1 + scale_msa) + shift_msa
-        norm_prompt = prompt_normed * (1 + scale_msa) + shift_msa
+        norm_spatial = ttnn.squeeze(
+            self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=(1 + scale_msa), dynamic_bias=shift_msa), 0
+        )
+        norm_prompt = ttnn.squeeze(
+            self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=(1 + scale_msa), dynamic_bias=shift_msa), 0
+        )
 
         norm_spatial = self.ccl_manager.all_gather_persistent_buffer(
             norm_spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True
@@ -333,6 +334,7 @@ class Flux1Transformer(Module):
             inner_dim,
             norm_eps=1e-6,
             norm_elementwise_affine=False,
+            bias=False,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
