@@ -57,8 +57,8 @@ void kernel_main() {
         uint32_t start_column_id = get_arg_val<uint32_t>(3);
         uint32_t single_block_size_row_arg = get_arg_val<uint32_t>(4);
         uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(5);
-        uint32_t single_sblock_size_row_arg = get_arg_val<uint32_t>(7);
         uint32_t sblock_width_size = get_arg_val<uint32_t>(6);
+        uint32_t single_sblock_size_row_arg = get_arg_val<uint32_t>(7);
 
         for (uint32_t b = 0; b < single_block_size_col_arg; b++) {
             uint32_t this_block_num_rows = tile_height;
