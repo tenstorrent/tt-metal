@@ -306,12 +306,12 @@ def prepare_generator_args(
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {
-                "temperature": torch.ones(32).tolist(),
+                "temperature": (2 * torch.ones(32)).tolist(),
                 "top_p": torch.ones(32).tolist(),
                 "top_k": (32 * torch.ones(32)).tolist(),
-                # "frequency_penalty": torch.ones(32).tolist(),
-                # "presence_penalty": torch.ones(32).tolist(),
-                # "repetition_penalty": torch.ones(32).tolist(),
+                "frequency_penalty": torch.ones(32).tolist(),
+                "presence_penalty": torch.ones(32).tolist(),
+                "repetition_penalty": torch.ones(32).tolist(),
                 "seed": (456 * torch.ones(32).to(torch.int32)).tolist(),
                 # "seed": torch.linspace(0, 31, steps=32, dtype=torch.int32).tolist(), # int32 values from 0 to 31 inclusive
             },
@@ -1122,6 +1122,7 @@ def test_demo_text(
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
+                reset_batch=(iteration == 0),
                 sampling_params=device_sampling_params,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,

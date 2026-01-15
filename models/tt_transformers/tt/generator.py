@@ -82,7 +82,7 @@ def _apply_prefill_sampling_state(
     assert sampling_module is not None, "Sampling module not found in model for sampling on device."
     sampling_module.reset_sampling_params(sampling_params)
     sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
-    sampling_module.seed_manager.get_new_values(empty_slots)
+    sampling_module.seed_manager.get_new_values(empty_slots, replicate_seeds=True)
     if prompt_tokens is not None:
         sampling_module.reset_prompt_tokens(prompt_tokens)
     sampling_module.reset_output_state()
@@ -395,7 +395,7 @@ class Generator:
                     self.model[model_id],
                     sampling_params=per_request_params,
                     prompt_tokens=prefill_ids[:, :seq_len].repeat(32, 1),
-                    empty_slots=empty_slots,
+                    empty_slots=[user_id],
                 )
 
             if enable_trace_current_prompt:
