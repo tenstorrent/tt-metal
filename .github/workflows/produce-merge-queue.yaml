@@ -1,9 +1,5 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
-permissions:
-  contents: read
-  pull-requests: read
-
 on:
   workflow_dispatch:
   schedule:
@@ -18,10 +14,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Fetch open PRs (merge-queue inference)
+      - name: Fetch open PRs (merge queue inference)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -32,7 +27,7 @@ jobs:
             -f per_page=100 \
             > generated/merge_queue/open_prs.json
 
-          echo "Fetched PR snapshot:"
+          echo "Fetched PR count:"
           jq 'length' generated/merge_queue/open_prs.json
 
       - name: Add timestamp to filename
@@ -41,7 +36,6 @@ jobs:
           mv generated/merge_queue/open_prs.json \
              generated/merge_queue/${ts}_merge_queue_pr_snapshot.json
 
-          echo "Files:"
           ls -lh generated/merge_queue
 
       - name: Upload merge queue data via SFTP

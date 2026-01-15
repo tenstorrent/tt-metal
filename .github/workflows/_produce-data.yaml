@@ -216,37 +216,37 @@ jobs:
         run: find generated/benchmark_data -type f | xargs -n 1 -I {} bash -c 'echo {} && cat {}'
 
 
-  test-merge-queue-upload:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+  # test-merge-queue-upload:
+  #   if: ${{ github.event_name == 'workflow_dispatch' }}
+  #   runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      pull-requests: read
+  #   permissions:
+  #     contents: read
+  #     pull-requests: read
 
-    steps:
-      - uses: actions/checkout@v4
+  #   steps:
+  #     - uses: actions/checkout@v4
 
-      - name: Fetch open PRs (merge queue inference)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p generated/merge_queue
+  #     - name: Fetch open PRs (merge queue inference)
+  #       env:
+  #         GH_TOKEN: ${{ github.token }}
+  #       run: |
+  #         mkdir -p generated/merge_queue
 
-          gh api repos/tenstorrent/tt-metal/pulls \
-            -f state=open \
-            -f per_page=100 \
-            > generated/merge_queue/merge_queue_test.json
+  #         gh api repos/tenstorrent/tt-metal/pulls \
+  #           -f state=open \
+  #           -f per_page=100 \
+  #           > generated/merge_queue/merge_queue_test.json
 
-          echo "Fetched PR snapshot:"
-          jq 'length' generated/merge_queue/merge_queue_test.json
+  #         echo "Fetched PR snapshot:"
+  #         jq 'length' generated/merge_queue/merge_queue_test.json
 
-      - name: Upload merge queue data via SFTP
-        uses: ./.github/actions/upload-data-via-sftp
-        with:
-          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
-          username: ${{ secrets.SFTP_CICD_WRITER_USERNAME }}
-          hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
-          sftp-batchfile: .github/actions/upload-data-via-sftp/merge_queue_data_batchfile.txt
+  #     - name: Upload merge queue data via SFTP
+  #       uses: ./.github/actions/upload-data-via-sftp
+  #       with:
+  #         ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+  #         username: ${{ secrets.SFTP_CICD_WRITER_USERNAME }}
+  #         hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
+  #         sftp-batchfile: .github/actions/upload-data-via-sftp/merge_queue_data_batchfile.txt
 
 
