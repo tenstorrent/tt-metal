@@ -52,7 +52,9 @@ class FileVectorSource(VectorSource):
                         vector = suite_content[vector_id]
                         vector["input_hash"] = vector_id
                         vector["suite_name"] = suite_key
-                        vector["sweep_name"] = module_name
+                        # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                        if "sweep_name" not in vector:
+                            vector["sweep_name"] = module_name
                         vectors.append(vector)
                         break
             else:
@@ -64,7 +66,9 @@ class FileVectorSource(VectorSource):
                     for input_hash, vector_data in suite_content.items():
                         vector_data["input_hash"] = input_hash
                         vector_data["suite_name"] = suite_key
-                        vector_data["sweep_name"] = module_name
+                        # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                        if "sweep_name" not in vector_data:
+                            vector_data["sweep_name"] = module_name
                         vectors.append(vector_data)
 
             return vectors
@@ -146,7 +150,9 @@ class VectorExportSource(VectorSource):
                             vector = suite_content[vector_id]
                             vector["input_hash"] = vector_id
                             vector["suite_name"] = suite_key
-                            vector["sweep_name"] = module_name
+                            # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                            if "sweep_name" not in vector:
+                                vector["sweep_name"] = module_name
                             all_vectors.append(vector)
                             logger.info(
                                 f"Vector ID '{vector_id}' found in suite '{suite_name}' of module '{module_name}' (file: {module_file.name})"
@@ -160,7 +166,9 @@ class VectorExportSource(VectorSource):
                         for input_hash, vector_data in suite_content.items():
                             vector_data["input_hash"] = input_hash
                             vector_data["suite_name"] = suite_key
-                            vector_data["sweep_name"] = module_name
+                            # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                            if "sweep_name" not in vector_data:
+                                vector_data["sweep_name"] = module_name
                             all_vectors.append(vector_data)
 
             except (json.JSONDecodeError, IOError) as e:
