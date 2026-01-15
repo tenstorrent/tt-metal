@@ -509,7 +509,7 @@ bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 4>& padding,
     const std::array<uint32_t, 2>& dilation,
-    uint32_t groups,
+    uint32_t /*groups*/,
     const Conv2dConfig& conv_config) {
     bool is_width_sharded =
         (conv_config.shard_layout.has_value() && conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED);
@@ -873,7 +873,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     bool height_sharded,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     bool transpose_mcast,
-    uint32_t grid_size_along_c) {
+    uint32_t /*grid_size_along_c*/) {
     if (height_sharded) {
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig matmul_config = {
             .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
@@ -1077,7 +1077,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t out_channels,
     uint32_t output_height,
     uint32_t output_width,
-    uint32_t weights_width,
+    uint32_t /*weights_width*/,
     uint32_t input_height,
     uint32_t input_width,
     const CoreCoord& compute_grid_size,
@@ -1175,7 +1175,7 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
     uint32_t output_height,
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
-    const CoreCoord& compute_grid,
+    const CoreCoord& /*compute_grid*/,
     bool is_1d_depthwise_conv) {
     uint32_t round_up_size = tt::constants::TILE_HEIGHT;
     uint32_t nhw_out = batch_size * output_height * output_width;
@@ -1267,7 +1267,7 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
 bool auto_enable_kernel_folding(
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_layout,
-    const DataType& input_dtype,
+    const DataType& /*input_dtype*/,
     std::optional<bool> enable_folding_,
     uint32_t input_height,
     uint32_t input_width,
@@ -1392,7 +1392,7 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 4> padding_n4,
-    const Conv2dConfig& conv_config) {
+    const Conv2dConfig& /*conv_config*/) {
     // Calculate padded dimensions first - this is what the folding operation will see
     uint32_t padded_height = input_height + padding_n4[0] + padding_n4[1];
     uint32_t padded_width = input_width + padding_n4[2] + padding_n4[3];

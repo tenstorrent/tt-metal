@@ -227,7 +227,12 @@ Tensor to_weight_special_padding_tile_layout(
                 w_shape[1],
                 16,  // Minimum work per thread
                 [&output_buffer, &input_buffer, &w_shape, &weight_matrix_cols, &block_height_padding](
-                    uint32_t out_t, uint32_t in_t, uint32_t k_start, uint32_t k_end, uint32_t c_start, uint32_t c_end) {
+                    uint32_t /*out_t*/,
+                    uint32_t /*in_t*/,
+                    uint32_t k_start,
+                    uint32_t k_end,
+                    uint32_t c_start,
+                    uint32_t c_end) {
                     for (auto r = 0; r < w_shape[2]; r++) {
                         for (auto s = 0; s < w_shape[3]; s++) {
                             for (auto c = c_start; c < c_end; c++) {
@@ -281,7 +286,12 @@ Tensor to_weight_interleaved_mm_layout(const Tensor& conv_weight_tensor, DataTyp
             w_shape[0],  // Co
             w_shape[1],  // Ci
             16,          // Minimum work per thread
-            [&](uint32_t out_t, uint32_t in_t, uint32_t co_start, uint32_t co_end, uint32_t ci_start, uint32_t ci_end) {
+            [&](uint32_t /*out_t*/,
+                uint32_t /*in_t*/,
+                uint32_t co_start,
+                uint32_t co_end,
+                uint32_t ci_start,
+                uint32_t ci_end) {
                 for (auto kh = 0; kh < w_shape[2]; kh++) {
                     for (auto kw = 0; kw < w_shape[3]; kw++) {
                         for (auto ci = ci_start; ci < ci_end; ci++) {
@@ -340,8 +350,8 @@ Tensor to_weight_tile_layout(
             w_shape[0],
             w_shape[1],
             16,  // Minimum work per thread
-            [&](uint32_t out_t,
-                uint32_t in_t,
+            [&](uint32_t /*out_t*/,
+                uint32_t /*in_t*/,
                 uint32_t out_start,
                 uint32_t out_end,
                 uint32_t in_start,
@@ -467,8 +477,8 @@ Tensor to_weight_tile_layout_block_sharded(
             out_num_channel_shards,
             in_num_channel_shards,
             1,  // Minimum work per thread
-            [&](uint32_t out_t,
-                uint32_t in_t,
+            [&](uint32_t /*out_t*/,
+                uint32_t /*in_t*/,
                 uint32_t out_start,
                 uint32_t out_end,
                 uint32_t in_start,
@@ -698,8 +708,8 @@ static Tensor conv_depthwise_weight_bcast_helper(
             output_weight_shape[0],
             output_weight_shape[1],
             16,  // Minimum work per thread
-            [&](uint32_t out_t,
-                uint32_t in_t,
+            [&](uint32_t /*out_t*/,
+                uint32_t /*in_t*/,
                 uint32_t out_start,
                 uint32_t out_end,
                 uint32_t in_start,
@@ -955,8 +965,8 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
                 out_channels,
                 in_channels,
                 16,  // Minimum work per thread
-                [&](uint32_t out_t,
-                    uint32_t in_t,
+                [&](uint32_t /*out_t*/,
+                    uint32_t /*in_t*/,
                     uint32_t out_start,
                     uint32_t out_end,
                     uint32_t in_start,
@@ -1033,7 +1043,7 @@ void validate_host_conv_bias(const ttnn::Tensor& bias_tensor) {
 // Validate device conv weights format (minimal validation for main path)
 bool is_valid_device_conv_weights(
     const ttnn::Tensor& weight_tensor,
-    uint32_t in_channels,
+    uint32_t /*in_channels*/,
     uint32_t out_channels,
     const std::optional<DataType>& expected_dtype) {
     if (weight_tensor.layout() != Layout::TILE) {
@@ -1744,7 +1754,7 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
+    const std::optional<const Conv2dSliceConfig>& /*dram_slice_config_*/) {
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
 

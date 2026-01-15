@@ -40,6 +40,7 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/dispatch_core_common.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "math.hpp"
@@ -1743,7 +1744,7 @@ void assemble_device_commands(
     bool use_prefetcher_cache) {
     CommandConstants constants{};
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    constants.dispatch_core_type = dispatch_core_config.get_core_type();
+    constants.dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     constants.noc_index = k_dispatch_downstream_noc;
     constants.max_prefetch_command_size =
         MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).max_prefetch_command_size();
@@ -2657,7 +2658,7 @@ void set_core_go_message_mapping_on_device(
     std::vector<CQDispatchWritePackedMulticastSubCmd> sub_cmds;
     std::vector<std::pair<uint32_t, uint32_t>> payload;
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    auto dispatch_core_type = dispatch_core_config.get_core_type();
+    auto dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     uint32_t noc_index = k_dispatch_downstream_noc;
     uint32_t max_prefetch_command_size =
         MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();

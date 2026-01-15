@@ -33,6 +33,9 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
@@ -503,15 +506,15 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
                 std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
             std::iota(src_vec.begin(), src_vec.end(), i);
             std::unordered_map<distributed::MeshCoordinate, std::vector<uint32_t>> dst_vec = {};
-            std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
-            std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
+            std::vector<distributed::ShardDataTransfer> input_shards = {};
+            std::vector<distributed::ShardDataTransfer> output_shards = {};
 
             for (const auto& coord : coord_range) {
-                input_shards.push_back({coord, src_vec.data()});
+                input_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(src_vec.data()));
             }
             for (const auto& coord : coord_range) {
                 dst_vec[coord] = std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
-                output_shards.push_back({coord, dst_vec[coord].data()});
+                output_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(dst_vec[coord].data()));
             }
 
             mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
@@ -564,15 +567,15 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
                         std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
                     std::iota(src_vec.begin(), src_vec.end(), i);
                     std::unordered_map<distributed::MeshCoordinate, std::vector<uint32_t>> dst_vec = {};
-                    std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
-                    std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
+                    std::vector<distributed::ShardDataTransfer> input_shards = {};
+                    std::vector<distributed::ShardDataTransfer> output_shards = {};
 
                     for (const auto& coord : coord_range) {
-                        input_shards.push_back({coord, src_vec.data()});
+                        input_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(src_vec.data()));
                     }
                     for (const auto& coord : coord_range) {
                         dst_vec[coord] = std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
-                        output_shards.push_back({coord, dst_vec[coord].data()});
+                        output_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(dst_vec[coord].data()));
                     }
 
                     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
@@ -588,6 +591,176 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
     for (auto& thread : threads) {
         thread.join();
     }
+}
+
+TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    // Use a replicated mesh buffer so per-device buffers are interleaved (not sharded)
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    // Make the buffer multiple tiles to exercise multi-page transfers
+    const uint32_t tiles_per_device = 128;
+    const uint32_t bytes_per_device = tiles_per_device * single_tile_size;
+
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    // Prepare source data and write it to a single shard (0,0)
+    std::vector<uint32_t> src(bytes_per_device / sizeof(uint32_t), 0);
+    std::iota(src.begin(), src.end(), 0);
+
+    distributed::MeshCoordinate coord(0, 0);
+    auto write_transfer = distributed::ShardDataTransfer{coord}
+                              .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
+                              .region(BufferRegion(0, bytes_per_device));
+    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+
+    // Prepare destination buffer and pin the entire destination range for the target shard
+    auto dst = std::make_shared<vector_aligned<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
+    uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
+
+    // Create HostBuffer on top of dst
+    HostBuffer host_buffer(
+        tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto pinned_unique = experimental::PinnedMemory::Create(
+        *mesh_device_,
+        coordinate_range_set,
+        host_buffer,
+        /*map_to_noc=*/true);
+    std::shared_ptr<experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+
+    // Read back using enqueue_read_shards with pinned_memory populated
+    auto read_transfer = distributed::ShardDataTransfer{coord}
+                             .host_data(static_cast<void*>(dst_ptr_aligned))
+                             .region(BufferRegion(0, bytes_per_device));
+    experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_shared);
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+
+    std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
+
+    EXPECT_EQ(dst_aligned, src);
+}
+
+TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    // Use a replicated mesh buffer so per-device buffers are interleaved (not sharded)
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    // Make the buffer multiple tiles to exercise multi-page transfers
+    const uint32_t tiles_per_device = 128;
+    const uint32_t bytes_per_device = tiles_per_device * single_tile_size;
+
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    // Prepare source data and write it to a single shard (0,0)
+    std::vector<uint32_t> src(bytes_per_device / sizeof(uint32_t), 0);
+    std::iota(src.begin(), src.end(), 0);
+
+    distributed::MeshCoordinate coord(0, 0);
+    auto write_transfer = distributed::ShardDataTransfer{coord}
+                              .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
+                              .region(BufferRegion(0, bytes_per_device));
+    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+
+    // Prepare destination buffer and pin the entire destination range for the target shard
+    auto dst = std::make_shared<vector_aligned<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
+    uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
+
+    // Create HostBuffer on top of dst
+    HostBuffer host_buffer(
+        tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto pinned_unique = experimental::PinnedMemory::Create(
+        *mesh_device_,
+        coordinate_range_set,
+        host_buffer,
+        /*map_to_noc=*/true);
+    std::shared_ptr<experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+
+    // Attach pinned memory to HostBuffer
+    experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
+
+    // Create DistributedHostBuffer and add the HostBuffer as a shard
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+    distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+
+    // Read back using enqueue_read with DistributedHostBuffer
+    mesh_device_->mesh_command_queue().enqueue_read(
+        mesh_buffer, distributed_host_buffer, std::nullopt, /*blocking=*/true);
+
+    std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
+
+    EXPECT_EQ(dst_aligned, src);
+}
+
+TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    // Use a replicated mesh buffer so per-device buffers are interleaved (not sharded)
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    // Make the buffer multiple tiles to exercise multi-page transfers
+    const uint32_t tiles_per_device = 128;
+    const uint32_t bytes_per_device = tiles_per_device * single_tile_size;
+
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    // Prepare source data and write it to a single shard (0,0)
+    std::vector<uint8_t> src(bytes_per_device, 0);
+    std::iota(src.begin(), src.end(), 0);
+
+    distributed::MeshCoordinate coord(0, 0);
+    auto write_transfer =
+        distributed::ShardDataTransfer{coord}.host_data(src.data()).region(BufferRegion(0, bytes_per_device));
+    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+
+    constexpr size_t unaligned_shift = 3;
+    // Prepare destination buffer and pin the entire destination range for the target shard
+    auto dst = std::make_shared<vector_aligned<uint8_t>>(bytes_per_device + unaligned_shift, 0);
+    uint8_t* dst_ptr_unaligned = dst->data() + unaligned_shift;
+
+    // Create HostBuffer on top of dst
+    HostBuffer host_buffer(tt::stl::Span<uint8_t>(dst_ptr_unaligned, bytes_per_device), MemoryPin(dst));
+
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto pinned_unique = experimental::PinnedMemory::Create(
+        *mesh_device_,
+        coordinate_range_set,
+        host_buffer,
+        /*map_to_noc=*/true);
+    std::shared_ptr<experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+
+    // Read back using enqueue_read_shards with pinned_memory populated
+    auto read_transfer = distributed::ShardDataTransfer{coord}
+                             .host_data(static_cast<void*>(dst_ptr_unaligned))
+                             .region(BufferRegion(0, bytes_per_device));
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+
+    std::vector<uint8_t> dst_aligned(dst_ptr_unaligned, dst_ptr_unaligned + bytes_per_device);
+
+    EXPECT_EQ(dst_aligned, src);
 }
 
 }  // namespace

@@ -9,20 +9,16 @@
 
 namespace ttnn::operations::experimental::ssm::prefix_scan {
 
-struct operation_attributes_t {
+struct PrefixScanParams {
     const tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     const MathFidelity math_fidelity;
 };
 
-struct tensor_args_t {
+struct PrefixScanInputs {
     Tensor a;
     Tensor bx;
     Tensor h_prev;
 };
-
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
 
 }  // namespace ttnn::operations::experimental::ssm::prefix_scan

@@ -203,7 +203,7 @@ ReshardDeviceOperation::tensor_return_value_t ReshardDeviceOperation::create_out
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ReshardDeviceOperation::tensor_return_value_t>
 ReshardDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) const {
     int ideal_dev_clock_cycles = common_tm_bw_model(tensor_args.input, output_tensor);

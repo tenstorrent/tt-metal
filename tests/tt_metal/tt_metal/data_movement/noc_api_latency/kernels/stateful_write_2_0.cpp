@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/endpoints.h"
 
 void kernel_main() {
     constexpr uint32_t l1_local_addr = get_compile_time_arg_val(0);

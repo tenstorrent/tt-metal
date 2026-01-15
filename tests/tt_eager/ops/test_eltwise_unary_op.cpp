@@ -109,7 +109,7 @@ bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float hig
         auto device_output = ttnn::tanh(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     }
-    TT_ASSERT(false, "Unsupported function");
+    TT_FATAL(false, "Unsupported function");
     return false;
 }
 
@@ -284,7 +284,7 @@ void test_program_cache() {
     TT_FATAL(device->num_program_cache_entries() == 0, "Error");
 }
 
-int main(int argc, char** argv) {
+int main() {
     // test_operation_infrastructure();
     test_shape_padding();
     test_numerically();

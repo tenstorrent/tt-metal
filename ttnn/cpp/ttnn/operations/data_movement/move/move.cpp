@@ -6,7 +6,7 @@
 
 #include "device/move_device_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/distributed/api.hpp"
 
 #include <tt-metalium/hal.hpp>

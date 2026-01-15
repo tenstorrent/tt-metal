@@ -47,11 +47,12 @@ class MeshCommandQueue;
 
 class Tensor {
 public:
+    constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t tensor_id{INVALID_TENSOR_ID};
+
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
-
-    constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -255,18 +256,21 @@ public:
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
-    std::uint64_t get_id() const;
-
-    static std::uint64_t next_id();
-
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
     auto attribute_values() const {
         return std::forward_as_tuple(
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
+    static std::uint64_t get_tensor_id_counter();
+
+    static void set_tensor_id_counter(std::uint64_t id);
+
+    // TODO #32045: Remove this function since IDs are assigned in the constructor.
+    static std::uint64_t next_tensor_id();
+
 private:
-    std::uint64_t id_{INVALID_TENSOR_ID};
+    static std::atomic<std::uint64_t> tensor_id_counter;
 
     // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
     // If not set, the tensor can either be on host or allocated on a single device.
@@ -309,6 +313,8 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 // Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
 // shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+
+Tensor set_tensor_id(const Tensor& tensor);
 
 namespace ops {
 Tensor view(

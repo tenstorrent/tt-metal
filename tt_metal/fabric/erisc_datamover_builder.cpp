@@ -38,12 +38,23 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
 
 namespace tt::tt_metal {
 class Program;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
+
+size_t FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return max_packet_payload_size_bytes_wormhole;
+        case tt::ARCH::BLACKHOLE: return max_packet_payload_size_bytes_blackhole;
+        default:
+            TT_FATAL(false, "Custom packet sizes not supported for architecture: {}", tt::arch_to_str(arch));
+            return 0;  // unreachable
+    }
+}
 
 // The channel structure is as follows:
 //              &header->  |----------------| channel_base_address
@@ -890,8 +901,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
 
-    auto dispatch_core_type =
-        tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config().get_core_type();
+    auto dispatch_core_type = get_core_type_from_config(
+        tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config());
     uint32_t my_eth_channel_ = [&]() -> uint32_t {
         if (dispatch_core_type == CoreType::WORKER) {
             return this->my_eth_channel;

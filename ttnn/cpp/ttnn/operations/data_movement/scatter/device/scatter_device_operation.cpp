@@ -26,7 +26,7 @@ void ScatterDeviceOperation::validate_on_program_cache_hit(
 }
 
 void ScatterDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor{tensor_args.input_tensor};
     const auto& index_tensor{tensor_args.index_tensor};
     const auto& src_tensor{tensor_args.src_tensor};
@@ -74,7 +74,7 @@ ScatterDeviceOperation::tensor_return_value_t ScatterDeviceOperation::create_out
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ScatterDeviceOperation::tensor_return_value_t>
 ScatterDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+    const operation_attributes_t& /*op_attr*/, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input_tensor = inputs.input_tensor;
     int ideal_dev_clock_cycles = data_movement::common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(

@@ -47,7 +47,7 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
 }
 
 TransposeOpParallelizationStrategy TransposeDeviceOperation::get_parallelization_strategy(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     switch (operation_attributes.dim) {
         case TransposeOpDim::WH: return TransposeOpParallelizationStrategy::MULTI_CORE_WH;
         case TransposeOpDim::HC: return TransposeOpParallelizationStrategy::MULTI_CORE_HC;
@@ -270,7 +270,7 @@ TransposeDeviceOperation::tensor_return_value_t TransposeDeviceOperation::create
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<TransposeDeviceOperation::tensor_return_value_t>
 TransposeDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, const Tensor& output) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args, const Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(

@@ -13,7 +13,7 @@ namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gat
 
 FusedRMSNormPreAllGatherDeviceOperation::program_factory_t
 FusedRMSNormPreAllGatherDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::FusedRMSNormPreAllGatherProgramFactory{};
 }
 
@@ -23,7 +23,7 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_hit(
 }
 
 void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
 
     const auto& tensor = tensor_args.input_tensor;

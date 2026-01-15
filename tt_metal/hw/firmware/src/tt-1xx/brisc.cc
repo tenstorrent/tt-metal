@@ -23,7 +23,6 @@
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
-#include "api/dataflow/dataflow_api.h"
 #include "dev_mem_map.h"
 #include "noc_overlay_parameters.h"
 
@@ -323,11 +322,20 @@ inline void wait_ncrisc_trisc() {
 
 inline void trigger_sync_register_init() { subordinate_sync->trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb_index) {
+inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t noc_mode, uint32_t end_cb_index) {
 #if defined(ARCH_BLACKHOLE)
     // cq_dispatch does not update noc transaction counts so skip this barrier on the dispatch core
     if (end_cb_index != NUM_CIRCULAR_BUFFERS) {
-        noc_async_atomic_barrier(noc_index);
+        WAYPOINT("NABW");
+        if (noc_mode == DM_DYNAMIC_NOC) {
+            do {
+                invalidate_l1_cache();
+            } while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_index));
+        } else {
+            while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+        }
+        invalidate_l1_cache();
+        WAYPOINT("NABD");
     }
 #endif
 }
@@ -471,7 +479,7 @@ int main() {
                 uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                 experimental::setup_remote_cb_interfaces<true>(
                     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                barrier_remote_cb_interface_setup(noc_index, end_cb_index);
+                barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
@@ -493,7 +501,7 @@ int main() {
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(
                         cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                    barrier_remote_cb_interface_setup(noc_index, end_cb_index);
+                    barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
                 }
                 start_ncrisc_kernel_run(enables);
                 wait_for_go_message();

@@ -17,7 +17,7 @@
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
 #if !defined(UCK_CHLKC_MATH)
-#include "api/remote_circular_buffer.h"
+#include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
@@ -32,8 +32,8 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
-uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 
 uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
@@ -110,13 +110,11 @@ extern "C" uint32_t _start1() {
     do_crt1(__ldm_data_start);
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
-
     // Initialize GPRs to all 0s
     // #pragma GCC unroll 0
     //     for (int i = 0; i < 64; i++) {
     //         regfile[i] = 0;
     //     }
-
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;
@@ -141,7 +139,6 @@ extern "C" uint32_t _start1() {
             invalidate_l1_cache();
         }
         DeviceZoneScopedMainN("TRISC-FW");
-
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
@@ -171,8 +168,8 @@ extern "C" uint32_t _start1() {
         uint32_t kernel_lma =
             (kernel_config_base +
              launch_msg->kernel_config.kernel_text_offset[hartid]);  // TODO verify if depends on kernel
-        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         asm("FENCE.i");
+        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
 

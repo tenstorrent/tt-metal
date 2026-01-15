@@ -170,7 +170,7 @@ void apply_override_runtime_arguments(
     tt::tt_metal::Program& program,
     typename ProgramFactory::shared_variables_t& shared_vars,
     const OperationAttributes& attrs,
-    const ttnn::MeshCoordinate& coord,
+    const ttnn::MeshCoordinate& /*coord*/,
     const TensorArgs& tensor_args,
     TensorReturnValue& return_value) {
     if constexpr (requires {

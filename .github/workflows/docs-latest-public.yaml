@@ -74,7 +74,7 @@ jobs:
 
   deploy-docs:
     needs: build-docs
-    if: ${{ !inputs.dry-run && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) }}
+    if: ${{ !inputs.dry-run && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: ubuntu-latest
     concurrency:
       # Note that people may spam the post-commit pipeline on their branch, and
