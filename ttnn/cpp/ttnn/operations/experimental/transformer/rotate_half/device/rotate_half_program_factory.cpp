@@ -13,8 +13,8 @@ namespace ttnn::operations::experimental::transformer::rotate_half::program {
 using namespace tt::tt_metal;
 
 RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const RotateHalfParams& /*operation_attributes*/,
+    const RotateHalfInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt::constants;
 
@@ -124,8 +124,8 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
 
 void RotateHalfProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const RotateHalfParams& /*operation_attributes*/,
+    const RotateHalfInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     Buffer* src_buffer = tensor_args.input.buffer();
     Buffer* dst_buffer = tensor_return_value.buffer();

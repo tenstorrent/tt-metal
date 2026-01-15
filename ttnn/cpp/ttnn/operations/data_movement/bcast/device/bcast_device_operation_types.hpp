@@ -9,14 +9,14 @@
 
 namespace ttnn::operations::data_movement::bcast {
 
-struct operation_attributes_t {
+struct BcastParams {
     ttnn::BcastOpMath math_op;
     ttnn::BcastOpDim dim;
     tt::tt_metal::MemoryConfig output_mem_config;
     bool in_place = false;
 };
 
-struct tensor_args_t {
+struct BcastInputs {
     Tensor input_a;
     Tensor input_b;
     std::optional<Tensor> preallocated_output;

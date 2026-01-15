@@ -17,8 +17,8 @@
 namespace ttnn::operations::embedding {
 
 struct EmbeddingsDeviceOperation {
-    using operation_attributes_t = embedding::operation_attributes_t;
-    using tensor_args_t = embedding::tensor_args_t;
+    using operation_attributes_t = EmbeddingParams;
+    using tensor_args_t = EmbeddingInputs;
     using spec_return_value_t = embedding::spec_return_value_t;
     using tensor_return_value_t = embedding::tensor_return_value_t;
     using program_factory_t = std::variant<

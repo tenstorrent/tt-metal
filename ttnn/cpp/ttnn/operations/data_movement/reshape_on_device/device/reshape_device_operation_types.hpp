@@ -8,13 +8,13 @@
 
 namespace ttnn::operations::data_movement::reshape_on_device {
 
-struct operation_attributes_t {
+struct ReshapeOnDeviceParams {
     tt::tt_metal::Shape logical_output_shape;
     tt::tt_metal::Shape padded_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct ReshapeOnDeviceInputs {
     tt::tt_metal::Tensor input_tensor;
 };
 

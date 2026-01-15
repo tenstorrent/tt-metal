@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 constexpr auto ema_buffer_depth = 2;
 
 EmaProgramFactory::cached_program_t EmaProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const EmaParams& operation_attributes, const EmaInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     auto& output = tensor_return_value;
 
@@ -183,8 +183,8 @@ EmaProgramFactory::cached_program_t EmaProgramFactory::create(
 
 void EmaProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const EmaParams& /*operation_attributes*/,
+    const EmaInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;

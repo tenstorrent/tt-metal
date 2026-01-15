@@ -26,14 +26,12 @@ struct PagedFillCacheProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        Tensor& tensor_return_value);
+        const FillParams& operation_attributes, const FillInputs& tensor_args, Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const FillParams& operation_attributes,
+        const FillInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 
@@ -42,15 +40,15 @@ struct PagedFillCacheMeshWorkloadFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& operation_attributes,
+        const FillParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
+        const FillInputs& tensor_args,
         Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const FillParams& operation_attributes,
+        const FillInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 

@@ -14,7 +14,7 @@ using namespace std;
 namespace ttnn::operations::reduction::topk::program {
 
 TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    const TopkParams& args, const TopkInputs& tensor_args, tensor_return_value_t& output_tensors) {
     using namespace tt::constants;
 
     const auto& input_tensor = tensor_args.input;
@@ -181,8 +181,8 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
 
 void TopKSingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*args*/,
-    const tensor_args_t& tensor_args,
+    const TopkParams& /*args*/,
+    const TopkInputs& tensor_args,
     tensor_return_value_t& output_tensors) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;

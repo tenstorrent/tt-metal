@@ -19,7 +19,7 @@
 namespace ttnn::operations::pool::grid_sample::program {
 
 GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output_tensor) {
+    const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& grid_tensor = tensor_args.grid;
     bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
@@ -352,8 +352,8 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
 
 void GridSampleBilinearProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const GridSampleParams& /*operation_attributes*/,
+    const GridSampleInputs& tensor_args,
     Tensor& output_tensor) {
     auto& prog = cached_program.program;
     const auto& input_tensor = tensor_args.input_tensor;

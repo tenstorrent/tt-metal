@@ -8,11 +8,11 @@
 
 namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b {
 
-struct operation_attributes_t {
+struct QkvHeadsFalcon7bParams {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct QkvHeadsFalcon7bInputs {
     Tensor input;
 };
 

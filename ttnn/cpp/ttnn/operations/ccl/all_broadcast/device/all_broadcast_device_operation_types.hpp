@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 namespace ttnn::operations::ccl::all_broadcast {
 
-struct operation_attributes_t {
+struct AllBroadcastParams {
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
     MemoryConfig output_mem_config;
@@ -19,7 +19,7 @@ struct operation_attributes_t {
     tt::tt_fabric::Topology topology{};
 };
 
-struct tensor_args_t {
+struct AllBroadcastInputs {
     Tensor input_tensor;
 };
 

@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::pool::upsample {
 
-struct operation_attributes_t {
+struct UpsampleParams {
     int scale_factor_h = 0;
     int scale_factor_w = 0;
     std::string mode = "nearest";
@@ -19,8 +19,8 @@ struct operation_attributes_t {
     std::optional<sliding_window::SlidingWindowConfig> sliding_window_config = std::nullopt;
 };
 
-struct tensor_args_t {
-   Tensor input_tensor;
+struct UpsampleInputs {
+    Tensor input_tensor;
 };
 
 }  // namespace ttnn::operations::pool::upsample

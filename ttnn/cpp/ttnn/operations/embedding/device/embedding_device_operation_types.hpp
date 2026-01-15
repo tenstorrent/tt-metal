@@ -11,14 +11,14 @@ namespace ttnn::operations::embedding {
 enum class EmbeddingsType { GENERIC, PADDED, BINARY };
 enum class EmbeddingsIndexType { UINT32, BFP16 };
 
-struct operation_attributes_t {
+struct EmbeddingParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     bool tilized = false;
     EmbeddingsType embeddings_type = EmbeddingsType::GENERIC;
     std::optional<uint32_t> pad_token;
 };
 
-struct tensor_args_t {
+struct EmbeddingInputs {
     Tensor input_tensor_arg;
     Tensor weight_arg;
     std::optional<Tensor> optional_output_tensor;

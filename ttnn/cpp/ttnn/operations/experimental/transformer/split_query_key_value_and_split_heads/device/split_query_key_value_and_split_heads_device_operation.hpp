@@ -18,8 +18,8 @@
 namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads {
 
 struct SplitFusedQKVAndSplitHeadsDeviceOperation {
-    using operation_attributes_t = split_query_key_value_and_split_heads::operation_attributes_t;
-    using tensor_args_t = split_query_key_value_and_split_heads::tensor_args_t;
+    using operation_attributes_t = SplitQueryKeyValueAndSplitHeadsParams;
+    using tensor_args_t = SplitQueryKeyValueAndSplitHeadsInputs;
     using spec_return_value_t = std::vector<TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 

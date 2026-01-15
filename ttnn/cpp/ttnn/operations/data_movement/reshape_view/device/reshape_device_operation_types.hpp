@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::data_movement::reshape {
 
-struct operation_attributes_t {
+struct ReshapeParams {
     ttnn::Shape logical_output_shape;
     ttnn::Shape padded_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -19,7 +19,7 @@ struct operation_attributes_t {
     std::optional<CoreRangeSet> sub_core_grid;
 };
 
-struct tensor_args_t {
+struct ReshapeInputs {
     Tensor input;
 };
 

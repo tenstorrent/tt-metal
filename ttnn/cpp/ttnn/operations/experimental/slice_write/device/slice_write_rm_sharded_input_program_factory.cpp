@@ -204,7 +204,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 }  // namespace
 
 SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInputProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& output_tensor_start = operation_attributes.slice_start;
@@ -320,8 +320,8 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
 
 void SliceWriteRMShardedInputProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const SliceWriteParams& /*operation_attributes*/,
+    const SliceWriteInputs& tensor_args,
     Tensor& tensor_return_value) {
     const auto& src_tensor = tensor_args.input;
     const auto& dst_tensor = tensor_return_value;

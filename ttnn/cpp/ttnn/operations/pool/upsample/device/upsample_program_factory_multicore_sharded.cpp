@@ -242,7 +242,7 @@ static CoreRangeSet get_cores_with_work(
 }
 
 UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreShardedProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output_tensor) {
+    const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     auto& output = output_tensor;
     const auto& scale_factor_h = operation_attributes.scale_factor_h;
@@ -398,8 +398,8 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
 
 void UpsampleMultiCoreShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const UpsampleParams& /*operation_attributes*/,
+    const UpsampleInputs& tensor_args,
     Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto* src_buffer = tensor_args.input_tensor.buffer();

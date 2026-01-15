@@ -15,8 +15,8 @@ using namespace tt::constants;
 using namespace tt;
 
 NlpCreateQkvHeadsFalcon7BProgramFactory::cached_program_t NlpCreateQkvHeadsFalcon7BProgramFactory::create(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const QkvHeadsFalcon7bParams& /*operation_attributes*/,
+    const QkvHeadsFalcon7bInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& a = tensor_args.input;
     const auto& ashape = a.padded_shape();
@@ -150,8 +150,8 @@ NlpCreateQkvHeadsFalcon7BProgramFactory::cached_program_t NlpCreateQkvHeadsFalco
 
 void NlpCreateQkvHeadsFalcon7BProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
+    const QkvHeadsFalcon7bParams&,
+    const QkvHeadsFalcon7bInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared = cached_program.shared_variables;

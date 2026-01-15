@@ -14,9 +14,7 @@
 namespace ttnn::operations::data_movement::fill_pad::program {
 
 FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    Tensor& /*tensor_return_value*/) {
+    const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& /*tensor_return_value*/) {
     const Tensor& input_tensor = tensor_args.input;
     const float fill_value = operation_attributes.fill_value;
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -128,8 +126,8 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
 
 void FillPadProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const FillPadParams& /*operation_attributes*/,
+    const FillPadInputs& tensor_args,
     Tensor& /*tensor_return_value*/) {
     const Tensor& input_tensor = tensor_args.input;
     tt::tt_metal::Buffer* tens_buffer = input_tensor.buffer();

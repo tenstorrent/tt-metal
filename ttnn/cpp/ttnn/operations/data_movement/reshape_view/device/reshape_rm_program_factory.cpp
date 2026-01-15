@@ -13,7 +13,7 @@
 namespace ttnn::operations::data_movement::reshape {
 
 ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const ReshapeParams& operation_attributes, const ReshapeInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& sub_core_grid = operation_attributes.sub_core_grid;
@@ -184,8 +184,8 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
 
 void ReshapeRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const ReshapeParams& operation_attributes,
+    const ReshapeInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.reader_kernel_id;

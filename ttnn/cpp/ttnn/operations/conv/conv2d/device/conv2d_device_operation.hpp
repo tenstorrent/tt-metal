@@ -25,9 +25,9 @@
 namespace ttnn::operations::conv::conv2d {
 
 struct Conv2dDeviceOperation {
-    using operation_attributes_t = conv2d::operation_attributes_t;
+    using operation_attributes_t = Conv2dParams;
     using hashable_operation_attributes_t = conv2d::hashable_operation_attributes_t;
-    using tensor_args_t = conv2d::tensor_args_t;
+    using tensor_args_t = Conv2dInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t =
