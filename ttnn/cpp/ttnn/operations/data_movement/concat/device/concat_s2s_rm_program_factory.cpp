@@ -12,7 +12,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tt_align.hpp>
 
-namespace ttnn::operations::data_movement::concat::program {
+namespace ttnn::prim {
 
 template <typename T>
 static std::pair<std::vector<T>, std::vector<T>> split(std::vector<T> input, std::size_t index) {
@@ -229,4 +229,4 @@ void ConcatS2SRMProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *tensor_return_value.buffer());
 }
 
-}  // namespace ttnn::operations::data_movement::concat::program
+}  // namespace ttnn::prim
