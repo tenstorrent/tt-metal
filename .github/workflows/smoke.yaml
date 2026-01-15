@@ -40,7 +40,8 @@ jobs:
       volumes:
         - /work
         - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
-      options: --device /dev/tenstorrent
+      # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
+      options: --device /dev/tenstorrent ${{ contains(fromJSON('["N300-llmbox", "in-service-dedicated-merge-gate"]'), inputs.runner) && '--memory 256g' || '' }}
     defaults:
       run:
         shell: bash
@@ -57,6 +58,30 @@ jobs:
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
+
+      - name: Check available memory in container for WH LB 2
+        run: |
+          # You never know with GH!!!
+          set -e
+
+          # Read memory limit for container cgroup from cgroup v2 or v1
+          memory_bytes=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || \
+                         cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null)
+
+          if [ -z "$memory_bytes" ]; then
+              echo "Unable to read memory limit from cgroup (v1 or v2)" >&2
+              exit 1
+          fi
+
+          # 256GB = 274877906944 bytes
+          max_bytes_wh_lb2=274877906944
+
+          if [ "$memory_bytes" -gt "$max_bytes_wh_lb2" ]; then
+              echo "Error: Container memory limit ${memory_bytes} upcoming max of 256GB (${max_bytes_wh_lb2} bytes)" >&2
+              exit 1
+          fi
+
+          echo "Memory limit validated: ${memory_bytes} bytes"
 
       - name: Install packages
         run: |
