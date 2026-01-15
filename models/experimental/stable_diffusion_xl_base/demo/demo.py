@@ -79,6 +79,21 @@ def run_demo_inference(
         use_safetensors=True,
         local_files_only=is_ci_env,
     )
+
+    # ------------------- DEBUG -------------------
+    debug_hidden_states_dimension = True
+    if debug_hidden_states_dimension:
+        with torch.no_grad():
+            image = pipeline(
+                prompt=prompts[0],
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                height=image_resolution[0],
+                width=image_resolution[1],
+            ).images[0]
+            image.save("output/torch_output0.png")
+    # ------------------- DEBUG -------------------
+
     profiler.end("diffusion_pipeline_from_pretrained")
 
     assert isinstance(pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"

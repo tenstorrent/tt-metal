@@ -18,8 +18,12 @@ from functools import reduce
 @pytest.mark.parametrize(
     "input_shape, module_path, pcc",
     [
+        # 1024x1024 image resolution
         ((1024, 1280), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.948),
         ((4096, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
+        # 512x512 image resolution
+        ((256, 1280), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.948),
+        ((1024, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
     ],
 )
 def test_geglu(device, input_shape, module_path, pcc, is_ci_env, reset_seeds):
