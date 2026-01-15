@@ -86,8 +86,15 @@ public:
         std::span<T> buffer, const Shape& shape, MemoryPin pin, const std::optional<Tile>& tile = std::nullopt);
 
     // TODO: This should just be caught by the std::span overload?
+    // River: oh it's because the overload should be std::span<const T>
     template <typename T>
     static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value = 0);
+
+    /**
+     * From original Tensor:
+     * Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major,
+     * physical shape matches logical shape, and no type conversion is needed.
+     */
     template <typename T>
     static HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0);
 
