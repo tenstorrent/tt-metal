@@ -7,17 +7,13 @@
 
 namespace ttnn::operations::reduction::prod_nc {
 
-struct operation_attributes_t {
+struct ProdNcParams {
     int64_t dim;
 };
 
-struct tensor_args_t {
+struct ProdNcInputs {
     Tensor input;
     Tensor output;  // Note: output is passed as input (inplace pattern)
 };
-
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
 
 }  // namespace ttnn::operations::reduction::prod_nc

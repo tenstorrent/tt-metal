@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.24...3.30)
 
+# Hello
+
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
@@ -35,11 +37,8 @@ project(
         CXX
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
-message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
-
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-# FIXME: Why are we setting these ourselves?
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 

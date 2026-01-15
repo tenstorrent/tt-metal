@@ -8,13 +8,10 @@
 
 namespace ttnn::operations::experimental::reduction {
 
-struct operation_attributes_t {};
+struct ReductionParams {};
 
-struct tensor_args_t {
+struct ReductionInputs {
     const Tensor& input_tensor;
 };
-
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
 
 }  // namespace ttnn::operations::experimental::reduction

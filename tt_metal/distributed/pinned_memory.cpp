@@ -360,4 +360,41 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     return params;
 }
 
+class HostBufferPinnedMemoryHelper {
+public:
+    static void SetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
+        host_buffer.pinned_memory_ = std::move(pinned_memory);
+    }
+    static std::shared_ptr<PinnedMemory> GetPinnedMemory(HostBuffer& host_buffer) { return host_buffer.pinned_memory_; }
+};
+
+void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
+    HostBufferPinnedMemoryHelper::SetPinnedMemory(host_buffer, std::move(pinned_memory));
+}
+
+std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer) {
+    return HostBufferPinnedMemoryHelper::GetPinnedMemory(host_buffer);
+}
+
+class ShardDataTransferHelper {
+public:
+    static void SetPinnedMemory(
+        distributed::ShardDataTransfer& shard_data_transfer, std::shared_ptr<PinnedMemory> pinned_memory) {
+        shard_data_transfer.pinned_memory_ = std::move(pinned_memory);
+    }
+    static const std::shared_ptr<PinnedMemory>& GetPinnedMemory(
+        const distributed::ShardDataTransfer& shard_data_transfer) {
+        return shard_data_transfer.pinned_memory_;
+    }
+};
+
+void ShardDataTransferSetPinnedMemory(
+    distributed::ShardDataTransfer& shard_data_transfer, std::shared_ptr<PinnedMemory> pinned_memory) {
+    ShardDataTransferHelper::SetPinnedMemory(shard_data_transfer, std::move(pinned_memory));
+}
+
+const std::shared_ptr<PinnedMemory>& ShardDataTransferGetPinnedMemory(
+    const distributed::ShardDataTransfer& shard_data_transfer) {
+    return ShardDataTransferHelper::GetPinnedMemory(shard_data_transfer);
+}
 }  // namespace tt::tt_metal::experimental
