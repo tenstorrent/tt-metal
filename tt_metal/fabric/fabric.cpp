@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <tt-metalium/program.hpp>
@@ -11,7 +11,6 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
@@ -248,7 +247,7 @@ void append_routing_plane_connection_manager_rt_args(
         auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
         if (dir_opt.has_value()) {
             TT_FATAL(
-                used_directions.find(dir_opt.value()) == used_directions.end(),
+                !used_directions.contains(dir_opt.value()),
                 "Multiple ethernet cores in the same direction ({}) are not currently supported. "
                 "This restriction will be removed in a future update when proper multi-core routing is implemented.",
                 dir_opt.value());

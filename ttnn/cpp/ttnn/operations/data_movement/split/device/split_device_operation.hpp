@@ -11,8 +11,8 @@
 namespace ttnn::operations::data_movement::split {
 
 struct SplitDeviceOperation {
-    using operation_attributes_t = split::operation_attributes_t;
-    using tensor_args_t = split::tensor_args_t;
+    using operation_attributes_t = SplitParams;
+    using tensor_args_t = SplitInputs;
     using spec_return_value_t = split::spec_return_value_t;
     using tensor_return_value_t = split::tensor_return_value_t;
     using program_factory_t = std::variant<program::SplitProgramFactory>;
@@ -29,14 +29,11 @@ struct SplitDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, int num_splits, int dim, const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 
 }  // namespace ttnn::operations::data_movement::split
 
 namespace ttnn::prim {
-constexpr auto split =
-    ttnn::register_operation<"ttnn::prim::split", ttnn::operations::data_movement::split::SplitDeviceOperation>();
+std::vector<ttnn::Tensor> split(
+    const Tensor& input_tensor, int num_splits, int dim, const tt::tt_metal::MemoryConfig& output_mem_config);
 }  // namespace ttnn::prim

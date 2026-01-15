@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ssm::hc_sum_reduce {
 
 HCSumReduceDeviceOperation::program_factory_t HCSumReduceDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::HCSumReduceProgramFactory{};
 }
 
@@ -55,7 +55,7 @@ void HCSumReduceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(((ashape[3] / TILE_WIDTH) % latent == 0), "Final dim/TILE_SIZE must be a multiple of latent size!");
 }
 
-spec_return_value_t HCSumReduceDeviceOperation::compute_output_specs(
+TensorSpec HCSumReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     constexpr uint32_t latent = 32;
     const auto& input_tensor_a = tensor_args.input;
@@ -64,7 +64,7 @@ spec_return_value_t HCSumReduceDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), args.memory_config));
 }
 
-tensor_return_value_t HCSumReduceDeviceOperation::create_output_tensors(
+Tensor HCSumReduceDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
@@ -85,19 +85,25 @@ tt::stl::hash::hash_t HCSumReduceDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<HCSumReduceDeviceOperation::operation_attributes_t, HCSumReduceDeviceOperation::tensor_args_t>
-HCSumReduceDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ssm::hc_sum_reduce::HCSumReduceDeviceOperation::tensor_return_value_t hc_sum_reduce(
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DataType> dtype,
-    const std::optional<MathFidelity> math_fidelity) {
-    return {
-        operation_attributes_t{
-            .memory_config = memory_config.value_or(input.memory_config()),
-            .dtype = dtype.value_or(input.dtype()),
-            .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
-        },
-        tensor_args_t{.input = input}};
+    std::optional<DataType> dtype,
+    std::optional<MathFidelity> math_fidelity) {
+    using OperationType = ttnn::operations::experimental::ssm::hc_sum_reduce::HCSumReduceDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .memory_config = memory_config.value_or(input.memory_config()),
+        .dtype = dtype.value_or(input.dtype()),
+        .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce
+}  // namespace ttnn::prim

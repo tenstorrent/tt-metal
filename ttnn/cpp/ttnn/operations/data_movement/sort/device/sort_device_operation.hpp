@@ -15,8 +15,8 @@
 namespace ttnn::operations::data_movement::sort {
 
 struct SortDeviceOperation {
-    using operation_attributes_t = sort::operation_attributes_t;
-    using tensor_args_t = sort::tensor_args_t;
+    using operation_attributes_t = SortParams;
+    using tensor_args_t = SortInputs;
     using spec_return_value_t = sort::spec_return_value_t;
     using tensor_return_value_t = sort::tensor_return_value_t;
     using program_factory_t = std::variant<
@@ -31,19 +31,16 @@ struct SortDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        int8_t dim,
-        bool descending,
-        bool stable,
-        const MemoryConfig& output_memory_config,
-        const std::vector<std::optional<Tensor>>& output_tensors);
 };
 
 }  // namespace ttnn::operations::data_movement::sort
 
 namespace ttnn::prim {
-constexpr auto sort =
-    ttnn::register_operation<"ttnn::prim::sort", ttnn::operations::data_movement::sort::SortDeviceOperation>();
+ttnn::operations::data_movement::sort::SortDeviceOperation::tensor_return_value_t sort(
+    const Tensor& input_tensor,
+    int8_t dim,
+    bool descending,
+    bool stable,
+    const MemoryConfig& output_memory_config,
+    const std::vector<std::optional<Tensor>>& output_tensors);
 }  // namespace ttnn::prim

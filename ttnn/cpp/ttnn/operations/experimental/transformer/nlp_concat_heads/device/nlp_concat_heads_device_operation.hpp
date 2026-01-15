@@ -20,8 +20,8 @@
 namespace ttnn::operations::experimental::nlp_concat_heads {
 
 struct NLPConcatHeadsDeviceOperation {
-    using operation_attributes_t = nlp_concat_heads::operation_attributes_t;
-    using tensor_args_t = nlp_concat_heads::tensor_args_t;
+    using operation_attributes_t = NlpConcatHeadsParams;
+    using tensor_args_t = NlpConcatHeadsInputs;
     using spec_return_value_t = nlp_concat_heads::spec_return_value_t;
     using tensor_return_value_t = nlp_concat_heads::tensor_return_value_t;
     using program_factory_t = std::variant<program::NLPConcatHeadsProgramFactory>;
@@ -34,15 +34,11 @@ struct NLPConcatHeadsDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
 };
 
 }  // namespace ttnn::operations::experimental::nlp_concat_heads
 
 namespace ttnn::prim {
-constexpr auto nlp_concat_heads = ttnn::register_operation<
-    "ttnn::prim::nlp_concat_heads",
-    ttnn::operations::experimental::nlp_concat_heads::NLPConcatHeadsDeviceOperation>();
+ttnn::operations::experimental::nlp_concat_heads::tensor_return_value_t nlp_concat_heads(
+    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
 }  // namespace ttnn::prim

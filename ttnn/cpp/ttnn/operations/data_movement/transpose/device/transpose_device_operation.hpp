@@ -22,8 +22,8 @@
 namespace ttnn::operations::data_movement::transpose {
 
 struct TransposeDeviceOperation {
-    using operation_attributes_t = transpose::operation_attributes_t;
-    using tensor_args_t = transpose::tensor_args_t;
+    using operation_attributes_t = TransposeParams;
+    using tensor_args_t = TransposeInputs;
     using spec_return_value_t = transpose::spec_return_value_t;
     using tensor_return_value_t = transpose::tensor_return_value_t;
     using program_factory_t = std::variant<
@@ -56,17 +56,14 @@ struct TransposeDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, const Tensor& output);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        TransposeOpDim dim,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const std::optional<float>& pad_value);
 };
 
 }  // namespace ttnn::operations::data_movement::transpose
 
 namespace ttnn::prim {
-constexpr auto transpose = ttnn::
-    register_operation<"ttnn::prim::transpose", ttnn::operations::data_movement::transpose::TransposeDeviceOperation>();
+ttnn::Tensor transpose(
+    const Tensor& input_tensor,
+    ttnn::operations::data_movement::transpose::TransposeOpDim dim,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<float>& pad_value);
 }  // namespace ttnn::prim

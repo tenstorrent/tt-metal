@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/moe/device/moe_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <optional>
 
@@ -61,7 +62,7 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be equal to 32, got {}", expert_shape[-2]);
 }
 
-spec_return_value_t MoeDeviceOperation::compute_output_specs(
+TensorSpec MoeDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -74,8 +75,7 @@ spec_return_value_t MoeDeviceOperation::compute_output_specs(
         output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), args.output_memory_config));
 }
 
-tensor_return_value_t MoeDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+Tensor MoeDeviceOperation::create_output_tensors(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
     }
@@ -83,21 +83,25 @@ tensor_return_value_t MoeDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<MoeDeviceOperation::operation_attributes_t, MoeDeviceOperation::tensor_args_t> MoeDeviceOperation::invoke(
+}  // namespace ttnn::operations::reduction::moe
+
+namespace ttnn::prim {
+ttnn::Tensor moe(
     const Tensor& input_tensor,
     const Tensor& expert_mask_tensor,
     const Tensor& topk_mask_tensor,
     uint16_t k,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& preallocated_output_tensor) {
-    return {
-        operation_attributes_t{
-            .k = k, .output_memory_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG)},
-        tensor_args_t{
+    using OperationType = ttnn::operations::reduction::moe::MoeDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .k = k,
+            .output_memory_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG)},
+        OperationType::tensor_args_t{
             .input = input_tensor,
             .expert_mask = expert_mask_tensor,
             .topk_mask = topk_mask_tensor,
-            .preallocated_output = preallocated_output_tensor}};
+            .preallocated_output = preallocated_output_tensor});
 }
-
-}  // namespace ttnn::operations::reduction::moe
+}  // namespace ttnn::prim

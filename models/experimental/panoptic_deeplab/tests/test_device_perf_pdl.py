@@ -53,7 +53,7 @@ def test_device_perf_pdl_20_cores(
     "command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments",
     [
         (
-            "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k panoptic_deeplab_130_cores",
+            "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k panoptic_deeplab_110_cores",
             12_445_978,
             PANOPTIC_DEEPLAB,
             PANOPTIC_DEEPLAB,
@@ -63,8 +63,8 @@ def test_device_perf_pdl_20_cores(
             "",
         ),
         (
-            "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k deeplab_v3_plus_130_cores",
-            8_521_002,
+            "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k deeplab_v3_plus_110_cores",
+            8_471_069,
             DEEPLAB_V3_PLUS,
             DEEPLAB_V3_PLUS,
             1,
@@ -73,10 +73,10 @@ def test_device_perf_pdl_20_cores(
             "",
         ),
     ],
-    ids=["test_panoptic_deeplab_130_cores", "test_deeplab_v3_plus_130_cores"],
+    ids=["test_panoptic_deeplab_110_cores", "test_deeplab_v3_plus_110_cores"],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_device_perf_pdl_130_cores(
+def test_device_perf_pdl_110_cores(
     command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
 ):
     run_model_device_perf_test(

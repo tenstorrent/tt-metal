@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement::reshape {
 
 ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return ReshapeRMProgramFactory{};
-    } else {
-        return ReshapeTiledProgramFactory{};
     }
+    return ReshapeTiledProgramFactory{};
 }
 
 void ReshapeDeviceOperation::validate_on_program_cache_miss(
@@ -82,19 +82,20 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
         operation_attributes.subdevice_id.has_value(),
         operation_attributes.subdevice_id.has_value() ? operation_attributes.subdevice_id.value() : SubDeviceId(0));
 }
+}  // namespace ttnn::operations::data_movement::reshape
 
-std::tuple<ReshapeDeviceOperation::operation_attributes_t, ReshapeDeviceOperation::tensor_args_t>
-ReshapeDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::reshape::ReshapeDeviceOperation::tensor_return_value_t reshape(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
     const std::optional<SubDeviceId>& subdevice_id) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::reshape::ReshapeDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor, subdevice_id},
-        tensor_args_t{input}};
+        OperationType::tensor_args_t{input});
 }
-
-}  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::prim

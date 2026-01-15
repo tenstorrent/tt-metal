@@ -18,10 +18,10 @@
 namespace ttnn::operations::experimental::slice_write {
 
 struct SliceWriteDeviceOperation {
-    using operation_attributes_t = slice_write::operation_attributes_t;
-    using tensor_args_t = slice_write::tensor_args_t;
-    using spec_return_value_t = slice_write::spec_return_value_t;
-    using tensor_return_value_t = slice_write::tensor_return_value_t;
+    using operation_attributes_t = SliceWriteParams;
+    using tensor_args_t = SliceWriteInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         program::SliceWriteRMShardedInputProgramFactory,
         program::SliceWriteTiledShardedInputProgramFactory,
@@ -39,19 +39,17 @@ struct SliceWriteDeviceOperation {
 
     static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        Tensor& output_tensor,
-        const ttnn::Shape& slice_start,
-        const ttnn::Shape& slice_end,
-        const ttnn::Shape& step);
 };
 
 }  // namespace ttnn::operations::experimental::slice_write
 
 namespace ttnn::prim {
-constexpr auto slice_write = ttnn::register_operation<
-    "ttnn::prim::slice_write",
-    ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation>();
+
+ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation::tensor_return_value_t slice_write(
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const ttnn::Shape& slice_start,
+    const ttnn::Shape& slice_end,
+    const ttnn::Shape& step);
+
 }  // namespace ttnn::prim

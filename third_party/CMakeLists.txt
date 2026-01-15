@@ -201,12 +201,6 @@ CPMAddPackage(
 )
 
 ############################################################################################################################
-# pybind11 : https://github.com/pybind/pybind11
-############################################################################################################################
-
-CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
-
-############################################################################################################################
 # nanobind : https://github.com/wjakob/nanobind
 ############################################################################################################################
 
@@ -374,7 +368,7 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.6
+    VERSION 1.1.7
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"

@@ -17,10 +17,10 @@
 namespace ttnn::operations::normalization::group_norm {
 
 struct GroupNormDeviceOperation {
-    using operation_attributes_t = group_norm::operation_attributes_t;
-    using tensor_args_t = group_norm::tensor_args_t;
-    using spec_return_value_t = group_norm::spec_return_value_t;
-    using tensor_return_value_t = group_norm::tensor_return_value_t;
+    using operation_attributes_t = GroupNormParams;
+    using tensor_args_t = GroupNormInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<GroupNormShardedProgramFactory, GroupNormNoMcastProgramFactory, GroupNormMcastProgramFactory>;
 
@@ -32,26 +32,22 @@ struct GroupNormDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        float eps,
-        uint32_t num_groups,
-        const MemoryConfig& output_mem_config,
-        const GroupNormProgramConfig& program_config,
-        const DeviceComputeKernelConfig& compute_kernel_config,
-        bool use_welford,
-        std::optional<Tensor> gamma,
-        std::optional<Tensor> beta,
-        std::optional<Tensor> input_mask,
-        std::optional<Tensor> negative_mask,
-        std::optional<Tensor> reciprocals);
 };
 
 }  // namespace ttnn::operations::normalization::group_norm
 
 namespace ttnn::prim {
-constexpr auto group_norm = ttnn::register_operation<
-    "ttnn::prim::group_norm",
-    ttnn::operations::normalization::group_norm::GroupNormDeviceOperation>();
+ttnn::operations::normalization::group_norm::GroupNormDeviceOperation::tensor_return_value_t group_norm(
+    const Tensor& input,
+    float eps,
+    uint32_t num_groups,
+    const MemoryConfig& output_mem_config,
+    const ttnn::operations::normalization::group_norm::GroupNormProgramConfig& program_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford,
+    std::optional<Tensor> gamma,
+    std::optional<Tensor> beta,
+    std::optional<Tensor> input_mask,
+    std::optional<Tensor> negative_mask,
+    std::optional<Tensor> reciprocals);
 }  // namespace ttnn::prim

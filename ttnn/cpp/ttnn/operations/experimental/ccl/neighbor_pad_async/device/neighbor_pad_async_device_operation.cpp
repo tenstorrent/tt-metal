@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ccl::neighbor_pad {
 
 NeighborPadAsyncDeviceOperation::program_factory_t NeighborPadAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return NeighborPadAsyncMeshWorkloadFactory{};
 }
 
@@ -83,7 +83,7 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t NeighborPadAsyncDeviceOperation::compute_output_specs(
+TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
@@ -92,7 +92,7 @@ spec_return_value_t NeighborPadAsyncDeviceOperation::compute_output_specs(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 
-tensor_return_value_t NeighborPadAsyncDeviceOperation::create_output_tensors(
+Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -129,8 +129,12 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-std::tuple<NeighborPadAsyncDeviceOperation::operation_attributes_t, NeighborPadAsyncDeviceOperation::tensor_args_t>
-NeighborPadAsyncDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ccl::neighbor_pad
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::neighbor_pad::NeighborPadAsyncDeviceOperation::tensor_return_value_t
+neighbor_pad_async(
     const Tensor& input_tensor,
     int32_t dim,
     uint32_t padding_left,
@@ -144,17 +148,18 @@ NeighborPadAsyncDeviceOperation::invoke(
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<uint32_t> secondary_cluster_axis,
     const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
+    using OperationType = ttnn::operations::experimental::ccl::neighbor_pad::NeighborPadAsyncDeviceOperation;
+
     auto* mesh_device = input_tensor.device();
     uint32_t num_devices;
     const auto& mesh_view = mesh_device->get_view();
-    // Use the mesh dimensions to determine the ring size
     num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     TT_FATAL(num_devices > 1, "neighbor_pad_async op will only work for num_devices > 1, but has {}", num_devices);
 
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
-    operation_attributes_t operation_attributes(
+    auto operation_attributes = OperationType::operation_attributes_t(
         dim,
         padding_left,
         padding_right,
@@ -169,9 +174,9 @@ NeighborPadAsyncDeviceOperation::invoke(
         secondary_cluster_axis,
         secondary_mesh_shape);
 
-    tensor_args_t tensor_args{.input_tensor = input_tensor, .preallocated_output = std::nullopt};
+    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = std::nullopt};
 
-    return std::make_tuple(std::move(operation_attributes), std::move(tensor_args));
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::neighbor_pad
+}  // namespace ttnn::prim

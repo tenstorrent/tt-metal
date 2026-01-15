@@ -9,14 +9,15 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <variant>
 
 namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit {
 
 struct NlpCreateHeadsVitDeviceOperation {
-    using operation_attributes_t = nlp_create_qkv_heads_vit::operation_attributes_t;
-    using tensor_args_t = nlp_create_qkv_heads_vit::tensor_args_t;
+    using operation_attributes_t = NlpCreateQkvHeadsVitParams;
+    using tensor_args_t = NlpCreateQkvHeadsVitInputs;
     using spec_return_value_t = nlp_create_qkv_heads_vit::spec_return_value_t;
     using tensor_return_value_t = nlp_create_qkv_heads_vit::tensor_return_value_t;
     using program_factory_t = std::variant<program::NlpCreateQkvHeadsVitProgramFactory>;
@@ -29,17 +30,13 @@ struct NlpCreateHeadsVitDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const MemoryConfig& output_mem_config,
-        const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit
 
 namespace ttnn::prim {
-constexpr auto nlp_create_qkv_heads_vit = ttnn::register_operation<
-    "ttnn::prim::nlp_create_qkv_heads_vit",
-    ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit::NlpCreateHeadsVitDeviceOperation>();
+std::vector<Tensor> nlp_create_qkv_heads_vit(
+    const Tensor& input_tensor,
+    const MemoryConfig& output_mem_config,
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
 }  // namespace ttnn::prim

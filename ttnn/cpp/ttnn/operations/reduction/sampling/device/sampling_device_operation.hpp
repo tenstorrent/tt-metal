@@ -16,10 +16,10 @@
 namespace ttnn::operations::reduction::sampling {
 
 struct SamplingDeviceOperation {
-    using operation_attributes_t = sampling::operation_attributes_t;
-    using tensor_args_t = sampling::tensor_args_t;
-    using spec_return_value_t = sampling::spec_return_value_t;
-    using tensor_return_value_t = sampling::tensor_return_value_t;
+    using operation_attributes_t = SamplingParams;
+    using tensor_args_t = SamplingInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::SamplingProgramFactory>;
     using shared_variables_t = program::SamplingProgramFactory::shared_variables_t;
 
@@ -28,23 +28,18 @@ struct SamplingDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_values_tensor,
-        const Tensor& input_indices_tensor,
-        const Tensor& k,
-        const Tensor& p,
-        const Tensor& temp,
-        const std::optional<uint32_t>& seed = std::nullopt,
-        const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
-        const std::optional<Tensor>& preallocated_output_tensor = std::nullopt);
 };
 
 }  // namespace ttnn::operations::reduction::sampling
 
 namespace ttnn::prim {
-
-constexpr auto sampling =
-    ttnn::register_operation<"ttnn::prim::sampling", ttnn::operations::reduction::sampling::SamplingDeviceOperation>();
-
+ttnn::Tensor sampling(
+    const Tensor& input_values_tensor,
+    const Tensor& input_indices_tensor,
+    const Tensor& k,
+    const Tensor& p,
+    const Tensor& temp,
+    const std::optional<uint32_t>& seed = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<Tensor>& preallocated_output_tensor = std::nullopt);
 }  // namespace ttnn::prim

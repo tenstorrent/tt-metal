@@ -15,8 +15,8 @@
 namespace ttnn::operations::data_movement::nonzero {
 
 struct NonZeroIndicesDeviceOperation {
-    using operation_attributes_t = nonzero::operation_attributes_t;
-    using tensor_args_t = nonzero::tensor_args_t;
+    using operation_attributes_t = NonzeroParams;
+    using tensor_args_t = NonzeroInputs;
     using spec_return_value_t = nonzero::spec_return_value_t;
     using tensor_return_value_t = nonzero::tensor_return_value_t;
     using program_factory_t = std::variant<program::NonZeroIndicesProgramFactory>;
@@ -27,17 +27,13 @@ struct NonZeroIndicesDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& memory_config);
 };
 
 }  // namespace ttnn::operations::data_movement::nonzero
 
 namespace ttnn::prim {
 
-constexpr auto nonzero = ttnn::register_operation<
-    "ttnn::prim::nonzero",
-    ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation>();
+ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation::tensor_return_value_t nonzero(
+    const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& memory_config);
 
 }  // namespace ttnn::prim

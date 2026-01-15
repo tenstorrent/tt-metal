@@ -32,9 +32,9 @@ bool enable_fp32_dest_acc(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFusedUpdateCacheProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const FusedUpdateParams& operation_attributes,
+    const FusedUpdateInputs& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/) {
     Program program{};
 
     const auto& cache_tensor1 = tensor_args.cache_tensor1;
@@ -448,9 +448,9 @@ PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFused
 
 void PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const FusedUpdateParams& operation_attributes,
+    const FusedUpdateInputs& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -532,9 +532,9 @@ void PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
 
 PagedRowMajorFusedUpdateCacheMeshWorkloadFactory::cached_mesh_workload_t
 PagedRowMajorFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const FusedUpdateParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
+    const FusedUpdateInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     log_debug(tt::LogOp, "PagedRowMajorFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload called");
     log_debug(tt::LogOp, "tensor_coords has {} ranges", tensor_coords.ranges().size());
@@ -557,7 +557,7 @@ PagedRowMajorFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
             // Skip this coordinate if mesh_coords is provided and this coordinate is not in the set
             if (mesh_coords_opt.has_value()) {
                 const auto& mesh_coords_set = mesh_coords_opt.value();
-                if (mesh_coords_set.find(mesh_coord) == mesh_coords_set.end()) {
+                if (!mesh_coords_set.contains(mesh_coord)) {
                     log_debug(
                         tt::LogOp, "Skipping coordinate ({}, {}) - not in mesh_coords", mesh_coord[0], mesh_coord[1]);
                     continue;  // Skip this coordinate
@@ -580,8 +580,8 @@ PagedRowMajorFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
 
 void PagedRowMajorFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const FusedUpdateParams& operation_attributes,
+    const FusedUpdateInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     PagedRowMajorFusedUpdateCacheProgramFactory program_factory;
 

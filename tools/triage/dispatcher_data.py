@@ -10,6 +10,9 @@ Usage:
 Description:
     Provides dispatcher data noc locations on devices.
     Data include firmware path, kernel path, kernel offset, etc.
+
+Owner:
+    jbaumanTT
 """
 
 from dataclasses import dataclass
@@ -21,7 +24,8 @@ from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDev
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check_location
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import MemoryAccess, ElfVariable
+from ttexalens.elf import ElfVariable
+from ttexalens.memory_access import MemoryAccess
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
@@ -31,6 +35,8 @@ script_config = ScriptConfig(
     data_provider=True,
     depends=["inspector_data", "elfs_cache", "run_checks", "metal_device_id_mapping"],
 )
+
+MAILBOX_CORRUPTED_MESSAGE = "Mailbox is likely corrupted, potentially due to NoC writes to an invalid location."
 
 
 @dataclass
@@ -218,7 +224,7 @@ class DispatcherData:
         return value
 
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
-        l1_mem_access = MemoryAccess.get_l1(location)
+        l1_mem_access = MemoryAccess.create_l1(location)
         if location.device.get_block_type(location) == "functional_workers":
             # For tensix, use the brisc elf
             fw_elf = self._brisc_elf
@@ -265,7 +271,7 @@ class DispatcherData:
         log_check_location(
             location,
             launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
-            f"launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
+            f"launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}. {MAILBOX_CORRUPTED_MESSAGE}",
         )
 
         previous_launch_msg_rd_ptr = (launch_msg_rd_ptr - 1) % self._launch_msg_buffer_num_entries

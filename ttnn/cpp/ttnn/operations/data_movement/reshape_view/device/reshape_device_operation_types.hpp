@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::data_movement::reshape {
 
-struct operation_attributes_t {
+struct ReshapeParams {
     ttnn::Shape logical_output_shape;
     ttnn::Shape padded_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -19,11 +19,8 @@ struct operation_attributes_t {
     std::optional<SubDeviceId> subdevice_id;
 };
 
-struct tensor_args_t {
+struct ReshapeInputs {
     Tensor input;
 };
-
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
 
 }  // namespace ttnn::operations::data_movement::reshape

@@ -38,13 +38,11 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    input_b_dtype=None,
-    input_b_layout=None,
     input_b_memory_config=None,
-    output_memory_config=None,
-    storage_type="StorageType::DEVICE",
+    program_config=None,
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
@@ -66,19 +64,34 @@ def run(
     input_tensor = ttnn.from_torch(
         torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=input_a_memory_config
     )
-    # Determine weight layout based on dtype - bfloat8_b and bfloat4_b require TILE layout
-    weight_layout = ttnn.TILE_LAYOUT if input_b_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
+    # Weight tensor should always be ROW_MAJOR layout and bfloat16 dtype
+    # This is required by rms_norm_post_all_gather operation
     weight_tensor = ttnn.from_torch(
         torch_weight_padded,
-        dtype=input_b_dtype or input_a_dtype,
-        layout=weight_layout,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=input_b_memory_config or input_a_memory_config,
     )
 
     # Op call
     start_time = start_measuring_time()
-    stats = ttnn.rms_norm_pre_all_gather(input_tensor)
+
+    # Parse program_config if provided (from traced JSON)
+    if program_config and isinstance(program_config, dict):
+        # Create LayerNormShardedMultiCoreProgramConfig from dict
+        compute_grid = program_config.get("compute_with_storage_grid_size", {})
+        ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid.get("x", 1), compute_grid.get("y", 1)),
+            subblock_w=program_config.get("subblock_w", 1),
+            block_h=program_config.get("block_h", 1),
+            block_w=program_config.get("block_w", 1),
+            inplace=bool(program_config.get("inplace", 0)),
+        )
+        stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=ttnn_program_config)
+    else:
+        stats = ttnn.rms_norm_pre_all_gather(input_tensor)
+
     output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats, epsilon=eps, weight=weight_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)

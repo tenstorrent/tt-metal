@@ -17,8 +17,8 @@
 namespace ttnn::operations::reduction::topk {
 
 struct TopKDeviceOperation {
-    using operation_attributes_t = topk::operation_attributes_t;
-    using tensor_args_t = topk::tensor_args_t;
+    using operation_attributes_t = TopkParams;
+    using tensor_args_t = TopkInputs;
     using spec_return_value_t = topk::spec_return_value_t;
     using tensor_return_value_t = topk::tensor_return_value_t;
     using program_factory_t = std::variant<program::TopKSingleCoreProgramFactory, program::TopKMultiCoreProgramFactory>;
@@ -28,24 +28,19 @@ struct TopKDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        uint32_t k,
-        int8_t dim,
-        bool largest,
-        bool sorted,
-        const tt::tt_metal::MemoryConfig& memory_config,
-        const tt::tt_metal::CoreRangeSet& sub_core_grids,
-        const std::optional<Tensor>& indices_tensor = std::nullopt,
-        const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors = std::nullopt);
 };
 
 }  // namespace ttnn::operations::reduction::topk
 
 namespace ttnn::prim {
-
-constexpr auto topk =
-    ttnn::register_operation<"ttnn::prim::topk", ttnn::operations::reduction::topk::TopKDeviceOperation>();
-
+std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
+    const Tensor& input_tensor,
+    uint32_t k,
+    int8_t dim,
+    bool largest,
+    bool sorted,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const tt::tt_metal::CoreRangeSet& sub_core_grids,
+    const std::optional<Tensor>& indices_tensor = std::nullopt,
+    const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors = std::nullopt);
 }  // namespace ttnn::prim

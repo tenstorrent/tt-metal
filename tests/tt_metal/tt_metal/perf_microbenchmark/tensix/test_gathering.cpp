@@ -18,7 +18,7 @@
 
 namespace tt_metal = tt::tt_metal;
 
-int main(int argc, char** argv) {
+int main() {
     int device_id = 0;
     auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();

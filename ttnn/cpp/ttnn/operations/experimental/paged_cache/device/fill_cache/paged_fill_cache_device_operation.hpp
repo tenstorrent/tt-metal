@@ -18,10 +18,10 @@
 namespace ttnn::operations::experimental::paged_cache::fill {
 
 struct PagedFillCacheDeviceOperation {
-    using operation_attributes_t = fill::operation_attributes_t;
-    using tensor_args_t = fill::tensor_args_t;
-    using spec_return_value_t = fill::spec_return_value_t;
-    using tensor_return_value_t = fill::tensor_return_value_t;
+    using operation_attributes_t = FillParams;
+    using tensor_args_t = FillInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<program::PagedFillCacheProgramFactory, program::PagedFillCacheMeshWorkloadFactory>;
     using shared_variables_t = program::PagedFillCacheProgramFactory::shared_variables_t;
@@ -37,20 +37,19 @@ struct PagedFillCacheDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& cache_tensor,
-        const Tensor& input_tensor,
-        const Tensor& page_table,
-        const std::optional<Tensor>& batch_idx_tensor,
-        uint32_t batch_idx_fallback,
-        const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::paged_cache::fill
 
 namespace ttnn::prim {
-constexpr auto paged_fill_cache = ttnn::register_operation<
-    "ttnn::prim::paged_fill_cache",
-    ttnn::operations::experimental::paged_cache::fill::PagedFillCacheDeviceOperation>();
+
+ttnn::operations::experimental::paged_cache::fill::PagedFillCacheDeviceOperation::tensor_return_value_t
+paged_fill_cache(
+    const Tensor& cache_tensor,
+    const Tensor& input_tensor,
+    const Tensor& page_table,
+    const std::optional<Tensor>& batch_idx_tensor,
+    uint32_t batch_idx_fallback,
+    const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt);
+
 }  // namespace ttnn::prim

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -11,7 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::indexed_fill {
 
 IndexedFillDeviceOperation::program_factory_t IndexedFillDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::IndexedFillProgramFactory{};
 }
 
@@ -63,31 +64,32 @@ IndexedFillDeviceOperation::tensor_return_value_t IndexedFillDeviceOperation::cr
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<IndexedFillDeviceOperation::tensor_return_value_t>
 IndexedFillDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input_tensor = tensor_args.batch_id;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
 }
+}  // namespace ttnn::operations::data_movement::indexed_fill
 
-std::tuple<IndexedFillDeviceOperation::operation_attributes_t, IndexedFillDeviceOperation::tensor_args_t>
-IndexedFillDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation::tensor_return_value_t indexed_fill(
     const Tensor& batch_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     int64_t dim) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .output_mem_config = output_mem_config,
             .dim = dim,
         },
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .batch_id = batch_id,
             .input_tensor_a = input_tensor_a,
             .input_tensor_b = input_tensor_b,
-        }};
+        });
 }
-
-}  // namespace ttnn::operations::data_movement::indexed_fill
+}  // namespace ttnn::prim

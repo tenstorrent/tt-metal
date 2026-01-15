@@ -25,9 +25,8 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
             if (is_l1) {
                 if (is_row_major) {
                     return program::TransposeWHShardedRMProgramFactory{};
-                } else {
-                    return program::TransposeWHShardedProgramFactory{};
                 }
+                return program::TransposeWHShardedProgramFactory{};
             }
             return program::TransposeWHProgramFactory{};
 
@@ -48,7 +47,7 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
 }
 
 TransposeOpParallelizationStrategy TransposeDeviceOperation::get_parallelization_strategy(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     switch (operation_attributes.dim) {
         case TransposeOpDim::WH: return TransposeOpParallelizationStrategy::MULTI_CORE_WH;
         case TransposeOpDim::HC: return TransposeOpParallelizationStrategy::MULTI_CORE_HC;
@@ -271,7 +270,7 @@ TransposeDeviceOperation::tensor_return_value_t TransposeDeviceOperation::create
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<TransposeDeviceOperation::tensor_return_value_t>
 TransposeDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, const Tensor& output) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args, const Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
@@ -279,21 +278,23 @@ TransposeDeviceOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<TransposeDeviceOperation::operation_attributes_t, TransposeDeviceOperation::tensor_args_t>
-TransposeDeviceOperation::invoke(
+}  // namespace ttnn::operations::data_movement::transpose
+
+namespace ttnn::prim {
+ttnn::Tensor transpose(
     const Tensor& input_tensor,
-    TransposeOpDim dim,
+    ttnn::operations::data_movement::transpose::TransposeOpDim dim,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::transpose::TransposeDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .dim = dim,
             .output_mem_config = output_mem_config,
             .pad_value = pad_value,
         },
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .input = input_tensor,
-        }};
+        });
 }
-
-}  // namespace ttnn::operations::data_movement::transpose
+}  // namespace ttnn::prim

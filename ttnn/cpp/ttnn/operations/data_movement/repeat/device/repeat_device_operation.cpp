@@ -7,18 +7,18 @@
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement::repeat {
 
 RepeatDeviceOperation::program_factory_t RepeatDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     bool is_last_dim = operation_attributes.m_is_last_dim;
     if (is_last_dim) {
         return program::RepeatProgramFactoryLastDim{};
-    } else {
-        return program::RepeatProgramFactoryHigherDim{};
     }
+    return program::RepeatProgramFactoryHigherDim{};
 }
 
 void RepeatDeviceOperation::validate_on_program_cache_miss(
@@ -72,9 +72,8 @@ RepeatDeviceOperation::tensor_return_value_t RepeatDeviceOperation::create_outpu
         compute_output_specs(operation_attributes, input_tensors), input_tensors.input.device());
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
-RepeatDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> RepeatDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input;
@@ -83,15 +82,18 @@ RepeatDeviceOperation::create_op_performance_model(
         {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
+}  // namespace ttnn::operations::data_movement::repeat
 
-std::tuple<operation_attributes_t, tensor_args_t> RepeatDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::repeat::RepeatDeviceOperation::tensor_return_value_t repeat(
     const Tensor& input,
     uint32_t m_num_repeats,
     bool m_is_last_dim,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::repeat::RepeatDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .m_num_repeats = m_num_repeats, .m_is_last_dim = m_is_last_dim, .m_output_mem_config = output_mem_config},
-        tensor_args_t{.input = input}};
+        OperationType::tensor_args_t{.input = input});
 }
-}  // namespace ttnn::operations::data_movement::repeat
+}  // namespace ttnn::prim

@@ -16,10 +16,10 @@
 namespace ttnn::operations::reduction::moe {
 
 struct MoeDeviceOperation {
-    using operation_attributes_t = moe::operation_attributes_t;
-    using tensor_args_t = moe::tensor_args_t;
-    using spec_return_value_t = moe::spec_return_value_t;
-    using tensor_return_value_t = moe::tensor_return_value_t;
+    using operation_attributes_t = MoeParams;
+    using tensor_args_t = MoeInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::MoeProgramFactory>;
     using shared_variables_t = program::MoeProgramFactory::shared_variables_t;
 
@@ -28,21 +28,16 @@ struct MoeDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const Tensor& expert_mask_tensor,
-        const Tensor& topk_mask_tensor,
-        uint16_t k,
-        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& preallocated_output_tensor = std::nullopt);
 };
 
 }  // namespace ttnn::operations::reduction::moe
 
 namespace ttnn::prim {
-
-constexpr auto moe =
-    ttnn::register_operation<"ttnn::prim::moe", ttnn::operations::reduction::moe::MoeDeviceOperation>();
-
+ttnn::Tensor moe(
+    const Tensor& input_tensor,
+    const Tensor& expert_mask_tensor,
+    const Tensor& topk_mask_tensor,
+    uint16_t k,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& preallocated_output_tensor = std::nullopt);
 }  // namespace ttnn::prim

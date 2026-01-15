@@ -15,8 +15,8 @@ SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_p
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     bool has_step = false;
-    for (uint32_t i = 0; i < operation_attributes.step.size(); i++) {
-        if (operation_attributes.step[i] != 1) {
+    for (unsigned int step_val : operation_attributes.step) {
+        if (step_val != 1) {
             has_step = true;
             break;
         }
@@ -27,11 +27,12 @@ SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_p
         TT_FATAL(!has_step, "Step is not supported for sharded slice_write operation");
         if (input.layout() == Layout::ROW_MAJOR) {
             return program::SliceWriteRMShardedInputProgramFactory{};
-        } else if (input.layout() == Layout::TILE) {
-            return program::SliceWriteTiledShardedInputProgramFactory{};
-        } else {
-            TT_THROW("Unsupported input memory layout for slice_write operation");
         }
+        if (input.layout() == Layout::TILE) {
+            return program::SliceWriteTiledShardedInputProgramFactory{};
+        }
+        TT_THROW("Unsupported input memory layout for slice_write operation");
+
     } else {
         return program::SliceWriteRMInterleavedProgramFactory{};
     }
@@ -44,7 +45,6 @@ void SliceWriteDeviceOperation::validate_on_program_cache_hit(
 
 void SliceWriteDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_args.output;
     const auto output_padded_shape = output_tensor.padded_shape();
@@ -89,7 +89,7 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape().rank());
 }
 
-spec_return_value_t SliceWriteDeviceOperation::compute_output_specs(
+TensorSpec SliceWriteDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output.tensor_spec();
 }
@@ -120,25 +120,31 @@ tt::stl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
     return hash;
 }
 
-tensor_return_value_t SliceWriteDeviceOperation::create_output_tensors(
+Tensor SliceWriteDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output;
 }
 
-std::tuple<SliceWriteDeviceOperation::operation_attributes_t, SliceWriteDeviceOperation::tensor_args_t>
-SliceWriteDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::slice_write
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation::tensor_return_value_t slice_write(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
     const ttnn::Shape& step) {
-    return {
-        operation_attributes_t{
-            .slice_start = slice_start,
-            .slice_end = slice_end,
-            .step = step,
-        },
-        tensor_args_t{.input = input_tensor, .output = output_tensor}};
+    using OperationType = ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .slice_start = slice_start,
+        .slice_end = slice_end,
+        .step = step,
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input_tensor, .output = output_tensor};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::slice_write
+}  // namespace ttnn::prim

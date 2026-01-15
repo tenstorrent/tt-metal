@@ -11,7 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -129,9 +129,8 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 
     // 3) Otherwise, when the input is tiled, it is never a NOP if the last two dimensions are permuted. When it is row
     // major, it is never a NOP if the last dimension is permuted.
-    if (a.layout() == Layout::TILE && (dims[rank - 1] != rank - 1 || dims[rank - 2] != rank - 2)) {
-        return false;
-    } else if (a.layout() == Layout::ROW_MAJOR && dims[rank - 1] != rank - 1) {
+    if ((a.layout() == Layout::TILE && (dims[rank - 1] != rank - 1 || dims[rank - 2] != rank - 2)) ||
+        (a.layout() == Layout::ROW_MAJOR && dims[rank - 1] != rank - 1)) {
         return false;
     }
 
@@ -195,8 +194,8 @@ ttnn::Tensor ExecutePermute::invoke(
         for (int i = 0; i < additional_ranks; i++) {
             new_order.push_back(i);
         }
-        for (int i = 0; i < dims.size(); i++) {
-            new_order.push_back(dims[i] + additional_ranks);
+        for (unsigned int dim : dims) {
+            new_order.push_back(dim + additional_ranks);
         }
         return new_order;
     };

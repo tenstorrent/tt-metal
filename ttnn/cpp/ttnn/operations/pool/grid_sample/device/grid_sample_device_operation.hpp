@@ -21,10 +21,10 @@ constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST = 2;
 constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
 
 struct GridSampleOperation {
-    using operation_attributes_t = grid_sample::operation_attributes_t;
-    using tensor_args_t = grid_sample::tensor_args_t;
-    using spec_return_value_t = grid_sample::spec_return_value_t;
-    using tensor_return_value_t = grid_sample::tensor_return_value_t;
+    using operation_attributes_t = GridSampleParams;
+    using tensor_args_t = GridSampleInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<program::GridSampleBilinearProgramFactory, program::GridSampleNearestProgramFactory>;
 
@@ -33,21 +33,18 @@ struct GridSampleOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const Tensor& grid,
-        const std::string& mode = "bilinear",
-        const std::string& padding_mode = "zeros",
-        bool align_corners = false,
-        bool use_precomputed_grid = false,
-        bool batch_output_channels = false,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::pool::grid_sample
 
 namespace ttnn::prim {
-constexpr auto grid_sample =
-    ttnn::register_operation<"ttnn::prim::grid_sample", ttnn::operations::pool::grid_sample::GridSampleOperation>();
+ttnn::Tensor grid_sample(
+    const Tensor& input_tensor,
+    const Tensor& grid,
+    const std::string& mode = "bilinear",
+    const std::string& padding_mode = "zeros",
+    bool align_corners = false,
+    bool use_precomputed_grid = false,
+    bool batch_output_channels = false,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
 }  // namespace ttnn::prim

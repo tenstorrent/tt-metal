@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 #include <numeric>
 
 #include "ttnn/operations/cb_utils.hpp"
@@ -60,7 +60,7 @@ uint32_t tensor_idxs_to_page_idx(
     const uint32_t c,
     const uint32_t h,
     const uint32_t w,
-    const Shape& shape,
+    const Shape& /*shape*/,
     const std::array<uint32_t, 2>& tile_shape,
     const Dims& tile_dims) {
     return (c * tile_dims.c) + (h / tile_shape[0] * tile_dims.w) + (w / tile_shape[1]);
@@ -99,18 +99,18 @@ struct TileIterator {
         if (tile_idx_w < tile_end_w) {
             ++tile_idx_w;
             return true;
-        } else if (tile_idx_h < tile_end_h) {
+        }
+        if (tile_idx_h < tile_end_h) {
             tile_idx_w = 0;
             ++tile_idx_h;
             return true;
-        } else {
-            return false;
         }
+        return false;
     }
 
     auto operator*() { return std::make_tuple(this->h(), this->w()); }
 
-    uint32_t size() { return (tile_end_h + 1) * (tile_end_w + 1); }
+    uint32_t size() const { return (tile_end_h + 1) * (tile_end_w + 1); }
 
 protected:
     const uint32_t& start_h;
@@ -121,9 +121,9 @@ protected:
     const uint32_t tile_end_w;
     bool first{true};
 
-    uint32_t h() { return start_h + tile_idx_h; }
+    uint32_t h() const { return start_h + tile_idx_h; }
 
-    uint32_t w() { return start_w + tile_idx_w; }
+    uint32_t w() const { return start_w + tile_idx_w; }
 };
 
 std::vector<SegmentMapData> reshape_map_output_page(
@@ -167,7 +167,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
         TT_ASSERT(wi < input_shape[2], "wi: {} input_shape[2]: {} ", wi, input_shape[2]);
         TT_ASSERT(offset_i < tile_shape[0] * tile_shape[1]);
 
-        if (map_data.count(page_idx_i)) {
+        if (map_data.contains(page_idx_i)) {
             if (page_idx_i == prev_page_idx_i && offset_i - prev_offset_i == 1 && offset_o - prev_offset_o == 1) {
                 ++map_data[page_idx_i].back().num_elements;
             } else {
@@ -205,7 +205,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
 }
 
 Tensor compute_reshape_mapping_host_tensor(
-    const uint32_t num_input_pages,
+    const uint32_t /*num_input_pages*/,
     const uint32_t num_output_pages,
     const Shape& input_shape,
     const Shape& output_shape,
@@ -272,9 +272,7 @@ Tensor compute_reshape_mapping_host_tensor(
 // the scratch page is copied to its output destination.
 
 ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReshapeParams& operation_attributes, const ReshapeInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_return_value;
 
@@ -348,12 +346,20 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
             .set_page_size(output_cb_idx, output_tile_size_bytes);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
 
+    CoreRangeSet worker_cores = CoreRangeSet(total_cores);
+    if (operation_attributes.subdevice_id.has_value()) {
+        const std::vector<SubDeviceId>& sub_device_ids = device->get_sub_device_ids();
+        const auto& subdevice_id_value = operation_attributes.subdevice_id.value();
+        TT_FATAL(
+            std::find(sub_device_ids.begin(), sub_device_ids.end(), subdevice_id_value) != sub_device_ids.end(),
+            "Subdevice ID is not valid for this device");
+        auto sub_device_cores = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id_value);
+        worker_cores = sub_device_cores;
+    }
+
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            //            operation_attributes.sub_core_grid.has_value()
-            //                ? tt::tt_metal::split_work_to_cores(operation_attributes.sub_core_grid.value(),
-            //                num_output_pages) : tt::tt_metal::split_work_to_cores(grid, num_output_pages);
-        tt::tt_metal::split_work_to_cores(grid, num_output_pages);
+            tt::tt_metal::split_work_to_cores(worker_cores, num_output_pages);
 
     TT_ASSERT(num_cores <= num_output_pages);
 
@@ -413,9 +419,9 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
 
 void ReshapeTiledProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReshapeParams& operation_attributes,
+    const ReshapeInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = shared_variables.writer_kernel_id;

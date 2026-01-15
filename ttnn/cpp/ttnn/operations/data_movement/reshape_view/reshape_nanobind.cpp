@@ -34,7 +34,8 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
                const ttnn::TileReshapeMapMode reshape_tile_mode,
                const std::optional<CoreRangeSet>& sub_core_grids,
                const std::optional<SubDeviceId>& subdevice_id) -> ttnn::Tensor {
-                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
+                return self(
+                    input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids, subdevice_id);
             },
             nb::arg("input_tensor"),
             nb::arg("shape"),
@@ -109,7 +110,7 @@ void bind_reshape_view(nb::module_& mod) {
 
             Args:
                 * input_tensor: Input Tensor.
-                * new_shape: New shape of tensor.
+                * shape: Shape of tensor.
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config

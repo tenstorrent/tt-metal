@@ -18,8 +18,8 @@ namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused {
 struct AllGatherConcatDeviceOperation {
     using operation_attributes_t = all_gather_concat_heads_fused::operation_attributes_t;
     using tensor_args_t = all_gather_concat_heads_fused::tensor_args_t;
-    using spec_return_value_t = all_gather_concat_heads_fused::spec_return_value_t;
-    using tensor_return_value_t = all_gather_concat_heads_fused::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::AllGatherConcatMeshWorkloadFactory>;
     using shared_variables_t = program::AllGatherConcatMeshWorkloadFactory::shared_variables_t;
 
@@ -34,8 +34,15 @@ struct AllGatherConcatDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+}  // namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::all_gather_concat_heads_fused::AllGatherConcatDeviceOperation::
+    tensor_return_value_t
+    all_gather_concat(
         const Tensor& input_tensor,
         Tensor& buffer_tensor,
         int32_t dim,
@@ -48,12 +55,5 @@ struct AllGatherConcatDeviceOperation {
         std::optional<uint32_t> num_links,
         ttnn::ccl::Topology topology,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
-};
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused
-
-namespace ttnn::prim {
-constexpr auto all_gather_concat = ttnn::register_operation<
-    "ttnn::prim::all_gather_concat",
-    ttnn::operations::experimental::ccl::all_gather_concat_heads_fused::AllGatherConcatDeviceOperation>();
 }  // namespace ttnn::prim
