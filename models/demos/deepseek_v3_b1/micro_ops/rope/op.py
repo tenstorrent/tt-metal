@@ -21,6 +21,10 @@ where rotate_half is implemented via matrix multiplication with trans_mat.
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    UnifiedCompileTimeCoreDescriptor,
+    UnifiedKernelDescriptor,
+)
 
 
 def rotate_half_meta_style(x: torch.Tensor) -> torch.Tensor:
@@ -57,8 +61,9 @@ class RopeSingleCore:
 
         Args:
             input_tensor: Input tensor [batch, n_heads, seq_len, head_dim] or [1, batch, n_heads, head_dim]
-            cos: Cosine tensor broadcastable to input shape
-            sin: Sine tensor broadcastable to input shape
+            cos: Cosine tensor [max_seq_len, head_dim]
+            sin: Sine tensor [max_seq_len, head_dim]
+            position_ids: Position indices [batch, seq_len] or [batch]
 
         Returns:
             Output tensor with RoPE applied
@@ -103,7 +108,6 @@ class RopeSingleCore:
 
         # Calculate dimensions in tiles
         # shard_shape[0] = n_heads * TILE_HEIGHT, shard_shape[1] = head_dim
-        n_heads_t = shard_shape[0] // ttnn.TILE_SIZE  # Number of head tile rows
         head_dim_t = shard_shape[1] // ttnn.TILE_SIZE  # head_dim in tiles (Wt)
 
         # Get core grid from shard spec
@@ -113,10 +117,7 @@ class RopeSingleCore:
         tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
         tile_size = tile.get_tile_size(data_format)
 
-        # Number of tiles
-        num_input_tiles = n_heads_t * head_dim_t
-        num_cos_sin_tiles = head_dim_t  # cos/sin are broadcast across heads
-        num_trans_mat_tiles = 1  # Single tile for transformation matrix
+        # Number of tiles for intermediate buffers
         num_interm_tiles = head_dim_t  # Intermediate buffers sized for one head row
 
         # CB indices (matching C++ implementation)
@@ -191,41 +192,62 @@ class RopeSingleCore:
         )
 
         # ========================================================================
-        # Compute Kernel (TRISC)
-        # Self-contained kernel that handles CB signaling and computation
-        # Performs: output = (input * cos) + (rotate_half(input) * sin)
+        # Unified Kernel Descriptor (handles NCRISC, BRISC, TRISC)
         # ========================================================================
-        compute_compile_time_args = [
-            input_cb,
-            cos_cb,
-            sin_cb,
-            trans_mat_cb,
-            rotated_input_interm_cb,
-            cos_interm_cb,
-            sin_interm_cb,
-            output_cb,
-            head_dim_t,  # Wt - width in tiles
-            n_heads_t,  # Ht - height in tiles (number of head rows)
+
+        # Named compile-time args for NCRISC
+        ncrisc_named_compile_time_args = [
+            ("in_cb", input_cb),
+            ("cos_cb", cos_cb),
+            ("sin_cb", sin_cb),
+            ("trans_mat_cb", trans_mat_cb),
+            ("Wt", head_dim_t),
         ]
 
-        compute_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/rope/kernels/rope_compute.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        # Named compile-time args for BRISC (empty - no-op)
+        brisc_named_compile_time_args = []
+
+        # Named compile-time args for TRISC
+        trisc_named_compile_time_args = [
+            ("in_cb", input_cb),
+            ("cos_cb", cos_cb),
+            ("sin_cb", sin_cb),
+            ("trans_mat_cb", trans_mat_cb),
+            ("rotated_in_interm_cb", rotated_input_interm_cb),
+            ("cos_interm_cb", cos_interm_cb),
+            ("sin_interm_cb", sin_interm_cb),
+            ("out_cb", output_cb),
+            ("Wt", head_dim_t),
+        ]
+
+        # Unified kernel descriptor
+        unified_kernel = UnifiedKernelDescriptor(
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/rope/kernels/rope_kernel.cpp",
             core_ranges=core_grid,
-            compile_time_args=compute_compile_time_args,
-            config=ttnn.ComputeConfigDescriptor(
+            ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+            brisc_named_compile_time_args=brisc_named_compile_time_args,
+            trisc_named_compile_time_args=trisc_named_compile_time_args,
+            trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 dst_full_sync_en=fp32_dest_acc_en,
             ),
+            unified_compile_time_core_descriptors=[
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_active_core",
+                    core_range=core_grid,
+                    value=1,
+                    other_value=0,
+                ),
+            ],
         )
 
         # ========================================================================
         # Program Descriptor
         # ========================================================================
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=[compute_kernel_descriptor],
+            kernels=unified_kernel.get_kernel_descriptors(),
             cbs=[
                 input_cb_descriptor,
                 cos_cb_descriptor,
