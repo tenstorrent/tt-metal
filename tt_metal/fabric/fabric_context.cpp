@@ -145,10 +145,10 @@ void FabricContext::compute_packet_specifications() {
         }
 
         // Validate 1D topology against memory map limits
-        // ROUTING_PATH_SIZE_1D = 256 bytes / 8 bytes per entry = 32 chips max
+        // ROUTING_PATH_SIZE_1D = 1024 bytes / 16 bytes per entry = 64 chips max (63 hops)
         TT_FATAL(
             max_1d_hops_ <= Limits::MAX_1D_HOPS,
-            "1D routing with {} hops exceeds maximum {} hops (ROUTING_PATH_SIZE_1D = 256 bytes limit).",
+            "1D routing with {} hops exceeds maximum {} hops (ROUTING_PATH_SIZE_1D = 1024 bytes limit).",
             max_1d_hops_,
             Limits::MAX_1D_HOPS);
 
@@ -182,16 +182,20 @@ size_t FabricContext::get_1d_header_size(uint32_t extension_words) const {
     switch (extension_words) {
         case 0: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<0>);
         case 1: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<1>);
+        case 2: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<2>);
+        case 3: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<3>);
         default: TT_THROW("Unsupported extension words: {}", extension_words);
     }
 }
 
 size_t FabricContext::get_2d_header_size(uint32_t route_buffer_size) const {
     // Use explicit template instantiation for compile-time type safety
-    // Only max-capacity tiers per header size (19, 35) to avoid switch bloat
+    // Only max-capacity tiers per header size (19, 35, 51, 67) to avoid switch bloat
     switch (route_buffer_size) {
-        case 19: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<19>);  // 80B header max
-        case 35: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<35>);  // 96B header max
+        case 19: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<19>);  // 80B header, max capacity
+        case 35: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<35>);  // 96B header, max capacity
+        case 51: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<51>);  // 112B header, max capacity
+        case 67: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<67>);  // 128B header, max capacity
         default: TT_THROW("Unsupported 2D route buffer size: {}", route_buffer_size);
     }
 }
@@ -218,13 +222,19 @@ size_t FabricContext::compute_packet_header_size_bytes() const {
 }
 
 size_t FabricContext::compute_max_payload_size_bytes() const {
+    // If user provided override, validate and use it
+    if (router_config_.max_packet_payload_size_bytes.has_value()) {
+        return validate_and_apply_packet_size(router_config_.max_packet_payload_size_bytes.value());
+    }
+    // Default behavior
     if (is_2D_routing_enabled_) {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes;
     }
     return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
 }
 
-FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
+FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config) :
+    router_config_(router_config) {
     // === Initialization order critical - dependencies flow downward ===
     // fabric_config_ → topology_ → routing flags → packet specs
 
@@ -417,6 +427,29 @@ void FabricContext::compute_routing_mode() {
         "2D routing mode cannot be combined with LINE or RING or NEIGHBOR_EXCHANGE topology");
 
     routing_mode_ = mode;
+}
+
+size_t FabricContext::validate_and_apply_packet_size(size_t requested_size) const {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    tt::ARCH arch = hal.get_arch();
+
+    // Get architecture-specific limit from single source of truth
+    size_t max_allowed = FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(arch);
+
+    TT_FATAL(
+        requested_size <= max_allowed,
+        "Requested packet size {} exceeds maximum {} for {}",
+        requested_size,
+        max_allowed,
+        tt::arch_to_str(arch));
+
+    TT_FATAL(requested_size > 0, "Packet size must be greater than 0");
+
+    // Validate alignment (must be L1-aligned for NOC transfers)
+    const auto alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    TT_FATAL(requested_size % alignment == 0, "Packet size {} must be {}-byte aligned", requested_size, alignment);
+
+    return requested_size;
 }
 
 }  // namespace tt::tt_fabric

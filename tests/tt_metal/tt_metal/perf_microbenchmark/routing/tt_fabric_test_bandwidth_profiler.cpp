@@ -433,6 +433,12 @@ void BandwidthProfiler::calculate_bandwidth(
     uint32_t packet_size_first_pattern = fetch_pattern_packet_size(first_pattern);
 
     // Create a new entry that represents all iterations of the same test (per call we handle single iteration)
+    // Get max_packet_size from FabricContext (already accounts for user override and topology)
+    uint32_t max_pkt_size = tt::tt_metal::MetalContext::instance()
+                                .get_control_plane()
+                                .get_fabric_context()
+                                .get_fabric_max_payload_size_bytes();
+
     latest_summary_ = BandwidthResultSummary{
         .test_name = config.name,
         .num_iterations = 1,
@@ -446,5 +452,6 @@ void BandwidthProfiler::calculate_bandwidth(
         .cycles_vector = {static_cast<double>(max_cycles)},
         .bandwidth_vector_GB_s = {bandwidth_GB_s},
         .packets_per_second_vector = {packets_per_second},
+        .max_packet_size = max_pkt_size,
     };
 }

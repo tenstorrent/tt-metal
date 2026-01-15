@@ -61,27 +61,19 @@ ReshapeDeviceOperation::tensor_return_value_t ReshapeDeviceOperation::create_out
 
 tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.logical_shape();
-    const auto& input_dtype = input_tensor.dtype();
-    const auto layout = input_tensor.layout();
-    const auto& input_mem_config = input_tensor.memory_config();
+    log_trace(tt::LogOp, "ReshapeDeviceOperation::compute_program_hash is called");
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     // don't hash on operation_attributes_t::recreate_mapping_tensor
-
-    return tt::stl::hash::hash_objects(
-        program_factory.index(),
-        input_shape,
-        layout,
-        input_mem_config,
-        input_dtype,
+    return tt::tt_metal::operation::hash_operation<ReshapeDeviceOperation>(
         operation_attributes.logical_output_shape,
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grid.has_value(),
         operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
-                                                       : CoreRangeSet(CoreRange({0, 0}, {0, 0})));
+                                                       : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        tensor_args,
+        program_factory.index());
 }
 }  // namespace ttnn::operations::data_movement::reshape
 

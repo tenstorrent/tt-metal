@@ -101,25 +101,49 @@ struct __attribute__((packed)) direction_table_t {
 };
 
 // Compressed routing entry structures using manual bit packing
+// Note: Using uint32_t (4B) instead of packed uint16_t+uint8_t (3B) because union with 1D table
+// makes both equivalent in memory (union = max(1024, 1024) = 1024B). Prioritizing performance.
+// Can switch to 3B packed (uint16_t+uint8_t) if memory becomes critical in future.
 struct __attribute__((packed)) compressed_route_2d_t {
-    // 16 bits total: ns_hops(5) + ew_hops(5) + ns_dir(1) + ew_dir(1) + turn_point(4)
-    uint16_t data;
+    // Field widths (source of truth)
+    static constexpr uint32_t NS_HOPS_WIDTH = 7;
+    static constexpr uint32_t EW_HOPS_WIDTH = 7;
+    static constexpr uint32_t NS_DIR_WIDTH = 1;
+    static constexpr uint32_t EW_DIR_WIDTH = 1;
+    static constexpr uint32_t TURN_POINT_WIDTH = 7;
+
+    // Bit positions (derived from widths)
+    static constexpr uint32_t NS_HOPS_SHIFT = 0;
+    static constexpr uint32_t EW_HOPS_SHIFT = NS_HOPS_SHIFT + NS_HOPS_WIDTH;   // 7
+    static constexpr uint32_t NS_DIR_SHIFT = EW_HOPS_SHIFT + EW_HOPS_WIDTH;    // 14
+    static constexpr uint32_t EW_DIR_SHIFT = NS_DIR_SHIFT + NS_DIR_WIDTH;      // 15
+    static constexpr uint32_t TURN_POINT_SHIFT = EW_DIR_SHIFT + EW_DIR_WIDTH;  // 16
+
+    // Masks (derived from widths)
+    static constexpr uint32_t NS_HOPS_MASK = (1U << NS_HOPS_WIDTH) - 1;        // 0x7F
+    static constexpr uint32_t EW_HOPS_MASK = (1U << EW_HOPS_WIDTH) - 1;        // 0x7F
+    static constexpr uint32_t NS_DIR_MASK = (1U << NS_DIR_WIDTH) - 1;          // 0x1
+    static constexpr uint32_t EW_DIR_MASK = (1U << EW_DIR_WIDTH) - 1;          // 0x1
+    static constexpr uint32_t TURN_POINT_MASK = (1U << TURN_POINT_WIDTH) - 1;  // 0x7F
+
+    uint32_t data;
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     void set(uint8_t ns_hops, uint8_t ew_hops, uint8_t ns_dir, uint8_t ew_dir, uint8_t turn_point) {
-        data = (ns_hops & 0x1F) | ((ew_hops & 0x1F) << 5) | ((ns_dir & 0x1) << 10) | ((ew_dir & 0x1) << 11) |
-               ((turn_point & 0xF) << 12);
+        data = (ns_hops & NS_HOPS_MASK) | ((ew_hops & EW_HOPS_MASK) << EW_HOPS_SHIFT) |
+               ((ns_dir & NS_DIR_MASK) << NS_DIR_SHIFT) | ((ew_dir & EW_DIR_MASK) << EW_DIR_SHIFT) |
+               ((turn_point & TURN_POINT_MASK) << TURN_POINT_SHIFT);
     }
 #else
-    uint8_t get_ns_hops() const { return data & 0x1F; }              // bits 0-4
-    uint8_t get_ew_hops() const { return (data >> 5) & 0x1F; }       // bits 5-9
-    uint8_t get_ns_direction() const { return (data >> 10) & 0x1; }  // bit 10
-    uint8_t get_ew_direction() const { return (data >> 11) & 0x1; }  // bit 11
-    uint8_t get_turn_point() const { return (data >> 12) & 0xF; }    // bits 12-15
+    uint8_t get_ns_hops() const { return data & NS_HOPS_MASK; }
+    uint8_t get_ew_hops() const { return (data >> EW_HOPS_SHIFT) & EW_HOPS_MASK; }
+    uint8_t get_ns_direction() const { return (data >> NS_DIR_SHIFT) & NS_DIR_MASK; }
+    uint8_t get_ew_direction() const { return (data >> EW_DIR_SHIFT) & EW_DIR_MASK; }
+    uint8_t get_turn_point() const { return (data >> TURN_POINT_SHIFT) & TURN_POINT_MASK; }
 #endif
 };
 
-static_assert(sizeof(compressed_route_2d_t) == 2, "2D route must be 2 bytes");
+static_assert(sizeof(compressed_route_2d_t) == 4, "2D route must be 4 bytes");
 
 // ============================================================================
 // Dynamic Packet Header Configuration
@@ -147,7 +171,7 @@ struct FabricHeaderConfig {
 #endif
 
     // Validation (Fail fast)
-    static_assert(LOW_LATENCY_EXTENSION_WORDS <= 1, "Only supports up to 1 extension word (32 hops)");
+    static_assert(LOW_LATENCY_EXTENSION_WORDS <= 3, "Only supports up to 3 extension words (64 hops)");
 };
 
 // Centralized routing field constants (single source of truth)
@@ -401,9 +425,12 @@ inline void encode_2d_unicast(
 
 // ============================================================================
 
-static const uint16_t MAX_CHIPS_LOWLAT_1D = 32;
+// Number of routing table entries (destinations), not hops.
+// For 4×64 mesh: 64 entries, each storing a route up to 63 hops long.
+static const uint16_t MAX_CHIPS_LOWLAT_1D = 64;
 static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
-static const uint16_t SINGLE_ROUTE_SIZE_1D = 8;
+// Size of each routing table entry in bytes
+static const uint16_t SINGLE_ROUTE_SIZE_1D = 16;  // 4 words for 64 hops: base + 3 extension words
 static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
 template <uint8_t dim, bool compressed>
@@ -440,11 +467,6 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
         uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop = false) const;
 #endif
 };
-// 32 chips * 8 bytes = 256
-static_assert(sizeof(intra_mesh_routing_path_t<1, false>) == 256, "1D uncompressed routing path must be 256 bytes");
-static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
-// 256 chips * 2 bytes = 512
-static_assert(sizeof(intra_mesh_routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
 
 struct fabric_connection_info_t {
     uint32_t edm_buffer_base_addr;
@@ -489,11 +511,33 @@ struct routing_l1_info_t {
     //       Need to evaluate once actual workloads are available
     direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};   // 96 bytes
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
-    intra_mesh_routing_path_t<1, false> routing_path_table_1d{};     // 64 bytes
-    intra_mesh_routing_path_t<2, true> routing_path_table_2d{};      // 512 bytes
+
+    // Union overlaps 1D and 2D routing tables at same offset
+    union __attribute__((packed)) {
+        intra_mesh_routing_path_t<1, false> routing_path_table_1d;  // 1024 bytes
+        intra_mesh_routing_path_t<2, true> routing_path_table_2d;   // 1024 bytes
+    };
+
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
     uint8_t padding[12] = {};                                        // pad to 16-byte alignment
 } __attribute__((packed));
+
+// 64 chips * 16 bytes = 1024
+static_assert(
+    sizeof(intra_mesh_routing_path_t<1, false>) == 1024,
+    "1D uncompressed routing path must be 1024 bytes (64 entries x 16 bytes per route)");
+
+static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
+
+// 256 chips * 4 bytes = 1024
+static_assert(
+    sizeof(intra_mesh_routing_path_t<2, true>) == 1024,
+    "2D compressed routing path must be 1024 bytes (256 entries x 4 bytes per route)");
+
+// Verify total struct size
+static_assert(
+    sizeof(routing_l1_info_t) == 2544,
+    "routing_l1_info_t must be 2544 bytes: base(484) + union(1024) + exit(1024) + pad(12)");
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};
@@ -525,16 +569,19 @@ static constexpr uint32_t FABRIC_CONNECTION_OBJECT_SIZE = 128;
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
 #if defined(COMPILE_FOR_ERISC)
-#define ROUTING_PATH_BASE_1D (MEM_AERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
-#define ROUTING_PATH_BASE_2D (ROUTING_PATH_BASE_1D + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D)
-#define ROUTING_TABLE_BASE (MEM_AERISC_ROUTING_TABLE_BASE)
-#define EXIT_NODE_TABLE_BASE (ROUTING_PATH_BASE_2D + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D)
+#define ROUTING_PATH_BASE MEM_AERISC_FABRIC_ROUTING_PATH_BASE
+#define ROUTING_PATH_BASE_1D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D
+#define ROUTING_TABLE_BASE MEM_AERISC_ROUTING_TABLE_BASE
+#define EXIT_NODE_TABLE_BASE MEM_AERISC_EXIT_NODE_TABLE_BASE
 #elif defined(COMPILE_FOR_IDLE_ERISC)
+#define ROUTING_PATH_BASE MEM_IERISC_FABRIC_ROUTING_PATH_BASE
 #define ROUTING_PATH_BASE_1D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D
 #define ROUTING_PATH_BASE_2D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D
 #define ROUTING_TABLE_BASE MEM_IERISC_ROUTING_TABLE_BASE
 #define EXIT_NODE_TABLE_BASE MEM_IERISC_EXIT_NODE_TABLE_BASE
 #else
+#define ROUTING_PATH_BASE MEM_TENSIX_ROUTING_PATH_BASE
 #define ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE_1D
 #define ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE_2D
 #define ROUTING_TABLE_BASE MEM_TENSIX_ROUTING_TABLE_BASE
