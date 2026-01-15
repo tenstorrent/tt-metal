@@ -857,12 +857,6 @@ def pytest_addoption(parser):
         default=False,
         help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files)",
     )
-    parser.addoption(
-        "--trace-debug",
-        action="store_true",
-        default=False,
-        help="Enable debug output for operation tracing (prints trace file locations)",
-    )
 
 
 def pytest_configure(config):
