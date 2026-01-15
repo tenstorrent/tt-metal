@@ -12,7 +12,7 @@ enum class UpdateCacheOpParallelizationStrategy { MULTI_CORE };
 
 enum class UpdateCacheOpType { FILL, UPDATE };
 
-struct operation_attributes_t {
+struct KvCacheParams {
     uint32_t batch_idx = 0;
     uint32_t update_idx = 0;
     uint32_t batch_offset = 0;
@@ -20,7 +20,7 @@ struct operation_attributes_t {
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct KvCacheInputs {
     Tensor cache;
     Tensor input;
 };

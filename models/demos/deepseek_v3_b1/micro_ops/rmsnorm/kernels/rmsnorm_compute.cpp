@@ -13,6 +13,7 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/rsqrt.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
+#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
 
 template <
     uint32_t input_cb,
@@ -29,8 +30,9 @@ void compute_rmsnorm(uint32_t epsilon) {
     {
         // Square the input
         mul_tiles_init(input_cb, input_cb);
+        add_rsqrt_tile_init();
         cb_wait_front(input_cb, num_tiles);
-        cb_reserve_back(interm_cb, num_tiles + 1);  // Plus 1 for the RMS tile
+        cb_reserve_back(interm_cb, num_tiles);
         tile_regs_acquire();
         for (uint32_t i = 0; i < num_tiles; i++) {
             mul_tiles(input_cb, input_cb, i, i, i);
@@ -38,48 +40,33 @@ void compute_rmsnorm(uint32_t epsilon) {
         tile_regs_commit();
         tile_regs_wait();
         pack_tile_block(0, interm_cb, num_tiles);
-        tile_regs_release();
         cb_push_back(interm_cb, num_tiles);
+        tile_regs_release();
 
         // Calculate the avg of the sum of the squares
-        cb_wait_front(interm_cb, num_tiles);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_SCALAR, fp32_acc>(interm_cb, scalars_cb, interm_cb);
+        cb_wait_front(interm_cb, num_tiles);
         tile_regs_acquire();
-        // TODO: #32998: Instead of accumulating to index 0, accumulate to num_tiles + 1 once bcast reuse is supported
         for (uint32_t i = 0; i < num_tiles; i++) {
-            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR, fp32_acc>(interm_cb, scalars_cb, i, 0, 0);
+            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR, fp32_acc>(interm_cb, scalars_cb, i, 0, num_tiles);
         }
-    }
-    // TODO: #32998: Avoid having to spill 1/RMS to interm cb
-    {
-        // TODO: We can move this to the beginning of the function since this is the only sfpu op we use
-        add_rsqrt_tile_init();
-        add_rsqrt_tile<rsqrt_fast_approx, VectorMode::RC_custom, 1>(0, epsilon);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, interm_cb);
-        tile_regs_release();
-        reduce_uninit();
         cb_pop_front(interm_cb, num_tiles);
-        cb_push_back(interm_cb, 1);  // 1/RMS tile should now be index 0
+        reduce_uninit();
+    }
+    {
+        add_rsqrt_tile<rsqrt_fast_approx, VectorMode::RC_custom, 1>(num_tiles, epsilon);
     }
     {
         // Multiply input by 1/RMS
-        cb_wait_front(interm_cb, 1);
-        cb_reserve_back(output_cb, num_tiles);
-        mul_tiles_bcast_scalar_init_short(input_cb, interm_cb);
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < num_tiles; i++) {
-            // TODO: #32998: Once we have bcast reuse, we will use input_cb index i, reuse dst index num_tiles + 1,
-            // output dst index i
-            mul_tiles_bcast_scalar(input_cb, interm_cb, i, 0, i);
-        }
+        rmsnorm_mul_bcast_scalar_reuse_tiles_init<num_tiles>(input_cb);
+        rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles>(input_cb, 0, num_tiles, 0);
         if constexpr (pop_input) {
             cb_pop_front(input_cb, num_tiles);
         }
     }
     {
         // Multiply by the weight
+        cb_reserve_back(output_cb, num_tiles);
         binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(weight_cb);
         for (uint32_t i = 0; i < num_tiles; i++) {
             binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(weight_cb, i, i);
@@ -87,9 +74,8 @@ void compute_rmsnorm(uint32_t epsilon) {
         tile_regs_commit();
         tile_regs_wait();
         pack_tile_block(0, output_cb, num_tiles);
-        tile_regs_release();
-        cb_pop_front(interm_cb, 1);
         cb_push_back(output_cb, num_tiles);
+        tile_regs_release();
     }
 }
 

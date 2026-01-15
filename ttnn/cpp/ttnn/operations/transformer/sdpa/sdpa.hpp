@@ -116,7 +116,9 @@ struct ExecuteRingDistributedScaledDotProductAttention {
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<SDPAProgramConfig>& program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<ttnn::Tensor>& page_table = std::nullopt,
+        std::optional<int64_t> chunk_start_idx = std::nullopt);
 };
 
 }  // namespace operations::transformer

@@ -382,20 +382,27 @@ class RotarySetup(LightweightModule):
         max_seq_len: int,
         rope_theta: float,
         rope_scaling: Optional[RopeScaling] = None,
+        use_qk_fused: bool = False,
         datatype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
+        self.use_qk_fused = use_qk_fused
+        self.original_batch_size = batch_size
 
-        self.batch_size = batch_size
+        # NOTE: If qk fused ops (rotary embedding + paged cache update) are used
+        # we need to double the batch size in order to replicate the transformation matrix on double the batch size number of cores
+        self.doubled_batch_size = self.original_batch_size * 2 if use_qk_fused else self.original_batch_size
         self.head_dim = head_dim
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:
-            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1)
+            self.batch_size_per_device_group = max(self.doubled_batch_size // list(device.shape)[1], 1)
         else:
-            self.batch_size_per_device_group = self.batch_size
-        self.core_grid = device.compute_with_storage_grid_size()
+            self.batch_size_per_device_group = self.doubled_batch_size
+        self.core_grid = (
+            ttnn.CoreCoord(8, 8) if ttnn.get_arch_name() == "blackhole" else device.compute_with_storage_grid_size()
+        )
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = get_rot_mats(
@@ -407,16 +414,13 @@ class RotarySetup(LightweightModule):
             datatype=datatype,
         )
 
-        self.batch_grid = (
-            ttnn.CoreGrid(y=4, x=8)
-            if ttnn.get_arch_name() == "blackhole"
-            else ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
-        )
+        self.batch_grid = ttnn.num_cores_to_corerangeset(self.doubled_batch_size, self.core_grid, row_wise=True)
+
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
             1,
-            batch_size,
+            self.doubled_batch_size,
             1,
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
@@ -464,10 +468,18 @@ class RotarySetup(LightweightModule):
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
+        if self.use_qk_fused:
+            # NOTE: For fused QK ops (rotary embedding + paged cache update), we intentionally double the batch dimension so that
+            # the rotary indices can be used for Q and K tensors each.
+            position_idxs = position_idxs.repeat(2)
+            assert (
+                position_idxs.shape[0] == self.batch_size_per_device_group
+            ), "Position idxs must be the same as the batch size per device group"
+
         batch = position_idxs.shape[0]
         position_idxs = position_idxs.reshape(1, batch)  # [1, 1, 1, batch]
-        assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
-        assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
+        assert position_idxs.shape == (1, batch), "Position idxs must be a [1, batch] tensor"
+        assert torch.min(position_idxs) >= 0, "Position idxs must be non-negative"
 
         # Add padding if needed
         pad_size = nearest_32(batch) - batch

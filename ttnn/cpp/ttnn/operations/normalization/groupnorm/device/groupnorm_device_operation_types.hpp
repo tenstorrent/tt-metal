@@ -33,7 +33,7 @@ struct GroupNormShardedMultiCoreProgramConfig {
 using GroupNormProgramConfig = std::variant<GroupNormMultiCoreProgramConfig, GroupNormShardedMultiCoreProgramConfig>;
 
 // Device operation types
-struct operation_attributes_t {
+struct GroupNormParams {
     float eps = 0.0f;
     uint32_t num_groups = 0;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -42,7 +42,7 @@ struct operation_attributes_t {
     bool use_welford = false;
 };
 
-struct tensor_args_t {
+struct GroupNormInputs {
     Tensor input;
     std::optional<Tensor> gamma;
     std::optional<Tensor> beta;

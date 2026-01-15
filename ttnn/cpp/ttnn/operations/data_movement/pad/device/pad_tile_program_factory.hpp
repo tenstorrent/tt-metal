@@ -20,13 +20,12 @@ struct PadTileCoreProgramFactory {
     using shared_variables_t = PadTileCoreSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output);
+    static cached_program_t create(const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const PadParams& operation_attributes,
+        const PadInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 }  // namespace ttnn::operations::data_movement::pad::program
