@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reshape_tile_program_factory.hpp"
-#include "reshape_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>
