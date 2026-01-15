@@ -30,9 +30,3 @@ struct UnaryInputs {
 };
 
 }  // namespace ttnn::prim
-
-// Backward compatibility aliases
-namespace ttnn::operations::unary {
-using operation_attributes_t = ttnn::prim::UnaryParams;
-using tensor_args_t = ttnn::prim::UnaryInputs;
-}  // namespace ttnn::operations::unary
