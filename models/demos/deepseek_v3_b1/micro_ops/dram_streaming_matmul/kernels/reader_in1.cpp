@@ -12,6 +12,8 @@
  * Reads in1 from DRAM one Kx1 column stick at a time.
  * in1 is pre-shuffled on host so K tiles are contiguous for each N column.
  *
+ * Uses transaction IDs for pipelining DRAM reads (triple buffering).
+ * Reads are broken into pages that fit within NOC max burst size.
  * Output CB is tensor-backed - just waits for compute to finish.
  */
 void kernel_main() {
@@ -19,37 +21,71 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
     constexpr uint32_t in1_tensor_addr = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(3);
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_tile_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t out_num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t in1_num_pages = get_compile_time_arg_val(4);
+    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(5);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_block_size_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t out_num_tiles = get_compile_time_arg_val(8);
 
     // Runtime args (per-core values)
     const uint32_t dram_bank_id = get_arg_val<uint32_t>(0);
     const uint32_t vc = get_arg_val<uint32_t>(1);
 
-    // in1 stick size: K tiles contiguous for each N column
-    constexpr uint32_t in1_stick_bytes = num_tiles_k * in1_tile_bytes;
-
     // Setup DRAM read for in1
     uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in1_tensor_addr);
+    uint32_t l1_write_addr_in1;
+    uint32_t l1_read_addr_in1 = 0;
 
-    // Stream in1: one Kx1 stick at a time, per_core_N times
-    uint32_t in1_read_offset = 0;
+    // Set up NOC state for page reads
+    noc_async_read_one_packet_set_state<true>(in1_base_addr, in1_page_size, vc);
+
+    // Triple buffering with transaction IDs for pipelining
+    constexpr uint32_t total_num_blocks_in_buffer = 3;
+    uint32_t num_free_blocks_in_buffer = total_num_blocks_in_buffer;
+    uint32_t curr_block_trid = 1;
+    uint32_t block_trid_to_wait = 1;
+
+    cb_reserve_back(cb_id_in1, num_tiles_k);
+    uint32_t l1_write_addr_in1_offset = 0;
+    uint32_t l1_write_addr_in1_start = get_write_ptr(cb_id_in1);
+    l1_write_addr_in1 = l1_write_addr_in1_start;
 
     for (uint32_t n = 0; n < per_core_N; n++) {
-        cb_reserve_back(cb_id_in1, num_tiles_k);
-        uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+        noc_async_read_set_trid(curr_block_trid);
 
-        // Read K tiles for this N column (contiguous in shuffled layout)
-        uint64_t in1_addr = in1_base_addr + in1_read_offset;
-        noc_async_read(in1_addr, l1_write_addr_in1, in1_stick_bytes);
-        noc_async_read_barrier();
+        // Read pages for this Kx1 stick (broken into NOC-sized pages)
+        for (uint32_t p = 0; p < in1_num_pages; p++) {
+            noc_async_read_one_packet_with_state_with_trid(
+                in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
+            l1_read_addr_in1 += in1_page_size;
+            l1_write_addr_in1 += in1_page_size;
+        }
 
-        cb_push_back(cb_id_in1, num_tiles_k);
+        if (num_free_blocks_in_buffer == 2) {
+            noc_async_read_barrier_with_trid(block_trid_to_wait);
+            cb_push_back(cb_id_in1, num_tiles_k);
+            // wait for next block trid
+            block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
+            // reserve for next block
+            cb_reserve_back(cb_id_in1, num_tiles_k * 2);
+        } else {
+            num_free_blocks_in_buffer -= 1;
+        }
 
-        in1_read_offset += in1_stick_bytes;
+        if (curr_block_trid == total_num_blocks_in_buffer) {
+            l1_write_addr_in1_offset = 0;
+            curr_block_trid = 1;
+        } else {
+            l1_write_addr_in1_offset += in1_block_size_bytes;
+            curr_block_trid += 1;
+        }
+        l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
+
+    // Wait for last block
+    noc_async_read_barrier_with_trid(block_trid_to_wait);
+    cb_push_back(cb_id_in1, num_tiles_k);
 
     // Wait for compute to finish writing all output tiles
     // CB4 is backed by output tensor - data goes directly there

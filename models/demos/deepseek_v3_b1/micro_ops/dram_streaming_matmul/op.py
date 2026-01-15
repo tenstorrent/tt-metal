@@ -41,6 +41,40 @@ def get_batch_size(shape):
     return batch
 
 
+def get_max_page_size_and_num_pages(device, num_tiles, tile_size):
+    """
+    Calculate optimal page size and number of pages for NOC transfers.
+
+    The NOC has a maximum burst size that varies by architecture:
+    - Wormhole: 8192 bytes
+    - Blackhole: 16384 bytes
+
+    Returns (page_size, num_pages) where:
+    - page_size is the largest multiple of tile_size that fits in NOC max
+    - num_pages is total_size / page_size
+    """
+    total_size = num_tiles * tile_size
+
+    # Get NOC max page size based on architecture
+    arch = device.arch()
+    if arch == ttnn.device.Arch.WORMHOLE_B0:
+        noc_max_page_size = 8192
+    elif arch == ttnn.device.Arch.BLACKHOLE:
+        noc_max_page_size = 16384
+    else:
+        raise ValueError(f"Unsupported architecture: {arch}")
+
+    # Calculate page size as largest multiple of tile_size that fits
+    page_size = (noc_max_page_size // tile_size) * tile_size
+
+    # Ensure total_size is divisible by page_size
+    while total_size % page_size != 0 and page_size >= tile_size:
+        page_size -= tile_size
+
+    num_pages = total_size // page_size
+    return page_size, num_pages
+
+
 class DRAMStreamingMatmul:
     """
     Simplified DRAM streaming matmul using ttnn.generic_op.
@@ -127,10 +161,19 @@ class DRAMStreamingMatmul:
         in1_tile_size = in1_tile.get_tile_size(in1_dtype)
         out_tile_size = out_tile.get_tile_size(out_dtype)
 
+        # Calculate page size for NOC transfers (respects max NOC burst size)
+        # Each block is Kt tiles (one Kx1 stick)
+        in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, Kt, in1_tile_size)
+        in1_block_size_bytes = Kt * in1_tile_size
+
+        logger.debug(
+            f"in1_page_size={in1_page_size}, in1_num_pages={in1_num_pages}, in1_block_size={in1_block_size_bytes}"
+        )
+
         # CB sizes
         # in0: K tiles (full tensor, tensor-backed - size determined by tensor)
-        # in1: K tiles at a time (one column stick), double buffered
-        in1_CB_tiles = Kt * 2
+        # in1: K tiles at a time (one column stick), triple buffered for pipelining
+        in1_CB_tiles = Kt * 3
         in1_CB_size = in1_CB_tiles * in1_tile_size
 
         # Output: per_core_N tiles (tensor-backed - size determined by tensor)
@@ -206,9 +249,11 @@ class DRAMStreamingMatmul:
             cb_id_in1,
             cb_id_out,
             in1_buffer_addr,
-            Kt,  # num_tiles_k
+            in1_page_size,
+            in1_num_pages,
+            Kt,  # num_tiles_k (for CB push/pop)
             per_core_N,
-            in1_tile_size,
+            in1_block_size_bytes,
             out_num_tiles,
         ]
 
