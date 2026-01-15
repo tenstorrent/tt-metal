@@ -582,7 +582,7 @@ MESH_SHAPE_TO_MODEL_DIMS = {
     (1, 1): {"dim": 2048, "hidden_dim": 3584, "n_heads": 32, "n_kv_heads": 8},
     (1, 2): {"dim": 4096, "hidden_dim": 7168, "n_heads": 32, "n_kv_heads": 8},
     (1, 4): {"dim": 4096, "hidden_dim": 14336, "n_heads": 32, "n_kv_heads": 8},
-    (1, 8): {"dim": 8192, "hidden_dim": 28672, "n_heads": 64, "n_kv_heads": 8},
+    (1, 8): {"dim": 4096, "hidden_dim": 14336, "n_heads": 32, "n_kv_heads": 8},
 }
 
 
