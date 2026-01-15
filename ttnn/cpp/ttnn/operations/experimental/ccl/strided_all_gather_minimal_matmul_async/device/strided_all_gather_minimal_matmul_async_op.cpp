@@ -37,9 +37,9 @@ StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalM
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather shape
     ttnn::TensorSpec strided_all_gather_output_shape =
-        strided_all_gather_async::StridedAllGatherAsync::compute_output_specs(
+        ttnn::experimental::prim::StridedAllGatherAsync::compute_output_specs(
             attributes.strided_all_gather_async_struct,
-            strided_all_gather_async::tensor_args_t{tensor_args.input_tensor});
+            ttnn::experimental::prim::StridedAllGatherAsyncInputs{tensor_args.input_tensor});
 
     // Matmul shape
     ttnn::TensorSpec minimal_matmul_output_specs = matmul_device_operation_t::compute_output_specs(
@@ -52,9 +52,10 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather output tensor
     ttnn::Tensor strided_all_gather_output_tensor =
-        strided_all_gather_async::StridedAllGatherAsync::create_output_tensors(
+        ttnn::experimental::prim::StridedAllGatherAsync::create_output_tensors(
             attributes.strided_all_gather_async_struct,
-            strided_all_gather_async::tensor_args_t{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
+            ttnn::experimental::prim::StridedAllGatherAsyncInputs{
+                tensor_args.input_tensor, tensor_args.persistent_output_buffer});
 
     // Matmul output tensor
     ttnn::Tensor minimal_matmul_output_tensor = matmul_device_operation_t::create_output_tensors(
@@ -120,23 +121,22 @@ ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::St
 
     /* AllGather setup */
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-    ttnn::operations::experimental::ccl::strided_all_gather_async::operation_attributes_t
-        strided_all_gather_async_struct =
-            ttnn::operations::experimental::ccl::strided_all_gather_async::operation_attributes_t(
-                devices,
-                dim,
-                num_links,
-                num_devices,
-                memory_config_ag.value_or(input_tensor.memory_config()),
-                topology,
-                multi_device_global_semaphore,
-                cluster_axis,
-                /*tiles_per_chunk=*/std::nullopt,
-                num_workers_per_link,
-                num_buffers_per_channel,
-                config->compute_with_storage_grid_size.y,
-                config->M_block_size,
-                config->K_block_size);
+    ttnn::experimental::prim::StridedAllGatherAsyncParams strided_all_gather_async_struct =
+        ttnn::experimental::prim::StridedAllGatherAsyncParams(
+            devices,
+            dim,
+            num_links,
+            num_devices,
+            memory_config_ag.value_or(input_tensor.memory_config()),
+            topology,
+            multi_device_global_semaphore,
+            cluster_axis,
+            /*tiles_per_chunk=*/std::nullopt,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            config->compute_with_storage_grid_size.y,
+            config->M_block_size,
+            config->K_block_size);
 
     /* Matmul setup */
     auto matmul_struct = decltype(ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::
@@ -145,7 +145,7 @@ ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::St
         .fused_activation = std::move(fused_activation),
         .output_mem_config = memory_config_mm,
         .compute_kernel_config = compute_kernel_config.value()};
-    ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync ag_op{};
+    ttnn::experimental::prim::StridedAllGatherAsync ag_op{};
 
     bool read_local_from_input = read_local_slice_from_input.value_or(false);
 

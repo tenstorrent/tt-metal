@@ -12,7 +12,7 @@ namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul
 
 struct StridedAllGatherMinimalMatmulAsyncProgramFactory {
     struct shared_variables_t {
-        strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables;
+        ttnn::experimental::prim::StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables;
         minimal_matmul::program::MinimalMatmulProgramFactory::shared_variables_t mm_shared_variables;
     };
 

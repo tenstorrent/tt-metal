@@ -10,9 +10,9 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::experimental::ccl::strided_all_gather_async {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct StridedAllGatherAsyncParams {
     const std::vector<tt::tt_metal::IDevice*> devices;
     const uint32_t dim;
     const uint32_t num_links;
@@ -29,13 +29,9 @@ struct operation_attributes_t {
     const std::optional<uint32_t> mm_block_wt;
 };
 
-struct tensor_args_t {
+struct StridedAllGatherAsyncInputs {
     const Tensor input_tensor;
     const std::optional<Tensor> persistent_output_buffer;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async
+}  // namespace ttnn::experimental::prim

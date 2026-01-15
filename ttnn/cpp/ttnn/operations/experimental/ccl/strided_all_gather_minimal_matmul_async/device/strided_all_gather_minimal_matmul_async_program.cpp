@@ -50,11 +50,11 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
     tensor_return_value_t& output_tensor) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.shared_variables.at(range);
-        strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program(
+        ttnn::experimental::prim::StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program(
             shared_variables.ag_shared_variables,
             program,
             attributes.strided_all_gather_async_struct,
-            ttnn::operations::experimental::ccl::strided_all_gather_async::tensor_args_t(tensor_args.input_tensor),
+            ttnn::experimental::prim::StridedAllGatherAsyncInputs(tensor_args.input_tensor),
             output_tensor.at(0));
 
         auto cached_program_proxy = minimal_matmul::program::MinimalMatmulProgramFactory::cached_program_t::proxy(
@@ -131,30 +131,29 @@ strided_all_gather_minimal_matmul_async_program(
         matmul_fused_op_signaler->fused_op_signaler_mode);
 
     // All Gather
-    strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables =
-        strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::
-            strided_all_gather_async_minimal_default_helper(
-                program,
-                input_tensor,
-                target_device_coord,
-                forward_coord,
-                backward_coord,
-                all_gather_output_tensor,
-                dim,
-                num_links,
-                ring_size,
-                ring_index,
-                topology,
-                semaphore,
-                all_gather_fused_op_signaler,
-                read_local_slice_from_input,
-                std::nullopt,
-                num_workers_per_direction_opt,
-                num_buffers_per_channel,
-                matmul_fused_op_signaler->num_fused_op_cores_to_signal,
-                config.M_block_size,
-                config.K_block_size,
-                core_grid_offset);
+    ttnn::experimental::prim::StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables =
+        ttnn::experimental::prim::StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_helper(
+            program,
+            input_tensor,
+            target_device_coord,
+            forward_coord,
+            backward_coord,
+            all_gather_output_tensor,
+            dim,
+            num_links,
+            ring_size,
+            ring_index,
+            topology,
+            semaphore,
+            all_gather_fused_op_signaler,
+            read_local_slice_from_input,
+            std::nullopt,
+            num_workers_per_direction_opt,
+            num_buffers_per_channel,
+            matmul_fused_op_signaler->num_fused_op_cores_to_signal,
+            config.M_block_size,
+            config.K_block_size,
+            core_grid_offset);
 
     return {std::move(program), {ag_shared_variables, mm_shared_variables}};
 }

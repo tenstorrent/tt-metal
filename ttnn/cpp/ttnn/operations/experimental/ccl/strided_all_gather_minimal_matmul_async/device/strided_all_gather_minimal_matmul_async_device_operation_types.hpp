@@ -15,7 +15,7 @@ namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul
 
 struct operation_attributes_t {
     /* All Gather Params */
-    const strided_all_gather_async::operation_attributes_t strided_all_gather_async_struct;
+    const ttnn::experimental::prim::StridedAllGatherAsyncParams strided_all_gather_async_struct;
 
     /* Matmul Params */
     const minimal_matmul::operation_attributes_t matmul_struct;
@@ -23,7 +23,7 @@ struct operation_attributes_t {
     const CoreCoord all_gather_core_grid_offset;
     const bool read_local_slice_from_input;
     const std::vector<tt::tt_metal::IDevice*> devices;
-    const strided_all_gather_async::StridedAllGatherAsync ag_op;
+    const ttnn::experimental::prim::StridedAllGatherAsync ag_op;
 };
 
 struct tensor_args_t {

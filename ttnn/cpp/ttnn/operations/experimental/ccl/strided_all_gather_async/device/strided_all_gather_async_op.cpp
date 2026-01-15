@@ -10,11 +10,11 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
-namespace ttnn::operations::experimental::ccl::strided_all_gather_async {
+namespace ttnn::experimental::prim {
 
 StridedAllGatherAsync::program_factory_t StridedAllGatherAsync::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::StridedAllGatherAsyncProgramFactory{};
+    return StridedAllGatherAsyncProgramFactory{};
 }
 
 void StridedAllGatherAsync::validate_on_program_cache_hit(
@@ -65,12 +65,11 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         tensor_args.input_tensor.memory_config());
 }
 
-}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync::tensor_return_value_t
-strided_all_gather_async(
+Tensor strided_all_gather_async(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
@@ -85,7 +84,7 @@ strided_all_gather_async(
     const std::optional<uint32_t>& mm_cores_y,
     const std::optional<uint32_t>& mm_block_ht,
     const std::optional<uint32_t>& mm_block_wt) {
-    using OperationType = ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync;
+    using OperationType = ttnn::experimental::prim::StridedAllGatherAsync;
 
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,

@@ -36,3 +36,10 @@
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/device
