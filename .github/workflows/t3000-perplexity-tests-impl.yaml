@@ -35,7 +35,7 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - tt-metal-ci-vm-t3k-15
+      - tt-metal-ci-vm-t3k-10
     container:
       image: ${{ inputs.docker-image }}
       env:

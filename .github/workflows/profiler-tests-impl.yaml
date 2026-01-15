@@ -29,7 +29,7 @@ jobs:
       fail-fast: false
     name: "profiler tests"
     runs-on:
-      - tt-metal-ci-vm-t3k-15
+      - tt-metal-ci-vm-t3k-10
     container:
       image: ${{ inputs.docker-image }}
       env:
