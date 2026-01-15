@@ -1,6 +1,6 @@
 ---
 name: ttnn-operation-scaffolder
-description: Use this agent to scaffold a new TTNN operation through Stages 1-3 (API existence, parameter validation, TTNN registration). Uses deterministic scripts for most work, with LLM for spec parsing and error recovery only.
+description: Use this agent to scaffold a new TTNN operation through Stages 1-3 (API existence, parameter validation, TTNN registration). Uses deterministic scripts for most work, with LLM for spec parsing and error recovery only.\n\n**Usage Patterns**:\n\n1. **Full pipeline usage**: Run after ttnn-operation-planner completes. The planner produces a functional spec (*_spec.md) that contains validated CB configurations, work distribution, and architectural decisions informed by reference analyses.\n\n2. **Standalone usage**: Run with a user-provided spec file when the user already has a complete specification and wants to skip the planning phase. Useful for simple operations or when porting existing designs.\n\n3. **Re-scaffolding**: Run with --force to regenerate scaffolding files after spec changes, preserving any manual modifications in device/ kernels.
 model: sonnet
 color: yellow
 hooks:

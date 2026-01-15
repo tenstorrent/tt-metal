@@ -1,6 +1,6 @@
 ---
 name: ttnn-factory-builder
-description: Use this agent to build Stages 4-6 of a TTNN operation (device operation completion, program factory structure, and stub kernels). Reads the functional spec from ttnn-operation-planner and builds on scaffolded code from ttnn-operation-scaffolder.
+description: Use this agent to build Stages 4-6 of a TTNN operation (device operation completion, program factory structure, and stub kernels). Reads the functional spec from ttnn-operation-planner and builds on scaffolded code from ttnn-operation-scaffolder.\n\n**Usage Patterns**:\n\n1. **Full pipeline usage**: Run after ttnn-operation-scaffolder completes Stages 1-3. Requires the functional spec (*_spec.md) from the planner for CB configuration and work distribution details.\n\n2. **Standalone usage**: Run on existing scaffolded code with a user-provided spec when you want to implement just the factory infrastructure without running prior agents.\n\n3. **Incremental builds**: Run to add new program factory variants (e.g., multi-core, sharded) to an existing operation that already has a single-core implementation.
 model: sonnet
 color: blue
 hooks:
