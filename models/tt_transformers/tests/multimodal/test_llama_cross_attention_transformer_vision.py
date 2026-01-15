@@ -23,14 +23,11 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_visi
 )
 
 
-# Meta's lib Crossattention vision transformer branch does not exist indepedently as a subclass in HF,
+# Meta's lib crossattention vision transformer branch does not exist indepedently as a subclass in HF,
 # instead it is implemented directly in the whole mLlama model graph.
-# Thus the following custom class is apapted from mLlama model of HF to
-# create the same computational graph as in meta lib for this comparison with tt_model
+# Thus the following custom class is adapted from mLlama model of HF to
+# create the same computational graph as in meta lib for this comparison with tt_model.
 class CrossAttentionTransformerVisionModel(MllamaPreTrainedModel):
-    _checkpoint_conversion_mapping = {"language_model.model": "language_model"}
-    _supports_quantized_cache = False  # quant cache not supported in encoder-decoder setting
-
     def __init__(self, config: MllamaConfig):
         super().__init__(config)
         self.vocab_size = config.text_config.vocab_size
