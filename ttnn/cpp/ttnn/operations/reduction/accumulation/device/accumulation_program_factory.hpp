@@ -18,7 +18,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::reduction::accumulation {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 using namespace tt::stl;
@@ -75,4 +75,4 @@ struct AccumulationProgramFactory {
     static uint32_t calc_input_tile_offset(const Shape& input_shape, const int32_t& dim);
 };
 
-}  // namespace ttnn::operations::reduction::accumulation
+}  // namespace ttnn::prim
