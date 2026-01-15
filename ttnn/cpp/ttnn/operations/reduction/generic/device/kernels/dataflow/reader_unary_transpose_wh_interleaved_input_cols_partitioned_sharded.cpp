@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -20,7 +20,7 @@ void kernel_main() {
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
     uint32_t scalar = get_arg_val<uint32_t>(6);
-    generate_reduce_scaler(cb_id_in2, scalar);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_id_in2, scalar);
 #endif
 
     constexpr uint32_t onetile = 1;

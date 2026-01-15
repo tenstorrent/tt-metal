@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/assert.h"
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
@@ -200,9 +200,9 @@ void kernel_main() {
     constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
 
     // generate and send scaler to compute
-    constexpr bool is_half_tile = (get_tile_size(cb_identity_scale_in) < 2 * tt::constants::TILE_HW);
-    generate_reduce_scaler<is_half_tile>(cb_identity_scale_in, identity_scalar_packed);
-    generate_reduce_scaler<is_half_tile>(cb_zero_in, zero_scalar_packed);
+    // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
+    dataflow_kernel_lib::generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // Generate sliding window mask only if we have local data and need it
