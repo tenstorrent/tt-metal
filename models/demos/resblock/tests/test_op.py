@@ -38,7 +38,7 @@ def create_random_tensor(shape, random_tensor_gen):
 )
 @pytest.mark.parametrize(
     "tile_size",
-    [(1, 32), (32, 32)],
+    [(1, 32), (16, 32), (32, 32)],
 )
 @pytest.mark.parametrize(
     "dtype",
