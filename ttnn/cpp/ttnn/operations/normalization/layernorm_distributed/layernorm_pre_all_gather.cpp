@@ -37,7 +37,7 @@ ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
     }
     return ttnn::prim::layer_norm_pre_all_gather(
         input_tensor,
-        LayerNormDistributedType::LAYERNORM,
+        ttnn::prim::LayerNormDistributedType::LAYERNORM,
         dtype,
         kernel_config_val,
         program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),

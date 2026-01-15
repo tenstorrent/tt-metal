@@ -43,7 +43,7 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
     return ttnn::prim::layer_norm_post_all_gather(
         input_tensor,
         stats,
-        LayerNormDistributedType::RMSNORM,
+        ttnn::prim::LayerNormDistributedType::RMSNORM,
         epsilon,
         weight,
         bias,

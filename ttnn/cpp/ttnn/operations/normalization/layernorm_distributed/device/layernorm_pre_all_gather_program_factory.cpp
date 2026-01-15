@@ -18,7 +18,7 @@
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
-namespace ttnn::operations::normalization::program {
+namespace ttnn::prim {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -52,12 +52,10 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 // =============================================================================
 
 LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgramFactory::create(
-    const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-    const LayerNormPreAllGatherTensorArgs& tensor_args,
-    Tensor& output) {
+    const LayerNormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    const auto& a = tensor_args.input;
+    const auto& a = tensor_args;
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
@@ -260,13 +258,13 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
 
 void LayerNormPreAllGatherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormPreAllGatherOperationAttributes& /*operation_attributes*/,
-    const LayerNormPreAllGatherTensorArgs& tensor_args,
+    const LayerNormPreAllGatherParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.input.buffer()->address();
+    const auto input_addr = tensor_args.buffer()->address();
     const auto output_addr = output.buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
@@ -292,12 +290,10 @@ void LayerNormPreAllGatherProgramFactory::override_runtime_arguments(
 // =============================================================================
 
 LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DProgramFactory::create(
-    const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-    const LayerNormPreAllGatherTensorArgs& tensor_args,
-    Tensor& output) {
+    const LayerNormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    const auto& a = tensor_args.input;
+    const auto& a = tensor_args;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
@@ -507,13 +503,13 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
 
 void LayerNormPreAllGather2DProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormPreAllGatherOperationAttributes& /*operation_attributes*/,
-    const LayerNormPreAllGatherTensorArgs& tensor_args,
+    const LayerNormPreAllGatherParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.input.buffer()->address();
+    const auto input_addr = tensor_args.buffer()->address();
     const auto output_addr = output.buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
@@ -532,4 +528,4 @@ void LayerNormPreAllGather2DProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::normalization::program
+}  // namespace ttnn::prim

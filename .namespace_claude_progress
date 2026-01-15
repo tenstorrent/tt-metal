@@ -85,3 +85,6 @@
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/where/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/kv_cache/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/matmul/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/normalization/groupnorm/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device
