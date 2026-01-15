@@ -71,7 +71,7 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
-              "name": "[BH-DB] Llama-3.1-8B-Instruct",
+              "name": "[BH-DB][v1] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 20,
               "benchmark-timeout": 5,
@@ -80,19 +80,25 @@ jobs:
               "mesh-device": "P150x2",
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"data_parallel\": 2}",
+              "additional-server-args": "--data_parallel_size 2",
+              "use-vllm-v1": true,
+              "structured-output": true,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[BH-QB-GE] Llama-3.1-8B-Instruct",
+              "name": "[BH-QB-GE][v1] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 20,
-              "benchmark-timeout": 5,
+              "server-timeout": 35,
+              "benchmark-timeout": 10,
               "runner-label": "BH-QB-GE",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"data_parallel\": 1}",
+              "additional-server-args": "--data_parallel_size 1",
+              "use-vllm-v1": true,
+              "structured-output": true,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
             },
@@ -368,8 +374,7 @@ jobs:
       - ${{ matrix.test-group.runner-label }}
       - ${{ matrix.test-group.arch }}
       - in-service
-      - pipeline-functional
-      - pipeline-perf
+      - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && 'pipeline-perf') || 'pipeline-functional' }}
     container:
       image: ${{ inputs.docker-image }}
       env:
