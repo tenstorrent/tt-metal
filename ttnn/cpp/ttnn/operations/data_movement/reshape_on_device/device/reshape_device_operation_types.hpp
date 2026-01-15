@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::reshape_on_device {
+namespace ttnn::prim {
 
 struct ReshapeOnDeviceParams {
     tt::tt_metal::Shape logical_output_shape;
@@ -20,4 +20,4 @@ struct ReshapeOnDeviceInputs {
 
 using tensor_return_value_t = tt::tt_metal::Tensor;
 
-}  // namespace ttnn::operations::data_movement::reshape_on_device
+}  // namespace ttnn::prim
