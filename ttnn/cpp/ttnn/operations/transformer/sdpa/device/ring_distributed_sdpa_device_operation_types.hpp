@@ -19,12 +19,14 @@ struct RingDistributedSDPAParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    std::optional<int64_t> chunk_start_idx;
 };
 
 struct RingDistributedSDPAInputs {
     ttnn::Tensor q;
     ttnn::Tensor k;
     ttnn::Tensor v;
+    std::optional<ttnn::Tensor> page_table;
 };
 
 }  // namespace ttnn::prim

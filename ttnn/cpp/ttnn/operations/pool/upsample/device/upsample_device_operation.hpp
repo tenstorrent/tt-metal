@@ -15,6 +15,7 @@
 #include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_nearest_float_program_factory.hpp"
 
 namespace ttnn::prim {
 
@@ -26,7 +27,8 @@ struct UpsampleOperation {
     using program_factory_t = std::variant<
         UpsampleBilinearProgramFactory,
         UpsampleMultiCoreInterleavedProgramFactory,
-        UpsampleMultiCoreShardedProgramFactory>;
+        UpsampleMultiCoreShardedProgramFactory,
+        UpsampleNearestFloatProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
@@ -40,8 +42,8 @@ struct UpsampleOperation {
 
 ttnn::Tensor upsample(
     const ttnn::Tensor& input_tensor,
-    int scale_factor_h,
-    int scale_factor_w,
+    float scale_factor_h,
+    float scale_factor_w,
     const std::string& mode,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,

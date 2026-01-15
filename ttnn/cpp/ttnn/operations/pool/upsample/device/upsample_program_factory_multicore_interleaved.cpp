@@ -16,6 +16,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 
 namespace ttnn::prim {
 
@@ -23,8 +24,15 @@ UpsampleMultiCoreInterleavedProgramFactory::cached_program_t UpsampleMultiCoreIn
     const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
     const auto& input = input_tensor;
     auto& output = output_tensor;
-    const auto& scale_factor_h = operation_attributes.scale_factor_h;
-    const auto& scale_factor_w = operation_attributes.scale_factor_w;
+    // This factory only supports integer scale factors
+    TT_FATAL(
+        operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_h) &&
+            operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_w),
+        "Interleaved upsample factory requires integer scale factors, got scale_h={}, scale_w={}",
+        operation_attributes.scale_factor_h,
+        operation_attributes.scale_factor_w);
+    const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
+    const uint32_t scale_factor_w = static_cast<uint32_t>(operation_attributes.scale_factor_w);
 
     tt::tt_metal::Program program{};
 
