@@ -302,10 +302,15 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             {8, 16, 0, 0},   // Option 2
             {8, 8, 0, 0},    // Option 3
             {4, 8, 0, 0},    // Option 4
-            {4, 8, 4, 4},    // Option 4
-            {4, 8, 2, 2},    // Option 4
-            {4, 4, 2, 2},    // Option 4
-            {2, 2, 2, 2}     // Option 4
+            {4, 4, 0, 0},    // Option 5: VC0 only, smaller
+            {2, 4, 0, 0},    // Option 6: VC0 only, smaller
+            {2, 2, 0, 0},    // Option 7: VC0 only, smaller
+            {1, 2, 0, 0},    // Option 8: VC0 only, smallest
+            {1, 1, 0, 0},    // Option 9: VC0 only, smallest
+            {4, 8, 4, 4},    // Option 10: supports both VCs
+            {4, 8, 2, 2},    // Option 11: supports both VCs
+            {4, 4, 2, 2},    // Option 12: supports both VCs
+            {2, 2, 2, 2}     // Option 13: supports both VCs
         },
         // BLACKHOLE
         {
@@ -313,7 +318,13 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             {16, 32, 0, 0},  // Option 2
             {16, 16, 0, 0},  // Option 3
             {8, 16, 0, 0},   // Option 4
-            {8, 8, 0, 0}     // Option 5
+            {8, 8, 0, 0},    // Option 5
+            {4, 8, 0, 0},    // Option 6
+            {4, 4, 0, 0},    // Option 7
+            {2, 4, 0, 0},    // Option 8
+            {2, 2, 0, 0},    // Option 9
+            {1, 2, 0, 0},    // Option 10
+            {1, 1, 0, 0}     // Option 11
         }};
 
     auto get_num_buffer_slots = [](Topology topology, size_t arch_index) -> const std::vector<PerVcBufferSlots>& {
@@ -324,37 +335,58 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             {
                 {7, 11, 0, 0},  // Option 1: VC0 only
                 {4, 8, 0, 0},   // Option 2: VC0 only, smaller
-                {4, 8, 2, 4},   // Option 3: supports both VCs
-                {4, 8, 2, 2},   // Option 4: supports both VCs, smaller VC1 receiver
-                {2, 4, 2, 2},   // Option 5: supports both VCs, smaller overall
-                {2, 4, 1, 1},   // Option 6: supports both VCs, smaller overall
-                {2, 2, 1, 1},   // Option 7: supports both VCs, smaller overall
-                {1, 1, 1, 1}    // Option 8: supports both VCs, smaller overall
-
+                {4, 4, 0, 0},   // Option 3: VC0 only, smaller
+                {2, 4, 0, 0},   // Option 4: VC0 only, smaller
+                {2, 2, 0, 0},   // Option 5: VC0 only, smaller
+                {1, 2, 0, 0},   // Option 6: VC0 only, smallest
+                {1, 1, 0, 0},   // Option 7: VC0 only, smallest
+                {4, 8, 2, 4},   // Option 8: supports both VCs
+                {4, 8, 2, 2},   // Option 9: supports both VCs, smaller VC1 receiver
+                {2, 4, 2, 2},   // Option 10: supports both VCs, smaller overall
+                {2, 4, 1, 1},   // Option 11: supports both VCs, smaller overall
+                {2, 2, 1, 1},   // Option 12: supports both VCs, smaller overall
+                {1, 1, 1, 1}    // Option 13: supports both VCs, smaller overall
             },
             // BLACKHOLE
             {
                 {8, 16, 0, 0},  // Option 1: VC0 only
                 {8, 8, 0, 0},   // Option 2: VC0 only
                 {4, 8, 0, 0},   // Option 3: VC0 only
-                {4, 8, 2, 4},   // Option 4: supports both VCs
-                {4, 8, 2, 2},   // Option 5: supports both VCs, smaller VC1 receiver
-                {2, 4, 2, 2},   // Option 6: supports both VCs, smaller overall
-                {2, 4, 1, 1},   // Option 7: supports both VCs, smaller overall
-                {2, 2, 1, 1},   // Option 8: supports both VCs, smaller overall
-                {1, 1, 1, 1}    // Option 9: supports both VCs, smaller overall
+                {4, 4, 0, 0},   // Option 4: VC0 only, smaller
+                {2, 4, 0, 0},   // Option 5: VC0 only, smaller
+                {2, 2, 0, 0},   // Option 6: VC0 only, smaller
+                {1, 2, 0, 0},   // Option 7: VC0 only, smallest
+                {1, 1, 0, 0},   // Option 8: VC0 only, smallest
+                {4, 8, 2, 4},   // Option 9: supports both VCs
+                {4, 8, 2, 2},   // Option 10: supports both VCs, smaller VC1 receiver
+                {2, 4, 2, 2},   // Option 11: supports both VCs, smaller overall
+                {2, 4, 1, 1},   // Option 12: supports both VCs, smaller overall
+                {2, 2, 1, 1},   // Option 13: supports both VCs, smaller overall
+                {1, 1, 1, 1}    // Option 14: supports both VCs, smaller overall
             }};
         static const std::vector<std::vector<PerVcBufferSlots>> other_buffer_slot_options = {
             // WORMHOLE_B0
             {{16, 16, 0, 0},  // Only VC0 for non-mesh topologies.
-             {8, 16, 0, 0}},
+             {8, 16, 0, 0},
+             {8, 8, 0, 0},
+             {4, 8, 0, 0},
+             {4, 4, 0, 0},
+             {2, 4, 0, 0},
+             {2, 2, 0, 0},
+             {1, 2, 0, 0},
+             {1, 1, 0, 0}},
             // BLACKHOLE
             {{32, 32, 0, 0},  // Only VC0 for non-mesh topologies.
              {16, 32, 0, 0},
              {16, 16, 0, 0},
              {8, 16, 0, 0},
              {8, 8, 0, 0},
-             {4, 8, 0, 0}}};
+             {4, 8, 0, 0},
+             {4, 4, 0, 0},
+             {2, 4, 0, 0},
+             {2, 2, 0, 0},
+             {1, 2, 0, 0},
+             {1, 1, 0, 0}}};
 
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> mesh_slots(mesh_buffer_slot_options);
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(

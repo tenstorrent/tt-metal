@@ -69,6 +69,17 @@ void bind_fabric_api(nb::module_& mod) {
         .value("INIT_FABRIC", tt::tt_fabric::FabricManagerMode::INIT_FABRIC)
         .value("TERMINATE_FABRIC", tt::tt_fabric::FabricManagerMode::TERMINATE_FABRIC);
 
+    nb::class_<tt::tt_fabric::FabricRouterConfig>(mod, "FabricRouterConfig", R"(
+        Configuration for router-level parameters.
+        Extensible for future router tuning (buffer counts, VC settings, etc.)
+        )")
+        .def(nb::init<>())
+        .def_rw(
+            "max_packet_payload_size_bytes",
+            &tt::tt_fabric::FabricRouterConfig::max_packet_payload_size_bytes,
+            "Optional override for maximum packet payload size (bytes). If not set, uses architecture and routing mode "
+            "defaults.");
+
     mod.def(
         "set_fabric_config",
         &tt::tt_fabric::SetFabricConfig,
@@ -77,7 +88,8 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("num_planes") = nb::none(),
         nb::arg("fabric_tensix_config") = nb::cast(tt::tt_fabric::FabricTensixConfig::DISABLED),
         nb::arg("fabric_udm_mode") = nb::cast(tt::tt_fabric::FabricUDMMode::DISABLED),
-        nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT));
+        nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT),
+        nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}));
 }
 
 }  // namespace ttnn::fabric
