@@ -67,6 +67,8 @@ metal_infra:
 
 # Current time budgets are sums of timeouts of existing tests.
 ttnn:
+  smoke:
+    wh_llmbox: 5
   unit:
     wh_llmbox: 50
   e2e:

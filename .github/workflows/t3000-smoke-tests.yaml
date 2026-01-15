@@ -1,0 +1,37 @@
+name: "(T3K) T3000 smoke tests"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Select model to test"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+
+permissions:
+  packages: write
+  contents: write
+
+jobs:
+  t3000-smoke-tests:
+    secrets: inherit
+    uses: ./.github/workflows/t3000-smoke-tests-impl.yaml
+    with:
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      model: ${{ inputs.model || 'all' }}

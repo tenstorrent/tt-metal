@@ -1,0 +1,18 @@
+# This file defines the test matrix for the T3000 smoke tests pipeline.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The command to run the test.
+#   sku: Machine type to target (e.g. wh_llmbox).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   timeout: The maximum allowed runtime for this job in minutes.
+#
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: test_all_to_all_combine_no_trace_submesh
+  cmd: tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace_submesh
+  sku: wh_llmbox
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+  timeout: 5
