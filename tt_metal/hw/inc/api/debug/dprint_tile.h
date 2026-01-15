@@ -5,9 +5,7 @@
 #pragma once
 
 #include "hostdevcommon/dprint_common.h"
-#ifndef ARCH_QUASAR
 #include "llk_io.h"
-#endif
 #include "api/debug/ring_buffer.h"
 
 // Printing tiles from CBs requires reading CB config from generated files

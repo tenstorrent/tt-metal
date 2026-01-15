@@ -9,16 +9,16 @@
 // 2) instantiate global variables
 
 #include "ckernel.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 
 #include "chlkc_list.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-#include "remote_circular_buffer_api.h"
+#include "api/remote_circular_buffer_api.h"
 #endif
-#include "debug/stack_usage.h"
+#include "internal/debug/stack_usage.h"
 
 // Global vars
 uint32_t unp_cfg_context = 0;
