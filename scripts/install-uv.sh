@@ -143,6 +143,11 @@ fi
 ensure_local_bin_in_path() {
     local user_bin="${HOME}/.local/bin"
     if [[ -d "$user_bin" ]] && [[ ":$PATH:" != *":$user_bin:"* ]]; then
+        # Warn if PATH is very long (some systems have PATH length limits)
+        if [[ ${#PATH} -gt 4096 ]]; then
+            echo "Warning: PATH is very long (${#PATH} characters)" >&2
+            echo "Adding ~/.local/bin may cause issues on some systems" >&2
+        fi
         export PATH="$user_bin:$PATH"
     fi
 }
@@ -184,10 +189,11 @@ requires_break_system_packages() {
 # ============================================================================
 
 # Verify SHA256 hash of a file
-# Arguments: $1 = file path, $2 = expected hash
+# Arguments: $1 = file path, $2 = expected hash, $3 = install mode (optional, for security enforcement)
 verify_sha256() {
     local file="$1"
     local expected_hash="$2"
+    local install_mode="${3:-user}"
     local actual_hash
 
     if command -v sha256sum &>/dev/null; then
@@ -195,8 +201,15 @@ verify_sha256() {
     elif command -v shasum &>/dev/null; then
         actual_hash=$(shasum -a 256 "$file" | cut -d' ' -f1)
     else
-        echo "Warning: No SHA256 tool available, skipping hash verification" >&2
-        return 0
+        if [[ "$install_mode" == "system" ]]; then
+            echo "Error: SHA256 verification required for system installation but no tool available" >&2
+            echo "Please install sha256sum or shasum (usually provided by coreutils or openssl)" >&2
+            return 1
+        else
+            echo "Warning: No SHA256 tool available, skipping hash verification" >&2
+            echo "Continuing with unverified installer (not recommended for production use)" >&2
+            return 0
+        fi
     fi
 
     if [[ "$actual_hash" != "$expected_hash" ]]; then
@@ -226,7 +239,10 @@ install_uv_standalone() {
     # shellcheck disable=SC2064
     # SC2064: We intentionally expand $temp_script at trap-setting time (not signal time)
     # so the cleanup uses the actual temp file path, not whatever $temp_script might be later.
-    trap "rm -f '$temp_script'" EXIT
+    cleanup_temp() {
+        rm -f "$temp_script" 2>/dev/null
+    }
+    trap cleanup_temp EXIT INT TERM
 
     # Download installer script to temp file
     if command -v curl &>/dev/null; then
@@ -245,8 +261,8 @@ install_uv_standalone() {
         return 1
     fi
 
-    # Verify the hash before executing
-    if ! verify_sha256 "$temp_script" "$UV_INSTALLER_SHA256"; then
+    # Verify the hash before executing (pass install mode for security enforcement)
+    if ! verify_sha256 "$temp_script" "$UV_INSTALLER_SHA256" "$INSTALL_MODE"; then
         rm -f "$temp_script"
         return 1
     fi
@@ -320,16 +336,47 @@ fail_system_install() {
 
 # Install uv on Fedora/RHEL family using system package manager
 install_uv_fedora_system() {
+    local temp_output
+    temp_output=$(mktemp "${TMPDIR:-/tmp}/uv-dnf-output.XXXXXX.log" 2>/dev/null || echo "/tmp/uv-dnf-output.log")
+
     if command -v dnf &>/dev/null; then
-        if ! dnf install -y uv; then
-            echo "Error: dnf install failed" >&2
-            return 1
+        if ! dnf install -y uv 2>&1 | tee "$temp_output"; then
+            # Check for specific error conditions
+            if grep -qiE "no package.*uv|package.*uv.*not found|nothing provides.*uv" "$temp_output" 2>/dev/null; then
+                echo "Error: uv package not available in Fedora repositories" >&2
+                echo "The uv package may not be in the default repositories for this Fedora version." >&2
+                echo "Falling back to pip-based installation..." >&2
+                rm -f "$temp_output"
+                # Fall back to pip installation
+                install_uv_pip_system "fedora" ""
+                return $?
+            else
+                echo "Error: dnf install failed" >&2
+                echo "Check the output above for details." >&2
+                rm -f "$temp_output"
+                return 1
+            fi
         fi
+        rm -f "$temp_output"
     elif command -v yum &>/dev/null; then
-        if ! yum install -y uv; then
-            echo "Error: yum install failed" >&2
-            return 1
+        if ! yum install -y uv 2>&1 | tee "$temp_output"; then
+            # Check for specific error conditions
+            if grep -qiE "no package.*uv|package.*uv.*not found|nothing provides.*uv" "$temp_output" 2>/dev/null; then
+                echo "Error: uv package not available in yum repositories" >&2
+                echo "The uv package may not be in the default repositories for this RHEL/CentOS version." >&2
+                echo "Falling back to pip-based installation..." >&2
+                rm -f "$temp_output"
+                # Fall back to pip installation
+                install_uv_pip_system "rhel" ""
+                return $?
+            else
+                echo "Error: yum install failed" >&2
+                echo "Check the output above for details." >&2
+                rm -f "$temp_output"
+                return 1
+            fi
         fi
+        rm -f "$temp_output"
     else
         echo "Error: No package manager found (dnf/yum)" >&2
         return 1

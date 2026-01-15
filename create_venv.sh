@@ -236,6 +236,14 @@ if [ -f "$SCRIPT_DIR/scripts/install-uv.sh" ]; then
     UV_VERSION=$(grep -m1 '^UV_VERSION=' "$SCRIPT_DIR/scripts/install-uv.sh" | cut -d'"' -f2)
     if [ -n "$UV_VERSION" ]; then
         echo "Using uv version from install-uv.sh: $UV_VERSION"
+        # Optional: Verify installed version matches pinned version (informational only)
+        if command -v uv &>/dev/null; then
+            installed_version=$(uv --version 2>/dev/null | cut -d' ' -f2 || echo "")
+            if [ -n "$installed_version" ] && [ "$installed_version" != "$UV_VERSION" ]; then
+                echo "Warning: Installed uv version ($installed_version) differs from pinned version ($UV_VERSION)" >&2
+                echo "Consider running: bash $SCRIPT_DIR/scripts/install-uv.sh --force" >&2
+            fi
+        fi
     fi
 fi
 
