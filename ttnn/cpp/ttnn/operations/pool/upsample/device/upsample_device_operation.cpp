@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::pool::upsample {
 
-static std::array<uint32_t, 4> get_input_shape(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+static std::array<uint32_t, 4> get_input_shape(const UpsampleParams& args, const UpsampleInputs& tensor_args) {
     const Tensor& input = tensor_args.input_tensor;
 
     // For bilinear mode, input is the HALOED tensor, so we must use sliding_window_config for dimensions

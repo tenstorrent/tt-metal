@@ -22,8 +22,8 @@ namespace ttnn::operations::data_movement::scatter {
 using namespace tt::tt_metal;
 
 struct ScatterDeviceOperation {
-    using operation_attributes_t = scatter::operation_attributes_t;
-    using tensor_args_t = scatter::tensor_args_t;
+    using operation_attributes_t = ScatterParams;
+    using tensor_args_t = ScatterInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t =

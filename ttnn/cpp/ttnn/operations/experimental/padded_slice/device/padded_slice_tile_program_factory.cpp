@@ -346,7 +346,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
 }
 
 PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output) {
+    const PaddedSliceParams& operation_attributes, const PaddedSliceInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.padded_slice_start;
     const auto& output_tensor_end = operation_attributes.padded_slice_end;
@@ -540,8 +540,8 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
 
 void PaddedSliceTileProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const PaddedSliceParams& /*operation_attributes*/,
+    const PaddedSliceInputs& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     const auto& src_tensor = tensor_args.input;

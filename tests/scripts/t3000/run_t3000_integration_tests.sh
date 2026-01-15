@@ -388,6 +388,11 @@ run_t3000_motif_tests() {
     "models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif"
 }
 
+run_t3000_qwenimage_tests() {
+  run_t3000_dit_tests \
+    "models/experimental/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k 2x4"
+}
+
 run_t3000_wan22_tests() {
   # Record the start time
   fail=0
@@ -493,6 +498,9 @@ run_t3000_tests() {
 
   # Run mochi tests
   run_t3000_mochi_tests
+
+  # Run qwenimage tests
+  run_t3000_qwenimage_tests
 }
 
 fail=0

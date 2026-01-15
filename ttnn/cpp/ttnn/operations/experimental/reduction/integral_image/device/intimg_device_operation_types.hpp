@@ -8,9 +8,9 @@
 
 namespace ttnn::operations::experimental::reduction {
 
-struct operation_attributes_t {};
+struct ReductionParams {};
 
-struct tensor_args_t {
+struct ReductionInputs {
     const Tensor& input_tensor;
 };
 

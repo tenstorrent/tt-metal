@@ -22,9 +22,9 @@ struct GatherProgramFactorySingleRowSingleCore {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const GatherParams&, const GatherInputs&, tensor_return_value_t&);
     static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        cached_program_t&, const GatherParams&, const GatherInputs&, tensor_return_value_t&);
 };
 
 // Single row - multi core
@@ -37,8 +37,8 @@ struct GatherProgramFactorySingleRowMultiCore {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const GatherParams&, const GatherInputs&, tensor_return_value_t&);
     static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        cached_program_t&, const GatherParams&, const GatherInputs&, tensor_return_value_t&);
 };
 }  // namespace ttnn::operations::data_movement::gather::program

@@ -155,7 +155,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
  *    Refer to the kernel code for info on compile time args and runtime args
  */
 ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& dim = operation_attributes.dim;
@@ -390,8 +390,8 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
 
 void ArgMaxMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const ArgmaxParams& /*operation_attributes*/,
+    const ArgmaxInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();

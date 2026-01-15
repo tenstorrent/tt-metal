@@ -33,9 +33,9 @@ constexpr uint32_t kNumInputTiles = 2;
 constexpr uint32_t kNumOutputTiles = 2;
 
 // Overrides the seed with a per-device seed by using the device ID as an offset.
-operation_attributes_t override_per_device_seed(
-    const operation_attributes_t& args, const ttnn::MeshCoordinate& mesh_coord, const ttnn::Tensor& input_tensor) {
-    operation_attributes_t args_with_per_device_seed = args;
+DropoutParams override_per_device_seed(
+    const DropoutParams& args, const ttnn::MeshCoordinate& mesh_coord, const ttnn::Tensor& input_tensor) {
+    DropoutParams args_with_per_device_seed = args;
     args_with_per_device_seed.seed += input_tensor.device()->get_device(mesh_coord)->id();
     return args_with_per_device_seed;
 }
@@ -171,7 +171,7 @@ inline void assign_per_core_runtime_args(
 }
 
 DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, Tensor& output) {
+    const DropoutParams& args, const DropoutInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -288,8 +288,8 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
 
 void DropoutProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const DropoutParams& operation_attributes,
+    const DropoutInputs& tensor_args,
     Tensor& output) {
     using namespace tt::tt_metal;
 
@@ -344,9 +344,9 @@ void DropoutProgramFactory::override_runtime_arguments(
 }
 
 DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& args,
+    const DropoutParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
+    const DropoutInputs& tensor_args,
     Tensor& output) {
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
 
@@ -366,8 +366,8 @@ DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::c
 
 void DropoutMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
+    const DropoutParams& args,
+    const DropoutInputs& tensor_args,
     Tensor& tensor_return_value) {
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
 
