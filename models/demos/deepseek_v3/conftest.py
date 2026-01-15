@@ -180,7 +180,7 @@ def clear_state_dict_cache(request):
 def hf_config_short(request, hf_config):
     hf_config_out = deepcopy(hf_config)
     hf_config_out.num_hidden_layers = getattr(request, "param", 1)
-    hf_config_out.max_seq_len = 4096
+    hf_config_out.max_seq_len = 128 * 1024
     return hf_config_out
 
 

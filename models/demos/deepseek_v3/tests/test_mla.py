@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import resource
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,6 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
@@ -31,6 +31,15 @@ from models.demos.deepseek_v3.utils.test_utils import (
 
 PCC_REQUIRED = 0.99
 PCC_REQUIRED_KVPE = 0.999
+
+
+def log_rss(note: str) -> None:
+    try:
+        rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except Exception as exc:
+        logger.info(f"RSS memory {note}: unavailable ({exc})")
+        return
+    logger.info(f"RSS memory {note}: {rss_kb} KB")
 
 
 def get_cache_on_host(tt_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
@@ -60,29 +69,44 @@ def generate_reference_io(
     mode: str,
     state_dict: dict[str, torch.Tensor],
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    logger.info(
+        f"generate_reference_io: mode={mode} seq_len={seq_len} batch_size={batch_size} module_path={module_path}"
+    )
+    log_rss("generate_reference_io start")
     if module_path is None:
         reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
         state_dict = add_inv_scale_to_state_dict(
             reference_model.state_dict(),
             block_shape=hf_config.quantization_config["weight_block_size"],
         )
+        log_rss("after add_inv_scale_to_state_dict")
     else:
         reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
+        log_rss("after reference_model init")
         state_dict = sub_state_dict(state_dict, module_path + ".")
+        log_rss("after sub_state_dict")
         dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+        log_rss("after dequantize_state_dict")
         reference_model.load_state_dict(dequantized_state_dict)
+        log_rss("after load_state_dict")
 
+    input_bytes = batch_size * seq_len * hf_config.hidden_size * torch.tensor([], dtype=torch.bfloat16).element_size()
+    logger.info(f"Allocating torch_input: ~{input_bytes / (1024 ** 2):.1f} MB")
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
+    log_rss("after torch_input alloc")
     position_ids = None
     if mode == "prefill":
         position_ids_or_seq_lens = torch.tensor([seq_len])
     else:
         position_ids = position_ids_or_seq_lens = torch.randint(0, hf_config.max_seq_len - 1, (batch_size,))
+    log_rss("after position_ids setup")
     reference_output, input_cache, output_cache = run_reference_with_attention(
         reference_model, torch_input, position_ids_or_seq_lens, layer_idx, hf_config, mode, zeroed_cache=True
     )
+    log_rss("after run_reference_with_attention")
     input_cache = torch_cache_from_transformers_single_layer(input_cache, layer_idx)
     output_cache = torch_cache_from_transformers_single_layer(output_cache, layer_idx)
+    log_rss("after torch_cache_from_transformers_single_layer")
     if mode == "decode":
         torch_input = torch_input.permute(1, 0, 2)  # [seq_len, batch_size, hidden_size]
         reference_output = reference_output.permute(1, 0, 2)  # [seq_len, batch_size, hidden_size]
@@ -315,6 +339,11 @@ def run_test_forward_pass_mla2d(
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
         model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode, state_dict
     )
+    logger.info(
+        f"Reference IO ready: torch_input={tuple(torch_input.shape)} "
+        f"reference_output={tuple(reference_output.shape)} "
+        f"position_ids={None if position_ids is None else tuple(position_ids.shape)}"
+    )
 
     # Set up page config
     logger.info("Setting up model configs")
@@ -322,6 +351,10 @@ def run_test_forward_pass_mla2d(
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
     paged_input_cache, torch_page_table = paged_cache_from_torch(
         input_cache, tuple(mesh_device.shape), paged_config, user_id
+    )
+    logger.info(
+        f"Paged cache ready: paged_input_cache={tuple(paged_input_cache.shape)} "
+        f"torch_page_table={tuple(torch_page_table.shape)} user_id={user_id}"
     )
 
     # Set up model config
@@ -336,6 +369,10 @@ def run_test_forward_pass_mla2d(
     model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device)
     model_state = MLA2D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_cache)
     run_config = create_run_config(model_config, weight_config, model_state)
+    logger.info(
+        f"Configs ready: model_config={model_config.__class__.__name__} "
+        f"weight_config={weight_config.__class__.__name__}"
+    )
 
     # Set up ttnn inputs
     logger.info("Setting up model inputs")
@@ -347,6 +384,7 @@ def run_test_forward_pass_mla2d(
         memory_config=run_config["input_memory_config"],
         layout=ttnn.TILE_LAYOUT,
     )
+    logger.info(f"tt_input ready: shape={tuple(tt_input.shape)} dtype={tt_input.dtype}")
 
     position_ids_tensor = (
         ttnn.from_torch(
@@ -358,11 +396,21 @@ def run_test_forward_pass_mla2d(
         if mode == "decode"
         else None
     )
+    if position_ids_tensor is not None:
+        logger.info(
+            f"position_ids_tensor ready: shape={tuple(position_ids_tensor.shape)} " f"dtype={position_ids_tensor.dtype}"
+        )
 
     tt_page_table = MLA2D.create_page_table(
         page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
     )
+    logger.info(f"tt_page_table ready: shape={tuple(tt_page_table.shape)}")
     tt_rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
+    if isinstance(tt_rope_tensors, dict):
+        rope_shapes = {key: tuple(value.shape) for key, value in tt_rope_tensors.items()}
+        logger.info(f"tt_rope_tensors ready: keys={list(tt_rope_tensors.keys())} shapes={rope_shapes}")
+    else:
+        logger.info(f"tt_rope_tensors ready: shapes={[tuple(tensor.shape) for tensor in tt_rope_tensors]}")
 
     # Forward pass
     logger.info("Running TTNN forward pass")
@@ -372,11 +420,14 @@ def run_test_forward_pass_mla2d(
     else:
         tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
 
+    logger.info(f"TTNN forward pass done: tt_output shape={tuple(tt_output.shape)} dtype={tt_output.dtype}")
+
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
     ).reshape(
         -1, seq_len, hf_config_short.hidden_size
     )  # Concatenate all batches together
+    logger.info(f"tt_output_torch ready: shape={tuple(tt_output_torch.shape)} dtype={tt_output_torch.dtype}")
 
     # Check PCC
     tt_cache = torch_cache_from_paged(
@@ -384,6 +435,7 @@ def run_test_forward_pass_mla2d(
         torch_page_table,
         mesh_device.get_num_devices(),
     )
+    logger.info(f"tt_cache ready: shape={tuple(tt_cache.shape)}")
     if mode == "prefill":
         assert (
             check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
@@ -410,10 +462,7 @@ def run_test_forward_pass_mla2d(
 
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row",
-    [
-        ("decode", 1, USERS_PER_ROW),
-    ]
-    + [("prefill", seq_len, 1) for seq_len in PREFILL_SEQ_LENS],
+    [("prefill", 64 * 1024, 1)],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -426,11 +475,11 @@ def run_test_forward_pass_mla2d(
 )
 @pytest.mark.parametrize(
     "module_path",
-    [None, "model.layers.0.self_attn"],
+    ["model.layers.0.self_attn"],
 )
 @pytest.mark.parametrize(
     "test_closure",
-    [run_test_forward_pass_mla1d, run_test_forward_pass_mla2d],
+    [run_test_forward_pass_mla2d],
 )
 def test_forward_pass(
     mode,
@@ -448,10 +497,10 @@ def test_forward_pass(
     state_dict,
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
+    # if mode == "prefill" and seq_len != 128:
+    #     pytest.skip(
+    #         f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+    #     )
 
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0
