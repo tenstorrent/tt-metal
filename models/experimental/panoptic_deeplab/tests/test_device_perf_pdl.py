@@ -54,7 +54,7 @@ def test_device_perf_pdl_20_cores(
     [
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k panoptic_deeplab_110_cores",
-            12_445_978,
+            7_156_261,
             PANOPTIC_DEEPLAB,
             PANOPTIC_DEEPLAB,
             1,
@@ -64,7 +64,7 @@ def test_device_perf_pdl_20_cores(
         ),
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k deeplab_v3_plus_110_cores",
-            8_471_069,
+            4_558_418,
             DEEPLAB_V3_PLUS,
             DEEPLAB_V3_PLUS,
             1,
