@@ -12,11 +12,11 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 
-namespace ttnn::operations::data_movement::move::program {
+namespace ttnn::prim {
 
 MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const MoveOperationAttributes& /*operation_attributes*/,
+    const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
@@ -93,8 +93,8 @@ MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
 
 void MoveShardedProgramFactory::override_runtime_arguments(
     MoveShardedProgramFactory::cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const MoveOperationAttributes& /*operation_attributes*/,
+    const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
@@ -126,4 +126,4 @@ void MoveShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::move::program
+}  // namespace ttnn::prim

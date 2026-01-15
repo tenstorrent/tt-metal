@@ -6,10 +6,12 @@
 #include "ttnn/operations/data_movement/copy/device/copy_program_factory.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::move::program {
+namespace ttnn::prim {
 
 MoveProgramFactory::cached_program_t MoveProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const MoveOperationAttributes& operation_attributes,
+    const MoveTensorArgs& tensor_args,
+    Tensor& tensor_return_value) {
     const Tensor& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
     using copy_attrs_t = ttnn::prim::operation_attributes_t;
@@ -24,8 +26,8 @@ MoveProgramFactory::cached_program_t MoveProgramFactory::create(
 
 void MoveProgramFactory::override_runtime_arguments(
     MoveProgramFactory::cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const MoveOperationAttributes& operation_attributes,
+    const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
     using copy_attrs_t = ttnn::prim::operation_attributes_t;
     using copy_args_t = ttnn::prim::tensor_args_t;
@@ -40,4 +42,4 @@ void MoveProgramFactory::override_runtime_arguments(
         cached_program, copy_attrs, copy_args, tensor_return_value);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim
