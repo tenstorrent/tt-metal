@@ -11,15 +11,14 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction::argmax {
+namespace ttnn::prim {
 
 struct ArgMaxDeviceOperation {
     using operation_attributes_t = ArgmaxParams;
     using tensor_args_t = ArgmaxInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t =
-        std::variant<program::ArgMaxSingleCoreProgramFactory, program::ArgMaxMultiCoreProgramFactory>;
+    using program_factory_t = std::variant<ArgMaxSingleCoreProgramFactory, ArgMaxMultiCoreProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -31,16 +30,14 @@ struct ArgMaxDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::reduction::argmax
-
-namespace ttnn::prim {
 ttnn::Tensor argmax(
-    const Tensor& input,
+    const ttnn::Tensor& input,
     tt::tt_metal::DataType output_dtype,
     std::optional<int> dim,
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool use_multicore,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<Tensor> optional_output_tensor = std::nullopt);
+    std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt);
+
 }  // namespace ttnn::prim

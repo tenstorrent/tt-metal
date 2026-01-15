@@ -6,7 +6,7 @@
 #include "argmax_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::reduction::argmax::program {
+namespace ttnn::prim {
 
 struct ArgMaxMultiCoreSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id0{};
@@ -29,4 +29,4 @@ struct ArgMaxMultiCoreProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::reduction::argmax::program
+}  // namespace ttnn::prim
