@@ -341,14 +341,14 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 }
             }
 
-            // While we have results in DST, take advantage of L1 accumulation
-            // to reduce row x cols tiles to rows x 1 tiles.
-            if (u > 0) {
-                // If on the same row, keep accumulating
-                PACK((llk_pack_reconfig_l1_acc(1)));
-            }
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                if (do_reduce) {
+            if constexpr (do_reduce) {
+                // While we have results in DST, take advantage of L1 accumulation
+                // to reduce row x cols tiles to rows x 1 tiles.
+                if (u > 0) {
+                    // If on the same row, keep accumulating
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+                for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile<true>(j, reduce_cb, i);
                 }
                 if (u == 0 && j == 0) {
@@ -364,7 +364,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             cb_push_back(in0_cb, cols);
         }
     }
-    if (do_reduce) {
+    if constexpr (do_reduce) {
         cb_push_back(reduce_cb, rows);
     }
 }
