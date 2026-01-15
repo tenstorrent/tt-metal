@@ -16,6 +16,9 @@ namespace ttnn::operations::normalization {
 // Softmax program configuration structs
 struct SoftmaxDefaultProgramConfig {
     bool recip_legacy_compat = false;
+
+    SoftmaxDefaultProgramConfig() = default;
+    explicit SoftmaxDefaultProgramConfig(bool recip_legacy_compat) : recip_legacy_compat(recip_legacy_compat) {}
 };
 struct SoftmaxShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
@@ -23,6 +26,19 @@ struct SoftmaxShardedMultiCoreProgramConfig {
     std::size_t block_h{};
     std::size_t block_w{};
     bool recip_legacy_compat = false;
+
+    SoftmaxShardedMultiCoreProgramConfig() = default;
+    SoftmaxShardedMultiCoreProgramConfig(
+        CoreCoord compute_with_storage_grid_size,
+        std::size_t subblock_w,
+        std::size_t block_h,
+        std::size_t block_w,
+        bool recip_legacy_compat = false) :
+        compute_with_storage_grid_size(compute_with_storage_grid_size),
+        subblock_w(subblock_w),
+        block_h(block_h),
+        block_w(block_w),
+        recip_legacy_compat(recip_legacy_compat) {}
 };
 
 using SoftmaxProgramConfig = std::variant<SoftmaxDefaultProgramConfig, SoftmaxShardedMultiCoreProgramConfig>;
