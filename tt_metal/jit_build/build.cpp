@@ -309,8 +309,6 @@ void JitBuildEnv::init(
     // Includes
     // TODO(pgk) this list is insane
     std::vector<std::string> includeDirs = {
-        ".",
-        "..",
         root_,
         root_ + "ttnn",
         root_ + "ttnn/cpp",
