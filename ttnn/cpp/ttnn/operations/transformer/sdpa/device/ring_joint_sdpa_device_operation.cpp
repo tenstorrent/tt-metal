@@ -52,7 +52,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_tensor_k,
         joint_tensor_v};
 
-    ring_attention_all_gather_async::RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
+    ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
         args.all_gather_operation_attributes, args.all_gather_tensor_args);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
@@ -273,7 +273,7 @@ tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
-        ring_attention_all_gather_async::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
+        ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
             args.all_gather_operation_attributes, args.all_gather_tensor_args) /*all_gather input tensors*/
     );
 }
@@ -330,18 +330,17 @@ ring_joint_scaled_dot_product_attention(
         rank - 1,
         dim);
 
-    auto all_gather_operation_attributes =
-        operations::experimental::ccl::ring_attention_all_gather_async::operation_attributes_t{
-            {},
-            gather_dim,
-            num_links,
-            num_devices,
-            input_tensor_k.memory_config(),
-            topology,
-            multi_device_global_semaphore,
-            subdevice_id,
-            cluster_axis};
-    auto all_gather_tensor_args = operations::experimental::ccl::ring_attention_all_gather_async::tensor_args_t{
+    auto all_gather_operation_attributes = ttnn::experimental::prim::RingAttentionAllGatherAsyncParams{
+        {},
+        gather_dim,
+        num_links,
+        num_devices,
+        input_tensor_k.memory_config(),
+        topology,
+        multi_device_global_semaphore,
+        subdevice_id,
+        cluster_axis};
+    auto all_gather_tensor_args = ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs{
         {input_tensor_k, input_tensor_v}, {persistent_output_buffer_k, persistent_output_buffer_v}};
 
     auto operation_attributes = OperationType::operation_attributes_t(

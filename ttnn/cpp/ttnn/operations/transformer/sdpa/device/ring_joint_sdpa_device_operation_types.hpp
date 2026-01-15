@@ -23,8 +23,8 @@ struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    experimental::ccl::ring_attention_all_gather_async::operation_attributes_t all_gather_operation_attributes;
-    experimental::ccl::ring_attention_all_gather_async::tensor_args_t all_gather_tensor_args;
+    experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes;
+    experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
 
     // We need a constructor, because all_gather_struct is not default initializable.
@@ -36,8 +36,8 @@ struct operation_attributes_t {
         tt::tt_metal::MemoryConfig output_memory_config,
         std::optional<SDPAProgramConfig> program_config,
         DeviceComputeKernelConfig compute_kernel_config,
-        experimental::ccl::ring_attention_all_gather_async::operation_attributes_t all_gather_operation_attributes,
-        experimental::ccl::ring_attention_all_gather_async::tensor_args_t all_gather_tensor_args,
+        experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
+        experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
         CoreCoord ccl_core_grid_offset) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),

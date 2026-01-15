@@ -21,9 +21,9 @@
 #include <utility>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct RingAttentionAllGatherAsyncParams {
     std::vector<IDevice*> devices;
     int32_t dim = 0;
     uint32_t num_links = 1;
@@ -35,13 +35,9 @@ struct operation_attributes_t {
     std::optional<uint32_t> cluster_axis;
 };
 
-struct tensor_args_t {
+struct RingAttentionAllGatherAsyncInputs {
     std::vector<Tensor> input_tensor;
     std::vector<std::optional<Tensor>> persistent_output_buffer;
 };
 
-using tensor_return_value_t = std::vector<Tensor>;
-
-using spec_return_value_t = std::vector<TensorSpec>;
-
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::experimental::prim

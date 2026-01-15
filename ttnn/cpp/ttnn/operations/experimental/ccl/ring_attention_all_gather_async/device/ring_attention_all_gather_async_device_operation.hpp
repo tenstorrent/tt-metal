@@ -10,18 +10,18 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::experimental::prim {
 
 using ttnn::ccl::EriscDatamoverBuilder;
 
 struct RingAttentionAllGatherAsyncDeviceOperation {
-    using operation_attributes_t = ring_attention_all_gather_async::operation_attributes_t;
+    using operation_attributes_t = RingAttentionAllGatherAsyncParams;
 
-    using tensor_args_t = ring_attention_all_gather_async::tensor_args_t;
+    using tensor_args_t = RingAttentionAllGatherAsyncInputs;
 
-    using spec_return_value_t = ring_attention_all_gather_async::spec_return_value_t;
+    using spec_return_value_t = std::vector<TensorSpec>;
 
-    using tensor_return_value_t = ring_attention_all_gather_async::tensor_return_value_t;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory>;
 
@@ -52,10 +52,10 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 constexpr auto ring_attention_all_gather_async = ttnn::register_operation<
     "ttnn::prim::ring_attention_all_gather_async",
-    ttnn::operations::experimental::ccl::ring_attention_all_gather_async::RingAttentionAllGatherAsyncDeviceOperation>();
+    ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation>();
 }  // namespace ttnn::prim

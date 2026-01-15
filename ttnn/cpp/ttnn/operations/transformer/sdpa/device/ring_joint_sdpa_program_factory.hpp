@@ -21,8 +21,8 @@ struct RingJointSDPASharedVariables {
     tt::tt_metal::KernelHandle reader_kernels_id{};
     tt::tt_metal::KernelHandle writer_kernels_id{};
     tt::tt_metal::KernelHandle compute_kernels_id{};
-    operations::experimental::ccl::ring_attention_all_gather_async::
-        RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::shared_variables_t all_gather_shared_variables;
+    experimental::prim::RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::shared_variables_t
+        all_gather_shared_variables;
 };
 
 struct RingJointSDPAProgramFactory {
