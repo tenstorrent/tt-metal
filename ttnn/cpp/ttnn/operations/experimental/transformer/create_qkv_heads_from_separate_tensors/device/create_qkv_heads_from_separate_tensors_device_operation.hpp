@@ -12,18 +12,14 @@
 #include "create_qkv_heads_from_separate_tensors_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental::prim {
 
 struct CreateQKVHeadsSeparateTensorsDeviceOperation {
-    using operation_attributes_t =
-        ttnn::operations::experimental::create_qkv_heads_from_separate_tensors::operation_attributes_t;
-    using tensor_args_t = ttnn::operations::experimental::create_qkv_heads_from_separate_tensors::tensor_args_t;
-    using spec_return_value_t =
-        ttnn::operations::experimental::create_qkv_heads_from_separate_tensors::spec_return_value_t;
-    using tensor_return_value_t =
-        ttnn::operations::experimental::create_qkv_heads_from_separate_tensors::tensor_return_value_t;
-    using program_factory_t = std::variant<ttnn::operations::experimental::create_qkv_heads_from_separate_tensors::
-                                               CreateQKVHeadsSeparateTensorsProgramFactory>;
+    using operation_attributes_t = CreateQKVHeadsFromSeparateTensorsParams;
+    using tensor_args_t = CreateQKVHeadsFromSeparateTensorsInputs;
+    using spec_return_value_t = CreateQKVHeadsFromSeparateTensorsResultSpec;
+    using tensor_return_value_t = CreateQKVHeadsFromSeparateTensorsResult;
+    using program_factory_t = std::variant<CreateQKVHeadsSeparateTensorsProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -38,7 +34,7 @@ struct CreateQKVHeadsSeparateTensorsDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 std::tuple<Tensor, Tensor, Tensor> create_qkv_heads_from_separate_tensors(
