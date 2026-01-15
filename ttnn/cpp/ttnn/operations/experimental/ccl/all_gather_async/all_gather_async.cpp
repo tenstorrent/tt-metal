@@ -227,7 +227,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool reverse_order,
+    bool /*reverse_order*/,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // NOTE: reverse_order parameter is ignored, always use true for reversed API
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
@@ -282,7 +282,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    bool reverse_order,
+    bool /*reverse_order*/,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
@@ -329,7 +329,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool reverse_order,
+    bool /*reverse_order*/,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);

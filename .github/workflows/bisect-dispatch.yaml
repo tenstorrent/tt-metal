@@ -23,7 +23,7 @@ on:
           - P100
           - config-t3000
           - BH-LoudBox
-          - topology-6u-wormhole_b0
+          - topology-6u
         description: "Runner Type Label"
       commit-range:
         required: true
@@ -60,18 +60,53 @@ permissions:
 
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
+  determine-runner-config:
+    runs-on: ubuntu-latest
+    outputs:
+      runs-on-labels: ${{ steps.config.outputs.runs-on-labels }}
+      arch-name: ${{ steps.config.outputs.arch-name }}
+    steps:
+      - id: config
+        shell: bash
+        run: |
+          RUNNER_LABEL="${{ inputs.runner-label }}"
+
+          # Determine runs-on labels based on runner type
+
+          if [[ "$RUNNER_LABEL" == "topology-6u" ]] || [[ "$RUNNER_LABEL" == "BH-LoudBox" ]]; then
+            # Galaxy/topology-6u runners and BH-LoudBox require bare-metal (not cloud-virtual-machine)
+            RUNS_ON='["'$RUNNER_LABEL'", "in-service", "bare-metal"]'
+          elif [[ "$RUNNER_LABEL" =~ ^(N150|N300|P150|P100|config-t3000)$ ]]; then
+            # Standard single-card runners use cloud-virtual-machine
+            RUNS_ON='["'$RUNNER_LABEL'", "in-service", "cloud-virtual-machine"]'
+          else
+            # Fallback to viommu-stable format (output as JSON array)
+            echo "Warning: unexpected runner label '$RUNNER_LABEL'; using fallback VIOMMU label." >&2
+            VIOMMU_LABEL='tt-ubuntu-2204-'$RUNNER_LABEL'-viommu-stable'
+            RUNS_ON='["'$VIOMMU_LABEL'"]'
+          fi
+
+          # Determine architecture name based on runner type
+          if [[ "$RUNNER_LABEL" =~ ^(N150|N300|config-t3000|topology-6u)$ ]] || [[ "$RUNNER_LABEL" == *"wormhole_b0"* ]]; then
+            ARCH_NAME="wormhole_b0"
+          else
+            ARCH_NAME="blackhole"
+          fi
+
+          echo "runs-on-labels=$RUNS_ON" >> $GITHUB_OUTPUT
+          echo "arch-name=$ARCH_NAME" >> $GITHUB_OUTPUT
+          echo "Determined runs-on: $RUNS_ON"
+          echo "Determined arch: $ARCH_NAME"
+
   test-dispatch:
+    needs: determine-runner-config
     timeout-minutes: 1440
-    runs-on: >-
-      ${{
-        fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-      }}
+    runs-on: ${{ fromJSON(needs.determine-runner-config.outputs.runs-on-labels) }}
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
       env:
         GH_TOKEN: ${{ github.token }}
-        ARCH_NAME: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P150' || inputs.runner-label == 'config-t3000' || contains(inputs.runner-label, 'wormhole_b0')) && 'wormhole_b0' || 'blackhole' }}
+        ARCH_NAME: ${{ needs.determine-runner-config.outputs.arch-name }}
         LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work:/work/ttnn:/work/tools
         LD_LIBRARY_PATH: /work/build/lib

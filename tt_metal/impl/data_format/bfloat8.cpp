@@ -20,14 +20,6 @@
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
 
-std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
-    tt::stl::Span<const float> fp32_vec,
-    bool row_major_input,
-    bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile) {
-    return pack_as_bfp_tiles<tt::DataFormat::Bfp8_b>(fp32_vec, row_major_input, is_exp_a, tile);
-}
-
 template <typename T>
 std::vector<uint32_t> pack_as_bfp8_tiles(
     tt::stl::Span<const T> data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile) {

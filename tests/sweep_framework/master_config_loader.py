@@ -348,8 +348,18 @@ class MasterConfigLoader:
                         # 2. Complex: [[{"x":0,"y":0}, {"x":7,"y":5}], [{"x":0,"y":6}, {"x":0,"y":6}]] - multiple ranges
 
                         if isinstance(grid_data, list) and len(grid_data) > 0:
+                            # Grid can be in three formats:
+                            # 1. Simple: [{"x":0,"y":0}, {"x":7,"y":7}] - direct coordinates
+                            # 2. Complex: [[{"x":0,"y":0}, {"x":7,"y":5}], [...]] - multiple ranges
+                            # 3. CoreRange: [{"start": {"x":0,"y":0}, "end": {"x":7,"y":3}}] - CoreRange format
+
+                            # Check for CoreRange format first (has "start" and "end" keys)
+                            if isinstance(grid_data[0], dict) and "start" in grid_data[0] and "end" in grid_data[0]:
+                                # CoreRange format
+                                start_coords = grid_data[0].get("start", {})
+                                end_coords = grid_data[0].get("end", {})
                             # Check if it's a complex grid (list of lists)
-                            if isinstance(grid_data[0], list):
+                            elif isinstance(grid_data[0], list):
                                 # Multiple core ranges - use the first range for now
                                 first_range = grid_data[0]
                                 if len(first_range) >= 2:
@@ -372,6 +382,10 @@ class MasterConfigLoader:
                                 end_x = end_coords.get("x", 0)
                                 end_y = end_coords.get("y", 0)
 
+                                # Note: We don't validate coordinates here - let TTNN fail naturally
+                                # with a clear error message if coordinates exceed hardware limits.
+                                # This provides better debugging information than silently falling back.
+
                                 # Create CoreGrid from the range
                                 # CoreGrid expects (y, x) format and represents number of cores, not end coordinates
                                 num_cores_y = end_y - start_y + 1
@@ -387,25 +401,44 @@ class MasterConfigLoader:
                                 num_cores_x = end_x - start_x + 1
                                 core_grid = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
 
-                        if core_grid and shard_shape:
+                        if core_grid and shard_shape and isinstance(grid_data, list) and len(grid_data) > 0:
                             # Create ShardSpec manually using the EXACT shard_shape from traced data
                             # Don't let TTNN calculate it - use the actual traced values!
                             from ttnn import CoreCoord, CoreRange, CoreRangeSet
 
-                            # Build CoreRangeSet from grid_data (handle both simple and complex grids)
+                            # Build CoreRangeSet from grid_data (handle all three formats)
                             core_ranges = []
-                            if isinstance(grid_data[0], list):
-                                # Complex multi-range grid
+                            if isinstance(grid_data[0], dict) and "start" in grid_data[0] and "end" in grid_data[0]:
+                                # CoreRange format: [{"start": {...}, "end": {...}}]
+                                for range_obj in grid_data:
+                                    if isinstance(range_obj, dict) and "start" in range_obj and "end" in range_obj:
+                                        start_coords = range_obj["start"]
+                                        end_coords = range_obj["end"]
+                                        if isinstance(start_coords, dict) and isinstance(end_coords, dict):
+                                            start = CoreCoord(start_coords["x"], start_coords["y"])
+                                            end = CoreCoord(end_coords["x"], end_coords["y"])
+                                            core_ranges.append(CoreRange(start, end))
+                            elif isinstance(grid_data[0], list):
+                                # Complex multi-range grid: [[{...}, {...}], ...]
                                 for range_pair in grid_data:
-                                    if len(range_pair) >= 2:
+                                    if (
+                                        len(range_pair) >= 2
+                                        and isinstance(range_pair[0], dict)
+                                        and isinstance(range_pair[1], dict)
+                                    ):
                                         start = CoreCoord(range_pair[0]["x"], range_pair[0]["y"])
                                         end = CoreCoord(range_pair[1]["x"], range_pair[1]["y"])
                                         core_ranges.append(CoreRange(start, end))
-                            else:
-                                # Simple single-range grid
-                                start = CoreCoord(grid_data[0]["x"], grid_data[0]["y"])
-                                end = CoreCoord(grid_data[1]["x"], grid_data[1]["y"])
-                                core_ranges.append(CoreRange(start, end))
+                            elif len(grid_data) >= 2:
+                                # Simple single-range grid: [{...}, {...}]
+                                if isinstance(grid_data[0], dict) and isinstance(grid_data[1], dict):
+                                    start = CoreCoord(grid_data[0]["x"], grid_data[0]["y"])
+                                    end = CoreCoord(grid_data[1]["x"], grid_data[1]["y"])
+                                    core_ranges.append(CoreRange(start, end))
+
+                            # Only create CoreRangeSet if we have valid core_ranges
+                            if not core_ranges:
+                                raise ValueError("Could not parse core ranges from grid_data")
 
                             core_range_set = CoreRangeSet(set(core_ranges))
 
@@ -577,6 +610,28 @@ class MasterConfigLoader:
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=False
                 )
+            elif self._matches_operation(operation_name, "fill"):
+                print(f"🔧 Detected fill operation - extracting fill_value parameter")
+                return self._get_fill_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
+            elif self._matches_operation(operation_name, "split"):
+                print(f"🔧 Detected split operation - extracting split_size and dim parameters")
+                return self._get_split_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
+            elif self._matches_operation(operation_name, "scatter"):
+                print(f"🔧 Detected scatter operation - extracting dim parameter")
+                return self._get_scatter_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
+            elif self._matches_operation(operation_name, "attention_softmax_"):
+                print(f"🔧 Detected attention_softmax_ operation - extracting head_size parameter")
+                return self._get_attention_softmax_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=False
+                )
+            elif self._matches_operation(operation_name, "fast_reduce_nc"):
+                print(f"🔧 Detected fast_reduce_nc operation - extracting dims parameter")
+                return self._get_fast_reduce_nc_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=False
+                )
+            elif self._matches_operation(operation_name, "repeat"):
+                print(f"🔧 Detected repeat operation - extracting repeat vector (no deduplication)")
+                return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
             elif self._matches_operation(
                 operation_name, "scaled_dot_product_attention"
             ) and not self._matches_operation(operation_name, "decode"):
@@ -855,6 +910,20 @@ class MasterConfigLoader:
                                         )
                                     ).encode()
                                 ).hexdigest()
+                            elif self._matches_operation(operation_name, "repeat") and "repeat_shape" in config_dict:
+                                # For repeat, deduplicate based on (input, repeat_shape) pair
+                                repeat_shape = config_dict["repeat_shape"]
+                                input_sig = hashlib.md5(
+                                    str(
+                                        (
+                                            tensor_config.shape,
+                                            parsed_dtype,
+                                            parsed_layout,
+                                            parsed_mem_config,
+                                            repeat_shape,
+                                        )
+                                    ).encode()
+                                ).hexdigest()
                             elif (
                                 operation_name == "permute" or operation_name == "ttnn::permute"
                             ) and "dims" in config_dict:
@@ -1017,10 +1086,26 @@ class MasterConfigLoader:
                 scalar_if_false_list = [] if self._matches_operation(operation_name, "where") else None
                 # multiply_ specific parameters (scalar multiply)
                 scalar_value_list = [] if self._matches_operation(operation_name, "multiply_") else None
+                # repeat specific parameters
+                repeat_shape_list = [] if self._matches_operation(operation_name, "repeat") else None
                 # New operation parameters
                 exponent_list = [] if self._matches_operation(operation_name, "pow") else None
                 min_list = [] if self._matches_operation(operation_name, "clamp") else None
                 max_list = [] if self._matches_operation(operation_name, "clamp") else None
+                # rms_norm specific parameters
+                program_config_list = (
+                    []
+                    if (
+                        operation_name
+                        in [
+                            "rms_norm_pre_all_gather",
+                            "ttnn::rms_norm_pre_all_gather",
+                            "rms_norm_post_all_gather",
+                            "ttnn::rms_norm_post_all_gather",
+                        ]
+                    )
+                    else None
+                )
                 # dim parameter is used by multiple operations
                 dim_list = (
                     []
@@ -1032,7 +1117,6 @@ class MasterConfigLoader:
                     )
                     else None
                 )
-                repeat_shape_list = [] if self._matches_operation(operation_name, "repeat") else None
                 # group_norm parameters (all 16 traced arguments)
                 num_groups_list = [] if self._matches_operation(operation_name, "group_norm") else None
                 epsilon_list = [] if self._matches_operation(operation_name, "group_norm") else None
@@ -1103,8 +1187,20 @@ class MasterConfigLoader:
                     # Convert shape to tuple so it serializes as a string for proper deserialization
                     input_shapes.append(tuple(cfg["shape"]))
                     # Parse dtype/layout strings to ttnn objects
-                    input_a_dtypes.append(self.parse_dtype(cfg["dtype"]))
-                    input_a_layouts.append(self.parse_layout(cfg["layout"]))
+                    parsed_dtype = self.parse_dtype(cfg["dtype"])
+                    parsed_layout = self.parse_layout(cfg["layout"])
+
+                    # Override UINT16 TILE to ROW_MAJOR for reshape to avoid device operation assertion
+                    # The reshape device operation doesn't support UINT16, but ROW_MAJOR uses view path
+                    if (
+                        operation_name == "reshape"
+                        and parsed_dtype == ttnn.uint16
+                        and parsed_layout == ttnn.TILE_LAYOUT
+                    ):
+                        parsed_layout = ttnn.ROW_MAJOR_LAYOUT
+
+                    input_a_dtypes.append(parsed_dtype)
+                    input_a_layouts.append(parsed_layout)
                     # Parse memory configs to ttnn objects (for proper serialization)
                     # Check if already a MemoryConfig object (from some extractors)
                     mem_config = cfg["memory_config"]
@@ -1131,6 +1227,18 @@ class MasterConfigLoader:
                             dim1_list.append(cfg["dim1"])
                     if operation_name == "reshape" and "target_shape" in cfg:
                         target_shape_list.append(cfg["target_shape"])
+                    if self._matches_operation(operation_name, "repeat") and "repeat_shape" in cfg:
+                        repeat_shape_list.append(cfg["repeat_shape"])
+                    if operation_name in [
+                        "rms_norm_pre_all_gather",
+                        "ttnn::rms_norm_pre_all_gather",
+                        "rms_norm_post_all_gather",
+                        "ttnn::rms_norm_post_all_gather",
+                    ]:
+                        if "program_config" in cfg:
+                            program_config_list.append(cfg["program_config"])
+                        else:
+                            program_config_list.append(None)
                     if operation_name == "pad" or operation_name == "ttnn::pad":
                         if "padding" in cfg and "value" in cfg:
                             # Using padding format
@@ -1237,10 +1345,6 @@ class MasterConfigLoader:
                     ):
                         if "dim" in cfg:
                             dim_list.append(cfg["dim"])
-                    # Extract repeat shape parameter
-                    if self._matches_operation(operation_name, "repeat"):
-                        if "shape" in cfg:
-                            repeat_shape_list.append(cfg["shape"])
                     # Extract group_norm parameters (all 16 arguments)
                     # NOTE: All optional parameters must be appended for EVERY config (use None if missing)
                     # to ensure zip(*param_lists) doesn't truncate
@@ -1460,6 +1564,21 @@ class MasterConfigLoader:
                     if scalar_value_list:
                         param_names.append("scalar_value")
                         param_lists.append(scalar_value_list)
+                # Add repeat parameters (repeat vector as 'repeat_shape')
+                if self._matches_operation(operation_name, "repeat"):
+                    if repeat_shape_list:
+                        param_names.append("repeat_shape")
+                        param_lists.append(repeat_shape_list)
+                # Add rms_norm program_config
+                if operation_name in [
+                    "rms_norm_pre_all_gather",
+                    "ttnn::rms_norm_pre_all_gather",
+                    "rms_norm_post_all_gather",
+                    "ttnn::rms_norm_post_all_gather",
+                ]:
+                    if program_config_list:
+                        param_names.append("program_config")
+                        param_lists.append(program_config_list)
                 # Add pow parameters
                 if self._matches_operation(operation_name, "pow"):
                     if exponent_list:
@@ -1483,11 +1602,6 @@ class MasterConfigLoader:
                     if dim_list:
                         param_names.append("dim")
                         param_lists.append(dim_list)
-                # Add repeat shape parameter
-                if self._matches_operation(operation_name, "repeat"):
-                    if repeat_shape_list:
-                        param_names.append("shape")
-                        param_lists.append(repeat_shape_list)
                 # Add group_norm parameters (all 16 arguments)
                 # Always add all parameters (not conditionally) to ensure zip doesn't truncate
                 if self._matches_operation(operation_name, "group_norm"):
@@ -2794,6 +2908,143 @@ class MasterConfigLoader:
 
             traceback.print_exc()
             return {}
+
+    def _get_fill_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for fill operation which requires fill_value parameter"""
+        # Extract fill_value from arg1
+        fill_values = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    fill_value = args[1]["arg1"]
+                    try:
+                        # Convert string to float
+                        fill_values.append(float(fill_value))
+                    except:
+                        fill_values.append(0.0)
+
+        # Get base parameters using unary operation logic
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add fill_value parameter
+        if fill_values:
+            params["fill_value"] = fill_values
+
+        return params
+
+    def _get_split_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for split operation which requires split_size and dim parameters"""
+        split_sizes = []
+        dims = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg1 is split_size/num_chunks, arg2 is dim
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    try:
+                        split_sizes.append(int(args[1]["arg1"]))
+                    except:
+                        split_sizes.append(1)
+                if len(args) > 2 and isinstance(args[2], dict) and "arg2" in args[2]:
+                    try:
+                        dims.append(int(args[2]["arg2"]))
+                    except:
+                        dims.append(0)
+
+        # Get base parameters
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add operation-specific parameters
+        if split_sizes:
+            params["split_size"] = split_sizes
+        if dims:
+            params["dim"] = dims
+
+        return params
+
+    def _get_scatter_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for scatter operation which has 3 tensor inputs and dim parameter"""
+        dims = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg1 is dim (arg0=input, arg2=index, arg3=src)
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    try:
+                        dims.append(int(args[1]["arg1"]))
+                    except:
+                        dims.append(0)
+
+        # Get base parameters - scatter is a 3-tensor operation
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add dim parameter
+        if dims:
+            params["dim"] = dims
+
+        return params
+
+    def _get_attention_softmax_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for attention_softmax_ operation which requires head_size and attention_mask"""
+        scalars = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg0 is input tensor, arg1 is head_size (scalar), arg2 is attention_mask tensor
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    try:
+                        head_size_value = args[1]["arg1"]
+                        scalars.append(int(head_size_value) if head_size_value else None)
+                    except:
+                        scalars.append(None)
+
+        # Get base parameters using the binary operation logic (has 2 tensor inputs)
+        params = self._get_binary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add scalar parameter (head_size)
+        if scalars:
+            params["scalar"] = scalars
+
+        return params
+
+    def _get_fast_reduce_nc_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for fast_reduce_nc operation which requires dims list parameter"""
+        dims_list = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg1 is dims list
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    dims_value = args[1]["arg1"]
+                    if isinstance(dims_value, list):
+                        dims_list.append(dims_value)
+                    elif isinstance(dims_value, str):
+                        try:
+                            import ast
+
+                            dims_list.append(ast.literal_eval(dims_value))
+                        except:
+                            dims_list.append([0, 1])
+
+        # Get base parameters
+        params = self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add dims parameter
+        if dims_list:
+            params["dims"] = dims_list
+
+        return params
 
     def _get_nlp_create_qkv_heads_suite_parameters(
         self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False

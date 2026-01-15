@@ -144,7 +144,6 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
     constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
     constexpr std::string_view compute = "{}/compute/{}";
-
     switch (kernel_name) {
         case KernelName::ReaderNoBcastTTT:
         case KernelName::ReaderOuterBcastTTT:
@@ -171,11 +170,8 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
         case KernelName::ComputeBcastTTS_TST:
             return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_tts_tst.cpp");
         case KernelName::ComputeNoBcastTTS_TST: return fmt::format(compute, root, "ternary_sfpu_no_bcast_tts_tst.cpp");
-        case KernelName::ComputeNoBcastAddcmul:
-            return fmt::format(compute, root, is_fpu ? "ternary_addcmul_fpu.cpp" : "ternary_addcmul_sfpu.cpp");
-        case KernelName::ComputeBcastAddcmul:
-            return fmt::format(
-                compute, root, is_fpu ? "ternary_addcmul_fpu_bcast.cpp" : "ternary_addcmul_sfpu_bcast.cpp");
+        case KernelName::ComputeNoBcastAddcmul: return fmt::format(compute, root, "ternary_addcmul_sfpu.cpp");
+        case KernelName::ComputeBcastAddcmul: return fmt::format(compute, root, "ternary_addcmul_sfpu_bcast.cpp");
         case KernelName::ComputeRowBcastAddcmul:
             return fmt::format(compute, root, is_fpu ? "ternary_addcmul_fpu_rowbcast.cpp" : "ternary_addcmul_sfpu.cpp");
         default: __builtin_unreachable();
@@ -285,8 +281,9 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             defines["TERNARY_SFPU_OP_FUNC"] = "lerp_tile";
             break;
         case TernaryOpType::ADDCMUL:
-            // ADDCMUL uses a separate kernel that implements the operation using existing add/mul tiles
-            // No SFPU macros needed since we use binary operations directly
+            defines["TERNARY_SFPU_OP_INIT"] = "addcmul_tile_init";
+            defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcmul_tile<DataFormat::Float32>"
+                                                                           : "addcmul_tile<DataFormat::Float16_b>";
             break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }

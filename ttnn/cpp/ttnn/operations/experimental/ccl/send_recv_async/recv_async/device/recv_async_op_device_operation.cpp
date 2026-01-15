@@ -7,13 +7,13 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 namespace ttnn::operations::experimental::ccl::recv_async {
 
 RecvAsyncDeviceOperation::program_factory_t RecvAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return RecvAsyncMeshWorkloadFactory{};
 }
 
@@ -33,12 +33,12 @@ void RecvAsyncDeviceOperation::validate_on_program_cache_miss(
 }
 
 RecvAsyncDeviceOperation::spec_return_value_t RecvAsyncDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     return {tensor_args.output_tensor.tensor_spec()};
 }
 
 RecvAsyncDeviceOperation::tensor_return_value_t RecvAsyncDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     return {tensor_args.output_tensor};
 }
 

@@ -24,7 +24,6 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
-    const uint32_t& num_cores,
     const CoreRangeSet& all_cores,
     const CoreRangeSet& core_group_1,
     const CoreRangeSet& core_group_2,
@@ -70,7 +69,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
 
     const auto set_reader_rt_args = [&](uint32_t* reader_rt_args,
                                         const uint32_t* num_unpadded_tiles_per_dim,
-                                        const uint32_t* num_padded_tiles_per_dim,
+                                        const uint32_t* /*num_padded_tiles_per_dim*/,
                                         const uint32_t& num_tiles_per_core,
                                         const uint32_t& start_offset,
                                         const uint32_t& num_tiles_written) __attribute__((always_inline)) {
@@ -166,7 +165,7 @@ namespace slice::program {
 
 // Slice Tile Program Factory implementation
 SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
@@ -221,7 +220,6 @@ SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
         input,
         output,
         args.slice_start,
-        num_cores,
         all_cores,
         core_group_1,
         core_group_2,
@@ -242,10 +240,7 @@ SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
 }
 
 void SliceTileProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const Tensor& src_tensor = tensor_args.input;
     const Tensor& dst_tensor = output;
     const auto& slice_start = args.slice_start;
@@ -262,7 +257,6 @@ void SliceTileProgramFactory::override_runtime_arguments(
         src_tensor,
         dst_tensor,
         slice_start,
-        num_cores,
         all_cores,
         core_group_1,
         core_group_2,
