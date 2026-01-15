@@ -304,23 +304,27 @@ int SearchHeuristic::compute_candidate_cost(
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     const std::vector<int>& mapping,
     ConnectionValidationMode validation_mode) {
-    int cost = 0;
+    // Cost formula (lower cost = better candidate):
+    // cost = -is_preferred * SOFT_WEIGHT
+    //      - channel_match_score (in relaxed mode only)
+    //      + degree_gap * RUNTIME_WEIGHT
+    //
+    // Where:
+    // - is_preferred: whether this candidate satisfies preferred constraints
+    // - channel_match_score: bonus for exact channel matches, penalty for mismatches (relaxed mode)
+    // - degree_gap: difference between global and target node degrees (runtime optimization)
 
-    // Soft constraint factors (subtract from cost = lower cost = better)
-    // Preferred constraint (fast index-based lookup)
+    // Check if preferred (fast index-based lookup)
     bool is_preferred = false;
     if (target_idx < constraint_data.preferred_global_indices.size()) {
         const auto& preferred = constraint_data.preferred_global_indices[target_idx];
         is_preferred = std::binary_search(preferred.begin(), preferred.end(), global_idx);
     }
-    if (is_preferred) {
-        cost -= SOFT_WEIGHT;
-    }
 
-    // Channel count matching (relaxed mode)
+    // Compute channel match score (relaxed mode only)
     // Prefer connections closer to required count (exact match = best, then closest above, then closest below)
+    int channel_match_score = 0;
     if (validation_mode == ConnectionValidationMode::RELAXED) {
-        int channel_match_score = 0;
         for (size_t neighbor : graph_data.target_adj_idx[target_idx]) {
             int mapped_global = mapping[neighbor];
             if (mapped_global != -1) {
@@ -346,21 +350,37 @@ int SearchHeuristic::compute_candidate_cost(
                 }
             }
         }
-        cost -= channel_match_score;  // Subtract score (negative cost = better)
     }
 
-    // Runtime optimization (add to cost = higher cost = worse)
+    // Compute degree gap (runtime optimization)
     size_t target_deg = graph_data.target_deg[target_idx];
     size_t global_deg = graph_data.global_deg[global_idx];
-    size_t degree_gap = (global_deg >= target_deg) ? (global_deg - target_deg) : SIZE_MAX;
-    if (degree_gap != SIZE_MAX) {
-        cost += static_cast<int>(degree_gap * RUNTIME_WEIGHT);
+    size_t degree_gap;
+    if (global_deg >= target_deg) {
+        degree_gap = global_deg - target_deg;
     } else {
         // Shouldn't happen if check_hard_constraints was called, but handle gracefully
-        cost += static_cast<int>(SIZE_MAX);
+        degree_gap = SIZE_MAX;
+    }
+    int degree_gap_cost;
+    if (degree_gap != SIZE_MAX) {
+        degree_gap_cost = static_cast<int>(degree_gap * RUNTIME_WEIGHT);
+    } else {
+        degree_gap_cost = static_cast<int>(SIZE_MAX);
     }
 
-    return cost;
+    // Cost = -is_preferred * SOFT_WEIGHT
+    //      - channel_match_score
+    //      + degree_gap * RUNTIME_WEIGHT
+    // Lower cost = better candidate
+    int preferred_cost;
+    if (is_preferred) {
+        preferred_cost = SOFT_WEIGHT;
+    } else {
+        preferred_cost = 0;
+    }
+    return static_cast<int>(-preferred_cost - channel_match_score +
+                            degree_gap_cost);
 }
 
 template <typename TargetNode, typename GlobalNode>
