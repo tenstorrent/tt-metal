@@ -94,25 +94,24 @@ class StatsReporter:
                 ]
 
                 # Add metadata columns for NOC estimator consumption
-                # Column names match csv_reader.cpp expectations
+                # All metadata fields are automatically included (except 'name' and 'comment')
                 if test_metadata is not None:
-                    header.extend(
-                        [
-                            "Architecture",
-                            "Mechanism",
-                            "Memory Type",
-                            "Pattern",
-                        ]
-                    )
-                    # Add Number of Peers if present in metadata
-                    if "num_peers" in test_metadata:
-                        header.append("Number of Peers")
-                    header.append("Same Axis")
+                    # Standard metadata fields in specific order for csv_reader.cpp compatibility
+                    standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
+                    for field in standard_fields:
+                        if field in test_metadata:
+                            column_name = self.metadata_loader.metadata_field_to_column_name(field)
+                            header.append(column_name)
+
+                    # Add any additional optional fields in alphabetical order
+                    optional_fields = sorted([k for k in test_metadata.keys() if k not in standard_fields])
+                    for field in optional_fields:
+                        column_name = self.metadata_loader.metadata_field_to_column_name(field)
+                        header.append(column_name)
 
                 header.extend(
                     [
                         "RISC-V Processor",
-                        "Kernel",
                         "Run Host ID",
                     ]
                 )
@@ -149,24 +148,20 @@ class StatsReporter:
 
                         # Add metadata columns
                         if test_metadata is not None:
-                            row.extend(
-                                [
-                                    test_metadata["architecture"],
-                                    test_metadata["mechanism"],
-                                    test_metadata["memory"],
-                                    test_metadata["pattern"],
-                                ]
-                            )
-                            # Add Number of Peers if present in metadata
-                            if "num_peers" in test_metadata:
-                                row.append(test_metadata["num_peers"])
-                            row.append(attributes.get("Same axis", 0))  # Default to 0 (false) if not present
+                            # Standard metadata fields in specific order
+                            standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
+                            for field in standard_fields:
+                                if field in test_metadata:
+                                    row.append(test_metadata[field])
 
-                        # Add internal debugging columns
+                            # Add any additional optional fields in alphabetical order
+                            optional_fields = sorted([k for k in test_metadata.keys() if k not in standard_fields])
+                            for field in optional_fields:
+                                row.append(test_metadata[field])
+
                         row.extend(
                             [
                                 riscv,
-                                "Receiver" if riscv == "riscv_1" else "Sender",
                                 run_host_id,
                             ]
                         )

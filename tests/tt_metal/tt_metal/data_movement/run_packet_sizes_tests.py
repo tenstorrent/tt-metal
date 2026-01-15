@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script to run all data movement packet sizes tests (tests with metadata) and generate reports.
+Script to run all relevant data movement packet sizes tests (tests with metadata) and generate reports.
 This script identifies tests that have the 'pattern' metadata field defined and runs them with --report flag.
 """
 
@@ -33,7 +33,6 @@ TEST_ID_TO_GTEST_NAME = {
     14: "TensixDataMovementOneToAllMulticastLinkedPacketSizes",
     15: "TensixDataMovementOneFromAllPacketSizes",
     16: "TensixDataMovementLoopbackPacketSizes",
-    40: "TensixDataMovementDRAMPacketSizes2_0",
     80: "TensixDataMovementOnePacketReadSizes",
     81: "TensixDataMovementOnePacketWriteSizes",
     113: "TensixDataMovementMultiInterleavedReadSizes",
@@ -46,22 +45,6 @@ TEST_ID_TO_GTEST_NAME = {
     127: "TensixDataMovementMultiInterleaved6x6WriteSizes",
     146: "TensixDataMovementCoreBidirectionalPacketSizesSameKernel",
     147: "TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels",
-    158: "TensixDataMovementOneToOnePacketSizes2_0",
-    159: "TensixDataMovementOneFromOnePacketSizes2_0",
-    160: "TensixDataMovementOneToOnePacketSizesSameAxis",
-    161: "TensixDataMovementOneToOnePacketSizesSameAxis2_0",
-    162: "TensixDataMovementOneFromOnePacketSizesSameAxis",
-    163: "TensixDataMovementOnePacketReadSizesSameAxis",
-    164: "TensixDataMovementOnePacketWriteSizesSameAxis",
-    170: "TensixDataMovementOneToAllUnicast2x2PacketSizes2_0",
-    171: "TensixDataMovementOneToAllUnicast5x5PacketSizes2_0",
-    172: "TensixDataMovementOneToAllUnicastPacketSizes2_0",
-    173: "TensixDataMovementOneToAllMulticast2x2PacketSizes2_0",
-    174: "TensixDataMovementOneToAllMulticast5x5PacketSizes2_0",
-    175: "TensixDataMovementOneToAllMulticastPacketSizes2_0",
-    176: "TensixDataMovementOneToAllMulticastLinked2x2PacketSizes2_0",
-    177: "TensixDataMovementOneToAllMulticastLinked5x5PacketSizes2_0",
-    178: "TensixDataMovementOneToAllMulticastLinkedPacketSizes2_0",
     301: "TensixDataMovementAllToAllPacketSizes",
     311: "TensixDataMovementAllFromAllPacketSizes",
 }
@@ -90,7 +73,7 @@ def get_tests_with_metadata(test_info):
             if gtest_name is None:
                 print(f"Warning: Test ID {test_id} has metadata but no gtest mapping. Skipping.")
                 continue
-
+            gtest_name += ":-2_0"  # exclude the 2_0 tests, since they are giving the same results
             tests_with_metadata.append((test_id, test_name, gtest_name))
 
     return sorted(tests_with_metadata, key=lambda x: x[0])

@@ -44,31 +44,28 @@ class TestMetadataLoader:
         test_data = test_info.get("tests", {}).get(test_id, {})
 
         # Check if test has required metadata fields
-        if "memory" not in test_data or "mechanism" not in test_data or "pattern" not in test_data:
+        if "memory_type" not in test_data or "mechanism" not in test_data or "pattern" not in test_data:
             raise KeyError(f"Test ID {test_id} does not have complete metadata (memory, mechanism, pattern)")
 
-        # Build result with metadata fields
-        result = {
-            "memory": test_data["memory"],
-            "mechanism": test_data["mechanism"],
-            "pattern": test_data["pattern"],
-        }
-
-        # Add optional num_peers field if present
-        if "num_peers" in test_data:
-            result["num_peers"] = test_data["num_peers"]
+        # Build result with all metadata fields, excluding 'name' and 'comment'
+        result = {}
+        for key, value in test_data.items():
+            if key not in ["name", "comment"]:
+                result[key] = value
 
         # Set architecture based on runtime environment
-        # Convert architecture name to match csv_reader.cpp expectations
-        arch_lower = arch.lower()
-        if arch_lower == "blackhole":
-            result["architecture"] = "blackhole"
-        elif arch_lower == "wormhole_b0" or arch_lower == "wormhole":
-            result["architecture"] = "wormhole_b0"
-        else:
-            result["architecture"] = arch_lower
+        result["architecture"] = arch.lower()
 
         return result
+
+    @staticmethod
+    def metadata_field_to_column_name(field_name: str) -> str:
+        """
+        Convert metadata field name to CSV column header.
+        Capitalizes each word separated by underscore.
+        """
+        words = field_name.split("_")
+        return " ".join(word.capitalize() for word in words)
 
     def _get_test_id_to_name(self, test_info: Dict[str, Any]) -> Dict[str, str]:
         """Extract test_id_to_name mapping from test information."""
