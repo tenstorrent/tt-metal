@@ -47,7 +47,7 @@ def enable_tracing_for_test(request):
     ],
     ids=["2x3_bfloat16", "4x5_bfloat16", "1x8_float32", "3x4_int32", "2x2x2_bfloat16"],
 )
-def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype, request):
+def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype):
     """Test that operation parameters are traced when --trace-params flag is used."""
     # Reset counter for predictable test numbering
     # Note: Tracing is enabled by the autouse fixture
@@ -209,63 +209,8 @@ def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype, 
         actual_return_elements == expected_return_elements
     ), f"Return value element count mismatch: expected {expected_return_elements}, got {actual_return_elements}"
 
-    # Print all trace files before cleanup (only if --trace-debug flag is set)
-    trace_debug_enabled = request.config.getoption("--trace-debug", default=False)
-
-    if trace_debug_enabled:
-        print("\n" + "=" * 80)
-        print("TRACE FILES LOCATION:")
-        print("=" * 80)
-        print(f"Trace directory: {trace_dir}")
-        if trace_dir.exists():
-            all_trace_files = sorted(trace_dir.glob("*_ttnn_*.json"))
-            print(f"\nFound {len(all_trace_files)} operation trace files:")
-            for trace_file in all_trace_files:
-                file_size = trace_file.stat().st_size
-                with open(trace_file, "r") as f:
-                    operation_data = json.load(f)
-
-                print(f"\n  {trace_file.name} ({file_size} bytes)")
-                print(f"    Operation: {operation_data['operation_name']}")
-                print(f"    Number: {operation_data.get('operation_number', 'N/A')}")
-                print(f"    Timestamp: {operation_data.get('timestamp', 'N/A')}")
-                print(f"    Num tensors: {operation_data.get('num_tensors', 0)}")
-
-                # Show input tensor information if any
-                input_tensors = []
-                for arg in operation_data.get("args", []):
-                    value = arg.get("value", {})
-                    if isinstance(value, dict) and value.get("type") == "ttnn.Tensor":
-                        input_tensors.append(value)
-
-                if input_tensors:
-                    print(f"    Input Tensors:")
-                    for i, tensor_data in enumerate(input_tensors):
-                        shape = tensor_data.get("shape", "unknown")
-                        dtype = tensor_data.get("dtype", "unknown")
-                        total_elements = 1
-                        if isinstance(shape, list):
-                            for dim in shape:
-                                total_elements *= dim
-                        print(f"      Input Tensor {i}: Shape: {shape}, Dtype: {dtype}, Elements: {total_elements}")
-
-                # Show return value if available
-                if "return_value" in operation_data:
-                    return_value = operation_data["return_value"]
-                    if isinstance(return_value, dict) and return_value.get("type") == "ttnn.Tensor":
-                        shape = return_value.get("shape", "unknown")
-                        dtype = return_value.get("dtype", "unknown")
-                        total_elements = 1
-                        if isinstance(shape, list):
-                            for dim in shape:
-                                total_elements *= dim
-                        print(f"    Output Tensor: Shape: {shape}, Dtype: {dtype}, Elements: {total_elements}")
-        else:
-            print("  (Trace directory does not exist)")
-        print("=" * 80 + "\n")
-
-    # Clean up trace directory if debug output was not requested
-    if not trace_debug_enabled and trace_dir.exists():
+    # Clean up trace directory
+    if trace_dir.exists():
         shutil.rmtree(trace_dir)
 
     # Restore original state
@@ -314,7 +259,7 @@ def test_tracing_disabled_no_files_created(tmp_path, device):
         ttnn.CONFIG.root_report_path = original_report_path
 
 
-def test_from_torch_to_device_tracing(tmp_path, device, request):
+def test_from_torch_to_device_tracing(tmp_path, device):
     """Test that from_torch and to_device operations are traced correctly."""
     # Enable tracing
     import ttnn.operation_tracer
@@ -374,61 +319,8 @@ def test_from_torch_to_device_tracing(tmp_path, device, request):
     first_arg = to_device_data["args"][0]["value"]
     assert first_arg["type"] == "ttnn.Tensor", f"Expected ttnn.Tensor, got {first_arg.get('type')}"
 
-    # Print trace files if --trace-debug is enabled
-    trace_debug_enabled = request.config.getoption("--trace-debug", default=False)
-
-    if trace_debug_enabled:
-        print("\n" + "=" * 80)
-        print("TRACE FILES LOCATION:")
-        print("=" * 80)
-        print(f"Trace directory: {trace_dir}")
-        if trace_dir.exists():
-            all_trace_files = sorted(trace_dir.glob("*_ttnn_*.json"))
-            print(f"\nFound {len(all_trace_files)} operation trace files:")
-            for trace_file in all_trace_files:
-                file_size = trace_file.stat().st_size
-                with open(trace_file, "r") as f:
-                    operation_data = json.load(f)
-
-                print(f"\n  {trace_file.name} ({file_size} bytes)")
-                print(f"    Operation: {operation_data['operation_name']}")
-                print(f"    Number: {operation_data.get('operation_number', 'N/A')}")
-                print(f"    Timestamp: {operation_data.get('timestamp', 'N/A')}")
-                print(f"    Num tensors: {operation_data.get('num_tensors', 0)}")
-
-                input_tensors = []
-                for arg in operation_data.get("args", []):
-                    value = arg.get("value", {})
-                    if isinstance(value, dict) and value.get("type") in ("ttnn.Tensor", "torch.Tensor"):
-                        input_tensors.append(value)
-
-                if input_tensors:
-                    print(f"    Input Tensors:")
-                    for i, tensor_data in enumerate(input_tensors):
-                        shape = tensor_data.get("shape", "unknown")
-                        dtype = tensor_data.get("dtype", "unknown")
-                        total_elements = 1
-                        if isinstance(shape, list):
-                            for dim in shape:
-                                total_elements *= dim
-                        print(f"      Input Tensor {i}: Shape: {shape}, Dtype: {dtype}, Elements: {total_elements}")
-
-                if "return_value" in operation_data:
-                    return_value = operation_data["return_value"]
-                    if isinstance(return_value, dict) and return_value.get("type") == "ttnn.Tensor":
-                        shape = return_value.get("shape", "unknown")
-                        dtype = return_value.get("dtype", "unknown")
-                        total_elements = 1
-                        if isinstance(shape, list):
-                            for dim in shape:
-                                total_elements *= dim
-                        print(f"    Output Tensor: Shape: {shape}, Dtype: {dtype}, Elements: {total_elements}")
-        else:
-            print("  (Trace directory does not exist)")
-        print("=" * 80 + "\n")
-
-    # Clean up trace directory if debug output was not requested
-    if not trace_debug_enabled and trace_dir.exists():
+    # Clean up trace directory
+    if trace_dir.exists():
         shutil.rmtree(trace_dir)
 
     # Restore
