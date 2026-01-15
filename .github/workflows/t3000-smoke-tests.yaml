@@ -4,17 +4,6 @@ on:
   push:
     branches:
       - roseli/0-shift-apc-t3k-tests
-  workflow_call:
-    inputs:
-      docker-image:
-        required: true
-        type: string
-      build-artifact-name:
-        required: true
-        type: string
-      wheel-artifact-name:
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       model:
@@ -40,7 +29,6 @@ jobs:
       build-wheel: true
       version: 22.04
   t3000-smoke-tests:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-smoke-tests-impl.yaml
@@ -48,13 +36,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      model: ${{ inputs.model || 'all' }}
-  t3000-smoke-tests-call:
-    if: github.event_name == 'workflow_call'
-    secrets: inherit
-    uses: ./.github/workflows/t3000-smoke-tests-impl.yaml
-    with:
-      docker-image: ${{ inputs.docker-image }}
-      build-artifact-name: ${{ inputs.build-artifact-name }}
-      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       model: ${{ inputs.model || 'all' }}

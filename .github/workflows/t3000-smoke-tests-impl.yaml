@@ -20,20 +20,6 @@ on:
         required: false
         type: string
         default: "in-service"
-      enable-watcher:
-        required: false
-        type: boolean
-        default: false
-      enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
-        required: false
-        type: boolean
-        default: false
-      enable-llk-asserts:
-        description: 'Enable LLK asserts'
-        required: false
-        type: boolean
-        default: false
       timeout:
         required: false
         type: number
@@ -132,14 +118,14 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-watcher: ${{ inputs.enable-watcher || false }}
-          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
+          # TEMP Define variables that may be used in test commands but we actually want to remove envvars and shell scripts from workflows! Revert later
+          export mpi_args="--allow-run-as-root --tag-output"
+          export mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
           echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
