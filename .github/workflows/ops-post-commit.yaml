@@ -150,9 +150,9 @@ jobs:
 
           # Device perf branch
           export DEVICE_PERF_REPORT_FILENAME="Ops_Perf.csv"
-          python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT || true
-          echo "Showing ops perf report..."
-          cat "Ops_Perf.csv" || true
+          python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT
+          echo "Showing ops perf report... will fail if not found"
+          cat $DEVICE_PERF_REPORT_FILENAME
 
       - name: Merge and check test reports
         timeout-minutes: 5
