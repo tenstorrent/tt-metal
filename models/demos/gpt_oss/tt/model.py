@@ -87,6 +87,7 @@ class Model:
             rope_theta=getattr(hf_config, "rope_theta", 150000.0),
             rope_scaling=rope_scaling,
             datatype=ttnn.bfloat16,
+            shard_batch_to_mesh_dim=0,
         )
 
         # Keep references for compatibility
