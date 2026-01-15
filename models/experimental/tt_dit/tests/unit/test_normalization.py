@@ -246,67 +246,85 @@ def test_distributed_rms_norm(
         assert_quality(torch_output.squeeze(), tt_output[i].squeeze(), pcc=0.999_300)
 
 
+TP_SWEEP = [
+    pytest.param((1, 1), 0, id="tp1_axis0"),
+    pytest.param((1, 2), 1, id="tp2_axis1"),
+    pytest.param((1, 4), 1, id="tp4_axis1"),
+]
+
+
 @pytest.mark.parametrize(
-    "mesh_device, mesh_axis",
-    [
-        [(1, 2), 1],
-        [(2, 1), 0],
-        [(2, 2), 0],
-        [(2, 2), 1],
-        [(2, 4), 0],
-        [(4, 2), 1],
-    ],
-    indirect=["mesh_device"],
+    "embedding_dim",
+    [2048, 2432, 3072, 5120],
+    ids=["dim0", "dim1", "dim2", "dim3"],
 )
 @pytest.mark.parametrize(
-    ("input_shape"),
-    [
-        (1, 1, 4096, 2432),  # spatial norm
-        (1, 1, 333, 2432),  # prompt norm
-    ],
+    "seq_len",
+    [512, 2048, 4096, 9472],
+    ids=["len0", "len1", "len2", "len3"],
 )
 @pytest.mark.parametrize(
-    ("norm_eltwise_affine, bias"),
+    "affine_parameters, affine_dynamic",
     [
-        (True, True),
         (False, False),
         (True, False),
+        (False, True),
     ],
+    ids=["no_affine", "static_affine", "dynamic_affine"],
 )
+@pytest.mark.parametrize("mesh_device, mesh_axis", TP_SWEEP, indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_distributed_layernorm(
     mesh_device: ttnn.MeshDevice,
     mesh_axis: int,
-    input_shape: tuple[int, int, int, int],
-    norm_eltwise_affine: bool,
-    bias: bool,
+    embedding_dim: int,
+    seq_len: int,
+    affine_parameters: bool,
+    affine_dynamic: bool,
 ) -> None:
+    """Covers all DistributedLayerNorm instantiations seen in tt_dit models."""
     torch_dtype = torch.bfloat16
+
     torch_model = TorchLayerNorm(
-        embedding_dim=input_shape[-1], norm_elementwise_affine=norm_eltwise_affine, bias=bias
+        embedding_dim=embedding_dim, norm_elementwise_affine=affine_parameters, bias=affine_parameters
     ).to(dtype=torch_dtype)
     torch_model.eval()
 
     ccl_manager = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
 
     tt_model = DistributedLayerNorm(
-        embedding_dim=input_shape[-1],
-        norm_elementwise_affine=norm_eltwise_affine,
-        bias=bias,
+        embedding_dim=embedding_dim,
+        norm_elementwise_affine=affine_parameters,
+        bias=affine_parameters,
         mesh_device=mesh_device,
         mesh_axis=mesh_axis,
         ccl_manager=ccl_manager,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype) * 2 + 4
-
+    torch_input_tensor = torch.randn((1, 1, seq_len, embedding_dim), dtype=torch_dtype) * 2 + 4
     tt_input_tensor = bf16_tensor(torch_input_tensor, device=mesh_device, mesh_axis=mesh_axis, shard_dim=-1)
+
+    if affine_dynamic:
+        torch_model.norm_elementwise_affine = True
+        torch_model.use_bias = True
+        torch_model.weight = torch.nn.Parameter(torch.randn((embedding_dim), dtype=torch_dtype))
+        torch_model.bias = torch.nn.Parameter(torch.randn((embedding_dim), dtype=torch_dtype))
+        # Tilized weights and bias for dynamic affine
+        tt_dynamic_weight_tensor = bf16_tensor(
+            torch_model.weight.data.unsqueeze(0), device=mesh_device, mesh_axis=mesh_axis, shard_dim=-1
+        )
+        tt_dynamic_bias_tensor = bf16_tensor(
+            torch_model.bias.data.unsqueeze(0), device=mesh_device, mesh_axis=mesh_axis, shard_dim=-1
+        )
+    else:
+        tt_dynamic_weight_tensor = None
+        tt_dynamic_bias_tensor = None
 
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
-    tt_output = tt_model(tt_input_tensor)
+    tt_output = tt_model(tt_input_tensor, dynamic_weight=tt_dynamic_weight_tensor, dynamic_bias=tt_dynamic_bias_tensor)
 
     shard_dims = [None, None]
     shard_dims[mesh_axis] = -1
@@ -315,6 +333,7 @@ def test_distributed_layernorm(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
     )
+
     for i in range(tt_output.shape[0]):
         assert_quality(torch_output.squeeze(), tt_output[i].squeeze(), pcc=0.999_300)
 
