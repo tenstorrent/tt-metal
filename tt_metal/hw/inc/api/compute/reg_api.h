@@ -81,7 +81,9 @@ ALWI void release_dst() {
     MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
     PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
 #else
-    MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));  // Can also be SFPU!!!!!!
+    // TODO: Expand programmability in order to support the dest dvalid scheme with different clients
+    // either FPU or SFPU can clear dvalid
+    MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));
     PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));
 #endif
 }
@@ -95,7 +97,9 @@ ALWI void tile_regs_commit() {
 #ifndef ARCH_QUASAR
     MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
 #else
-    MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));  // Can also be SFPU!!!!!!
+    // TODO: Expand programmability in order to support the dest dvalid scheme with different clients
+    // either FPU or SFPU can clear dvalid
+    MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));
 #endif
 }
 
