@@ -193,17 +193,21 @@ def compute_standard_matrix(modules, batch_size, suite_name):
     Compute matrix for standard runs (nightly, comprehensive, model_traced).
 
     Args:
-        modules: List of module names
+        modules: List of module names (may include mesh suffixes from JSON filenames)
         batch_size: Number of modules per batch
         suite_name: Suite name override (None means no override)
 
     Returns:
         Tuple of (include_entries, batches, ccl_batches)
     """
-    ccl_modules = [m for m in modules if m.startswith("ccl.")]
+    # Strip mesh suffixes to get base module names that sweeps_runner can find
+    # The VectorExportSource will automatically load mesh-variant JSONs
+    base_modules = sorted(set(strip_mesh_suffix(m) for m in modules))
 
-    # Create batches for all modules
-    regular_batches = chunk_modules(modules, batch_size)
+    ccl_modules = [m for m in base_modules if m.startswith("ccl.")]
+
+    # Create batches for all modules using base names
+    regular_batches = chunk_modules(base_modules, batch_size)
     batches = list(regular_batches)
 
     # Generate CCL-only batches for dedicated runners
