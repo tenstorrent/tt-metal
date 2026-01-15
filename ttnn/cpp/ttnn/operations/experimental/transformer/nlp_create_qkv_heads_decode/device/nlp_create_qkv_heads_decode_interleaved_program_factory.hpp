@@ -8,12 +8,12 @@
 #include "ttnn/device_operation.hpp"
 #include "nlp_create_qkv_heads_decode_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode::program {
+namespace ttnn::experimental::prim {
 
 struct NLPCreateQKVHeadsDecodeInterleavedProgramFactory {
     using operation_attributes_t = NlpCreateQkvHeadsDecodeParams;
     using tensor_args_t = NlpCreateQkvHeadsDecodeInputs;
-    using tensor_return_value_t = nlp_create_qkv_heads_decode::tensor_return_value_t;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -41,4 +41,4 @@ struct NLPCreateQKVHeadsDecodeInterleavedProgramFactory {
         tensor_return_value_t& output_tensors);
 };
 
-}  // namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode::program
+}  // namespace ttnn::experimental::prim

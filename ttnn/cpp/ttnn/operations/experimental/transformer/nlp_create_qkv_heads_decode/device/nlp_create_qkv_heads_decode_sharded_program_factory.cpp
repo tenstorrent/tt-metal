@@ -11,7 +11,7 @@
 using namespace tt::constants;
 using namespace tt;
 
-namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode::program {
+namespace ttnn::experimental::prim {
 
 NLPCreateQKVHeadsDecodeShardedProgramFactory::cached_program_t NLPCreateQKVHeadsDecodeShardedProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -313,4 +313,4 @@ void NLPCreateQKVHeadsDecodeShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode::program
+}  // namespace ttnn::experimental::prim
