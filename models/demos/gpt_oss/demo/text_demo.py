@@ -172,7 +172,8 @@ def prepare_gpt_oss_generator_args(
             False,  # users_row_sharded
         ),
         (
-            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            # "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/gpt_oss/demo/sample_prompts/mixed_len_prompts_b128.json",  # input_prompts
             1,  # data_parallel
             128,  # batch_size
             1,  # repeat_batches

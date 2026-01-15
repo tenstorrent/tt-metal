@@ -170,7 +170,6 @@ class ThroughputProgramConfig:
         core_x, core_y = self.gate_up_cores
         n_tiles = math.ceil(n / ttnn.TILE_SIZE)
         per_core_N = n_tiles // (core_x * core_y)
-        # per_core_N = 2
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
@@ -196,7 +195,6 @@ class ThroughputProgramConfig:
         core_x, core_y = self.down_cores
         n_tiles = math.ceil(n / ttnn.TILE_SIZE)
         per_core_N = n_tiles // (core_x * core_y)
-        per_core_N = 2
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
@@ -236,13 +234,6 @@ def create_expert_mapping_tensors(
         .unsqueeze(0)
         .unsqueeze(0)
     )
-    # if cluster_axis is not None:
-    #     if cluster_axis == 0:
-    #         mapping = mapping.repeat(1, 1, mesh_shape[1], 1)
-    #     elif cluster_axis == 1:
-    #         mapping = mapping.repeat(1, 1, 1, mesh_shape[0])
-    #     else:
-    #         raise ValueError(f"Invalid cluster axis: {cluster_axis}")
 
     return ttnn.from_torch(
         mapping,

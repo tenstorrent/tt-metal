@@ -81,7 +81,7 @@ class GPTOSSRowShardedGenerator(Generator):
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill_traces
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
-            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
+            # group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
             prefill_seq_len = get_padded_prefill_len(seq_len)

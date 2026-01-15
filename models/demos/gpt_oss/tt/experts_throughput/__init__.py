@@ -50,7 +50,6 @@ from .prefill import prefill_forward_chunked
 from .weights import (
     ThroughputExpertWeights,
     load_throughput_expert_weights,
-    load_throughput_expert_weights_from_hf,
 )
 
 __all__ = [
