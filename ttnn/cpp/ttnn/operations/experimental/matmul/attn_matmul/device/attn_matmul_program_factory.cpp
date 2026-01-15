@@ -9,16 +9,14 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::matmul::attn_matmul::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 AttnMatmulProgramFactory::cached_program_t AttnMatmulProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AttnMatmulParams& operation_attributes, const AttnMatmulInputs& tensor_args, Tensor& tensor_return_value) {
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input_tensor_a;
@@ -257,9 +255,9 @@ AttnMatmulProgramFactory::cached_program_t AttnMatmulProgramFactory::create(
 
 void AttnMatmulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AttnMatmulParams& operation_attributes,
+    const AttnMatmulInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
@@ -369,4 +367,4 @@ void AttnMatmulProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::matmul::attn_matmul::program
+}  // namespace ttnn::experimental::prim
