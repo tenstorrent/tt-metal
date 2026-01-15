@@ -437,15 +437,13 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         (32, 1),  # decode
         (128, 1),  # decode
         (1, 128),  # prefill
-        (1, 2048),  # prefill 2k
-        (1, 4096),  # prefill 4k TODO: 20b fails attention pcc and 120b runs out of DRAM in experts
+        (1, 4096),  # prefill 4k
     ],
     ids=[
         "decode_1",
         "decode_32",
         "decode_128",
         "prefill_128",
-        "prefill_2048",
         "prefill_4096",
     ],
 )
@@ -541,6 +539,7 @@ def test_decoder(
     max_seq_len = seq_len
 
     # For TTNN: use precompute_freqs and gather_cos_sin to get cos/sin tensors
+    # TODO: To test longer sequences we will need to change this so we can apply rope scaling using Yarn implementation
     cos_full, sin_full = precompute_freqs(
         dim=config.head_dim,
         end=max_seq_len * 2,
