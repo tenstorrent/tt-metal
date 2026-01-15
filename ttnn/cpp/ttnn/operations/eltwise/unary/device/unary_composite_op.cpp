@@ -25,6 +25,8 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
+// Note: This namespace remains as ttnn::operations::unary because it contains composite operations
+// that are not primitive device operations
 
 // TODO: In future will uplift the op once the floor and tan has supported.
 // digamma support for the range of (1, inf)
