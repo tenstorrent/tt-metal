@@ -121,3 +121,18 @@ if _initialize():
     from ._ttml import *  # noqa: F401, F403
 else:
     from _ttml import *  # noqa: F401, F403
+
+# Import types from ttnn that are used by ttml but not re-registered in C++
+# This avoids duplicate nanobind registration errors
+import ttnn
+
+Layout = ttnn.Layout
+MeshDevice = ttnn.MeshDevice
+
+# Add types to submodules where they were originally exposed
+autograd.DataType = ttnn.DataType
+
+# Add distributed types to core.distributed submodule
+core.distributed.TensorToMesh = ttnn.TensorToMesh
+core.distributed.MeshToTensor = ttnn.MeshToTensor
+core.distributed.MeshComposerConfig = ttnn.MeshComposerConfig
