@@ -46,6 +46,9 @@ void MAIN {
         // Wait for in1 Kx1 stick (K tiles for this output column)
         cb_wait_front(cb_id_in1, num_tiles_k);
 
+        // Reserve output
+        cb_reserve_back(cb_id_out, 1);
+
         // Accumulate across K dimension
         tile_regs_acquire();
 
@@ -56,16 +59,16 @@ void MAIN {
             matmul_tiles(cb_id_in0, cb_id_in1, k, k, 0);
         }
 
+        tile_regs_commit();
+
         // Pop in1 Kx1 stick
         cb_pop_front(cb_id_in1, num_tiles_k);
 
-        tile_regs_commit();
-
         // Pack output tile directly
-        cb_reserve_back(cb_id_out, 1);
         tile_regs_wait();
         pack_tile(0, cb_id_out);
         tile_regs_release();
+
         cb_push_back(cb_id_out, 1);
     }
 
