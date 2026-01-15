@@ -67,7 +67,7 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     const std::optional<const Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config_mm,
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
-    std::optional<const ttnn::operations::experimental::minimal_matmul::MinimalMatmulConfig> config,
+    std::optional<const ttnn::experimental::prim::MinimalMatmulConfig> config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,

@@ -57,15 +57,14 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
             StridedAllGatherAsyncInputs(tensor_args.input_tensor),
             output_tensor.at(0));
 
-        auto cached_program_proxy = ttnn::operations::experimental::minimal_matmul::program::
-            MinimalMatmulProgramFactory::cached_program_t::proxy(program, shared_variables.mm_shared_variables);
+        auto cached_program_proxy = ttnn::experimental::prim::MinimalMatmulProgramFactory::cached_program_t::proxy(
+            program, shared_variables.mm_shared_variables);
 
-        ttnn::operations::experimental::minimal_matmul::program::MinimalMatmulProgramFactory::
-            override_runtime_arguments(
-                cached_program_proxy,
-                attributes.matmul_struct,
-                {output_tensor.at(0), tensor_args.weight_tensor, tensor_args.bias, tensor_args.input_tensor},
-                {output_tensor.at(1)});
+        ttnn::experimental::prim::MinimalMatmulProgramFactory::override_runtime_arguments(
+            cached_program_proxy,
+            attributes.matmul_struct,
+            {output_tensor.at(0), tensor_args.weight_tensor, tensor_args.bias, tensor_args.input_tensor},
+            {output_tensor.at(1)});
     }
 }
 
@@ -95,7 +94,7 @@ strided_all_gather_minimal_matmul_async_program(
     /* Matmul Params */
     const std::optional<const Tensor>& bias,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation,
-    operations::experimental::minimal_matmul::MinimalMatmulConfig config,
+    ttnn::experimental::prim::MinimalMatmulConfig config,
     DeviceComputeKernelConfig compute_kernel_config) {
     tt::tt_metal::Program program{};
 
@@ -112,7 +111,7 @@ strided_all_gather_minimal_matmul_async_program(
         read_local_slice_from_input ? std::optional<const Tensor>(input_tensor) : std::nullopt);
 
     // Matmul
-    auto mm_shared_variables = operations::experimental::minimal_matmul::program::minimal_matmul_factory_helper(
+    auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper(
         program,
         all_gather_output_tensor,
         weight_tensor,

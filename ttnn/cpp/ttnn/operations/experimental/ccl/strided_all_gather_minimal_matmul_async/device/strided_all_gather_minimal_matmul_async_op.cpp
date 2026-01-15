@@ -9,7 +9,7 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 
-using matmul_device_operation_t = ttnn::operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation;
+using matmul_device_operation_t = ttnn::experimental::prim::MinimalMatmulDeviceOperation;
 
 namespace ttnn::experimental::prim {
 
@@ -97,7 +97,7 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     const std::optional<const Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config_mm,
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
-    std::optional<const ttnn::operations::experimental::minimal_matmul::MinimalMatmulConfig> config,
+    std::optional<const ttnn::experimental::prim::MinimalMatmulConfig> config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,

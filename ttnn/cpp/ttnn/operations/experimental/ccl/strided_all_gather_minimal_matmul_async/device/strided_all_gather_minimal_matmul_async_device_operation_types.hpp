@@ -18,7 +18,7 @@ struct StridedAllGatherMinimalMatmulAsyncParams {
     const StridedAllGatherAsyncParams strided_all_gather_async_struct;
 
     /* Matmul Params */
-    const ttnn::operations::experimental::minimal_matmul::operation_attributes_t matmul_struct;
+    const MinimalMatmulParams matmul_struct;
 
     const CoreCoord all_gather_core_grid_offset;
     const bool read_local_slice_from_input;

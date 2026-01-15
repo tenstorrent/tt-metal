@@ -13,8 +13,7 @@ namespace ttnn::experimental::prim {
 struct StridedAllGatherMinimalMatmulAsyncProgramFactory {
     struct shared_variables_t {
         StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables;
-        ttnn::operations::experimental::minimal_matmul::program::MinimalMatmulProgramFactory::shared_variables_t
-            mm_shared_variables;
+        MinimalMatmulProgramFactory::shared_variables_t mm_shared_variables;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
