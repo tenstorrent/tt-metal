@@ -83,8 +83,6 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      - name: Check available memory in container
-        run: cat /sys/fs/cgroup/memory.max
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
         timeout-minutes: 20
