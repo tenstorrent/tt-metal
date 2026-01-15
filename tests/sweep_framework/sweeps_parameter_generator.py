@@ -11,6 +11,7 @@ import os
 import pathlib
 import random
 import sys
+from collections import defaultdict
 
 from framework.constants import LEAD_MODELS
 from framework.permutations import permutations
@@ -74,7 +75,6 @@ def group_vectors_by_mesh_shape(vectors):
     Returns:
         dict: Mapping of mesh_shape tuple to list of vectors with that mesh shape
     """
-    from collections import defaultdict
 
     grouped = defaultdict(list)
     for vector in vectors:
@@ -421,7 +421,7 @@ def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name
 
     if not module_name:
         # Determine which directory to search based on model_traced_only flag
-        if model_traced != None:
+        if model_traced is not None:
             search_dir = SWEEP_SOURCES_DIR / "model_traced"
             logger.info("Generating test vectors for model_traced operations only.")
             # Only search directly in model_traced directory, not subdirectories

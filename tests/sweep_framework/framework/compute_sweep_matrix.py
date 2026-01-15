@@ -300,10 +300,26 @@ def main():
         print(f"Error: No vector JSON files found in {vectors_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # Detect run type
-    is_comprehensive = schedule_expr == "0 4 * * 3,6" or sweep_name == "ALL SWEEPS (Comprehensive)"
-    is_model_traced = schedule_expr == "0 4 * * *" or sweep_name == "ALL SWEEPS (Model Traced)"
-    is_lead_models = schedule_expr == "0 3 * * *" or sweep_name == "ALL SWEEPS (Lead Models)"
+    # Detect run type (mutually exclusive with explicit precedence)
+    is_comprehensive = False
+    is_model_traced = False
+    is_lead_models = False
+
+    # Prefer explicit sweep selection over schedule-based detection
+    if sweep_name == "ALL SWEEPS (Lead Models)":
+        is_lead_models = True
+    elif sweep_name == "ALL SWEEPS (Model Traced)":
+        is_model_traced = True
+    elif sweep_name == "ALL SWEEPS (Comprehensive)":
+        is_comprehensive = True
+    else:
+        # Fallback to schedule-based detection when no explicit sweep is selected
+        if schedule_expr == "0 3 * * *":
+            is_lead_models = True
+        elif schedule_expr == "0 4 * * *":
+            is_model_traced = True
+        elif schedule_expr == "0 4 * * 3,6":
+            is_comprehensive = True
 
     # Determine batch size
     # Use smaller batch size for comprehensive runs or when device performance measurement is enabled
