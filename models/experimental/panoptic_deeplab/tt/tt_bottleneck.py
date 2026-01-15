@@ -266,6 +266,12 @@ class TtBottleneck(LightweightModule):
         logger.debug(f"TtBottleneck {self.block_id} adding residual connection and applying final ReLU")
         # With 110-core configs, tensors should be properly sharded for direct addition
 
+        # reshard if needed
+        if out.memory_config() != identity.memory_config():
+            identity_old = identity
+            identity = ttnn.reshard(identity, out.memory_config())
+            ttnn.deallocate(identity_old)
+
         out = ttnn.add(out, identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
 
         # Keep final output in L1 - no movement to DRAM
