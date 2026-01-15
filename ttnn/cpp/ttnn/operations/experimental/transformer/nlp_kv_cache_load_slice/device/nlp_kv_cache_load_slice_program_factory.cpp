@@ -9,7 +9,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
@@ -51,7 +51,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 NlpKVCacheLoadSliceProgramFactory::cached_program_t NlpKVCacheLoadSliceProgramFactory::create(
     const NlpKvCacheLoadSliceParams& operation_attributes,
     const NlpKvCacheLoadSliceInputs& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.output_tensor_start;
 
@@ -136,7 +136,7 @@ void NlpKVCacheLoadSliceProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const NlpKvCacheLoadSliceParams& operation_attributes,
     const NlpKvCacheLoadSliceInputs& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     const auto& src_tensor = tensor_args.input;
     auto* dst_tensor_buffer = output.buffer();
 
@@ -169,4 +169,4 @@ void NlpKVCacheLoadSliceProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::program
+}  // namespace ttnn::experimental::prim
