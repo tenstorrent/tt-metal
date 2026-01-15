@@ -17,6 +17,7 @@
 // Tensor related constructs
 #include <tt-metalium/experimental/tensor/spec/spec_fwd.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
 
 namespace tt::tt_metal /*::tensor*/ {
@@ -36,6 +37,8 @@ class HostTensor {
      */
 
 public:
+    using volumn_type = std::uint64_t;
+
     // Special Member functions
 
     /**
@@ -112,15 +115,16 @@ public:
     // "other getters"
 
     // TODO: I want to put this into HostBuffer
-    /* DataType dtype() const; */
+    DataType dtype() const;
+    Layout layout() const;
     const Shape& logical_shape() const;
     const Shape& padded_shape() const;
 
     const TensorSpec& tensor_spec() const;
 
     // Can't these be derived from other functions?
-    uint64_t logical_volume() const;
-    uint64_t physical_volume() const;
+    volumn_type logical_volume() const;
+    volumn_type physical_volume() const;
 
     // Can't this be accessed from tensor_spec?
     const MemoryConfig& memory_config() const;
@@ -133,11 +137,15 @@ public:
     const TensorTopology& tensor_topology() const;
 
     // TODO(River): learn this
+    // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
+    // TODO: Is there a way to express this "either or"?
     const std::optional<ShardSpec> shard_spec() const;
     const std::optional<NdShardSpec> nd_shard_spec() const;
 
     // "Extra helper functions"
     Shape strides() const;
+
+    // Do we need this?
     bool is_scalar() const;
 
     // Host buffer is always allocated:

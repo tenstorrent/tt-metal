@@ -4,11 +4,17 @@
 
 #pragma once
 
-#include <tt-metalium/shape.hpp>
+// Tensor related constructs
+#include <cstdint>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/tensor/spec/spec_fwd.hpp>
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 
 namespace tt::tt_metal /*::tensor*/ {
 
-class IDevice;
+namespace distributed {
+class MeshDevice;
+}
 
 /**
  * DeviceTensor is a device memory object. The user’s mental model of DeviceTensor is an owning handle to
@@ -28,6 +34,8 @@ class IDevice;
  */
 class DeviceTensor {
 public:
+    using volumn_type = std::uint64_t;
+
     // Special Member functions
 
     /**
@@ -52,20 +60,68 @@ public:
     /**
      * Deallocate and release owned device memory.
      */
-    void deallocate();
+    void deallocate(/* bool force = false */);
 
     // reshape transformation, mutating version
     // TODO: figure out what we will be doing for reshape
     void reshape(/* */);
 
+    // ?
+    /* with_tensor_topology(TensorTopology tensor_topology) */
+
     // Getters
 
-    IDevice* get_device() const;
+    distributed::MeshDevice* get_device() const;
+
+    // TODO: Should we make this mean something?
+    std::string write_to_string() const;
 
     // TODO(River): understand what is sharding better
     bool is_sharded() const;
     // TODO: what is the return type here?
     Shape element_size() const;
+
+    // "misc getters"
+    DataType dtype() const;
+    Layout layout() const;
+    const Shape& logical_shape() const;
+    const Shape& padded_shape() const;
+
+    const TensorSpec& tensor_spec() const;
+
+    // Can't these be derived from other functions?
+    volumn_type logical_volume() const;
+    volumn_type physical_volume() const;
+
+    // Can't this be accessed from tensor_spec?
+    const MemoryConfig& memory_config() const;
+
+    /**
+     * From original Tensor:
+     * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
+     */
+    const TensorTopology& tensor_topology() const;
+
+    // TODO(River): learn this
+    // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
+    // TODO: Is there a way to express this "either or"?
+    const std::optional<ShardSpec> shard_spec() const;
+    const std::optional<NdShardSpec> nd_shard_spec() const;
+
+    Shape strides() const;
+    // Do we need this?
+    bool is_scalar() const;
+    // TODO: would this be better as "is_deallocated"?
+    bool is_allocated() const;
+
+    // We prob need to leak this for compatability:
+    // Buffer* buffer() const;
+    //
+    // /**
+    //  * From original tensor:
+    //  *  Returns device `MeshBuffer`.
+    //  */
+    //  std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
 };
 
 }  // namespace tt::tt_metal

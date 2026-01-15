@@ -4,6 +4,9 @@
 
 #pragma once
 
+// For ShardSpec
+#include <tt-metalium/buffer.hpp>
+
 namespace tt::tt_metal /*::tensor*/ {
 
 // TODO:

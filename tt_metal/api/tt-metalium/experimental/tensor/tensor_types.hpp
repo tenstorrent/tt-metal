@@ -11,5 +11,6 @@ namespace tt::tt_metal {
 // (Renamed from types.hpp.)
 // There prob is a metal alternative we should adopt here instead.
 struct DataType {};
+enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
 
 }  // namespace tt::tt_metal
