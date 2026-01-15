@@ -283,24 +283,6 @@ private:
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
-// device tensor data will be copied to the dst buffer
-// dst need to have enough space
-// usage of host based tensor for dst memory recommended as most appropriate approach
-void copy_tensor_to_host_buffer(
-    distributed::MeshCommandQueue& queue,
-    void* dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region = std::nullopt,
-    bool blocking = true);
-
-// Device tensor will be filled with the data from src buffer
-// src could be picked from host based tensor as most recommended approach
-void fill_tensor_from_host_buffer(
-    distributed::MeshCommandQueue& queue,
-    Tensor& dst,
-    const void* src,
-    const std::optional<BufferRegion>& region = std::nullopt);
-
 // Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
 // shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
