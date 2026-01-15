@@ -16,7 +16,7 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docke
 
 # Install uv with version pinning (centralized in install-uv.sh)
 COPY scripts/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
+RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
 
 #############################################################
 

@@ -3,133 +3,239 @@ set -eo pipefail
 
 # Function to display help message
 show_help() {
-    cat << EOF
-Usage: $0 [OPTIONS]
+    cat << 'EOF'
+Usage: create_venv.sh [OPTIONS]
 
-This script creates a Python virtual environment for tt-metal development using uv.
-It installs the specified Python version, sets up the virtual environment, and
+Create a Python virtual environment for tt-metal development using uv.
+Installs the specified Python version, sets up the virtual environment, and
 installs all required dependencies including dev dependencies and tt-metal itself.
 
 OPTIONS:
-    --python VERSION    Specify the Python version to use (e.g., 3.10, 3.11)
-                        This can also be set via the VENV_PYTHON_VERSION environment variable.
-                        Default: 3.10
-
-    --help             Show this help message and exit
+    --python-version VER  Python version for the virtual environment (e.g., 3.10, 3.11)
+                          Default: 3.10
+    --python-cmd CMD      Python command to use for initial uv installation
+                          Default: python3
+    --env-dir DIR         Directory where the virtual environment will be created
+                          Default: ./python_env
+    --help, -h            Show this help message and exit
 
 ENVIRONMENT VARIABLES:
-    VENV_PYTHON_VERSION    Python version to use for the virtual environment.
-                           Default: 3.10
-                           Note: Command-line argument --python takes precedence over this variable.
+    Environment variables provide defaults that can be overridden by command-line
+    arguments. Arguments always take precedence over environment variables.
 
-    PYTHON_CMD             Python command to use for initial uv installation.
-                           Default: python3
+    VENV_PYTHON_VERSION   Python version (overridden by --python-version)
+    PYTHON_CMD            Python command (overridden by --python-cmd)
+    PYTHON_ENV_DIR        Virtual environment directory (overridden by --env-dir)
 
-    PYTHON_ENV_DIR         Directory where the virtual environment will be created.
-                           Default: ./python_env
+EXAMPLES:
+    # Use defaults (Python 3.10, ./python_env)
+    ./create_venv.sh
+
+    # Specify Python version
+    ./create_venv.sh --python-version 3.11
+
+    # Custom environment directory
+    ./create_venv.sh --env-dir /opt/venv
+
+    # Using environment variables
+    PYTHON_ENV_DIR=/opt/venv VENV_PYTHON_VERSION=3.11 ./create_venv.sh
+
+    # Arguments override environment variables
+    VENV_PYTHON_VERSION=3.10 ./create_venv.sh --python-version 3.11  # Uses 3.11
 
 NOTE:
     If you encounter venv issues, running "uv pip install -e ." with the venv active
     may fix them without having to rebuild the entire virtual environment.
-
 EOF
 }
 
-# Parse --python argument if provided
+# Variables to track argument-provided values (take precedence over env vars)
+ARG_PYTHON_VERSION=""
+ARG_PYTHON_CMD=""
+ARG_ENV_DIR=""
+
+# Parse command-line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --python)
-            if [ -z "$2" ]; then
-                echo "Error: --python requires a version argument (e.g., --python 3.10)"
-                echo "Run '$0 --help' for usage information"
+        --python-version)
+            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+                echo "Error: --python-version requires a version argument (e.g., --python-version 3.10)" >&2
+                echo "Run '$0 --help' for usage information" >&2
                 exit 1
             fi
-            VENV_PYTHON_VERSION="$2"
+            ARG_PYTHON_VERSION="$2"
             shift 2
             ;;
-        --help)
+        --python-cmd)
+            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+                echo "Error: --python-cmd requires a command argument (e.g., --python-cmd python3.11)" >&2
+                echo "Run '$0 --help' for usage information" >&2
+                exit 1
+            fi
+            ARG_PYTHON_CMD="$2"
+            shift 2
+            ;;
+        --env-dir)
+            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+                echo "Error: --env-dir requires a directory argument (e.g., --env-dir /opt/venv)" >&2
+                echo "Run '$0 --help' for usage information" >&2
+                exit 1
+            fi
+            ARG_ENV_DIR="$2"
+            shift 2
+            ;;
+        --help|-h)
             show_help
             exit 0
             ;;
         *)
-            echo "Error: Unknown argument '$1'"
-            echo "Run '$0 --help' for usage information"
+            echo "Error: Unknown argument '$1'" >&2
+            echo "Run '$0 --help' for usage information" >&2
             exit 1
             ;;
     esac
 done
 
-# Set default Python version if not specified via environment variable or argument
-if [ -z "$VENV_PYTHON_VERSION" ]; then
+# ============================================================================
+# Validation Functions
+# ============================================================================
+
+# Validate Python version format (e.g., 3.10, 3.11, 3.12)
+validate_python_version() {
+    local version="$1"
+    if ! [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "Error: Invalid Python version format: '$version'" >&2
+        echo "Expected format: X.Y or X.Y.Z (e.g., 3.10, 3.11, 3.12.1)" >&2
+        exit 1
+    fi
+
+    # Extract major and minor versions
+    local major="${version%%.*}"
+    local minor_with_patch="${version#*.}"
+    local minor="${minor_with_patch%%.*}"
+
+    # Require Python 3.8+
+    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 8 ]]; }; then
+        echo "Error: Python version must be 3.8 or higher (got: $version)" >&2
+        echo "Supported versions: 3.8, 3.9, 3.10, 3.11, 3.12, etc." >&2
+        exit 1
+    fi
+}
+
+# Validate Python command exists and is executable
+validate_python_cmd() {
+    local cmd="$1"
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "Error: Python command not found: '$cmd'" >&2
+        echo "Please ensure Python is installed and the command is in your PATH." >&2
+        exit 1
+    fi
+
+    # Verify it's actually Python
+    if ! "$cmd" --version 2>&1 | grep -qi "python"; then
+        echo "Error: '$cmd' does not appear to be a Python interpreter" >&2
+        exit 1
+    fi
+}
+
+# Validate environment directory path
+validate_env_dir() {
+    local dir="$1"
+    local parent_dir
+    parent_dir="$(dirname "$dir")"
+
+    # Check if path is empty
+    if [ -z "$dir" ]; then
+        echo "Error: Environment directory path cannot be empty" >&2
+        exit 1
+    fi
+
+    # Check if directory already exists and is not empty
+    if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+        echo "Warning: Environment directory already exists and is not empty: $dir" >&2
+        echo "The existing virtual environment will be overwritten." >&2
+    fi
+
+    # Check if parent directory exists or can be created
+    if [ ! -d "$parent_dir" ]; then
+        echo "Error: Parent directory does not exist: $parent_dir" >&2
+        echo "Please create the parent directory first or specify a different path." >&2
+        exit 1
+    fi
+
+    # Check if parent directory is writable
+    if [ ! -w "$parent_dir" ]; then
+        echo "Error: Parent directory is not writable: $parent_dir" >&2
+        echo "Please check permissions or specify a different path." >&2
+        exit 1
+    fi
+}
+
+# ============================================================================
+# Apply Configuration
+# ============================================================================
+
+# Apply configuration with precedence: arguments > env vars > defaults
+# Python version
+if [ -n "$ARG_PYTHON_VERSION" ]; then
+    VENV_PYTHON_VERSION="$ARG_PYTHON_VERSION"
+elif [ -z "$VENV_PYTHON_VERSION" ]; then
     VENV_PYTHON_VERSION="3.10"
 fi
 
-# Allow overriding Python command via environment variable
-if [ -z "$PYTHON_CMD" ]; then
+# Python command
+if [ -n "$ARG_PYTHON_CMD" ]; then
+    PYTHON_CMD="$ARG_PYTHON_CMD"
+elif [ -z "$PYTHON_CMD" ]; then
     PYTHON_CMD="python3"
-else
-    echo "Using user-specified Python: $PYTHON_CMD"
 fi
 
-# Verify Python command exists
-if ! command -v "$PYTHON_CMD" &>/dev/null; then
-    echo "Python command not found: $PYTHON_CMD"
-    exit 1
+# Environment directory
+if [ -n "$ARG_ENV_DIR" ]; then
+    PYTHON_ENV_DIR="$ARG_ENV_DIR"
+elif [ -z "$PYTHON_ENV_DIR" ]; then
+    PYTHON_ENV_DIR="$(pwd)/python_env"
 fi
+
+# ============================================================================
+# Validate Configuration
+# ============================================================================
+
+validate_python_version "$VENV_PYTHON_VERSION"
+validate_python_cmd "$PYTHON_CMD"
+validate_env_dir "$PYTHON_ENV_DIR"
 
 # Install uv if not already available
 if ! command -v uv &>/dev/null; then
-    echo "Installing uv..."
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [ -f "$SCRIPT_DIR/scripts/install-uv.sh" ]; then
+        # install-uv.sh handles: version pinning, pip/standalone fallback, PATH updates
         bash "$SCRIPT_DIR/scripts/install-uv.sh"
-        # Ensure uv is available in the current shell even if installed with --user
-        if ! command -v uv &>/dev/null; then
-            USER_BIN="${HOME}/.local/bin"
-            if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
-                export PATH="$USER_BIN:$PATH"
-            fi
-        fi
     else
-        echo "Warning: install-uv.sh not found, falling back to pip installation"
-        UV_VERSION="0.7.12"  # Fallback version - keep in sync with scripts/install-uv.sh
-        if ! ${PYTHON_CMD} -m pip install --no-cache-dir "uv==${UV_VERSION}"; then
-            echo "Initial 'pip install uv' failed. This can happen in PEP 668 externally-managed environments."
-            echo "Retrying uv installation with --break-system-packages..."
-            if ! ${PYTHON_CMD} -m pip install --no-cache-dir --break-system-packages "uv==${UV_VERSION}"; then
-                echo "Retry with --break-system-packages failed. Retrying uv installation with --user..."
-                if ! ${PYTHON_CMD} -m pip install --no-cache-dir --user "uv==${UV_VERSION}"; then
-                    echo "Error: Failed to install uv via pip after trying:" >&2
-                    echo "  1. Standard installation" >&2
-                    echo "  2. --break-system-packages flag" >&2
-                    echo "  3. --user installation" >&2
-                    echo "" >&2
-                    echo "Please ensure Python and pip are properly configured, or install uv manually." >&2
-                    echo "You can also try running '$SCRIPT_DIR/scripts/install-uv.sh' if available." >&2
-                    exit 1
-                fi
-            fi
+        echo "Error: scripts/install-uv.sh not found" >&2
+        echo "Please ensure you are running this script from the repository root." >&2
+        exit 1
+    fi
+
+    # Ensure uv is in PATH (install-uv.sh may have installed to ~/.local/bin or ~/.cargo/bin)
+    for bin_dir in "${HOME}/.local/bin" "${HOME}/.cargo/bin"; do
+        if [[ -d "$bin_dir" ]] && [[ ":$PATH:" != *":$bin_dir:"* ]]; then
+            export PATH="$bin_dir:$PATH"
         fi
-        # Add pip's bin directory to PATH for the current session
-        USER_BIN="${HOME}/.local/bin"
-        if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
-            export PATH="$USER_BIN:$PATH"
-        fi
+    done
+
+    # Verify uv is available
+    if ! command -v uv &>/dev/null; then
+        echo "Error: uv not found in PATH after installation" >&2
+        echo "Please ensure ~/.local/bin or ~/.cargo/bin is in your PATH and try again." >&2
+        exit 1
     fi
 fi
 
-# Verify uv is available
-if ! command -v uv &>/dev/null; then
-    echo "Error: uv not found in PATH after installation"
-    echo "Please ensure ~/.local/bin is in your PATH and try again"
-    exit 1
-fi
-
-# Set Python environment directory
-if [ -z "$PYTHON_ENV_DIR" ]; then
-    PYTHON_ENV_DIR=$(pwd)/python_env
-fi
+# Create virtual environment
 echo "Creating virtual env in: $PYTHON_ENV_DIR"
+echo "  Python version: ${VENV_PYTHON_VERSION}"
+echo "  Python command: ${PYTHON_CMD}"
 
 # Install Python via uv and create virtual environment
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
