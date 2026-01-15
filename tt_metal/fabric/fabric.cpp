@@ -8,15 +8,14 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include <optional>
-#include <set>
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
@@ -92,11 +91,12 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
     return mesh_shapes;
 }
 
+template <typename ProgramOrDescriptor>
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     const uint32_t link_idx,
-    tt::tt_metal::Program& worker_program,
+    ProgramOrDescriptor& worker_program_or_desc,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type) {
@@ -107,7 +107,6 @@ void append_fabric_connection_rt_args(
         dst_fabric_node_id);
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
     const auto& fabric_context = control_plane.get_fabric_context();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
@@ -172,8 +171,35 @@ void append_fabric_connection_rt_args(
         forwarding_links);
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
-    auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
-    auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
+
+    uint32_t worker_teardown_semaphore_id;
+    uint32_t worker_buffer_index_semaphore_id;
+    uint32_t worker_flow_control_semaphore_id;
+
+    if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
+        auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
+        TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
+        worker_teardown_semaphore_id = teardown_sem_id_opt.value();
+        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = worker_teardown_semaphore_id,
+            .core_type = core_type,
+            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
+            .initial_value = 0});
+
+        auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
+        TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
+        worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
+        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = worker_buffer_index_semaphore_id,
+            .core_type = core_type,
+            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
+            .initial_value = 0});
+    } else {
+        worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+        worker_buffer_index_semaphore_id =
+            tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+    }
+
     if (core_type == CoreType::WORKER) {
         append_worker_to_fabric_edm_sender_rt_args(
             fabric_router_channel, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, worker_args);
@@ -208,7 +234,22 @@ void append_fabric_connection_rt_args(
             .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
             .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
             .edm_direction = router_direction};
-        auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
+
+        if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
+            auto flow_control_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
+            TT_FATAL(flow_control_sem_id_opt.has_value(), "No available semaphore ID for flow control semaphore");
+            worker_flow_control_semaphore_id = flow_control_sem_id_opt.value();
+
+            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_flow_control_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
+        } else {
+            worker_flow_control_semaphore_id =
+                tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+        }
+
         append_worker_to_fabric_edm_sender_rt_args(
             edm_connection,
             worker_flow_control_semaphore_id,
@@ -219,11 +260,12 @@ void append_fabric_connection_rt_args(
 }
 
 // append runtime parameter for RoutingPlaneConnectionManager
+template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
-    tt::tt_metal::Program& worker_program,
+    ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
@@ -279,19 +321,34 @@ void append_routing_plane_connection_manager_rt_args(
             link_idx = links[0];
         }
 
-        append_fabric_connection_rt_args(
-            src_fabric_node_id, dst_node, link_idx, worker_program, worker_core, worker_args, core_type);
+        append_fabric_connection_rt_args<ProgramOrDescriptor>(
+            src_fabric_node_id, dst_node, link_idx, worker_program_or_desc, worker_core, worker_args, core_type);
     }
 
-    auto kernel = worker_program.impl().get_kernel(kernel_id);
+    auto add_kernel_defines = [&, kernel_ref = [&]() {
+        if constexpr (std::is_same_v<std::decay_t<ProgramOrDescriptor>, tt::tt_metal::ProgramDescriptor>) {
+            return &worker_program_or_desc.kernels[kernel_id];
+        } else {
+            return worker_program_or_desc.impl().get_kernel(kernel_id);
+        }
+    }()](std::initializer_list<std::pair<std::string, std::string>> defines) {
+        if constexpr (std::is_same_v<std::decay_t<ProgramOrDescriptor>, tt::tt_metal::ProgramDescriptor>) {
+            for (const auto& define : defines) {
+                kernel_ref->defines.push_back(define);
+            }
+        } else {
+            kernel_ref->add_defines(std::map<std::string, std::string>(defines.begin(), defines.end()));
+        }
+    };
+
     switch (api_type) {
-        case FabricApiType::Linear: kernel->add_defines({{"API_TYPE_Linear", "1"}}); break;
-        case FabricApiType::Mesh: kernel->add_defines({{"API_TYPE_Mesh", "1"}}); break;
+        case FabricApiType::Linear: add_kernel_defines({{"API_TYPE_Linear", "1"}}); break;
+        case FabricApiType::Mesh: add_kernel_defines({{"API_TYPE_Mesh", "1"}}); break;
         default: TT_FATAL(false, "Unsupported FabricApiType: {}", static_cast<int>(api_type));
     }
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
-        kernel->add_defines({{"FABRIC_2D", "1"}});
+        add_kernel_defines({{"FABRIC_2D", "1"}});
         auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
@@ -410,5 +467,45 @@ size_t get_number_of_available_routing_planes(
 }
 
 }  // namespace experimental
+
+template void append_fabric_connection_rt_args<tt::tt_metal::Program>(
+    const FabricNodeId&,
+    const FabricNodeId&,
+    const uint32_t,
+    tt::tt_metal::Program&,
+    const CoreCoord&,
+    std::vector<uint32_t>&,
+    CoreType);
+
+template void append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+    const FabricNodeId&,
+    const FabricNodeId&,
+    const uint32_t,
+    tt::tt_metal::ProgramDescriptor&,
+    const CoreCoord&,
+    std::vector<uint32_t>&,
+    CoreType);
+
+template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
+    const FabricNodeId&,
+    const std::vector<FabricNodeId>&,
+    const std::vector<uint32_t>&,
+    tt::tt_metal::ProgramDescriptor&,
+    tt::tt_metal::KernelHandle&,
+    const CoreCoord&,
+    std::vector<uint32_t>&,
+    FabricApiType,
+    CoreType);
+
+template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::Program>(
+    const FabricNodeId&,
+    const std::vector<FabricNodeId>&,
+    const std::vector<uint32_t>&,
+    tt::tt_metal::Program&,
+    tt::tt_metal::KernelHandle&,
+    const CoreCoord&,
+    std::vector<uint32_t>&,
+    FabricApiType,
+    CoreType);
 
 }  // namespace tt::tt_fabric

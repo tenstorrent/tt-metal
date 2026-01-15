@@ -580,6 +580,7 @@ run_t3000_ccl_tests() {
   # p2p: 1 test should be enough
   # trace test with device delay
   pytest -n auto tests/nightly/t3000/ccl/test_point_to_point.py::test_point_to_point_with_device_delay -k tile
+  pytest -n auto tests/ttnn/unit_tests/operations/debug/test_generic_op.py::test_point_to_point
 
   # all broadcast: row major + tile test
   # both rm and tile test are called here
