@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::operations::experimental::dropout::program {
+namespace ttnn::experimental::prim {
 
 struct DropoutSharedVariables {
     tt::tt_metal::KernelHandle dropout_reader_kernel_id = 0;
@@ -56,4 +56,4 @@ struct DropoutMeshWorkloadFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::dropout::program
+}  // namespace ttnn::experimental::prim
