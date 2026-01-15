@@ -566,10 +566,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes2_0) {
     CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
 
-    bool use_2_0_api = true;
-
     unit_tests::dm::all_from_all::packet_sizes_test(
-        mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size, use_2_0_api);
+        mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size, true);
 }
 
 }  // namespace tt::tt_metal
