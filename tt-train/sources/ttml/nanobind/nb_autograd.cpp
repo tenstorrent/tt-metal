@@ -28,7 +28,6 @@ namespace ttml::nanobind::autograd {
 using namespace ttml::autograd;
 
 void py_module_types(nb::module_& m) {
-    ttml::nanobind::util::export_enum<ttnn::DataType>(m);
     ttml::nanobind::util::export_enum<GradMode>(m);
     ttml::nanobind::util::export_enum<PreferredPrecision>(m);
 

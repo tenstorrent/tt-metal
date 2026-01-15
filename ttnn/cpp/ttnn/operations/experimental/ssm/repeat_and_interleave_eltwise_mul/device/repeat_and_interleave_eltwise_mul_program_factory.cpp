@@ -20,7 +20,7 @@ constexpr uint32_t ONE_TILE = 1;
 }  // namespace
 
 RepeatAndInterleaveEltwiseMulProgramFactory::cached_program_t RepeatAndInterleaveEltwiseMulProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const RepeatMulParams& operation_attributes, const RepeatMulInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
     auto& output = tensor_return_value;
@@ -192,8 +192,8 @@ RepeatAndInterleaveEltwiseMulProgramFactory::cached_program_t RepeatAndInterleav
 
 void RepeatAndInterleaveEltwiseMulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
+    const RepeatMulParams&,
+    const RepeatMulInputs& tensor_args,
     Tensor& tensor_return_value) {
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;

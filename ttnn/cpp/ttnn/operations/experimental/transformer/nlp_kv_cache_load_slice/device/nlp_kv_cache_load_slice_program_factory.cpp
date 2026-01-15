@@ -49,8 +49,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 }  // namespace
 
 NlpKVCacheLoadSliceProgramFactory::cached_program_t NlpKVCacheLoadSliceProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const NlpKvCacheLoadSliceParams& operation_attributes,
+    const NlpKvCacheLoadSliceInputs& tensor_args,
     tensor_return_value_t& output) {
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.output_tensor_start;
@@ -134,8 +134,8 @@ NlpKVCacheLoadSliceProgramFactory::cached_program_t NlpKVCacheLoadSliceProgramFa
 
 void NlpKVCacheLoadSliceProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const NlpKvCacheLoadSliceParams& operation_attributes,
+    const NlpKvCacheLoadSliceInputs& tensor_args,
     tensor_return_value_t& output) {
     const auto& src_tensor = tensor_args.input;
     auto* dst_tensor_buffer = output.buffer();

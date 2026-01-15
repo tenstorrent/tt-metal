@@ -86,8 +86,8 @@ void setup_runtime(
 }  // namespace
 
 SplitProgramFactory::cached_program_t SplitProgramFactory::create(
-    const split::operation_attributes_t& operation_attributes,
-    const split::tensor_args_t& tensor_args,
+    const split::SplitParams& operation_attributes,
+    const split::SplitInputs& tensor_args,
     split::tensor_return_value_t& output_tensors) {
     const auto& input_tensor = tensor_args.input;
     const uint32_t num_chunks = operation_attributes.num_splits;
@@ -219,8 +219,8 @@ SplitProgramFactory::cached_program_t SplitProgramFactory::create(
 
 void SplitProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const split::operation_attributes_t& /*operation_attributes*/,
-    const split::tensor_args_t& tensor_args,
+    const split::SplitParams& /*operation_attributes*/,
+    const split::SplitInputs& tensor_args,
     split::tensor_return_value_t& output_tensors) {
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;

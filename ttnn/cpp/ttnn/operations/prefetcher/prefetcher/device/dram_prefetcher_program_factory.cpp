@@ -32,7 +32,9 @@ std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
 }
 
 DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& /*output_tensor*/) {
+    const DramPrefetcherParams& operation_attributes,
+    const DramPrefetcherInputs& tensor_args,
+    Tensor& /*output_tensor*/) {
     const auto& input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
     TT_FATAL(operation_attributes.global_cb.has_value(), "Global circular buffer must be provided");
@@ -283,8 +285,8 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
 
 void DramPrefetcherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const DramPrefetcherParams& /*operation_attributes*/,
+    const DramPrefetcherInputs& tensor_args,
     Tensor& /*output_tensor*/) {
     auto& program = cached_program.program;
     const auto& tensor_addrs_cb = cached_program.shared_variables.tensor_addrs_cb;

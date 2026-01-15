@@ -11,13 +11,13 @@
 
 namespace ttnn::operations::experimental::slice_write {
 
-struct operation_attributes_t {
+struct SliceWriteParams {
     const ttnn::Shape slice_start;
     const ttnn::Shape slice_end;
     const ttnn::Shape step;
 };
 
-struct tensor_args_t {
+struct SliceWriteInputs {
     Tensor input;
     Tensor output;
 };

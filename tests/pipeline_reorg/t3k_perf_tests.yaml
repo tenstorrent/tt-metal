@@ -80,7 +80,7 @@
   sku: wh_llmbox
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
-  timeout: 75
+  timeout: 50
   model-name: flux1-dev
   model-type: DiT
 
@@ -91,6 +91,15 @@
   team: models
   timeout: 15
   model-name: motif
+  model-type: DiT
+
+- name: t3k_DiT_QwenImage_model_perf_tests
+  cmd: run_t3000_qwenimage_tests
+  sku: wh_llmbox
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  timeout: 25
+  model-name: qwenimage
   model-type: DiT
 
 - name: t3k_ViT_Gemma3_perf_tests
