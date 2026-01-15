@@ -106,7 +106,6 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
     const split_operation_attributes_t& operation_attributes,
     const split_tensor_args_t& tensor_args,
     split_tensor_return_value_t& tensor_return_value) {
-    // Validate chunks == 3
     const uint32_t N_chunks = operation_attributes.chunks;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();

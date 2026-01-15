@@ -26,7 +26,7 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulSplit::invoke(
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     // Validate chunks
-    TT_FATAL(chunks == 3, "minimal_matmul_split currently only supports chunks=3, got chunks={}", chunks);
+    TT_FATAL(chunks >= 1, "minimal_matmul_split requires chunks >= 1, got chunks={}", chunks);
 
     // Validate dim
     TT_FATAL(dim == -1, "minimal_matmul_split currently only supports dim=-1, got dim={}", dim);

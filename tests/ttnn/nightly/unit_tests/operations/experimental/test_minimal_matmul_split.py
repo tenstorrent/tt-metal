@@ -42,7 +42,7 @@ def run_test_linear_split(
 ):
     """Test minimal_matmul_split with chunks"""
     assert N % chunks == 0, f"N={N} must be divisible by chunks={chunks}"
-    assert chunks == 3, f"Only chunks=3 supported in this version, got chunks={chunks}"
+    assert (N // chunks) % 32 == 0, f"N/chunks={N // chunks} must be tile-aligned (divisible by 32)"
 
     logger.info(f"Running test_linear_split with M={M}, K={K}, N={N}, chunks={chunks}")
     torch_dtype = torch.float32
@@ -242,14 +242,14 @@ def test_linear_split_core_grid(device, core_grid):
 
 # Constraint validation tests
 def test_invalid_chunks(device):
-    """Should fail: chunks != 3"""
+    """Should fail: chunks < 1"""
     with pytest.raises((RuntimeError, ValueError)):
         M, K, N = 256, 256, 512
         torch_input = torch.randn((M, K), dtype=torch.float32)
         weight_input = torch.randn((K, N), dtype=torch.float32)
         tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
         tt_weight = ttnn.from_torch(weight_input, device=device, layout=ttnn.TILE_LAYOUT)
-        ttnn.experimental.minimal_matmul_split(tt_input, tt_weight, chunks=2, dim=-1)
+        ttnn.experimental.minimal_matmul_split(tt_input, tt_weight, chunks=0, dim=-1)
 
 
 def test_invalid_dim(device):
@@ -285,14 +285,21 @@ def test_non_tile_aligned_chunk(device):
         ttnn.experimental.minimal_matmul_split(tt_input, tt_weight, chunks=3, dim=-1)
 
 
-# Skipped tests for future work
-@pytest.mark.skip(reason="chunks != 3 not yet supported")
-@pytest.mark.parametrize("chunks", [2, 4, 5, 8])
-def test_linear_split_variable_chunks(device, chunks):
-    """Future: support arbitrary chunk counts"""
-    N = 256 * chunks  # Ensure divisible and tile-aligned
-    M, K = 256, 256
-    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 1, 1, 1, 1, 1
+# Variable chunks tests (N-tensor support)
+@pytest.mark.parametrize("chunks", [2, 4, 6])
+@pytest.mark.parametrize(
+    "M, K, N_per_chunk",
+    [
+        (256, 256, 32),  # Small: N = 32 * chunks
+        (256, 256, 64),  # Medium: N = 64 * chunks
+        (512, 512, 128),  # Larger: N = 128 * chunks
+    ],
+    ids=["small", "medium", "larger"],
+)
+def test_linear_split_variable_chunks(device, chunks, M, K, N_per_chunk):
+    """Test variable chunk counts (2, 4, 6) with N-tensor support"""
+    N = N_per_chunk * chunks  # Ensure divisible and tile-aligned
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 8, 8, 8, 2, 2
     check_result = run_test_linear_split(
         device,
         M,
@@ -304,6 +311,28 @@ def test_linear_split_variable_chunks(device, chunks):
         N_block_size=N_block_size,
         subblock_h=subblock_h,
         subblock_w=subblock_w,
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("chunks", [2, 4, 6])
+def test_linear_split_variable_chunks_with_bias(device, chunks):
+    """Test variable chunk counts with bias"""
+    M, K, N = 256, 256, 64 * chunks
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 8, 8, 8, 2, 2
+    check_result = run_test_linear_split(
+        device,
+        M,
+        K,
+        N,
+        chunks=chunks,
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        use_bias=True,
     )
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
