@@ -15,7 +15,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
 
-namespace ttnn::operations::data_movement::reshape {
+namespace ttnn::prim {
 
 namespace detail {
 
@@ -454,4 +454,4 @@ void ReshapeTiledProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::prim

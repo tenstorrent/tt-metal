@@ -10,7 +10,7 @@
 #define MASK_64 0xFFFFFFFFFFFFFFC0
 #define MASK_16 0xFFFFFFFFFFFFFFF0
 
-namespace ttnn::operations::data_movement::reshape {
+namespace ttnn::prim {
 
 ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
     const ReshapeParams& operation_attributes, const ReshapeInputs& tensor_args, Tensor& tensor_return_value) {
@@ -221,4 +221,4 @@ void ReshapeRMProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::prim

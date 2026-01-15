@@ -9,7 +9,7 @@
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_row_major_program_factory.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::reshape {
+namespace ttnn::prim {
 
 struct ReshapeDeviceOperation {
     using operation_attributes_t = ReshapeParams;
@@ -37,14 +37,12 @@ struct ReshapeDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::data_movement::reshape
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::reshape::ReshapeDeviceOperation::tensor_return_value_t reshape(
+ReshapeDeviceOperation::tensor_return_value_t reshape(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid);
+
 }  // namespace ttnn::prim

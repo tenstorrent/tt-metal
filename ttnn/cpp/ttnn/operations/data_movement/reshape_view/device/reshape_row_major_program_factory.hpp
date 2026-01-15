@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::reshape {
+namespace ttnn::prim {
 
 struct ReshapeRMProgramFactory {
     struct shared_variables_t {
@@ -29,4 +29,4 @@ struct ReshapeRMProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::prim

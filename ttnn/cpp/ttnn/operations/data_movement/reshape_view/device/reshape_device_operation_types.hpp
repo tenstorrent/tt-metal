@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::data_movement::reshape {
+namespace ttnn::prim {
 
 struct ReshapeParams {
     ttnn::Shape logical_output_shape;
@@ -23,4 +23,4 @@ struct ReshapeInputs {
     Tensor input;
 };
 
-}  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::prim
