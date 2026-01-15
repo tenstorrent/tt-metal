@@ -145,15 +145,13 @@ void MAIN {
         cb_wait_front(cb_max_exp_avg_sq_in_idx, block_size);
         copy_tile_init(cb_max_exp_avg_sq_in_idx);
         reconfig_data_format(cb_max_exp_avg_sq_in_idx, cb_max_exp_avg_sq_in_idx);
+        binary_max_tile_init();
         for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
             copy_tile(cb_max_exp_avg_sq_in_idx, cb_tile_idx, block_idx + 1);
-        }
-        cb_pop_front(cb_max_exp_avg_sq_in_idx, block_size);
-        binary_max_tile_init();
-        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
             // This part used max_tile API previously that's why it's the every second block
             binary_max_tile(block_idx, block_idx + 1, block_idx);
         }
+        cb_pop_front(cb_max_exp_avg_sq_in_idx, block_size);
         tile_regs_commit();
         // push every second block to max_exp_avg_sq_out
         cb_reserve_back(cb_max_exp_avg_sq_out_idx, block_size);
