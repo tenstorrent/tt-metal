@@ -19,14 +19,14 @@
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
 
-namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::program {
+namespace ttnn::experimental::prim {
 
 MatmulReduceScatterAsyncProgramFactory::cached_mesh_workload_t
 MatmulReduceScatterAsyncProgramFactory::create_mesh_workload(
-    const operation_attributes_t& args,
+    const MatmulReduceScatterAsyncParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const MatmulReduceScatterAsyncInputs& tensor_args,
+    MatmulReduceScatterAsyncResult& output_tensors) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
 
@@ -40,10 +40,10 @@ MatmulReduceScatterAsyncProgramFactory::create_mesh_workload(
 }
 
 MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyncProgramFactory::create_at(
-    const operation_attributes_t& args,
+    const MatmulReduceScatterAsyncParams& args,
     const ttnn::MeshCoordinate& mesh_coord,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const MatmulReduceScatterAsyncInputs& tensor_args,
+    MatmulReduceScatterAsyncResult& output_tensors) {
     ttnn::ccl::Topology topology = args.reduce_scatter_params.topology;
 
     const auto& dim = args.reduce_scatter_params.dim;
@@ -80,8 +80,8 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
     reduce_scatter_fused_op_signaler->init_fused_op();
 
     // Reduce Scatter - use the new artifacts-based helper
-    auto reduce_scatter_artifacts =
-        reduce_scatter_minimal_async::detail::build_ring_reduce_scatter_minimal_async_program_artifacts(
+    auto reduce_scatter_artifacts = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+        build_ring_reduce_scatter_minimal_async_program_artifacts(
             program,
             output_tensors.mm,
             tensor_args.persistent_intermediate,
@@ -115,7 +115,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         reduce_scatter_fused_op_signaler->fused_op_signaler_mode);
 
     // Matmul
-    auto matmul_cached_program = operations::matmul::program::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    auto matmul_cached_program = ttnn::operations::matmul::program::matmul_multi_core_reuse_mcast_2d_optimized_helper(
         program,
         tensor_args.input,
         tensor_args.weight,
@@ -135,14 +135,14 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
 
 void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const MatmulReduceScatterAsyncParams& args,
+    const MatmulReduceScatterAsyncInputs& tensor_args,
+    MatmulReduceScatterAsyncResult& output_tensors) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
         std::vector<Tensor> matmul_output_tensors = {output_tensors.mm};
-        operations::matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+        ttnn::operations::matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
             program,
             shared_vars.matmul_shared_variables,
             args.matmul_struct,
@@ -152,22 +152,23 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             matmul_output_tensors);
 
         // Call reduce scatter runtime arguments override directly using artifacts
-        reduce_scatter_minimal_async::detail::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
-            program,
-            shared_vars.reduce_scatter_artifacts.reader_kernel_id,
-            shared_vars.reduce_scatter_artifacts.writer_kernel_id,
-            shared_vars.reduce_scatter_artifacts.all_cores,
-            args.reduce_scatter_params.num_links,
-            shared_vars.reduce_scatter_artifacts.num_directions_per_link,
-            shared_vars.reduce_scatter_artifacts.num_workers_per_direction,
-            shared_vars.reduce_scatter_artifacts.num_mux_cores_per_direction_per_link,
-            shared_vars.reduce_scatter_artifacts.num_cores_per_link,
-            args.reduce_scatter_params.barrier_semaphore,
-            args.reduce_scatter_params.semaphore,
-            output_tensors.mm,
-            tensor_args.persistent_intermediate,
-            output_tensors.reduce_scatter);
+        ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+            ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+                program,
+                shared_vars.reduce_scatter_artifacts.reader_kernel_id,
+                shared_vars.reduce_scatter_artifacts.writer_kernel_id,
+                shared_vars.reduce_scatter_artifacts.all_cores,
+                args.reduce_scatter_params.num_links,
+                shared_vars.reduce_scatter_artifacts.num_directions_per_link,
+                shared_vars.reduce_scatter_artifacts.num_workers_per_direction,
+                shared_vars.reduce_scatter_artifacts.num_mux_cores_per_direction_per_link,
+                shared_vars.reduce_scatter_artifacts.num_cores_per_link,
+                args.reduce_scatter_params.barrier_semaphore,
+                args.reduce_scatter_params.semaphore,
+                output_tensors.mm,
+                tensor_args.persistent_intermediate,
+                output_tensors.reduce_scatter);
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::program
+}  // namespace ttnn::experimental::prim
