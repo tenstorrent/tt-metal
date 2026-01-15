@@ -48,6 +48,7 @@ namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests {
 constexpr uint32_t DEFAULT_ITERATIONS = 5;
 constexpr uint32_t DEFAULT_ITERATIONS_SMOKE_RANDOM = 1000;
 constexpr uint32_t DEVICE_DATA_SIZE = 768 * 1024;
+constexpr uint32_t DEVICE_DATA_SIZE_LARGE = 20 * 1024 * 1024;  // 20MB for large DRAM transfers
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
 constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
 constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 16 * 1024;
@@ -1091,7 +1092,8 @@ public:
 
         std::vector<HostMemDeviceCommand> commands_per_iteration;
 
-        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+        // Use larger data size for DRAM-to-DRAM transfers to better utilize DRAM capacity
+        uint32_t remaining_bytes = DEVICE_DATA_SIZE_LARGE;
         uint32_t src_read_offset_bytes = 0;  // Track source read position
 
         while (remaining_bytes > 0) {
@@ -2388,16 +2390,17 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 // Runs only with exec buff disabled - RELAY_LINEAR_H must be standalone
+// Uses larger data size (100MB total) to better test DRAM capacity
 INSTANTIATE_TEST_SUITE_P(
     PrefetcherTests,
     PrefetchRelayLinearHTestFixture,
     ::testing::Values(
-        // With exec buf disabled
+        // With exec buf disabled - 20MB per iteration × 5 iterations = 100MB total
         PagedReadParams{
             DRAM_PAGE_SIZE_DEFAULT,
             DRAM_PAGES_TO_READ_DEFAULT,
             DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
+            DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t),  // 20MB in words
             false}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
