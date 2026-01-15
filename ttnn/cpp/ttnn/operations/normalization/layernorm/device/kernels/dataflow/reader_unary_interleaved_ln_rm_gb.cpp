@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
@@ -55,7 +55,7 @@ void kernel_main() {
     if constexpr (!use_welford) {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
-        generate_reduce_scaler(cb_in_2, scaler);
+        dataflow_kernel_lib::generate_reduce_scaler(cb_in_2, scaler);
     }
     constexpr uint32_t eps_cb_id = 3;
     const uint32_t eps = get_arg_val<uint32_t>(5);
