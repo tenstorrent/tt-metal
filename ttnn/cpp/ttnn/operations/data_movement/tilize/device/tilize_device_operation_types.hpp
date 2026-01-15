@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "tt-metalium/kernel_types.hpp"
 
-namespace ttnn::operations::data_movement::tilize {
+namespace ttnn::prim {
 
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -27,7 +27,6 @@ struct tensor_args_t {
 using tensor_return_value_t = Tensor;
 using spec_return_value_t = ttnn::TensorSpec;
 
-namespace program {
 struct MultiCoreSharedVariables {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle unary_reader_kernel_id{};
@@ -36,5 +35,5 @@ struct MultiCoreSharedVariables {
         uint32_t ncores{};
     };
 };
-}  // namespace program
-}  // namespace ttnn::operations::data_movement::tilize
+
+}  // namespace ttnn::prim

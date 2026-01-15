@@ -16,15 +16,15 @@
 namespace ttnn::operations::data_movement {
 
 struct TilizeDeviceOperation {
-    using operation_attributes_t = data_movement::tilize::operation_attributes_t;
-    using tensor_args_t = data_movement::tilize::tensor_args_t;
-    using spec_return_value_t = data_movement::tilize::spec_return_value_t;
-    using tensor_return_value_t = data_movement::tilize::tensor_return_value_t;
+    using operation_attributes_t = ttnn::prim::operation_attributes_t;
+    using tensor_args_t = ttnn::prim::tensor_args_t;
+    using spec_return_value_t = ttnn::prim::spec_return_value_t;
+    using tensor_return_value_t = ttnn::prim::tensor_return_value_t;
     using program_factory_t = std::variant<
-        program::TilizeMultiCoreInterleavedProgramFactory,
-        program::TilizeMultiCoreBlockProgramFactory,
-        program::TilizeSingleCoreProgramFactory,
-        program::TilizeMultiCoreShardedProgramFactory>;
+        ttnn::prim::TilizeMultiCoreInterleavedProgramFactory,
+        ttnn::prim::TilizeMultiCoreBlockProgramFactory,
+        ttnn::prim::TilizeSingleCoreProgramFactory,
+        ttnn::prim::TilizeMultiCoreShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

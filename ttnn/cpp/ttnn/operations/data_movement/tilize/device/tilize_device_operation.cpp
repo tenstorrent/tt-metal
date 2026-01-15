@@ -109,17 +109,17 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
                            (operation_attributes.sub_core_grids.has_value() &&
                             (operation_attributes.sub_core_grids.value().num_cores() < 2));
     if (use_single_core) {
-        return program::TilizeSingleCoreProgramFactory{};
+        return ttnn::prim::TilizeSingleCoreProgramFactory{};
     }
 
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded tilize does not support sub core grid specification");
-        return program::TilizeMultiCoreShardedProgramFactory{};
+        return ttnn::prim::TilizeMultiCoreShardedProgramFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        return program::TilizeMultiCoreBlockProgramFactory{};
+        return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
     }
     auto sub_core_grids = operation_attributes.sub_core_grids;
 
@@ -146,10 +146,10 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
                                     (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
-            return program::TilizeMultiCoreBlockProgramFactory{};
+            return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
         }
     }
-    return program::TilizeMultiCoreInterleavedProgramFactory{};
+    return ttnn::prim::TilizeMultiCoreInterleavedProgramFactory{};
 }
 
 TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_output_tensors(
