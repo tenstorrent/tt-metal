@@ -141,7 +141,6 @@ void test_raw_host_memory_pointer() {
     // Alternatively, we could allocate memory manually and create Tensors with borrowed storage on the fly to print the
     // data
     void* storage_of_alternative_tensor_for_printing = malloc(shape.volume() * sizeof(bfloat16));
-
     copy_tensor_to_host_memory_buffer(storage_of_alternative_tensor_for_printing, c_dev);
 
     HostBuffer alternative_tensor_for_printing_buffer(
