@@ -4,6 +4,10 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
 const { DEFAULT_LOOKBACK_DAYS, EMPTY_VALUE, SUCCESS_EMOJI, FAILURE_EMOJI, SHA_SHORT_LENGTH, DEFAULT_INFRA_OWNER, getTimeSinceLastSuccess } = require('./data-loading');
+// Minimum number of consecutive failures required to classify a workflow as "still failing"
+// when previous run data is unavailable. This threshold helps distinguish ongoing failures
+// from new regressions when we can't compare against previous state.
+const MIN_CONSECUTIVE_FAILURES_THRESHOLD = 2;
 const { getWorkflowStats, fetchPRInfo, findFirstFailInWindow, fetchCommitAuthor, renderCommitsTable } = require('./analysis');
 const { fetchErrorSnippetsForRun, inferJobAndTestFromSnippet, resolveOwnersForSnippet, findOwnerForLabel, renderErrorsTable } = require('./error-processing');
 const { getAnnotationsDirForRunId, listCommitsBetweenOffline } = require('./data-loading');
@@ -506,6 +510,20 @@ function computeLatestRunInfo(runs) {
 }
 
 /**
+ * Builds workflow metadata URLs and commit info from run info
+ * @param {Object} info - Run info object from computeLatestRunInfo
+ * @param {object} context - GitHub Actions context
+ * @returns {Object} Object containing workflowUrl, aggregateRunUrl, commitUrl, commitShort
+ */
+function buildWorkflowMetadata(info, context) {
+  const workflowUrl = info?.path ? getWorkflowLink(context, info.path) : undefined;
+  const aggregateRunUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+  const commitUrl = info?.head_sha ? `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${info.head_sha}` : undefined;
+  const commitShort = info?.head_sha ? info.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
+  return { workflowUrl, aggregateRunUrl, commitUrl, commitShort };
+}
+
+/**
  * Gets main branch runs within the current window, deduplicated and sorted
  * @param {Array} runs - Array of workflow runs
  * @returns {Array} Deduplicated and sorted main branch runs
@@ -549,10 +567,7 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
 
       if (change) {
         const info = computeLatestRunInfo(currentRuns);
-        const workflowUrl = info?.path ? getWorkflowLink(context, info.path) : undefined;
-        const aggregateRunUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-        const commitUrl = info?.head_sha ? `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${info.head_sha}` : undefined;
-        const commitShort = info?.head_sha ? info.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
+        const { workflowUrl, aggregateRunUrl, commitUrl, commitShort } = buildWorkflowMetadata(info, context);
 
         changes.push({
           name,
@@ -602,11 +617,20 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
         }
       }
     } else if (currentRuns && !previousRuns) {
-      // Handle case where we have current data but no previous data
+      // Handle case where we have current data but no previous data.
       // If workflow is currently failing, check if it has multiple consecutive failures
-      // to determine if it's "still failing" vs a new regression
+      // to determine if it's "still failing" vs a new regression.
+      //
+      // Note: We intentionally do not handle the symmetric case `!currentRuns && previousRuns`
+      // here (e.g. workflow file removed, renamed, or filtered out of the current window).
+      // When a workflow disappears, we treat it as out of scope for this report and do not emit
+      // a transition in `changes`.
+      //
+      // Similarly, this block only enriches `stayedFailingDetails` when we can infer ongoing
+      // failures from current data alone; it does not update `changes` because we do not have
+      // a definitive previous state to classify a transition against.
       const current = computeLatestConclusion(currentRuns);
-      if (current === 'failure') {
+      if (current !== 'success') {
         const mainBranchRuns = getMainWindowRuns(currentRuns);
         // Check if there are multiple consecutive failures (at least 2)
         // This indicates the workflow has been failing for a while
@@ -621,12 +645,9 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
 
         // If there are 2+ consecutive failures, treat as "still failing"
         // Otherwise, it might be a new regression (but we can't be sure without previous data)
-        if (consecutiveFailures >= 2) {
+        if (consecutiveFailures >= MIN_CONSECUTIVE_FAILURES_THRESHOLD) {
           const info = computeLatestRunInfo(currentRuns);
-          const workflowUrl = info?.path ? getWorkflowLink(context, info.path) : undefined;
-          const aggregateRunUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-          const commitUrl = info?.head_sha ? `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${info.head_sha}` : undefined;
-          const commitShort = info?.head_sha ? info.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
+          const { workflowUrl, aggregateRunUrl, commitUrl, commitShort } = buildWorkflowMetadata(info, context);
 
           stayedFailingDetails.push({
             name,
