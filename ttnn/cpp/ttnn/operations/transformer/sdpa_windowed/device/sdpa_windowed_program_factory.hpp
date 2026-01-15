@@ -10,7 +10,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 
-namespace ttnn::operations::transformer::sdpa_windowed::program {
+namespace ttnn::prim {
 
 struct WindowedSDPASharedVariables {
     tt::tt_metal::KernelHandle reader_kernels_id{};
@@ -36,4 +36,4 @@ struct WindowedSDPAProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::transformer::sdpa_windowed::program
+}  // namespace ttnn::prim
