@@ -436,6 +436,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"tiles_per_chunk", tiles_per_chunk},
         {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
         {"total_chunks_cb_id", total_chunks_cb_id},
+        {"experts_per_device", experts_per_device},
+        {"aligned_input_page_size", aligned_input_page_size},
     };
 
     tt::tt_metal::KernelHandle compute_tilizer_kernel_id = tt::tt_metal::CreateKernel(
@@ -450,25 +452,30 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         indices_tensor.buffer()->address(),       // 1
         input_scores_tensor.buffer()->address(),  // 2
         mapping_tensor.buffer()->address(),       // 3
+        output_tensor.buffer()->address(),        // 4
     };
 
     [[maybe_unused]] uint32_t is_drain_tilizer_core_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 4: is_drain_tilizer_core
+    selective_tilize_runtime_args.push_back(0);  // 5: is_drain_tilizer_core
 
     // Add work split runtime args for tilizer cores
     uint32_t tilizer_subtoken_offset_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 5: tilizer_subtoken_offset
+    selective_tilize_runtime_args.push_back(0);  // 6: tilizer_subtoken_offset
     uint32_t tilizer_subtoken_size_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 6: tilizer_subtoken_size
+    selective_tilize_runtime_args.push_back(0);  // 7: tilizer_subtoken_size
 
     std::vector<CoreCoord> drain_tilizer_cores;
     uint32_t tilizer_subtoken_offset = 0;
 
+    // Compute kernel runtime args (separate from reader/writer)
+    std::vector<uint32_t> compute_tilizer_runtime_args = {0};  // [0]: tiles_per_chunk (set per-core below)
+
     for (uint32_t i = 0; i < num_tilizer_cores; i++) {
         // Set work split parameters based on which group the core is in
+        uint32_t tilizer_subtoken_size = 0;
         if (tilizer_cores_group_1.contains(selective_tilize_cores.at(i))) {
             selective_tilize_runtime_args.at(tilizer_subtoken_offset_idx) = tilizer_subtoken_offset;
-            uint32_t tilizer_subtoken_size = tilizer_units_per_core_g1 * tilizer_subtoken_bytes_aligned;
+            tilizer_subtoken_size = tilizer_units_per_core_g1 * tilizer_subtoken_bytes_aligned;
             // Clamp to not exceed the total token size
             if (tilizer_subtoken_offset + tilizer_subtoken_size > aligned_input_page_size) {
                 tilizer_subtoken_size = aligned_input_page_size - tilizer_subtoken_offset;
@@ -477,7 +484,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             tilizer_subtoken_offset += tilizer_subtoken_size;
         } else if (tilizer_cores_group_2.contains(selective_tilize_cores.at(i))) {
             selective_tilize_runtime_args.at(tilizer_subtoken_offset_idx) = tilizer_subtoken_offset;
-            uint32_t tilizer_subtoken_size = tilizer_units_per_core_g2 * tilizer_subtoken_bytes_aligned;
+            tilizer_subtoken_size = tilizer_units_per_core_g2 * tilizer_subtoken_bytes_aligned;
             // Clamp to not exceed the total token size
             if (tilizer_subtoken_offset + tilizer_subtoken_size > aligned_input_page_size) {
                 tilizer_subtoken_size = aligned_input_page_size - tilizer_subtoken_offset;
@@ -486,10 +493,15 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             tilizer_subtoken_offset += tilizer_subtoken_size;
         }
 
+        // Set compute kernel runtime args - tiles_per_chunk based on tilizer_subtoken_size
+        compute_tilizer_runtime_args.at(0) = tilizer_subtoken_size / tile_width_bytes;
+
         tt::tt_metal::SetRuntimeArgs(
             program, selective_tilize_kernel_id, selective_tilize_cores.at(i), selective_tilize_runtime_args);
         tt::tt_metal::SetRuntimeArgs(
             program, writer_tilizer_kernel_id, selective_tilize_cores.at(i), selective_tilize_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(
+            program, compute_tilizer_kernel_id, selective_tilize_cores.at(i), compute_tilizer_runtime_args);
     }
 
     return {

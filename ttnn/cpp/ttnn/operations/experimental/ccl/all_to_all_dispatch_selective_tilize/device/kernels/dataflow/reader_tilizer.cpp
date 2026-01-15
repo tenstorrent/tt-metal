@@ -466,13 +466,14 @@ void kernel_main() {
         ((2 * experts_per_device + 1) * sizeof(uint32_t) + l1_alignment - 1) / l1_alignment * l1_alignment;
 
     size_t rt_args_idx = 0;
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);     // 0
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);   // 1
-    uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);    // 2
-    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);   // 3
-    bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 4
-    uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);  // 5
-    uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);    // 6
+    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                    // 0
+    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                  // 1
+    uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                   // 2
+    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                  // 3
+    [[maybe_unused]] uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 4 (unused by reader)
+    bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);                 // 5
+    uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                 // 6
+    uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                   // 7
 
     // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output
     constexpr auto input_args = TensorAccessorArgs<0>();
@@ -616,6 +617,14 @@ void kernel_main() {
         e_t_buffer_ptr[num_activated_tokens_per_expert[e]] = -1;
     }
 
+    // Push per-expert token counts to CB for writer to read
+    cb_reserve_back(per_expert_total_tokens_cb_id, experts_per_device);
+    uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_write_ptr(per_expert_total_tokens_cb_id));
+    for (uint32_t e = 0; e < experts_per_device; e++) {
+        per_expert_counts_ptr[e] = num_activated_tokens_per_expert[e];
+    }
+    cb_push_back(per_expert_total_tokens_cb_id, experts_per_device);
+
     cb_reserve_back(total_chunks_cb_id, 1);
     uint32_t total_chunks = 0;
     for (uint32_t e = 0; e < experts_per_device; e++) {
@@ -641,8 +650,11 @@ void kernel_main() {
             // Read each activated token from the sparse input buffer
             for (uint32_t i = 0; i < tokens_in_chunk; i++) {
                 uint32_t token_id = e_t_ptr[chunk_start + i];  // Get sparse token ID from e_t buffer
-                noc_async_read_page(
-                    token_id, input_tensor_addr_gen, get_write_ptr(tilizer_input_cb_id) + i * input_page_size);
+                // read the token from the input tensor at the tilizer subtoken offset and size
+                noc_async_read(
+                    get_noc_addr(token_id, input_tensor_addr_gen) + tilizer_subtoken_offset,
+                    get_write_ptr(tilizer_input_cb_id) + i * tilizer_subtoken_size,
+                    tilizer_subtoken_size);
             }
             noc_async_read_barrier();
             cb_push_back(tilizer_input_cb_id, tokens_per_chunk);  // Push full chunk (padding is garbage, that's OK)
