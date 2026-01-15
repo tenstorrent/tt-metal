@@ -9,8 +9,36 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, check_with_pcc_without_tensor_printout
 from models.common.utility_functions import is_grayskull, is_blackhole, torch_random
+
+
+@pytest.mark.parametrize("shape", [[1, 1000]])
+@pytest.mark.parametrize("dtype", [[torch.float32, ttnn.float32], [torch.bfloat16, ttnn.bfloat16]])
+def test_to_layout_for_2D_from_tile_to_row_major(shape, device, dtype):  # untilize
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape, dtype=dtype[0])
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype[1])
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)
+    assert_equal(input_a, input_tensor)
+    assert_equal(input_a, output_tensor)  # FAIL
+
+
+@pytest.mark.parametrize("shape", [[1, 1000]])
+@pytest.mark.parametrize("dtype", [[torch.float32, ttnn.float32], [torch.bfloat16, ttnn.bfloat16]])
+def test_to_layout_for_2D_from_row_major_to_tile(shape, device, dtype):  # tilize
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape, dtype=dtype[0])
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype[1])
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)
+    assert_equal(input_a, input_tensor)
+    assert_equal(input_a, output_tensor)  # FAIL
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
