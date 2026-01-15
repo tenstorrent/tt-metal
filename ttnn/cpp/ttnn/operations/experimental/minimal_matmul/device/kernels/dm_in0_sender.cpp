@@ -27,12 +27,13 @@ void kernel_main() {
     uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(19);
+    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
+    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in3_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
@@ -45,19 +46,27 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<20>();
+    constexpr auto in0_args = TensorAccessorArgs<22>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
-    constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
+
+    // Always create tuple of output accessors (size = N_chunks)
+    constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
+    constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
+    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, out_addr_rt_arg_idx, out_tile_size);
+
 #ifdef FUSE_BIAS
-    constexpr auto in2_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t in2_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+    constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
     const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
 #endif
 
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
+    const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
@@ -72,8 +81,8 @@ void kernel_main() {
 #ifdef FUSE_AG
     // Receiver for ccl fusing
     MinimalMatmulOpReceiver fused_op_receiver;
-    uint32_t num_devices = get_arg_val<uint32_t>(argidx);
-    uint32_t num_k_blocks = get_arg_val<uint32_t>(argidx + 1);
+    uint32_t num_devices = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks);
+    uint32_t num_k_blocks = get_arg_val<uint32_t>(out_addr_rt_arg_idx + N_chunks + 1);
     uint8_t k_block_device_expected[num_k_blocks]{};
     uint8_t k_block_device_received[num_k_blocks]{};
     uint32_t device_k_block_counts[num_devices]{};
@@ -82,7 +91,7 @@ void kernel_main() {
     if constexpr (is_injector_core) {
         fused_op_receiver = MinimalMatmulOpReceiver(
             true,
-            argidx,
+            out_addr_rt_arg_idx + N_chunks,
             k_block_device_expected,
             k_block_device_received,
             device_k_block_counts,
@@ -92,9 +101,12 @@ void kernel_main() {
 
 #ifdef READ_FROM_LOCAL_INPUT
 #ifdef FUSE_BIAS
-    constexpr auto in3_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
+    constexpr auto in3_args =
+        TensorAccessorArgs<in2_args_cta_offset + tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS>();
 #else
-    constexpr auto in3_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t in3_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+    constexpr auto in3_args = TensorAccessorArgs<in3_args_cta_offset>();
 #endif
     const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
 #endif
@@ -155,15 +167,27 @@ void kernel_main() {
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-                        write_block_sync<M_block_tiles, N_block_tiles>(
-                            out_reader,
-                            out_shape,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile,
-                            defer_write_n_tile_end);
+                        if constexpr (N_chunks == 1) {
+                            write_block_sync<M_block_tiles, N_block_tiles>(
+                                std::get<0>(outputs_tuple),
+                                out_shape,
+                                out_read_ptr,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
+                        } else {
+                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                                outputs_tuple,
+                                out0_shape,
+                                out_read_ptr,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
+                        }
                         cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
                 }
@@ -261,8 +285,27 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                        out_reader, out_shape, cb_id_out, out_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
+                    if constexpr (N_chunks == 1) {
+                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                            std::get<0>(outputs_tuple),
+                            out_shape,
+                            cb_id_out,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile,
+                            n_tile_end);
+                    } else {
+                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                            outputs_tuple,
+                            out0_shape,
+                            cb_id_out,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile,
+                            n_tile_end);
+                    }
                 }
             }
         }
