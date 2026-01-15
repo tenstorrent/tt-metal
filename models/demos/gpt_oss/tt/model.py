@@ -9,7 +9,7 @@ from models.common.utility_functions import nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
-from models.tt_transformers.tt.common import copy_host_to_device
+from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
@@ -78,13 +78,14 @@ class Model:
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
         max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
+        rope_scaling = rope_scaling_model_factory(hf_config.rope_scaling)
         self.rope_setup = RotarySetup(
             device=mesh_device,
             batch_size=max_local_batch_size,
             head_dim=hf_config.head_dim,
             max_seq_len=max_seq_len,
-            rope_theta=getattr(hf_config, "rope_theta", 10000.0),
-            rope_scaling=None,
+            rope_theta=getattr(hf_config, "rope_theta", 150000.0),
+            rope_scaling=rope_scaling,
             datatype=ttnn.bfloat16,
         )
 
