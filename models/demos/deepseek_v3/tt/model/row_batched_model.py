@@ -178,6 +178,17 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             and all(mla_cache.shape == mla_caches[0].shape for mla_cache in mla_caches)
         )
 
+        mlp_caches = (
+            mla_caches[: hf_config.first_k_dense_replace]
+            if mla_caches is not None
+            else [None] * hf_config.first_k_dense_replace
+        )
+        moe_caches = (
+            mla_caches[hf_config.first_k_dense_replace :]
+            if mla_caches is not None
+            else [None] * (hf_config.num_hidden_layers - hf_config.first_k_dense_replace)
+        )
+
         return {
             "embedding": Embedding2D.create_state(hf_config, mesh_device, ccl),
             "mlp_decoder_block": [
@@ -189,19 +200,11 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     mla_cache,
                     kv_cache_override,
                 )
-                for mla_cache in (
-                    mla_caches[: hf_config.first_k_dense_replace]
-                    if mla_caches is not None
-                    else [None] * hf_config.first_k_dense_replace
-                )
+                for mla_cache in tqdm(mlp_caches, desc="Creating MLP layer states")
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock2D.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache, kv_cache_override)
-                for mla_cache in (
-                    mla_caches[hf_config.first_k_dense_replace :]
-                    if mla_caches is not None
-                    else [None] * (hf_config.num_hidden_layers - hf_config.first_k_dense_replace)
-                )
+                for mla_cache in tqdm(moe_caches, desc="Creating MoE layer states")
             ],
             "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
             "lm_head": LMHead1D.create_state(mesh_device, ccl),
