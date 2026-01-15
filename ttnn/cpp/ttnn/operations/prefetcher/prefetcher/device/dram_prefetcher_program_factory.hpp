@@ -6,7 +6,7 @@
 #include "dram_prefetcher_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::dram_prefetcher::program {
+namespace ttnn::prim {
 
 struct DramPrefetcherProgramFactory {
     struct shared_variables_t {
@@ -27,4 +27,4 @@ struct DramPrefetcherProgramFactory {
         Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::dram_prefetcher::program
+}  // namespace ttnn::prim
