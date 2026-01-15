@@ -566,7 +566,6 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes2_0) {
 
     unit_tests::dm::all_to_all::packet_sizes_test(
         mesh_device, test_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size, true);
-
 }
 
 }  // namespace tt::tt_metal
