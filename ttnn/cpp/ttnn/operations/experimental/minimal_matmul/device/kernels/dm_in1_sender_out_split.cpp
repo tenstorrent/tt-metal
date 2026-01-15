@@ -26,8 +26,8 @@ void kernel_main() {
     uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);           // NEW: for splitting
-    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);  // NEW: for splitting
+    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
 
     // Load input/output addresses and range parameters
     // Output addresses are at the end (N_chunks of them)
@@ -51,14 +51,6 @@ void kernel_main() {
     constexpr auto in1_args = TensorAccessorArgs<21>();  // Updated offset
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
-    // NEW: 3 output accessors
-    // constexpr auto out0_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
-    // const auto out0_reader = TensorAccessor(out0_args, out0_addr, out_tile_size);
-    // constexpr auto out1_args = TensorAccessorArgs<out0_args.next_compile_time_args_offset()>();
-    // const auto out1_reader = TensorAccessor(out1_args, out1_addr, out_tile_size);
-    // constexpr auto out2_args = TensorAccessorArgs<out1_args.next_compile_time_args_offset()>();
-    // const auto out2_reader = TensorAccessor(out2_args, out2_addr, out_tile_size);
-
     // Create tuple of TensorAccessorArgs for all output tensors
     // This uses template metaprogramming to create N accessor args at compile time
     constexpr uint32_t tensor_args_cta_offset = in1_args.next_compile_time_args_offset();
@@ -81,8 +73,6 @@ void kernel_main() {
     // Output shapes for each chunk - each has N_tiles_per_chunk width
     // N_tiles_per_chunk is already guaranteed to be tile-aligned by validation
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
-    const TensorShape2D out1_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
-    const TensorShape2D out2_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;

@@ -26,8 +26,8 @@ void kernel_main() {
     uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);           // NEW: for splitting
-    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);  // NEW: for splitting
+    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
     constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
 
     // Load input/output addresses and range parameters
@@ -74,8 +74,6 @@ void kernel_main() {
     // Output shapes for each chunk - each has N_tiles_per_chunk width
     // N_tiles_per_chunk is already guaranteed to be tile-aligned by validation
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
-    const TensorShape2D out1_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
-    const TensorShape2D out2_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
