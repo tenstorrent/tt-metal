@@ -15,6 +15,7 @@
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -245,8 +246,14 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
     const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     auto& output = output_tensor;
-    const auto& scale_factor_h = operation_attributes.scale_factor_h;
-    const auto& scale_factor_w = operation_attributes.scale_factor_w;
+    // This factory only supports integer scale factors
+    TT_FATAL(
+        is_integer_scale(operation_attributes.scale_factor_h) && is_integer_scale(operation_attributes.scale_factor_w),
+        "Sharded upsample factory requires integer scale factors, got scale_h={}, scale_w={}",
+        operation_attributes.scale_factor_h,
+        operation_attributes.scale_factor_w);
+    const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
+    const uint32_t scale_factor_w = static_cast<uint32_t>(operation_attributes.scale_factor_w);
 
     Program program = CreateProgram();
     distributed::MeshDevice* device = input.device();
