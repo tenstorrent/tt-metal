@@ -13,10 +13,10 @@
 namespace ttnn::operations::data_movement::repeat {
 
 struct RepeatDeviceOperation {
-    using operation_attributes_t = repeat::operation_attributes_t;
-    using tensor_args_t = repeat::tensor_args_t;
-    using spec_return_value_t = repeat::spec_return_value_t;
-    using tensor_return_value_t = repeat::tensor_return_value_t;
+    using operation_attributes_t = RepeatParams;
+    using tensor_args_t = RepeatInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<program::RepeatProgramFactoryLastDim, program::RepeatProgramFactoryHigherDim>;
 

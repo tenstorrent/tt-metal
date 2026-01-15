@@ -8,18 +8,15 @@
 
 namespace ttnn::operations::data_movement::indexed_fill {
 
-struct operation_attributes_t {
+struct IndexedFillParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     int64_t dim;
 };
 
-struct tensor_args_t {
+struct IndexedFillInputs {
     Tensor batch_id;
     Tensor input_tensor_a;
     Tensor input_tensor_b;
 };
-
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
 
 }  // namespace ttnn::operations::data_movement::indexed_fill

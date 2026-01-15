@@ -9,13 +9,13 @@
 
 namespace ttnn::operations::experimental::transformer::rotary_embedding_llama {
 
-struct operation_attributes_t {
+struct RotaryEmbeddingLlamaParams {
     bool is_decode_mode{};
     tt::tt_metal::MemoryConfig output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct RotaryEmbeddingLlamaInputs {
     tt::tt_metal::Tensor input_tensor;
     tt::tt_metal::Tensor cos_cache;
     tt::tt_metal::Tensor sin_cache;
