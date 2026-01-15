@@ -12,6 +12,7 @@ import pathlib
 import random
 import sys
 
+from framework.constants import LEAD_MODELS
 from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
@@ -24,8 +25,6 @@ SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 # Shuffle control (set in __main__ when --randomize is provided)
 SHUFFLE_SEED = None
 DO_RANDOMIZE = False
-
-LEAD_MODELS = ["deepseek_v3"]
 
 
 def get_mesh_shape_from_vector(vector):

@@ -19,6 +19,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 from .operation_parameter_extractors import OperationParameterExtractors
+from framework.constants import LEAD_MODELS
 
 # Get the base directory dynamically - import from model_tracer
 try:
@@ -172,9 +173,6 @@ class MasterConfigLoader:
         """
         # Check if we should filter for lead models only
         lead_models_only = os.environ.get("SWEEPS_LEAD_MODELS_ONLY") == "1"
-        lead_model_patterns = [
-            "deepseek_v3",
-        ]
 
         normalized = []
         for config in configs:
@@ -193,7 +191,7 @@ class MasterConfigLoader:
 
                         # Filter for lead models if requested
                         if lead_models_only:
-                            if not any(pattern.lower() in source.lower() for pattern in lead_model_patterns):
+                            if not any(pattern.lower() in source.lower() for pattern in LEAD_MODELS):
                                 continue  # Skip this context
 
                         normalized.append((arguments, source, machine_info))
@@ -204,7 +202,7 @@ class MasterConfigLoader:
 
                     # Filter for lead models if requested
                     if lead_models_only:
-                        if not any(pattern.lower() in source.lower() for pattern in lead_model_patterns):
+                        if not any(pattern.lower() in source.lower() for pattern in LEAD_MODELS):
                             continue  # Skip this config
 
                     normalized.append((config["arguments"], source, machine_info))
