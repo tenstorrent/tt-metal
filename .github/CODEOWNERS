@@ -152,7 +152,7 @@ ttnn/**/kernels/ @tenstorrent/codeowner-bypass # Removes the owners above from o
 ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
-ttnn/examples/lab_eltwise_binary/kernels/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+ttnn/examples/**/kernels/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 
 ttnn/cpp/ttnn/deprecated/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @tenstorrent/codeowner-bypass
 
