@@ -7,11 +7,11 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "fill_rm_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::fill_rm {
+namespace ttnn::prim {
 
 FillRMDeviceOperation::program_factory_t FillRMDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::FillRMProgramFactory{};
+    return FillRMProgramFactory{};
 }
 
 void FillRMDeviceOperation::validate_on_program_cache_hit(
@@ -74,15 +74,12 @@ FillRMDeviceOperation::create_op_performance_model(
 
     const Tensor& input_tensor = tensor_args.input;
     const Tensor& output_tensor = tensor_return_value;
-    const int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    const int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
     const operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
     return result;
 }
 
-}  // namespace ttnn::operations::data_movement::fill_rm
-
-namespace ttnn::prim {
 ttnn::Tensor fill_rm(
     uint32_t N,
     uint32_t C,
@@ -94,7 +91,7 @@ ttnn::Tensor fill_rm(
     float val_hi,
     float val_lo,
     const MemoryConfig& output_memory_config) {
-    using OperationType = ttnn::operations::data_movement::fill_rm::FillRMDeviceOperation;
+    using OperationType = ttnn::prim::FillRMDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .N = N,
@@ -109,4 +106,5 @@ ttnn::Tensor fill_rm(
         },
         OperationType::tensor_args_t{.input = input});
 }
+
 }  // namespace ttnn::prim
