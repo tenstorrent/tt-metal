@@ -268,6 +268,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [ "BH-LLMBox" ] #, "BH-LoudBox", "P300-viommu", "BH-QB-GE" ]
+        repeat: [1, 2, 3, 4, 5]
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
