@@ -1,0 +1,1384 @@
+diff --git a/tt_metal/api/tt-metalium/host_api.hpp b/tt_metal/api/tt-metalium/host_api.hpp
+index 0fb1c50c73f..570762fdfa3 100644
+--- a/tt_metal/api/tt-metalium/host_api.hpp
++++ b/tt_metal/api/tt-metalium/host_api.hpp
+@@ -18,6 +18,7 @@
+ #include <tt-metalium/lightmetal_binary.hpp>
+ #include <tt-metalium/profiler_types.hpp>
+ #include <tt-metalium/profiler_optional_metadata.hpp>
++#include <tt-metalium/unified_kernel.hpp>
+
+ /** @file */
+
+@@ -156,6 +157,12 @@ KernelHandle CreateKernel(
+     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
+
++void CreateKernel(
++    Program& program,
++    const std::string& file_name,
++    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
++    const UnifiedKernelConfigBuilder& config_builder);
++
+ // clang-format off
+ /**
+  * Creates a compute or data movement kernel with the given compile time arguments and adds it to the program.
+@@ -470,6 +477,9 @@ void SetRuntimeArgs(
+     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+     stl::Span<const uint32_t> runtime_args);
+
++void UpdateRuntimeArgs(
++    const Program& program, const CoreCoord& core_coord, const std::function<void(uint32_t*)>& updater_fn);
++
+ // clang-format off
+ /**
+  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
+diff --git a/tt_metal/api/tt-metalium/unified_kernel.hpp b/tt_metal/api/tt-metalium/unified_kernel.hpp
+new file mode 100644
+index 00000000000..2d7001ea22a
+--- /dev/null
++++ b/tt_metal/api/tt-metalium/unified_kernel.hpp
+@@ -0,0 +1,123 @@
++// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
++//
++// SPDX-License-Identifier: Apache-2.0
++
++#pragma once
++
++#include <string>
++#include <variant>
++#include <vector>
++#include <map>
++#include <unordered_map>
++#include <tt-metalium/core_coord.hpp>
++#include <tt-metalium/base_types.hpp>
++#include <tt-metalium/constants.hpp>
++#include <tt-metalium/buffer.hpp>
++#include <tt-metalium/mesh_buffer.hpp>
++#include <tt-metalium/tensor_accessor_args.hpp>
++#include <tt-metalium/kernel_types.hpp>
++#include <tt-metalium/circular_buffer_config.hpp>
++
++namespace tt::tt_metal {
++
++struct MathConfig {
++    MathFidelity math_fidelity = MathFidelity::HiFi4;
++    bool fp32_dest_acc_en = false;
++    bool dst_full_sync_en = false;
++    std::vector<UnpackToDestMode> unpack_to_dest_mode;
++    bool bfp8_pack_precise = false;
++    bool math_approx_mode = false;
++};
++
++struct UnifiedKernelConfig {
++    ReaderDataMovementConfig reader_config;
++    WriterDataMovementConfig writer_config;
++    ComputeConfig compute_config;
++    std::vector<uint32_t> runtime_args;
++    std::vector<uint32_t> common_runtime_args;
++};
++
++struct GeneratedTileConstant {
++    std::string name;
++    tt::DataFormat data_format = tt::DataFormat::Float16_b;
++    std::string generator_code;
++};
++
++class UnifiedKernelConfigBuilder {
++public:
++    UnifiedKernelConfigBuilder(MathConfig math_config = MathConfig{}) : math_config_(std::move(math_config)) {}
++
++    UnifiedKernelConfigBuilder& set_compile_time_args(std::vector<std::pair<std::string, uint32_t>> compile_time_args) {
++        compile_time_args_ = std::move(compile_time_args);
++        return *this;
++    }
++    UnifiedKernelConfigBuilder& add_compile_time_arg(std::string name, uint32_t value) {
++        compile_time_args_.emplace_back(std::move(name), value);
++        return *this;
++    }
++    UnifiedKernelConfigBuilder& set_runtime_args(std::vector<std::pair<std::string, uint32_t>> runtime_args) {
++        runtime_args_ = std::move(runtime_args);
++        return *this;
++    }
++    UnifiedKernelConfigBuilder& add_runtime_arg(std::string name, uint32_t value) {
++        runtime_args_.emplace_back(std::move(name), value);
++        return *this;
++    }
++    UnifiedKernelConfigBuilder& set_common_runtime_args(
++        std::vector<std::pair<std::string, uint32_t>> common_runtime_args) {
++        common_runtime_args_ = std::move(common_runtime_args);
++        return *this;
++    }
++    UnifiedKernelConfigBuilder& add_common_runtime_arg(std::string name, uint32_t value) {
++        common_runtime_args_.emplace_back(std::move(name), value);
++        return *this;
++    }
++    UnifiedKernelConfigBuilder& set_defines(std::map<std::string, std::string> defines) {
++        defines_ = std::move(defines);
++        return *this;
++    }
++    UnifiedKernelConfigBuilder& add_define(std::string name, std::string value) {
++        defines_.emplace(std::move(name), std::move(value));
++        return *this;
++    }
++    UnifiedKernelConfigBuilder& add_generated_tile_constant(GeneratedTileConstant generated_tile_constant) {
++        generated_tile_constants_.push_back(std::move(generated_tile_constant));
++        return *this;
++    }
++
++    UnifiedKernelConfigBuilder& add_buffer(std::string name, const Buffer& buffer, tt::DataFormat data_format);
++    UnifiedKernelConfigBuilder& add_buffer(std::string name, const Buffer* buffer, tt::DataFormat data_format);
++    UnifiedKernelConfigBuilder& add_buffer(
++        std::string name, const std::shared_ptr<Buffer>& buffer, tt::DataFormat data_format);
++    UnifiedKernelConfigBuilder& add_buffer(
++        std::string name, const distributed::MeshBuffer& buffer, tt::DataFormat data_format);
++    UnifiedKernelConfigBuilder& add_buffer(
++        std::string name, const distributed::MeshBuffer* buffer, tt::DataFormat data_format);
++    UnifiedKernelConfigBuilder& add_buffer(
++        std::string name, const std::shared_ptr<distributed::MeshBuffer>& buffer, tt::DataFormat data_format);
++
++    size_t get_runtime_arg_idx(const char* name) const;
++    size_t get_common_runtime_arg_idx(const char* name) const;
++    size_t buffer_addresses_start_runtime_arg_idx() const;
++
++    UnifiedKernelConfig build() const;
++    std::vector<CircularBufferConfig> compute_circular_buffers() const;
++
++private:
++    struct TensorData {
++        TensorAccessorArgs accessor_args;
++        uint32_t buffer_address = 0;
++        uint32_t page_size_bytes = 0;
++        tt::DataFormat data_format = tt::DataFormat::Float32;
++    };
++
++    std::vector<std::pair<std::string, uint32_t>> compile_time_args_;
++    std::vector<std::pair<std::string, uint32_t>> runtime_args_;
++    std::vector<std::pair<std::string, uint32_t>> common_runtime_args_;
++    std::map<std::string, std::string> defines_;
++    std::vector<std::pair<std::string, TensorData>> tensor_data_;
++    std::vector<GeneratedTileConstant> generated_tile_constants_;
++    MathConfig math_config_;
++};
++
++}  // namespace tt::tt_metal
+diff --git a/tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_list.h b/tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_list.h
+index 01135c40169..dfe51b71e09 100644
+--- a/tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_list.h
++++ b/tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_list.h
+@@ -4,10 +4,12 @@
+
+ #pragma once
+
++#ifdef COMPILE_FOR_TRISC
+ #include "debug/fw_debug.h"
+ #include "ckernel.h"
+ #include "ckernel_gpr_map.h"
+ #include "llk_param_structs.h"
++#endif
+
+ using namespace ckernel;
+
+diff --git a/tt_metal/hw/inc/dataflow_api.h b/tt_metal/hw/inc/dataflow_api.h
+index b841fea7235..3bfa6a535c7 100644
+--- a/tt_metal/hw/inc/dataflow_api.h
++++ b/tt_metal/hw/inc/dataflow_api.h
+@@ -25,6 +25,7 @@
+ #include "accessor/tensor_accessor.h"
+ #include "tools/profiler/kernel_profiler.hpp"
+
++#ifndef COMPILE_FOR_TRISC
+ // clang-format off
+ /**
+  * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
+@@ -77,6 +78,8 @@ inline uint8_t get_relative_logical_y() {
+     return my_relative_y_;
+ }
+
++#endif
++
+ // clang-format off
+ /**
+  * Helper function to check if an address is in L1 memory space (not register space).
+@@ -85,6 +88,8 @@ inline uint8_t get_relative_logical_y() {
+ // clang-format on
+ bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_START_ADDR); }
+
++#ifndef COMPILE_FOR_TRISC
++
+ // clang-format off
+ /**
+  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via
+@@ -267,6 +272,8 @@ constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
+
+ #endif
+
++#endif
++
+ // clang-format off
+ /**
+  * Returns a pointer to the beginning of a memory block previously reserved
+@@ -311,6 +318,8 @@ uint32_t get_read_ptr(uint32_t operand) {
+     return rd_ptr_bytes;
+ }
+
++#ifndef COMPILE_FOR_TRISC
++
+ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
+     volatile tt_reg_ptr uint32_t* reg_ptr = (volatile uint32_t*)addr;
+     int32_t reg_value;
+@@ -459,6 +468,8 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
+     WAYPOINT("CWFD");
+ }
+
++#endif
++
+ // #######################################################################################
+ // #################################### NOC transfers ####################################
+ // #######################################################################################
+diff --git a/tt_metal/hw/inc/unified_common.h b/tt_metal/hw/inc/unified_common.h
+new file mode 100644
+index 00000000000..1aae5c74a82
+--- /dev/null
++++ b/tt_metal/hw/inc/unified_common.h
+@@ -0,0 +1,132 @@
++#pragma once
++
++#include <cstdint>
++
++#ifdef COMPILE_FOR_TRISC
++#define NOC_INDEX 0
++#define NOC_MODE 0
++#include "debug/assert.h"
++#include "dataflow_api_common.h"
++#include "accessor/tensor_accessor.h"
++#endif
++
++#include "compute_kernel_api/common.h"
++#include "compute_kernel_api/tile_move_copy.h"
++#include "compute_kernel_api/eltwise_binary.h"
++#include "compute_kernel_api.h"
++
++using namespace ckernel;
++
++#ifdef COMPILE_FOR_TRISC
++#define KERNEL_MAIN       \
++    namespace NAMESPACE { \
++    void MAIN;            \
++    }                     \
++    void NAMESPACE::MAIN
++#else
++#define KERNEL_MAIN void kernel_main()
++#endif
++
++namespace unified_kernel::detail {
++
++#ifdef COMPILE_FOR_TRISC
++uint32_t read_pages[TOTAL_NUM_CIRCULAR_BUFFERS];
++uint32_t popped_pages[TOTAL_NUM_CIRCULAR_BUFFERS];
++#endif
++#ifdef COMPILE_FOR_BRISC
++uint32_t offset_pages[TOTAL_NUM_CIRCULAR_BUFFERS];
++#endif
++
++FORCE_INLINE void release_read_tile(uint32_t cb_id) {
++#ifdef COMPILE_FOR_TRISC
++    cb_pop_front(cb_id, 1);
++    popped_pages[cb_id] += 1;
++#endif
++#ifdef COMPILE_FOR_BRISC
++    noc_async_read_barrier();
++    cb_push_back(cb_id, 1);
++    offset_pages[cb_id] -= 1;
++#endif
++}
++
++struct ReadTile {
++    constexpr ReadTile(uint32_t cb_id, uint32_t id) : cb_id_(cb_id), id_(id) {}
++    ReadTile(const ReadTile&) = delete;
++    ReadTile& operator=(const ReadTile&) = delete;
++    ~ReadTile() { release_read_tile(cb_id_); }
++    uint32_t local_id() const {
++#ifdef COMPILE_FOR_TRISC
++        return id_ - popped_pages[cb_id_];
++#else
++        return id_;
++#endif
++    }
++    uint32_t cb_id() const { return cb_id_; }
++
++private:
++    uint32_t cb_id_ = 0;
++    uint32_t id_ = 0;
++};
++struct ConstantTile {
++    constexpr ConstantTile(uint32_t cb_id, uint32_t id) : cb_id_(cb_id), id_(id) {}
++    uint32_t local_id() const { return id_; }
++    uint32_t cb_id() const { return cb_id_; }
++
++private:
++    uint32_t cb_id_ = 0;
++    uint32_t id_ = 0;
++};
++
++template <typename Accessor>
++FORCE_INLINE auto read_tile_impl(
++    const uint32_t cb_id, const uint32_t id, const Accessor& addrgen, const uint32_t tile_size_bytes) {
++#ifdef COMPILE_FOR_TRISC
++    cb_wait_front(cb_id, 1);
++    read_pages[cb_id] += 1;
++    return ReadTile(cb_id, read_pages[cb_id] - 1);
++#elif COMPILE_FOR_BRISC
++    cb_reserve_back(cb_id, 1);
++    noc_async_read_tile(id, addrgen, get_write_ptr(cb_id) + tile_size_bytes * offset_pages[cb_id]);
++    offset_pages[cb_id] += 1;
++    return ReadTile(cb_id, offset_pages[cb_id] - 1);
++#else
++    return ConstantTile(0, 0);
++#endif
++}
++
++template <typename Accessor>
++FORCE_INLINE void write_tile_impl(
++    const uint32_t from_dst_idx,
++    const uint32_t cb_id,
++    const uint32_t into_page_id,
++    const Accessor& addrgen,
++    const uint32_t tile_size_bytes) {
++#ifdef COMPILE_FOR_TRISC
++    cb_reserve_back(cb_id, 1);
++    pack_tile(from_dst_idx, cb_id);
++    cb_push_back(cb_id, 1);
++#elif COMPILE_FOR_NCRISC
++    cb_wait_front(cb_id, 1);
++    noc_async_write_tile(into_page_id, addrgen, get_read_ptr(cb_id));
++    noc_async_write_barrier();
++    cb_pop_front(cb_id, 1);
++#endif
++}
++
++}  // namespace unified_kernel::detail
++
++#define read_tile(tensor, id) unified_kernel::detail::read_tile_impl(tensor##_cb, id, tensor, tensor##_page_size_bytes)
++#define write_tile(from_dst_idx, tensor, into_page_id) \
++    unified_kernel::detail::write_tile_impl(from_dst_idx, tensor##_cb, into_page_id, tensor, tensor##_page_size_bytes)
++using ReadTile = unified_kernel::detail::ReadTile;
++using ConstantTile = unified_kernel::detail::ConstantTile;
++
++template <typename TileA, typename TileB>
++FORCE_INLINE void add_tiles(const TileA& in0, const TileB& in1, uint32_t dst_idx) {
++    add_tiles(in0.cb_id(), in1.cb_id(), in0.local_id(), in1.local_id(), dst_idx);
++}
++
++template <typename TileA, typename TileB>
++FORCE_INLINE void reduce_tile(const TileA& in0, const TileB& in1, uint32_t dst_idx) {
++    reduce_tile(in0.cb_id(), in1.cb_id(), in0.local_id(), in1.local_id(), dst_idx);
++}
+diff --git a/tt_metal/impl/CMakeLists.txt b/tt_metal/impl/CMakeLists.txt
+index f509abe8e8a..283fbf97054 100644
+--- a/tt_metal/impl/CMakeLists.txt
++++ b/tt_metal/impl/CMakeLists.txt
+@@ -24,6 +24,7 @@ set(IMPL_SRC
+     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
++    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/unified_kernel.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/bank_manager.cpp
+diff --git a/tt_metal/impl/kernels/unified_kernel.cpp b/tt_metal/impl/kernels/unified_kernel.cpp
+new file mode 100644
+index 00000000000..3d6583d8961
+--- /dev/null
++++ b/tt_metal/impl/kernels/unified_kernel.cpp
+@@ -0,0 +1,159 @@
++#include <tt-metalium/unified_kernel.hpp>
++
++#include <sstream>
++
++namespace tt::tt_metal {
++
++UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
++    std::string name, const Buffer& buffer, tt::DataFormat data_format) {
++    return add_buffer(std::move(name), &buffer, data_format);
++}
++UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
++    std::string name, const Buffer* buffer, tt::DataFormat data_format) {
++    tensor_data_.emplace_back(
++        std::move(name),
++        TensorData{
++            TensorAccessorArgs(buffer), buffer ? buffer->address() : 0, buffer ? buffer->page_size() : 0, data_format});
++    return *this;
++}
++UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
++    std::string name, const std::shared_ptr<Buffer>& buffer, tt::DataFormat data_format) {
++    return add_buffer(std::move(name), buffer.get(), data_format);
++}
++UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
++    std::string name, const distributed::MeshBuffer& buffer, tt::DataFormat data_format) {
++    return add_buffer(std::move(name), &buffer, data_format);
++}
++UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
++    std::string name, const distributed::MeshBuffer* buffer, tt::DataFormat data_format) {
++    tensor_data_.emplace_back(
++        std::move(name),
++        TensorData{
++            TensorAccessorArgs(buffer), buffer ? buffer->address() : 0, buffer ? buffer->page_size() : 0, data_format});
++    return *this;
++}
++UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
++    std::string name, const std::shared_ptr<distributed::MeshBuffer>& buffer, tt::DataFormat data_format) {
++    return add_buffer(std::move(name), buffer.get(), data_format);
++}
++
++size_t UnifiedKernelConfigBuilder::get_runtime_arg_idx(const char* name) const {
++    for (size_t i = 0; i < runtime_args_.size(); ++i) {
++        if (runtime_args_[i].first == name) {
++            return i;
++        }
++    }
++    TT_THROW("Runtime argument {} not found", name);
++}
++size_t UnifiedKernelConfigBuilder::get_common_runtime_arg_idx(const char* name) const {
++    for (size_t i = 0; i < common_runtime_args_.size(); ++i) {
++        if (common_runtime_args_[i].first == name) {
++            return i;
++        }
++    }
++    TT_THROW("Common runtime argument {} not found", name);
++}
++size_t UnifiedKernelConfigBuilder::buffer_addresses_start_runtime_arg_idx() const { return runtime_args_.size(); }
++
++UnifiedKernelConfig UnifiedKernelConfigBuilder::build() const {
++    std::map<std::string, std::string> defines = defines_;
++    std::vector<uint32_t> runtime_args;
++    std::vector<uint32_t> common_runtime_args;
++    std::vector<uint32_t> compile_time_args;
++
++    std::stringstream init_define_ss;
++
++    compile_time_args.reserve(compile_time_args_.size());
++    for (const auto& [name, value] : compile_time_args_) {
++        compile_time_args.push_back(value);
++        init_define_ss << "constexpr uint32_t " << name << " = " << value << "; ";
++    }
++    runtime_args.reserve(runtime_args_.size());
++    for (size_t runtime_arg_idx = 0; runtime_arg_idx < runtime_args_.size(); ++runtime_arg_idx) {
++        const auto& [name, value] = runtime_args_[runtime_arg_idx];
++        runtime_args.push_back(value);
++        init_define_ss << "const uint32_t " << name << " = get_arg_val<uint32_t>(" << runtime_arg_idx << "); ";
++    }
++    common_runtime_args.reserve(common_runtime_args_.size());
++    for (size_t common_runtime_arg_idx = 0; common_runtime_arg_idx < common_runtime_args_.size();
++         ++common_runtime_arg_idx) {
++        const auto& [name, value] = common_runtime_args_[common_runtime_arg_idx];
++        common_runtime_args.push_back(value);
++        init_define_ss << "const uint32_t " << name << " = get_common_arg_val<uint32_t>(" << common_runtime_arg_idx
++                       << "); ";
++    }
++    for (size_t tensor_idx = 0; tensor_idx < tensor_data_.size(); ++tensor_idx) {
++        const auto& [name, tensor_data] = tensor_data_[tensor_idx];
++        size_t cta_offset = compile_time_args.size();
++        tensor_data.accessor_args.append_to(compile_time_args);
++        runtime_args.push_back(tensor_data.buffer_address);
++
++        init_define_ss << "constexpr auto " << name << "_cb = " << tensor_idx << "; ";
++        init_define_ss << "const uint32_t " << name << "_addr = get_arg_val<uint32_t>(" << runtime_args.size() - 1
++                       << "); ";
++        init_define_ss << "constexpr auto " << name << "_args = TensorAccessorArgs<" << cta_offset << ">(); ";
++        init_define_ss << "constexpr uint32_t " << name << "_page_size_bytes = " << tensor_data.page_size_bytes << "; ";
++        init_define_ss << "const auto " << name << " = TensorAccessor(" << name << "_args, " << name << "_addr, "
++                       << name << "_page_size_bytes); ";
++    }
++
++    std::stringstream init_reader_define_ss;
++    std::stringstream init_compute_define_ss;
++
++    for (size_t constant_idx = 0; constant_idx < generated_tile_constants_.size(); ++constant_idx) {
++        const auto& constant = generated_tile_constants_[constant_idx];
++        init_define_ss << "constexpr auto " << constant.name << "_cb = " << constant_idx + tensor_data_.size() << "; ";
++        init_define_ss << "constexpr auto " << constant.name << " = ConstantTile(" << constant.name << "_cb, 0); ";
++        init_reader_define_ss << constant.generator_code << "; ";
++        init_compute_define_ss << "cb_wait_front(" << constant.name << "_cb, 1); ";
++    }
++
++    defines["INIT_ARGUMENTS"] = init_define_ss.str();
++    defines["TOTAL_NUM_CIRCULAR_BUFFERS"] = std::to_string(tensor_data_.size());
++
++    auto reader_defines = defines;
++    reader_defines["INIT_ARGUMENTS"] += init_reader_define_ss.str();
++    auto compute_defines = defines;
++    compute_defines["INIT_ARGUMENTS"] += init_compute_define_ss.str();
++
++    ReaderDataMovementConfig reader_config(compile_time_args, std::move(reader_defines));
++    WriterDataMovementConfig writer_config(compile_time_args, std::move(defines));
++    ComputeConfig compute_config{
++        .math_fidelity = math_config_.math_fidelity,
++        .fp32_dest_acc_en = math_config_.fp32_dest_acc_en,
++        .dst_full_sync_en = math_config_.dst_full_sync_en,
++        .unpack_to_dest_mode = math_config_.unpack_to_dest_mode,
++        .bfp8_pack_precise = math_config_.bfp8_pack_precise,
++        .math_approx_mode = math_config_.math_approx_mode,
++        .compile_args = std::move(compile_time_args),
++        .defines = std::move(compute_defines),
++    };
++    return {
++        .reader_config = std::move(reader_config),
++        .writer_config = std::move(writer_config),
++        .compute_config = std::move(compute_config),
++        .runtime_args = std::move(runtime_args),
++        .common_runtime_args = std::move(common_runtime_args),
++    };
++}
++
++std::vector<CircularBufferConfig> UnifiedKernelConfigBuilder::compute_circular_buffers() const {
++    std::vector<CircularBufferConfig> circular_buffers;
++    circular_buffers.reserve(tensor_data_.size());
++    for (size_t tensor_idx = 0; tensor_idx < tensor_data_.size(); ++tensor_idx) {
++        const auto& tensor_data = tensor_data_[tensor_idx].second;
++        circular_buffers.push_back(
++            CircularBufferConfig(2 * tensor_data.page_size_bytes, {{tensor_idx, tensor_data.data_format}})
++                .set_page_size(tensor_idx, tensor_data.page_size_bytes));
++    }
++    for (size_t constant_idx = 0; constant_idx < generated_tile_constants_.size(); ++constant_idx) {
++        const auto& generated_tile_constant = generated_tile_constants_[constant_idx];
++        uint32_t cb_id = constant_idx + tensor_data_.size();
++        uint32_t tile_size = tt::tile_size(generated_tile_constant.data_format);
++        circular_buffers.push_back(CircularBufferConfig(tile_size, {{cb_id, generated_tile_constant.data_format}})
++                                       .set_page_size(cb_id, tile_size));
++    }
++    return circular_buffers;
++}
++
++}  // namespace tt::tt_metal
+diff --git a/tt_metal/include/compute_kernel_api/common.h b/tt_metal/include/compute_kernel_api/common.h
+index bd1b15dd271..ba6a2241a5c 100644
+--- a/tt_metal/include/compute_kernel_api/common.h
++++ b/tt_metal/include/compute_kernel_api/common.h
+@@ -6,6 +6,8 @@
+
+ #include "compute_kernel_api/common_globals.h"
+ #include "compute_kernel_api/reg_api.h"
++
++#ifdef COMPILE_FOR_TRISC
+ #include "compute_kernel_api/pack.h"
+ #include "compute_kernel_api/reconfig_data_format.h"
+ #include "compute_kernel_api/cb_api.h"
+@@ -133,3 +135,5 @@ inline uint8_t get_relative_logical_y() {
+     extern uint8_t my_relative_y_;  // Set in FW
+     return my_relative_y_;
+ }
++
++#endif
+diff --git a/tt_metal/include/compute_kernel_api/common_globals.h b/tt_metal/include/compute_kernel_api/common_globals.h
+index 56c5a64833d..dbfe5d98f82 100644
+--- a/tt_metal/include/compute_kernel_api/common_globals.h
++++ b/tt_metal/include/compute_kernel_api/common_globals.h
+@@ -6,11 +6,15 @@
+
+ #define ALWI inline __attribute__((always_inline))
+
++#ifdef COMPILE_FOR_TRISC
+ #include "chlkc_list.h"
+ #include "ckernel.h"
+ #include "firmware_common.h"
+ #include "ckernel_include.h"
+ #include "hostdevcommon/kernel_structs.h"
++#else
++#include "llk_defs.h"
++#endif
+
+ #ifdef TRISC_MATH
+ #include "llk_math_common_api.h"
+diff --git a/tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp b/tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp
+index 1ff4a8f88c6..938500000a3 100644
+--- a/tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp
++++ b/tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp
+@@ -80,70 +80,17 @@ int main(int argc, char** argv) {
+         distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
+         distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
+
+-        // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
+-        // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
+-        // kernel. Each circular buffer is made up of 2 tiles. Thus when one tile is pushed and being used by the receiving end, the
+-        // sending end can get the next piece of data ready to be pushed. Overlapping the operations. Leading to better performance.
+-        // However there is a trade off, The more tiles in a circular buffer, the more memory is used. And Circular buffers are
+-        // backed by L1(SRAM) memory and L1 is a precious resource.
+-        // The hardware supports up to 32 circular buffers and they all act the same.
+-        constexpr uint32_t tiles_per_cb = 2;
+-        tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
+-        CreateCircularBuffer(program, core, CircularBufferConfig(
+-            /*total_size=*/tiles_per_cb * tile_size_bytes,                    // The total size of the circular buffer in bytes
+-            /*data_format_spec=*/{{src0_cb_index, tt::DataFormat::Float16_b}})// The circular buffer index and data format it'll hold
+-            .set_page_size(src0_cb_index, tile_size_bytes));                  // Since we will be sending one tile at a time, we set
+-                                                                              // the page size to the tile size (and thus
+-                                                                              // total_size / page_size = tiles_per is the number of
+-                                                                              // entries in the circular buffer)
+-        tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
+-        CreateCircularBuffer(program, core, CircularBufferConfig(
+-            /*total_size=*/tiles_per_cb * tile_size_bytes,
+-            /*data_format_spec=*/{{src1_cb_index, tt::DataFormat::Float16_b}})
+-            .set_page_size(src1_cb_index, tile_size_bytes));
+-        tt::CBIndex dst_cb_index = tt::CBIndex::c_16;
+-        CreateCircularBuffer(program, core, CircularBufferConfig(
+-            /*total_size=*/tiles_per_cb * tile_size_bytes,
+-            /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
+-            .set_page_size(dst_cb_index, tile_size_bytes));
+-
+-        // Create the reader, writer and compute kernels. The kernels do the following:
+-        // * Reader: Reads data from the DRAM buffer and pushes it into the circular buffer.
+-        // * Compute: Waits for data to be available in the circular buffer, pops it, adds the two inputs together and pushes the result
+-        //   into the output circular buffer.
+-        // * Writer: Waits for data to be available in the output circular buffer, pops it and writes it back into DRAM.
+-        // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them available in the
+-        // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
+-        // back to DRAM.
+-        std::vector<uint32_t> reader_compile_time_args;
+-        TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+-        TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
+-        auto reader = CreateKernel(
+-            program,
+-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/read_tiles.cpp",
+-            core,
+-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
+-        std::vector<uint32_t> writer_compile_time_args;
+-        TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+-        auto writer = CreateKernel(
+-            program,
+-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/write_tile.cpp",
+-            core,
+-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
+-        auto compute = CreateKernel(
++        auto unified_config = UnifiedKernelConfigBuilder({.math_fidelity = MathFidelity::HiFi4})
++            .add_runtime_arg("n_tiles", n_tiles)
++            .add_buffer("in0", src0_dram_buffer, tt::DataFormat::Float16_b)
++            .add_buffer("in1", src1_dram_buffer, tt::DataFormat::Float16_b)
++            .add_buffer("out", dst_dram_buffer, tt::DataFormat::Float16_b);
++
++        CreateKernel(
+             program,
+-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",
++            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/tiles_add.cpp",
+             core,
+-            ComputeConfig{.math_fidelity = MathFidelity::HiFi4});   // There's different math fidelity modes (for the tensor engine)
+-                                                                // that trade off performance for accuracy. HiFi4 is the most accurate
+-                                                                // mode. The other modes are HiFi3, HiFi2, HiFi1 and LoFi. The
+-                                                                // difference between them is the number of bits used during computation.
+-
+-        // Set the runtime arguments for the kernels. This also registers
+-        // the kernels with the program.
+-        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
+-        SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
+-        SetRuntimeArgs(program, compute, core, {n_tiles});
++            unified_config);
+
+         // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates
+         // to Metalium that the operation is non-blocking. The function is allowed to return upon the kernel being queued. We must
+diff --git a/tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp b/tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp
+deleted file mode 100644
+index a99f86ca58c..00000000000
+--- a/tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp
++++ /dev/null
+@@ -1,60 +0,0 @@
+-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+-//
+-// SPDX-License-Identifier: Apache-2.0
+-
+-#include <cstdint>
+-#include "compute_kernel_api/common.h"
+-#include "compute_kernel_api/tile_move_copy.h"
+-#include "compute_kernel_api/eltwise_binary.h"
+-#include "compute_kernel_api.h"
+-
+-namespace NAMESPACE {
+-void MAIN {
+-    uint32_t n_tiles = get_arg_val<uint32_t>(0);
+-
+-    // We are going to read from these two circular buffers
+-    constexpr auto cb_in0 = tt::CBIndex::c_0;
+-    constexpr auto cb_in1 = tt::CBIndex::c_1;
+-    // and write to the output circular buffer
+-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+-
+-    // The destination register is a set of 16 tiles. Which the matrix engine (FPU) can output
+-    // to. For our case, we are going perform the addition of two tiles and write the result
+-    // to destination register 0.
+-    constexpr uint32_t dst_reg = 0;
+-
+-    // Tell the SFPU that we will be using circular buffers c_in0, c_in1 and c_out0
+-    // to perform the computation.
+-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+-    // And we are going to add tiles. This function is only called if we ever need to
+-    // switch operation to something else. Since we are only adding tiles, this function
+-    // is only called once before the loop.
+-    add_tiles_init(cb_in0, cb_in1);
+-
+-    // Loop over all the tiles and perform the computation
+-    for (uint32_t i = 0; i < n_tiles; i++) {
+-        // Wait until there is a tile in both input circular buffers
+-        cb_wait_front(cb_in0, 1);
+-        cb_wait_front(cb_in1, 1);
+-        // Make sure there is registers we can use and hold it. The register can be being used by other
+-        // components. So we need to be sure before we use it. Thus even though there is 16 registers, each
+-        // time acquire a register, we get 8 of them that we can use until released.
+-        tile_regs_acquire();
+-        // Add the tiles from the input circular buffers and write the result to the destination register
+-        add_tiles(cb_in0, cb_in1, 0, 0, dst_reg);
+-        // Release the held register
+-        tile_regs_commit();
+-        tile_regs_wait();
+-        // Make sure there is space in the output circular buffer
+-        cb_reserve_back(cb_out0, 1);
+-        // Copy the result from adding the tiles to the output circular buffer
+-        pack_tile(dst_reg, cb_out0);
+-        // Mark the output tile as ready and pop the input tiles
+-        cb_push_back(cb_out0, 1);
+-        cb_pop_front(cb_in0, 1);
+-        cb_pop_front(cb_in1, 1);
+-        // Release the held register
+-        tile_regs_release();
+-    }
+-}
+-}  // namespace NAMESPACE
+diff --git a/tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp b/tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp
+deleted file mode 100644
+index f146f9efcfb..00000000000
+--- a/tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp
++++ /dev/null
+@@ -1,50 +0,0 @@
+-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+-//
+-// SPDX-License-Identifier: Apache-2.0
+-
+-#include <cstdint>
+-
+-void kernel_main() {
+-    // Read parameters from the kernel arguments
+-    uint32_t in0_addr = get_arg_val<uint32_t>(0);
+-    uint32_t in1_addr = get_arg_val<uint32_t>(1);
+-    uint32_t n_tiles = get_arg_val<uint32_t>(2);
+-
+-    // The circular buffers to read the tiles into
+-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+-
+-    // Get the tile size used in the circular buffers. We assume the
+-    // circular buffers are created with the same tile size as the DRAM
+-    // buffers (Whis is most of the cases).
+-    const uint32_t tile_size_bytes = get_tile_size(cb_in0);
+-
+-    // Create address generators for the input buffers. Consider these the
+-    // pointers for interleaved buffers
+-    // Setting the page size to be tile_size_bytes works because we set it up
+-    // explicitly in host code. This is usually a good idea as it makes coding
+-    // easy.
+-    constexpr auto in0_args = TensorAccessorArgs<0>();
+-    const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
+-    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+-    const auto in1 = TensorAccessor(in1_args, in1_addr, tile_size_bytes);
+-
+-    // Loop over all the tiles and read them into the circular buffers
+-    for (uint32_t i = 0; i < n_tiles; i++) {
+-        // First make sure there is space in the circular buffers to be written to.
+-        cb_reserve_back(cb_in0, 1);
+-        cb_reserve_back(cb_in1, 1);  // wait until we have 1 free slot. This blocks if the
+-                                     // other kernels cannot consume the tiles fast enough.
+-                                     // Deciding how large the buffer should be is a tradeoff.
+-        uint32_t cb_in0_addr = get_write_ptr(cb_in0);
+-        uint32_t cb_in1_addr = get_write_ptr(cb_in1);
+-        noc_async_read_tile(i, in0, cb_in0_addr);  // read the tile into the circular buffer
+-        noc_async_read_tile(i, in1, cb_in1_addr);  // We can overlap async reads and writes
+-                                                   // to reduce the data movement overhead.
+-
+-        noc_async_read_barrier();  // Wait until tile reads are done
+-        cb_push_back(cb_in0, 1);
+-        cb_push_back(cb_in1, 1);  // mark the tiles as ready. From this point forward kernels
+-                                  // calling `cb_wait_front` will see this tile
+-    }
+-}
+diff --git a/tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp b/tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp
+deleted file mode 100644
+index 0fd0adfbbf9..00000000000
+--- a/tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp
++++ /dev/null
+@@ -1,34 +0,0 @@
+-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+-//
+-// SPDX-License-Identifier: Apache-2.0
+-
+-#include <cstdint>
+-
+-void kernel_main() {
+-    uint32_t c_addr = get_arg_val<uint32_t>(0);
+-    uint32_t n_tiles = get_arg_val<uint32_t>(1);
+-
+-    // The circular buffer that we are going to read from and write to DRAM
+-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+-    const uint32_t tile_size_bytes = get_tile_size(cb_out0);
+-
+-    // Address of the output buffer
+-    constexpr auto out0_args = TensorAccessorArgs<0>();
+-    const auto out0 = TensorAccessor(out0_args, c_addr, tile_size_bytes);
+-
+-    // Loop over all the tiles and write them to the output buffer
+-    for (uint32_t i = 0; i < n_tiles; i++) {
+-        // Make sure there is a tile in the circular buffer
+-        cb_wait_front(cb_out0, 1);
+-        uint32_t cb_out0_addr = get_read_ptr(cb_out0);
+-        // write the tile to DRAM
+-        noc_async_write_tile(i, out0, cb_out0_addr);
+-        noc_async_write_barrier();  // This will wait until the write is done. As an alternative,
+-                                    // noc_async_write_flushed() can be faster because it waits
+-                                    // until the write request is sent. In that case, you have to
+-                                    // use noc_async_write_barrier() at least once at the end of
+-                                    // data movement kernel to make sure all writes are done.
+-        // Mark the tile as consumed
+-        cb_pop_front(cb_out0, 1);
+-    }
+-}
+diff --git a/tt_metal/programming_examples/eltwise_binary/kernels/tiles_add.cpp b/tt_metal/programming_examples/eltwise_binary/kernels/tiles_add.cpp
+new file mode 100644
+index 00000000000..3556bee546b
+--- /dev/null
++++ b/tt_metal/programming_examples/eltwise_binary/kernels/tiles_add.cpp
+@@ -0,0 +1,33 @@
++// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
++//
++// SPDX-License-Identifier: Apache-2.0
++
++#include <cstdint>
++#include "compute_kernel_api/common.h"
++#include "compute_kernel_api/tile_move_copy.h"
++#include "compute_kernel_api/eltwise_binary.h"
++#include "compute_kernel_api.h"
++
++#include "unified_common.h"
++
++KERNEL_MAIN {
++    INIT_ARGUMENTS
++
++    binary_op_init_common(in0_cb, in1_cb, out_cb);
++    add_tiles_init(in0_cb, in1_cb);
++
++    for (uint32_t i = 0; i < n_tiles; i++) {
++        auto tile0 = read_tile(in0, i);
++        auto tile1 = read_tile(in1, i);
++
++        tile_regs_acquire();
++        constexpr uint32_t dst_idx = 0;
++        add_tiles(tile0, tile1, dst_idx);
++        tile_regs_commit();
++        tile_regs_wait();
++
++        write_tile(dst_idx, out, i);
++
++        tile_regs_release();
++    }
++}
+diff --git a/tt_metal/tt_metal.cpp b/tt_metal/tt_metal.cpp
+index 941e5fc29ca..8ebe9a918ec 100644
+--- a/tt_metal/tt_metal.cpp
++++ b/tt_metal/tt_metal.cpp
+@@ -1122,6 +1122,28 @@ KernelHandle CreateKernel(
+     return kernel;
+ }
+
++void CreateKernel(
++    Program& program,
++    const std::string& file_name,
++    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
++    const UnifiedKernelConfigBuilder& config_builder) {
++    auto circular_buffers = config_builder.compute_circular_buffers();
++    for (const auto& circular_buffer : circular_buffers) {
++        CreateCircularBuffer(program, core_spec, circular_buffer);
++    }
++
++    auto config = config_builder.build();
++    auto reader_kernel = CreateKernel(program, file_name, core_spec, config.reader_config);
++    auto writer_kernel = CreateKernel(program, file_name, core_spec, config.writer_config);
++    auto compute_kernel = CreateKernel(program, file_name, core_spec, config.compute_config);
++    SetRuntimeArgs(program, reader_kernel, core_spec, config.runtime_args);
++    SetRuntimeArgs(program, writer_kernel, core_spec, config.runtime_args);
++    SetRuntimeArgs(program, compute_kernel, core_spec, config.runtime_args);
++    SetCommonRuntimeArgs(program, reader_kernel, config.common_runtime_args);
++    SetCommonRuntimeArgs(program, writer_kernel, config.common_runtime_args);
++    SetCommonRuntimeArgs(program, compute_kernel, config.common_runtime_args);
++}
++
+ KernelHandle CreateKernelFromString(
+     Program& program,
+     const std::string& kernel_src_code,
+@@ -1278,6 +1300,16 @@ void SetRuntimeArgs(
+     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
+ }
+
++void UpdateRuntimeArgs(
++    const Program& program, const CoreCoord& core_coord, const std::function<void(uint32_t*)>& updater_fn) {
++    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
++        auto kernel = program.impl().get_kernel(kernel_id);
++        if (kernel->is_on_logical_core(core_coord)) {
++            updater_fn(kernel->runtime_args_data(core_coord).rt_args_data);
++        }
++    }
++}
++
+ void SetRuntimeArgs(
+     const Program& program,
+     KernelHandle kernel_id,
+diff --git a/ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp b/ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp
+index 4eb4796860d..50c0ab331f0 100644
+--- a/ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp
++++ b/ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp
+@@ -5,54 +5,54 @@
+ #include <cstdint>
+
+ #include "compute_kernel_api/reduce.h"
+-
+-namespace NAMESPACE {
+-void MAIN {
+-    uint32_t Ht = get_compile_time_arg_val(0);
+-    uint32_t Wt = get_compile_time_arg_val(1);
+-    uint32_t NC = get_compile_time_arg_val(2);
+-    uint32_t row_chunk = get_compile_time_arg_val(3);
+-
+-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
+-    reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
+-
+-    cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
+-
+-    constexpr int onetile = 1;
+-
+-    // tiles are expected to come in the N C W_skip H W_chunk order
+-    // W_skip(chunk size) represents the number of tile columns whose reduction will be intertwined
+-    // H W_chunk represent tiles of the chunk in row major order
+-    // each column in the chunk will have its intermediate result in a separate tile of DST
+-    // chunk size is calculated based on the number of available tiles in DST
+-    // exmpl. Ht = 3; Wt = 4; row_chunk = 2;
+-    //        tile order (H, W):
+-    //        1. chunk: (0, 0); (0, 1); (1, 0); (1, 1); (2, 0); (2, 1);
+-    //        2. chunk: (0, 2); (0, 3); (1, 2); (1, 3); (2, 2); (2, 3);
+-    for (uint32_t nc = 0; nc < NC; ++nc) {
+-        for (uint32_t wt = 0; wt < Wt; wt += row_chunk) {
+-            uint32_t chunk_end = std::min(wt + row_chunk, Wt);
+-            int reduce_dst_idx = 0;
+-
+-            // reduction for one chunk
+-            // accumulation of Ht results in separate DST indexes
+-            acquire_dst();
+-            for (uint32_t ht = 0; ht < Ht; ++ht) {
+-                reduce_dst_idx = 0;
+-                for (uint32_t i = wt; i < chunk_end; ++i) {
+-                    cb_wait_front(tt::CB::c_in0, onetile);
+-                    reduce_tile(tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
+-                    cb_pop_front(tt::CB::c_in0, onetile);
+-                    ++reduce_dst_idx;
++#include "unified_common.h"
++#include "compute_kernel_api/compute_kernel_hw_startup.h"
++#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
++
++KERNEL_MAIN {
++    INIT_ARGUMENTS
++
++    compute_kernel_hw_startup(src0_cb, scaler_tile_cb, out_cb);
++    reduce_init(src0_cb, scaler_tile_cb, out_cb);
++
++    uint32_t write_page_id = start_write_page_id;
++    uint32_t col_start_chunk = col_start_tile_id;
++    uint32_t w_chunk = curr_col_in_batch;
++    for (uint32_t wt = 0; wt < num_cols; wt += row_chunk) {
++        const uint32_t tiles_in_chunk = std::min(wt + row_chunk, num_cols) - wt;
++        const uint32_t row_wrap_increment = (Ht - 1) * Wt + 1;
++        uint32_t w_row = w_chunk;
++        uint32_t col_start_row = col_start_chunk;
++
++        // reduction for one chunk
++        // accumulation of Ht results in separate DST indexes
++        acquire_dst();
++        for (uint32_t ht = 0; ht < Ht; ++ht) {
++            w_row = w_chunk;
++            col_start_row = col_start_chunk;
++            uint32_t curr_id_row = col_start_row + ht * Wt;
++
++            for (uint32_t k = 0; k < tiles_in_chunk; ++k) {
++                auto src_tile = read_tile(src0, curr_id_row);
++                reduce_tile(src_tile, scaler_tile, k);
++
++                ++w_row;
++                if (w_row == Wt) {
++                    col_start_row += row_wrap_increment;
++                    curr_id_row = col_start_row + ht * Wt;
++                    w_row = 0;
++                } else {
++                    ++curr_id_row;
++                    ++col_start_row;
+                 }
+             }
+-            for (uint32_t i = wt; i < chunk_end; ++i) {
+-                cb_reserve_back(tt::CBIndex::c_3, onetile);
+-                pack_tile((i - wt), tt::CBIndex::c_3);
+-                cb_push_back(tt::CBIndex::c_3, onetile);
+-            }
+-            release_dst();
+         }
++        col_start_chunk = col_start_row;
++        w_chunk = w_row;
++
++        for (uint32_t k = 0; k < tiles_in_chunk; ++k) {
++            write_tile(k, out, write_page_id++);
++        }
++        release_dst();
+     }
+ }
+-}  // namespace NAMESPACE
+diff --git a/ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_transpose_wh_universal_input_cols_partitioned.cpp b/ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_transpose_wh_universal_input_cols_partitioned.cpp
+index 72f0379d0f9..329cd4573b6 100644
+--- a/ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_transpose_wh_universal_input_cols_partitioned.cpp
++++ b/ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_transpose_wh_universal_input_cols_partitioned.cpp
+@@ -4,7 +4,6 @@
+
+ #include <stdint.h>
+ #include "dataflow_api.h"
+-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+
+ void kernel_main() {
+     uint32_t src_addr = get_arg_val<uint32_t>(0);
+@@ -24,9 +23,7 @@ void kernel_main() {
+     constexpr uint32_t onetile = 1;
+     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+
+-    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
+-    constexpr uint32_t scalar = get_compile_time_arg_val(4);
+-    generate_reduce_scaler(cb_id_in2, scalar);
++    // Scaler tile is now generated in compute; no need to generate here.
+
+     constexpr auto tensor_args = TensorAccessorArgs<5>();
+     auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
+diff --git a/ttnn/cpp/ttnn/operations/reduction/generic/device/multi_core_h/reduce_op_multi_core_h.cpp b/ttnn/cpp/ttnn/operations/reduction/generic/device/multi_core_h/reduce_op_multi_core_h.cpp
+index f7e0b662dbc..bc96d5933ad 100644
+--- a/ttnn/cpp/ttnn/operations/reduction/generic/device/multi_core_h/reduce_op_multi_core_h.cpp
++++ b/ttnn/cpp/ttnn/operations/reduction/generic/device/multi_core_h/reduce_op_multi_core_h.cpp
+@@ -8,6 +8,7 @@
+ #include <tt-metalium/constants.hpp>
+ #include <tt-metalium/host_api.hpp>
+ #include <tt-metalium/tensor_accessor_args.hpp>
++#include <tt-metalium/unified_kernel.hpp>
+ #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+
+ using namespace tt::constants;
+@@ -27,259 +28,105 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
+
+     uint32_t Wt = W / TILE_WIDTH;
+     uint32_t Ht = H / TILE_HEIGHT;
+-    uint32_t HtWt = Ht * Wt;
+
+     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+         get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
+
+     tt_metal::Program program = tt_metal::CreateProgram();
+
+-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+-    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
+-    tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
+-    uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
+-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+-    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+-
+     tt_metal::IDevice* device = a.device();
+
+-    bool use_width_sharding = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+-                              output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+-
+     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+     auto num_cols = NC * Wt;
+     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
+         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
+
+-    // Current sharding only supports width, and that input and output are sharded
+-    if (use_width_sharding) {
+-        all_cores = a.shard_spec().value().grid;
+-        num_cores = all_cores.num_cores();
+-        core_group_1 = all_cores;
+-        core_group_2 = CoreRangeSet();
+-        num_cols_per_core_group_1 = NC * (a.shard_spec().value().shape[1] / TILE_WIDTH);
+-        num_cols_per_core_group_2 = 0;
+-    }
+-
+-    uint32_t src0_cb_index = CBIndex::c_0;
+-    uint32_t src1_cb_index = CBIndex::c_1;
+-    CBHandle cb_src1 = 0;
+-    if (use_width_sharding) {
+-        uint32_t num_shard_tiles = a.shard_spec().value().numel() / TILE_HW;
+-        uint32_t num_input_tiles = 2;
+-        tt_metal::CircularBufferConfig cb_src0_config =
+-            tt_metal::CircularBufferConfig(
+-                num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
+-                .set_page_size(src0_cb_index, src0_single_tile_size);
+-        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+-
+-        tt_metal::CircularBufferConfig cb_src1_config =
+-            tt_metal::CircularBufferConfig(
+-                num_shard_tiles * src0_single_tile_size, {{src1_cb_index, src0_cb_data_format}})
+-                .set_page_size(src1_cb_index, src0_single_tile_size)
+-                .set_globally_allocated_address(*a.buffer());
+-        cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+-    } else {
+-        uint32_t num_input_tiles = 2;
+-        tt_metal::CircularBufferConfig cb_src0_config =
+-            tt_metal::CircularBufferConfig(
+-                num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
+-                .set_page_size(src0_cb_index, src0_single_tile_size);
+-        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+-    }
+-
+-    uint32_t scaler_cb_index = CBIndex::c_2;
+-    tt_metal::CircularBufferConfig cb_scaler_config =
+-        tt_metal::CircularBufferConfig(1 * scaler_single_tile_size, {{scaler_cb_index, scaler_cb_data_format}})
+-            .set_page_size(scaler_cb_index, scaler_single_tile_size);
+-    tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
+-
+-    uint32_t output_cb_index = CBIndex::c_3;
+-    CBHandle cb_output;
+-    if (use_width_sharding) {
+-        uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
+-        tt_metal::CircularBufferConfig cb_output_config =
+-            tt_metal::CircularBufferConfig(
+-                num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
+-                .set_page_size(output_cb_index, dst_single_tile_size)
+-                .set_globally_allocated_address(*output.buffer());
+-        ;
+-        cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+-    } else {
+-        uint32_t num_output_tiles = 2;
+-        tt_metal::CircularBufferConfig cb_output_config =
+-            tt_metal::CircularBufferConfig(
+-                num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
+-                .set_page_size(output_cb_index, dst_single_tile_size);
+-        cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+-    }
+-    tt_metal::Buffer* src0_buffer = a.buffer();
+-    tt_metal::KernelHandle reader_kernel_id;
++    tt::DataFormat src0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
++    tt::DataFormat dst_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+     bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
+     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
++    uint32_t chunk_size = ttnn::get_dest_reg_count(compute_kernel_config);
+
+-    uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);
+-
+-    if (use_width_sharding) {
+-        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
+-        std::map<std::string, std::string> reader_defines;
+-        reader_defines["REDUCE_SCALER"] = "1";
+-        reader_kernel_id = tt_metal::CreateKernel(
+-            program,
+-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+-            "reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp",
+-            all_cores,
+-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+-    } else {
+-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
+-        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+-
+-        reader_kernel_id = tt_metal::CreateKernel(
+-            program,
+-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+-            "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
+-            all_cores,
+-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+-    }
+-
+-    tt_metal::Buffer* dst_buffer = output.buffer();
+-    tt_metal::KernelHandle writer_kernel_id;
+-
+-    if (use_width_sharding) {
+-        std::vector<uint32_t> writer_ct_args = {
+-            output_cb_index,
+-        };
+-        writer_kernel_id = CreateKernel(
+-            program,
+-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
+-            all_cores,
+-            WriterDataMovementConfig(writer_ct_args));
+-    } else {
+-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+-
+-        writer_kernel_id = tt_metal::CreateKernel(
+-            program,
+-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
+-            all_cores,
+-            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+-    }
+-    std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
+-    std::vector<uint32_t> compute_kernel_args_group_1 = {
+-        Ht,                         // Ht
+-        num_cols_per_core_group_1,  // Wt
+-        1,                          // NC
+-        chunk_size,                 // Column Chunk Size
++    MathConfig math_config = MathConfig{
++        .math_fidelity = math_fidelity,
++        .fp32_dest_acc_en = fp32_dest_acc_en,
+     };
++    auto unified_config_base = UnifiedKernelConfigBuilder(math_config)
++                                   .set_defines(reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H))
++                                   .add_compile_time_arg("Ht", Ht)
++                                   .add_compile_time_arg("Wt", Wt)
++                                   .add_compile_time_arg("row_chunk", chunk_size)
++                                   .add_compile_time_arg("packed_scaler_value", packed_scaler_value)
++                                   .add_runtime_arg("start_write_page_id", 0)
++                                   .add_runtime_arg("col_start_tile_id", 0)
++                                   .add_runtime_arg("curr_col_in_batch", 0)
++                                   .add_buffer("src0", a.buffer(), src0_data_format)
++                                   .add_buffer("out", output.buffer(), dst_data_format)
++                                   .add_generated_tile_constant(GeneratedTileConstant{
++                                       .name = "scaler_tile",
++                                       .data_format = DataFormat::Float16_b,
++                                       .generator_code = "generate_reduce_scaler(scaler_tile_cb, packed_scaler_value)",
++                                   });
++
++    size_t start_write_page_id_idx = unified_config_base.get_runtime_arg_idx("start_write_page_id");
++    size_t col_start_tile_id_idx = unified_config_base.get_runtime_arg_idx("col_start_tile_id");
++    size_t curr_col_in_batch_idx = unified_config_base.get_runtime_arg_idx("curr_col_in_batch");
++    size_t buffer_addresses_start_idx = unified_config_base.buffer_addresses_start_runtime_arg_idx();
++
++    auto unified_config_group_1 = unified_config_base;
++    unified_config_group_1.add_compile_time_arg("num_cols", num_cols_per_core_group_1);
++    auto unified_config_group_2 = unified_config_base;
++    unified_config_group_2.add_compile_time_arg("num_cols", num_cols_per_core_group_2);
+
+     tt_metal::CreateKernel(
+         program,
+         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
+         core_group_1,
+-        tt_metal::ComputeConfig{
+-            .math_fidelity = math_fidelity,
+-            .fp32_dest_acc_en = fp32_dest_acc_en,
+-            .compile_args = compute_kernel_args_group_1,
+-            .defines = reduce_defines});
++        unified_config_group_1);
+
+     if (!core_group_2.ranges().empty()) {
+-        std::vector<uint32_t> compute_kernel_args_group_2 = {
+-            Ht,                         // Ht
+-            num_cols_per_core_group_2,  // Wt
+-            1,                          // NC
+-            chunk_size,                 // Column Chunk Size
+-        };
+-
+         tt_metal::CreateKernel(
+             program,
+             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
+             core_group_2,
+-            tt_metal::ComputeConfig{
+-                .math_fidelity = math_fidelity,
+-                .fp32_dest_acc_en = fp32_dest_acc_en,
+-                .compile_args = compute_kernel_args_group_2,
+-                .defines = reduce_defines});
++            unified_config_group_2);
+     }
+
+     const auto& cores =
+         grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
+-    if (use_width_sharding) {
+-        uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
+-        uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
+-        uint32_t shard_batch_size = shard_row_size * Ht;
+-        std::vector<uint32_t> reader_rt_args = {
+-            num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size, packed_scaler_value};
+-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
++    for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
++        const CoreCoord& core = cores[i];
++        uint32_t num_cols_per_core = 0;
++        if (core_group_1.contains(core)) {
++            num_cols_per_core = num_cols_per_core_group_1;
++        } else if (core_group_2.contains(core)) {
++            num_cols_per_core = num_cols_per_core_group_2;
++        } else {
++            TT_THROW("Core not in specified core ranges");
++        }
+
+-        std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};
+-        tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, writer_rt_args);
+-    } else {
+-        for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
+-            const CoreCoord& core = cores[i];
+-            uint32_t num_cols_per_core = 0;
+-            if (core_group_1.contains(core)) {
+-                num_cols_per_core = num_cols_per_core_group_1;
+-            } else if (core_group_2.contains(core)) {
+-                num_cols_per_core = num_cols_per_core_group_2;
+-            } else {
+-                TT_THROW("Core not in specified core ranges");
+-            }
+-            tt_metal::SetRuntimeArgs(
+-                program,
+-                reader_kernel_id,
+-                core,
+-                {a.buffer()->address(),
+-                 num_cols_read / Wt * HtWt + num_cols_read % Wt,
+-                 num_cols_read % Wt,
+-                 num_cols_per_core});
++        tt_metal::UpdateRuntimeArgs(program, core, [=](uint32_t* runtime_args) {
++            runtime_args[start_write_page_id_idx] = num_cols_read;
++            runtime_args[col_start_tile_id_idx] = num_cols_read / Wt * Wt * Ht + num_cols_read % Wt;
++            runtime_args[curr_col_in_batch_idx] = num_cols_read % Wt;
++        });
+
+-            tt_metal::SetRuntimeArgs(
+-                program,
+-                writer_kernel_id,
+-                core,
+-                {
+-                    output.buffer()->address(),
+-                    num_cols_per_core,  // number of tiles to write
+-                    num_cols_read       // output tile start index
+-                });
+-            num_cols_read += num_cols_per_core;
+-        }
++        num_cols_read += num_cols_per_core;
+     }
+
+-    auto override_runtime_arguments_callback = [reader_kernel_id = reader_kernel_id,
+-                                                writer_kernel_id = writer_kernel_id,
+-                                                cb_src1 = cb_src1,
+-                                                cb_output = cb_output,
+-                                                cores = cores](
++    auto override_runtime_arguments_callback = [cores = cores, buffer_addresses_start_idx](
+                                                    const void* operation,
+                                                    Program& program,
+                                                    const std::vector<Tensor>& input_tensors,
+                                                    const std::vector<std::optional<const Tensor>>&,
+                                                    const std::vector<Tensor>& output_tensors) {
+-        auto src_buffer = input_tensors.at(0).buffer();
+-        auto dst_buffer = output_tensors.at(0).buffer();
+-
+-        bool use_width_sharding =
+-            input_tensors.at(0).memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+-            output_tensors.at(0).memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+-
+-        if (use_width_sharding) {
+-            UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
+-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+-        } else {
+-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+-            for (const auto& core : cores) {
+-                {
+-                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+-                    runtime_args[0] = src_buffer->address();
+-                }
+-
+-                {
+-                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+-                    runtime_args[0] = dst_buffer->address();
+-                }
+-            }
++        auto src_buffer_address = input_tensors.at(0).buffer()->address();
++        auto dst_buffer_address = output_tensors.at(0).buffer()->address();
++        for (const auto& core : cores) {
++            tt_metal::UpdateRuntimeArgs(program, core, [=](uint32_t* runtime_args) {
++                runtime_args[buffer_addresses_start_idx] = src_buffer_address;
++                runtime_args[buffer_addresses_start_idx + 1] = dst_buffer_address;
++            });
+         }
+     };

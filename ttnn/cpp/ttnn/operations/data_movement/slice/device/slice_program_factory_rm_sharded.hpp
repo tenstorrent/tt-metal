@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::slice::program {
+namespace ttnn::prim {
 
 struct SliceRmShardedProgramFactory {
     struct shared_variables_t {
@@ -23,4 +23,4 @@ struct SliceRmShardedProgramFactory {
         cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };
 
-}  // namespace ttnn::operations::data_movement::slice::program
+}  // namespace ttnn::prim

@@ -1,0 +1,131 @@
+digraph {
+	graph [ordering=in rankdir=TB]
+	node [border=1 fontname="Linux libertine" fontsize=10 height=0.2 margin=0 ranksep=0.1 shape=box style=filled]
+	edge [fontsize=10]
+	node_0 [label=capture_start fillcolor="#DCDCDC"]
+	subgraph subgraph_0 {
+		node [style=filled]
+		bgcolor="#ee00ee80   " cluster=true fontcolor=black label="tt::tt_metal::detail::convert_python_tensor_to_tt_tensor" rankdir=TB shape=hexagon
+		node_1 [label="function_start
+tt::tt_metal::detail::convert_python_tensor_to_tt_tensor" fillcolor="#DCDCDC"]
+		subgraph subgraph_1 {
+			node [style=filled]
+			bgcolor="#ff000080" cluster=true fontcolor=black label="Tensor::to_device" rankdir=TB shape=hexagon
+			node_2 [label="function_start
+Tensor::to_device" fillcolor="#DCDCDC"]
+			node_3 [label="tensor
+0" fillcolor="#DCDCDC"]
+			node_4 [label=buffer fillcolor="#DCDCDC"]
+			node_5 [label=buffer_allocate fillcolor="#DCDCDC"]
+			node_6 [label="function_end
+Tensor::to_device" fillcolor="#DCDCDC"]
+		}
+		node_7 [label="tensor
+1" fillcolor="#DCDCDC"]
+		node_8 [label="function_end
+tt::tt_metal::detail::convert_python_tensor_to_tt_tensor" fillcolor="#DCDCDC"]
+	}
+	node_9 [label="tensor
+2" fillcolor="#DCDCDC"]
+	subgraph subgraph_2 {
+		node [style=filled]
+		bgcolor="#ee00ee80   " cluster=true fontcolor=black label="ttnn::add" rankdir=TB shape=hexagon
+		node_10 [label="function_start
+ttnn::add" fillcolor="#DCDCDC"]
+		subgraph subgraph_3 {
+			node [style=filled]
+			bgcolor="#ff000080" cluster=true fontcolor=black label=BinaryNgDeviceOperation rankdir=TB shape=hexagon
+			node_11 [label="function_start
+BinaryNgDeviceOperation" fillcolor="#DCDCDC"]
+			subgraph subgraph_4 {
+				node [style=filled]
+				bgcolor="#eeee0080" cluster=true fontcolor=black label="tt::tt_metal::create_device_tensor" rankdir=TB shape=hexagon
+				node_12 [label="function_start
+tt::tt_metal::create_device_tensor" fillcolor="#DCDCDC"]
+				node_13 [label=buffer fillcolor="#DCDCDC"]
+				node_14 [label=buffer_allocate fillcolor="#DCDCDC"]
+				node_15 [label="function_end
+tt::tt_metal::create_device_tensor" fillcolor="#DCDCDC"]
+			}
+			node_16 [label="tensor
+4" fillcolor="#DCDCDC"]
+			node_17 [label=circular_buffer_deallocate_all fillcolor="#DCDCDC"]
+			node_18 [label=circular_buffer_allocate fillcolor="#DCDCDC"]
+			node_19 [label=circular_buffer_allocate fillcolor="#DCDCDC"]
+			node_20 [label=circular_buffer_allocate fillcolor="#DCDCDC"]
+			node_21 [label="function_end
+BinaryNgDeviceOperation" fillcolor="#DCDCDC"]
+		}
+		node_22 [label="function_end
+ttnn::add" fillcolor="#DCDCDC"]
+	}
+	subgraph subgraph_5 {
+		node [style=filled]
+		bgcolor="#ee00ee80   " cluster=true fontcolor=black label="Tensor::cpu" rankdir=TB shape=hexagon
+		node_23 [label="function_start
+Tensor::cpu" fillcolor="#DCDCDC"]
+		node_24 [label="function_end
+Tensor::cpu" fillcolor="#DCDCDC"]
+	}
+	node_25 [label="tensor
+6" fillcolor="#DCDCDC"]
+	subgraph subgraph_6 {
+		node [style=filled]
+		bgcolor="#ee00ee80   " cluster=true fontcolor=black label="tt::tt_metal::detail::convert_tt_tensor_to_framework_tensor" rankdir=TB shape=hexagon
+		node_26 [label="function_start
+tt::tt_metal::detail::convert_tt_tensor_to_framework_tensor" fillcolor="#DCDCDC"]
+		node_27 [label="function_end
+tt::tt_metal::detail::convert_tt_tensor_to_framework_tensor" fillcolor="#DCDCDC"]
+	}
+	node_28 [label=buffer_deallocate fillcolor="#DCDCDC"]
+	node_29 [label=capture_end fillcolor="#DCDCDC"]
+	node_0 -> node_1
+	node_0 -> node_10
+	node_0 -> node_23
+	node_0 -> node_26
+	node_0 -> node_28
+	node_1 -> node_2
+	node_1 -> node_8
+	node_2 -> node_4
+	node_2 -> node_5
+	node_2 -> node_6
+	node_3 -> node_2
+	node_4 -> node_7
+	node_4 -> node_9
+	node_4 -> node_9
+	node_4 -> node_9
+	node_5 -> node_4
+	node_6 -> node_7
+	node_8 -> node_9
+	node_8 -> node_10
+	node_9 -> node_10
+	node_9 -> node_11
+	node_10 -> node_11
+	node_10 -> node_22
+	node_11 -> node_12
+	node_11 -> node_17
+	node_11 -> node_18
+	node_11 -> node_19
+	node_11 -> node_20
+	node_11 -> node_21
+	node_12 -> node_13
+	node_12 -> node_14
+	node_12 -> node_15
+	node_13 -> node_16
+	node_13 -> node_16
+	node_13 -> node_16
+	node_13 -> node_16
+	node_14 -> node_13
+	node_15 -> node_16
+	node_16 -> node_23
+	node_17 -> node_11
+	node_21 -> node_16
+	node_22 -> node_16
+	node_22 -> node_23
+	node_23 -> node_24
+	node_24 -> node_25
+	node_24 -> node_26
+	node_26 -> node_27
+	node_27 -> node_29
+	node_28 -> node_13
+}

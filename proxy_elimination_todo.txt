@@ -1,0 +1,79 @@
+# [x] = done, [ ] = pending, [/] = in progress
+
+[x] bernoulli ttnn/cpp/ttnn/operations/bernoulli/bernoulli.hpp
+[x] clone ttnn/cpp/ttnn/operations/data_movement/clone/clone.hpp
+[x] copy ttnn/cpp/ttnn/operations/data_movement/copy/copy.hpp
+[x] fill_rm ttnn/cpp/ttnn/operations/data_movement/fill_rm/fill_rm.hpp
+[x] nonzero ttnn/cpp/ttnn/operations/data_movement/non_zero_indices/non_zero_indices.hpp
+[x] reshard ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/reshard.hpp
+[x] sharded_to_interleaved ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp
+[x] typecast ttnn/cpp/ttnn/operations/copy/typecast/typecast.hpp
+[x] recv_async ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp
+[x] send_async ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp
+[x] plus_one ttnn/cpp/ttnn/operations/experimental/plusone/plusone.hpp
+[x] deepseek_grouped_gate ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate.hpp
+[x] intimg ttnn/cpp/ttnn/operations/experimental/reduction/integral_image/intimg.hpp
+[x] hc_sum_reduce ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce.hpp
+[x] prefix_scan ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/prefix_scan.hpp
+[x] fused_rmsnorm_post_all_gather ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_post_all_gather.hpp
+[x] nlp_concat_heads ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.hpp
+[x] nlp_kv_cache_load_slice ttnn/cpp/ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
+[x] gelu_bw ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp
+[x] full ttnn/cpp/ttnn/operations/full/full.hpp (renamed to moreh_full)
+[x] moreh_full_like ttnn/cpp/ttnn/operations/full_like/full_like.hpp
+[x] indexed_fill ttnn/cpp/ttnn/operations/index_fill/index_fill.hpp
+[x] moreh_adam ttnn/cpp/ttnn/operations/moreh/moreh_adam/moreh_adam.hpp
+[x] moreh_arange ttnn/cpp/ttnn/operations/moreh/moreh_arange/moreh_arange.hpp
+[x] moreh_group_norm ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/moreh_group_norm.hpp
+[x] moreh_layer_norm ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/moreh_layer_norm.hpp
+[x] moreh_nll_loss_backward ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/moreh_nll_loss_backward.hpp
+[x] moreh_nll_loss_unreduced_backward ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward.hpp
+[x] moreh_sgd ttnn/cpp/ttnn/operations/moreh/moreh_sgd/moreh_sgd.hpp
+[x] manual_seed ttnn/cpp/ttnn/operations/reduction/manual_seed/manual_seed.hpp
+[x] sampling ttnn/cpp/ttnn/operations/reduction/sampling/sampling.hpp
+[x] uniform ttnn/cpp/ttnn/operations/uniform/uniform.hpp
+[x] dropout ttnn/cpp/ttnn/operations/experimental/dropout/dropout.hpp
+[x] conv3d ttnn/cpp/ttnn/operations/experimental/conv3d/conv3d.hpp
+[x] rms_allgather ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.hpp
+
+[x] moreh_abs_pow ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.hpp
+[x] moreh_dot ttnn/cpp/ttnn/operations/moreh/moreh_dot/moreh_dot.hpp
+[x] moreh_getitem ttnn/cpp/ttnn/operations/moreh/moreh_getitem/moreh_getitem.hpp
+[x] generic_op ttnn/cpp/ttnn/operations/generic/generic_op.hpp
+[ ] point_to_point ttnn/cpp/ttnn/operations/point_to_point/point_to_point.hpp
+[x] grid_sample ttnn/cpp/ttnn/operations/pool/grid_sample/grid_sample.hpp
+[x] dram_prefetcher ttnn/cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher.hpp
+[ ] accumulation ttnn/cpp/ttnn/operations/reduction/accumulation/accumulation_common.hpp
+[x] ema_device ttnn/cpp/ttnn/operations/reduction/accumulation/ema/ema.hpp
+[x] moe ttnn/cpp/ttnn/operations/reduction/moe/moe.hpp
+[ ] prod_nc ttnn/cpp/ttnn/operations/reduction/prod/device/prod_nc_op.hpp
+[ ] halo ttnn/cpp/ttnn/operations/sliding_window/halo/halo.hpp
+[ ] joint_scaled_dot_product_attention ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa.hpp
+[ ] ring_joint_scaled_dot_product_attention ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa.hpp
+[x] windowed_scaled_dot_product_attention ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/sdpa_windowed.hpp
+[ ] mesh_partition ttnn/cpp/ttnn/operations/ccl/mesh_partition/mesh_partition.hpp (optional->required conversion)
+[ ] reduce ttnn/cpp/ttnn/operations/ccl/reduce_to_root/reduce_to_root.hpp (extracts .at(1) from result)
+[ ] move ttnn/cpp/ttnn/operations/data_movement/move/move.hpp (complex: deallocate, sharded handling)
+[ ] scatter ttnn/cpp/ttnn/operations/data_movement/scatter/tosa_scatter.hpp (complex transforms)
+[ ] interleaved_to_sharded ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp (grid computation)
+[ ] interleaved_to_sharded_partial ttnn/cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.hpp (grid computation)
+[ ] split ttnn/cpp/ttnn/operations/data_movement/split/split.hpp (complex routing)
+[ ] tilize ttnn/cpp/ttnn/operations/data_movement/tilize/tilize.hpp (MassagedOperation, space computation)
+[ ] untilize ttnn/cpp/ttnn/operations/data_movement/untilize/untilize.hpp (MassagedOperation, space computation)
+[ ] apply_device_delay ttnn/cpp/ttnn/operations/debug/apply_device_delay.hpp (computes subdevice_core_range_set)
+[ ] ternary ttnn/cpp/ttnn/operations/eltwise/ternary/ternary.hpp (complex dispatch, typecast, fallback)
+[ ] unary ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp (complex dtype/precision handling)
+[ ] deepseek_minimal_broadcast ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast.hpp (topology validation)
+[ ] neighbor_pad_async ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async.hpp (topology/device logic)
+[ ] strided_all_gather_async ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async.hpp (topology/validation)
+[ ] strided_all_gather_minimal_matmul_async ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.hpp (device discovery, config)
+[ ] convert_to_chw ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw.hpp (validation/memory config)
+[ ] attn_matmul ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul.hpp (two operations, validation)
+[ ] paged_fill_cache ttnn/cpp/ttnn/operations/experimental/paged_cache/paged_cache.hpp (kernel config init)
+[ ] paged_fused_update_cache ttnn/cpp/ttnn/operations/experimental/paged_cache/paged_cache.hpp (kernel config init)
+[ ] paged_update_cache ttnn/cpp/ttnn/operations/experimental/paged_cache/paged_cache.hpp (kernel config init)
+[ ] all_reduce_create_qkv_heads ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.hpp (validation, head_dim, mesh)
+[ ] create_qkv_heads ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp (validation, head_dim)
+[ ] nlp_create_qkv_heads ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp (validation, head_dim)
+[ ] moreh_fold ttnn/cpp/ttnn/operations/moreh/moreh_fold/fold.hpp (uses tuple return invoke pattern)
+[ ] update_cache ttnn/cpp/ttnn/operations/kv_cache/kv_cache.hpp (multi-operation prim: 4 ops share same prim)
