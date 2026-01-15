@@ -714,13 +714,13 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config.register_layer_override(
             "stem.conv1",
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1024),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=608),
             enable_weights_double_buffer=True,
         )
         self.config._register_multiple_layers(
             ["stem.conv2", "stem.conv3"],
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=512),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=608),
             enable_weights_double_buffer=True,
         )
         self.config.register_layer_override(
@@ -738,14 +738,14 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         # Shortcut: Downsample layer in first block
         self.config.register_layer_override(
             "res2.0.shortcut",
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=320),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=320, reshard_if_not_optimal=True),
             enable_weights_double_buffer=True,
         )
         self.config._register_stage_blocks(
             "res2",
             3,
             "conv1",
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=320),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=320, reshard_if_not_optimal=True),
             enable_weights_double_buffer=True,
         )
         self.config._register_stage_blocks(
@@ -811,21 +811,21 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             "res4",
             6,
             "conv1",
-            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=224, reshard_if_not_optimal=True),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=256, reshard_if_not_optimal=True),
             enable_weights_double_buffer=True,
         )
         self.config._register_stage_blocks(
             "res4",
             6,
             "conv2",
-            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=224),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=256),
             enable_weights_double_buffer=True,
         )
         self.config._register_stage_blocks(
             "res4",
             6,
             "conv3",
-            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=224),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=256),
             enable_weights_double_buffer=True,
         )
 
