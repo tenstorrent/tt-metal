@@ -57,6 +57,9 @@ jobs:
             p150)
               tt_transformers_models='["llama3.1-8b"]'
               ;;
+            p300)
+              tt_transformers_models='["llama3.2-11b-vision", "qwen2.5-7b", "phi-3-mini-128k"]'
+              ;;
             WH-QB)
               tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.2-90b-vision", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b"]'
               ;;
@@ -117,6 +120,19 @@ jobs:
                 {"name":"unet-vgg19","test_path":"models/demos/blackhole/vgg_unet/demo/demo.py::test_demo","test_args":"","timeout":20},
                 {"name":"ufld-v2","test_path":"models/demos/blackhole/ufld_v2/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
                 {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20}
+              ]')
+              ;;
+            p300)
+              standalone_models=$(jq -nc '[
+                {"name":"stable-diffusion","test_path":"models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo","test_args":"--input-path=models/demos/wormhole/stable_diffusion/demo/input_data.json","timeout":30},
+                {"name":"resnet-50","test_path":"models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
+                {"name":"vit","test_path":"models/demos/wormhole/vit/tests/test_ttnn_optimized_sharded_vit_wh.py::test_vit","test_args":"","timeout":20},
+                {"name":"mobilenet-v2","test_path":"models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
+                {"name":"unet-vgg19","test_path":"models/demos/wormhole/vgg_unet/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"ufld-v2","test_path":"models/demos/wormhole/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
+                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
+                {"name":"unet-vanilla","test_path":"models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
               ]')
               ;;
             WH-QB)

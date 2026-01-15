@@ -14,6 +14,7 @@ on:
           - n300
           - p100
           - p150
+          - p300
           - wh-qb
           - bh-qb2
           - wh-6u
@@ -105,6 +106,22 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # P300 Tests (Blackhole dual chip)
+  p300-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'p300' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'p300'
+      runner-label: 'P300-viommu'
+      arch: 'blackhole'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+      extra-tag: 'in-service'
 
   # WH QuietBox Tests (4xN300)
   wh-quietbox-tests:
