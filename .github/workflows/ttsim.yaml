@@ -70,9 +70,15 @@ jobs:
       TT_METAL_SLOW_DISPATCH_MODE: 1
     steps:
 
+      - name: Checkout actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout-cone-mode: false
+
       - name: Download packages artifact
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
+        uses: ./.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
