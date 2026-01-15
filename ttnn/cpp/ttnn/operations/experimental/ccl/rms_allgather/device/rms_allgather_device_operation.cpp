@@ -256,7 +256,7 @@ namespace ttnn::prim {
 
 ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
     const Tensor& input_tensor,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const ttnn::prim::LayerNormProgramConfig& program_config,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& semaphore,
@@ -284,7 +284,7 @@ ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms
     auto [subblock_wt, block_wt, inplace, grid_size] = std::visit(
         [](const auto& config) -> std::tuple<uint32_t, uint32_t, bool, CoreCoord> {
             using T = std::decay_t<decltype(config)>;
-            if constexpr (std::is_same_v<T, ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
+            if constexpr (std::is_same_v<T, ttnn::prim::LayerNormShardedMultiCoreProgramConfig>) {
                 return {
                     static_cast<uint32_t>(config.subblock_w),
                     static_cast<uint32_t>(config.block_w),

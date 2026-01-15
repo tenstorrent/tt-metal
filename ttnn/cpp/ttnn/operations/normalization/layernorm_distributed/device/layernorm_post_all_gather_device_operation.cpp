@@ -16,8 +16,8 @@ namespace ttnn::operations::normalization {
 LayerNormPostAllGatherDeviceOperation::program_factory_t LayerNormPostAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     // Check if Welford algorithm is requested (only for layernorm)
-    if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
-        const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
+    if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(args.program_config)) {
+        const auto& program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(args.program_config);
         if (program_config.use_welford) {
             return program::LayerNormPostAllGatherWelfordProgramFactory{};
         }
@@ -161,8 +161,8 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Additional validation for Welford - it doesn't support rmsnorm
-    if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
-        const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
+    if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(args.program_config)) {
+        const auto& program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(args.program_config);
         TT_FATAL(
             !(program_config.use_welford && args.norm_type == LayerNormDistributedType::RMSNORM),
             "RMS norm is not compatible with Welford algorithm. Please disable use_welford flag.");
@@ -198,7 +198,7 @@ Tensor layer_norm_post_all_gather(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config) {
+    const ttnn::prim::LayerNormProgramConfig& program_config) {
     using OperationType = ttnn::operations::normalization::LayerNormPostAllGatherDeviceOperation;
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{

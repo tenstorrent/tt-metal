@@ -21,8 +21,8 @@ LayerNormPreAllGatherDeviceOperation::program_factory_t LayerNormPreAllGatherDev
     }
 
     // Check if Welford algorithm is requested (only for layernorm)
-    if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
-        const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
+    if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(args.program_config)) {
+        const auto& program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(args.program_config);
         if (program_config.use_welford) {
             return program::LayerNormPreAllGatherWelfordProgramFactory{};
         }
@@ -53,8 +53,8 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
     // Additional validation for Welford - it doesn't support rmsnorm
-    if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
-        const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
+    if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(args.program_config)) {
+        const auto& program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(args.program_config);
         if (program_config.use_welford && args.norm_type == LayerNormDistributedType::RMSNORM) {
             TT_FATAL(false, "RMS norm is not compatible with Welford algorithm. Please disable use_welford flag.");
         }
@@ -62,8 +62,8 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     // Additional validation for 2D core grid - it doesn't support Welford
     if (args.use_2d_core_grid.has_value() && args.use_2d_core_grid.value()) {
-        if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
-            const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
+        if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(args.program_config)) {
+            const auto& program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(args.program_config);
             if (program_config.use_welford) {
                 TT_FATAL(false, "Welford layernorm variation does not support 2D core grid.");
             }
@@ -100,7 +100,7 @@ Tensor layer_norm_pre_all_gather(
     ttnn::operations::normalization::LayerNormDistributedType norm_type,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const ttnn::prim::LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid) {
     using OperationType = ttnn::operations::normalization::LayerNormPreAllGatherDeviceOperation;
     return ttnn::device_operation::detail::launch<OperationType>(

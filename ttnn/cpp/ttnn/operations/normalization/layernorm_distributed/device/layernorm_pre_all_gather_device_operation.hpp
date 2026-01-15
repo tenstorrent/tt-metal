@@ -43,7 +43,7 @@ Tensor layer_norm_pre_all_gather(
     ttnn::operations::normalization::LayerNormDistributedType norm_type,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const ttnn::prim::LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid);
 
 }  // namespace ttnn::prim

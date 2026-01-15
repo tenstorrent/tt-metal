@@ -15,7 +15,7 @@ struct LayerNormPreAllGatherOperationAttributes {
     LayerNormDistributedType norm_type = LayerNormDistributedType::LAYERNORM;
     std::optional<tt::tt_metal::DataType> dtype = std::nullopt;
     DeviceComputeKernelConfig compute_kernel_config;
-    LayerNormProgramConfig program_config;
+    ttnn::prim::LayerNormProgramConfig program_config;
     std::optional<bool> use_2d_core_grid;
 };
 

@@ -168,9 +168,9 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Get program config
-    LayerNormDefaultProgramConfig program_config;
-    if (std::holds_alternative<LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
-        program_config = std::get<LayerNormDefaultProgramConfig>(operation_attributes.program_config);
+    ttnn::prim::LayerNormDefaultProgramConfig program_config;
+    if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
+        program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config);
     }
 
     bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
@@ -406,9 +406,9 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Get program config
-    LayerNormDefaultProgramConfig program_config;
-    if (std::holds_alternative<LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
-        program_config = std::get<LayerNormDefaultProgramConfig>(operation_attributes.program_config);
+    ttnn::prim::LayerNormDefaultProgramConfig program_config;
+    if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
+        program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config);
     }
 
     bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;

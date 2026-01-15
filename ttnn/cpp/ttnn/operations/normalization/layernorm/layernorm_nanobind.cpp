@@ -23,16 +23,18 @@ struct LayerNormProgramConfigPlaceholder {};
 void bind_normalization_layernorm_program_config(nb::module_& mod) {
     nb::class_<LayerNormProgramConfigPlaceholder>(mod, "LayerNormProgramConfig");
 
-    nb::class_<LayerNormDefaultProgramConfig>(mod, "LayerNormDefaultProgramConfig")
+    nb::class_<ttnn::prim::LayerNormDefaultProgramConfig>(mod, "LayerNormDefaultProgramConfig")
         .def(
             nb::init<bool, bool, bool>(),
             nb::kw_only(),
             nb::arg("legacy_reduction").noconvert() = false,
             nb::arg("legacy_rsqrt").noconvert() = false,
             nb::arg("use_welford").noconvert() = false)
-        .def("__repr__", [](const LayerNormDefaultProgramConfig& config) { return fmt::format("{}", config); });
+        .def("__repr__", [](const ttnn::prim::LayerNormDefaultProgramConfig& config) {
+            return fmt::format("{}", config);
+        });
 
-    nb::class_<LayerNormShardedMultiCoreProgramConfig>(mod, "LayerNormShardedMultiCoreProgramConfig")
+    nb::class_<ttnn::prim::LayerNormShardedMultiCoreProgramConfig>(mod, "LayerNormShardedMultiCoreProgramConfig")
         .def(
             nb::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool, bool>(),
             nb::kw_only(),
@@ -44,8 +46,9 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
             nb::arg("legacy_reduction").noconvert() = false,
             nb::arg("legacy_rsqrt").noconvert() = false,
             nb::arg("use_welford").noconvert() = false)
-        .def(
-            "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
+        .def("__repr__", [](const ttnn::prim::LayerNormShardedMultiCoreProgramConfig& config) {
+            return fmt::format("{}", config);
+        });
 }
 
 void bind_normalization_layernorm_operation(nb::module_& mod) {

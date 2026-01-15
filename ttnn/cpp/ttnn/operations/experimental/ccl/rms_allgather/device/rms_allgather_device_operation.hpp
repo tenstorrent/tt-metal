@@ -12,7 +12,7 @@
 
 namespace ttnn::experimental::prim {
 
-namespace layernorm = ttnn::operations::normalization;
+namespace layernorm = ttnn::prim;
 
 struct RMSAllGatherDeviceOperation {
     using operation_attributes_t = RMSAllGatherParams;
@@ -40,7 +40,7 @@ namespace ttnn::prim {
 
 ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
     const Tensor& input_tensor,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const ttnn::prim::LayerNormProgramConfig& program_config,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& semaphore,

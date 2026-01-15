@@ -15,7 +15,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 
-namespace ttnn::operations::normalization::layer_norm {
+namespace ttnn::prim {
 
 struct LayerNormMultiCoreSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -38,4 +38,4 @@ struct LayerNormMultiCoreProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::normalization::layer_norm
+}  // namespace ttnn::prim
