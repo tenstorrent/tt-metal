@@ -493,3 +493,77 @@ def test_softmax_4096x4096_fp32(device):
     ttnn_output_tensor = ttnn.softmax(ttnn_input_tensor, dim=3)
     output_torch = ttnn_output_tensor.cpu().to_torch()
     assert_with_pcc(torch_output, output_torch, 0.998)
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32), (1, 1, 64, 128)])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_softmax_in_place_with_recip_legacy_compat(device, shape, dim):
+    """
+    Test softmax_in_place with recip_legacy_compat=True to verify that
+    the legacy reciprocal kernel is used when specified in program_config.
+    """
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    torch_output = torch.softmax(torch_input_tensor, dim=dim)
+
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.SoftmaxDefaultProgramConfig(
+        recip_legacy_compat=True,
+    )
+
+    ttnn_output_tensor = ttnn.softmax_in_place(ttnn_input_tensor, dim=dim, program_config=program_config)
+    output_torch = ttnn_output_tensor.cpu().to_torch()
+    assert_with_pcc(torch_output, output_torch, 0.997)
+
+
+@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("num_heads", [4])
+@pytest.mark.parametrize("h", [384])
+@pytest.mark.parametrize("w", [384])
+def test_softmax_sharded_with_recip_legacy_compat(device, batch_size, num_heads, h, w):
+    """
+    Test sharded softmax with recip_legacy_compat=True to verify that
+    the legacy reciprocal kernel is used when specified in SoftmaxShardedMultiCoreProgramConfig.
+    """
+    torch.manual_seed(0)
+    grid_size = (batch_size, num_heads)
+
+    torch_input_tensor = torch_random((batch_size, num_heads, h, w), -1000, 1000, dtype=torch.bfloat16)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
+
+    memory_config = ttnn.create_sharded_memory_config(
+        torch_input_tensor.shape,
+        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        subblock_w=6,
+        block_h=h // 32,
+        block_w=w // 32,
+        recip_legacy_compat=True,
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    output_tensor = ttnn.scale_mask_softmax_in_place(
+        input_tensor,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        numeric_stable=True,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

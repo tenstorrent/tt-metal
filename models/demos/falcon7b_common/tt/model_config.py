@@ -395,6 +395,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         subblock_w=subblock_w,
         block_h=block_h,
         block_w=block_w,
+        recip_legacy_compat=True,
     )
 
     model_config[

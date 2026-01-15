@@ -12,10 +12,18 @@
 
 namespace ckernel {
 
+// Allow override of legacy_compat default via preprocessor define TT_METAL_RECIP_LEGACY_COMPAT
+// This define is set by the softmax program factory when recip_legacy_compat is true in SoftmaxProgramConfig
+#ifndef TT_METAL_RECIP_LEGACY_COMPAT
+#define TT_METAL_RECIP_LEGACY_COMPAT_DEFAULT false
+#else
+#define TT_METAL_RECIP_LEGACY_COMPAT_DEFAULT true
+#endif
+
 /**
  * Please refer to documentation for any_init.
  */
-template <bool legacy_compat = false>
+template <bool legacy_compat = TT_METAL_RECIP_LEGACY_COMPAT_DEFAULT>
 ALWI void recip_tile_init() {
     MATH(SFPU_THREE_TEMPLATE_PARAM_INIT(reciprocal, sfpu::recip_init, APPROX, DST_ACCUM_MODE, legacy_compat));
 }
@@ -35,7 +43,7 @@ ALWI void recip_tile_init() {
  * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | int      | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
-template <bool legacy_compat = false>
+template <bool legacy_compat = TT_METAL_RECIP_LEGACY_COMPAT_DEFAULT>
 ALWI void recip_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
     MATH(SFPU_FOUR_PARAM_KERNEL_FP32_FIRST(reciprocal, APPROX, DST_ACCUM_MODE, 8, legacy_compat, idst, vector_mode));
 }

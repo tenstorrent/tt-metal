@@ -51,7 +51,8 @@ void bind_normalization_softmax_program_config_operation(nb::module_& mod) {
         standard behavior suitable for most use cases. It automatically selects
         appropriate parameters based on the input tensor characteristics.
     )doc")
-        .def(nb::init<>());
+        .def(nb::init<>())
+        .def_rw("recip_legacy_compat", &SoftmaxDefaultProgramConfig::recip_legacy_compat);
 
     nb::class_<SoftmaxShardedMultiCoreProgramConfig>(mod, "SoftmaxShardedMultiCoreProgramConfig", R"doc(
         Multi-core sharded program configuration for Softmax operations.
@@ -79,7 +80,8 @@ void bind_normalization_softmax_program_config_operation(nb::module_& mod) {
             nb::arg("subblock_w").noconvert(),
             nb::arg("block_h").noconvert(),
             nb::arg("block_w").noconvert())
-        .def_rw("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w);
+        .def_rw("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w)
+        .def_rw("recip_legacy_compat", &SoftmaxShardedMultiCoreProgramConfig::recip_legacy_compat);
 }
 
 // Softmax operation base

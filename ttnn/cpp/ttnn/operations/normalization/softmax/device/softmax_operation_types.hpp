@@ -14,12 +14,15 @@
 namespace ttnn::operations::normalization {
 
 // Softmax program configuration structs
-struct SoftmaxDefaultProgramConfig {};
+struct SoftmaxDefaultProgramConfig {
+    bool recip_legacy_compat = false;
+};
 struct SoftmaxShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w{};
     std::size_t block_h{};
     std::size_t block_w{};
+    bool recip_legacy_compat = false;
 };
 
 using SoftmaxProgramConfig = std::variant<SoftmaxDefaultProgramConfig, SoftmaxShardedMultiCoreProgramConfig>;

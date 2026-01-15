@@ -12,12 +12,22 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <utility>
+#include <variant>
 
 constexpr const char* SOFTMAX_KERNEL_PATH_GENERAL = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels";
 constexpr const char* SOFTMAX_KERNEL_PATH_ATTENTION =
     "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention";
 
 namespace ttnn::operations::normalization::softmax::program {
+
+// Helper function to add TT_METAL_RECIP_LEGACY_COMPAT define based on program_config
+inline void add_recip_legacy_compat_define(
+    std::map<std::string, std::string>& defines, const SoftmaxProgramConfig& program_config) {
+    if (std::visit([](const auto& config) { return config.recip_legacy_compat; }, program_config)) {
+        defines["TT_METAL_RECIP_LEGACY_COMPAT"] = "1";
+    }
+}
+
 // General-purpose softmax with arbitrary dimension support
 void SoftmaxProgramFactoryGeneral::override_runtime_arguments(
     cached_program_t& cached_program,
@@ -123,6 +133,7 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    add_recip_legacy_compat_define(compute_defines, attributes.program_config);
 
     // Compute kernels
     CreateComputeKernel(
@@ -257,6 +268,7 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    add_recip_legacy_compat_define(compute_defines, attributes.program_config);
 
     // Compute kernels
     CreateComputeKernel(
@@ -392,6 +404,7 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    add_recip_legacy_compat_define(compute_defines, attributes.program_config);
 
     // Compute kernel
     CreateComputeKernel(
@@ -528,6 +541,7 @@ SoftmaxProgramFactoryGeneralHLarge::cached_program_t SoftmaxProgramFactoryGenera
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    add_recip_legacy_compat_define(compute_defines, attributes.program_config);
 
     // Compute kernel
     CreateComputeKernel(
@@ -669,6 +683,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    add_recip_legacy_compat_define(compute_defines, attributes.program_config);
 
     // Comput kernel
     CreateComputeKernel(
@@ -897,6 +912,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
 
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+    add_recip_legacy_compat_define(softmax_defines, attributes.program_config);
     std::string softmax_kernel_path =
         use_large_kernel ? std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_large_tensor.cpp"
                          : std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax.cpp";
@@ -1447,6 +1463,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     }
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+    add_recip_legacy_compat_define(softmax_defines, attributes.program_config);
     CreateKernel(
         program,
         std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_sharded.cpp",
