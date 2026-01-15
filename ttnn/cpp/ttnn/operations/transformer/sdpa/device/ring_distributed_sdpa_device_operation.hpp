@@ -53,6 +53,8 @@ ring_distributed_sdpa(
     std::optional<float> scale,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<ttnn::Tensor>& page_table = std::nullopt,
+    std::optional<int64_t> chunk_start_idx = std::nullopt);
 
 }  // namespace ttnn::prim

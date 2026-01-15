@@ -496,8 +496,14 @@ void bind_sdpa(nb::module_& mod) {
 
         Args:
             input_tensor_q (ttnn.Tensor): the input tensor.          [b x nqh x s x dh]
+                The sequence length 's' must be divisible by 2*ring_size. Additionally, for proper tile alignment,
+                's' should be divisible by TILE_HEIGHT * 2 * ring_size (typically 256 for ring_size=4).
             input_tensor_k (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
+                When using paged KV cache (page_table is provided), this represents paged KV cache blocks with shape
+                [max_num_blocks x nkv x block_size x dh], where block_size is the page block size.
             input_tensor_v (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
+                When using paged KV cache (page_table is provided), this represents paged KV cache blocks with shape
+                [max_num_blocks x nkv x block_size x dh], where block_size is the page block size.
             ring_size (uint32_t): Number of devices in the ring topology.
             ring_id (uint32_t, optional): This device's position in the ring (0 to ring_size-1).
                                          If None, automatically infers from device coordinate. Defaults to `None`.
@@ -507,6 +513,9 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Program configuration. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to `None`.
+            page_table (ttnn.Tensor, optional): Page table tensor for paged KV cache access [b x num_pages]. Defaults to `None`.
+            chunk_start_idx (int, optional): Absolute position in the sequence where this chunk starts (for prefix caching).
+                Must be a multiple of program_config.q_chunk_size. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -529,7 +538,9 @@ void bind_sdpa(nb::module_& mod) {
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<ttnn::Tensor>& page_table,
+               std::optional<int64_t> chunk_start_idx) {
                 return self(
                     input_tensor_q,
                     input_tensor_k,
@@ -539,7 +550,9 @@ void bind_sdpa(nb::module_& mod) {
                     scale,
                     memory_config,
                     program_config,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    page_table,
+                    chunk_start_idx);
             },
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
@@ -550,6 +563,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("scale") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("page_table") = nb::none(),
+            nb::arg("chunk_start_idx") = nb::none()});
 }
 }  // namespace ttnn::operations::transformer
