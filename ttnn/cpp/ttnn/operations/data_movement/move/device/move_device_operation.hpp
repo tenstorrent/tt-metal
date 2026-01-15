@@ -19,7 +19,7 @@ struct MoveDeviceOperation {
     // Type aliases
     using operation_attributes_t = move::operation_attributes_t;
     using tensor_args_t = move::tensor_args_t;
-    using tensor_return_value_t = move::tensor_return_value_t;
+    using tensor_return_value_t = Tensor;
     using spec_return_value_t = ttnn::TensorSpec;
 
     using program_factory_t = std::

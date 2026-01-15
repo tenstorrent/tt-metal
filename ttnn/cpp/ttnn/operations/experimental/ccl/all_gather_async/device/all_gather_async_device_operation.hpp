@@ -16,8 +16,8 @@ namespace ttnn::operations::experimental::ccl::all_gather_async {
 struct AllGatherAsyncDeviceOperation {
     using operation_attributes_t = all_gather_async::operation_attributes_t;
     using tensor_args_t = all_gather_async::tensor_args_t;
-    using spec_return_value_t = all_gather_async::spec_return_value_t;
-    using tensor_return_value_t = all_gather_async::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<DefaultMeshWorkloadFactory, LlamaShardedMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

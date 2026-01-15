@@ -155,7 +155,6 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
     return cached_program_t(
         {std::move(program),
          shared_variables_t{
-             .all_gather_override_runtime_arguments_callback = std::nullopt,
              .matmul_shared_variables = std::move(matmul_shared_variables),
              .all_gather_async_shared_variables = std::move(all_gather_async_shared_variables)}});
 }

@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad {
 void MorehLayerNormBackwardGammaBetaGradOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 MorehLayerNormBackwardGammaBetaGradOperation::program_factory_t
 MorehLayerNormBackwardGammaBetaGradOperation::select_program_factory(

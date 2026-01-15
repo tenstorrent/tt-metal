@@ -23,8 +23,8 @@ namespace ttnn::operations::experimental::ccl {
 struct AllToAllAsyncGenericDeviceOperation {
     using operation_attributes_t = all_to_all_async_generic::operation_attributes_t;
     using tensor_args_t = all_to_all_async_generic::tensor_args_t;
-    using spec_return_value_t = all_to_all_async_generic::spec_return_value_t;
-    using tensor_return_value_t = all_to_all_async_generic::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
     using AllToAllAsyncGenericProgram = all_to_all_async_generic::AllToAllAsyncGenericProgram;
     using program_factory_t = std::variant<AllToAllAsyncGenericProgram>;

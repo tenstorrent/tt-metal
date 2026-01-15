@@ -24,24 +24,8 @@ void kernel_main() {
     constexpr uint32_t output_element_size = get_compile_time_arg_val(5);
     constexpr uint32_t num_cols_per_input_block = get_compile_time_arg_val(6);
     constexpr uint32_t num_cols_per_output_block = get_compile_time_arg_val(7);
-
-#ifdef SHARDED
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(8),    // Memory layout
-        get_compile_time_arg_val(9),    // The number of sharding cores
-        get_compile_time_arg_val(10),   // The page size we offset each write to
-        get_compile_time_arg_val(11),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(12),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(13),   // pages_per_shard_x
-        get_compile_time_arg_val(14)>;  // pages_per_shard_y
-
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(6));
-    experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
-#else
     constexpr auto dst_args = TensorAccessorArgs<8>();
     const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
-#endif
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
         cb_wait_front(cb_id_out0, num_tiles_per_input_block);
@@ -91,7 +75,7 @@ void kernel_main() {
                 uint32_t num_bytes_to_write = num_cols_to_write * output_element_size;
 
                 // Perform the write
-                uint64_t dst_noc_addr = get_noc_addr(output_page_id, s, output_offset_within_page_in_bytes);
+                uint64_t dst_noc_addr = s.get_noc_addr(output_page_id, output_offset_within_page_in_bytes);
                 noc_async_write(current_l1_read_addr, dst_noc_addr, num_bytes_to_write);
 
                 // Increment the number of cols we've processed in the input block

@@ -226,6 +226,7 @@ Data manipulation and processing
   identity_tile
   mask_tile
   where_tile
+  addcmul_tile
   reshuffle_rows_tile
   typecast_tile
   dropout_tile

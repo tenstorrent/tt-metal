@@ -26,12 +26,13 @@
 #include <tt_stl/assert.hpp>
 #include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "profiler.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
@@ -354,7 +355,7 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(const IDevice* device, const st
     std::vector<CoreCoord> virtual_dispatch_cores;
     for (const CoreCoord& core : logical_dispatch_cores) {
         const CoreCoord virtual_dispatch_core =
-            device->virtual_core_from_logical_core(core, dispatch_core_config.get_core_type());
+            device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
         virtual_dispatch_cores.push_back(virtual_dispatch_core);
     }
 
@@ -749,6 +750,9 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     // Additional metadata from trailer data
                     if (device_marker.meta_data.contains("dst_addr")) {
                         data["dst_addr"] = device_marker.meta_data["dst_addr"];
+                        data["src_addr"] = device_marker.meta_data["src_addr"];
+                        data["posted"] = device_marker.meta_data["posted"];
+                        data["noc_status_counter"] = device_marker.meta_data["noc_status_counter"];
                     }
 
                     json_events_by_op[program_execution_uid].push_back(data);
@@ -1131,19 +1135,16 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(
 void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device, uint8_t active_dram_buffer_index) {
     ZoneScoped;
     const DeviceAddr profiler_addr = getProfilerDramBufferAddress(active_dram_buffer_index);
+    const uint32_t bank_size_bytes = getProfileBufferBankSizeBytes();
+    const uint32_t bank_size_words = bank_size_bytes / sizeof(uint32_t);
     uint32_t profile_buffer_idx = 0;
 
     const int num_dram_channels = device->num_dram_channels();
+    const auto& cluster = MetalContext::instance().get_cluster();
     for (int dram_channel = 0; dram_channel < num_dram_channels; ++dram_channel) {
-        std::vector<uint32_t> profile_buffer_bank_data(getProfileBufferBankSizeBytes() / sizeof(uint32_t), 0);
-        MetalContext::instance().get_cluster().read_dram_vec(
-            profile_buffer_bank_data.data(), getProfileBufferBankSizeBytes(), device_id, dram_channel, profiler_addr);
-
-        std::copy(
-            profile_buffer_bank_data.begin(),
-            profile_buffer_bank_data.end(),
-            profile_buffer.begin() + profile_buffer_idx);
-        profile_buffer_idx += getProfileBufferBankSizeBytes() / sizeof(uint32_t);
+        cluster.read_dram_vec(
+            &(profile_buffer[profile_buffer_idx]), bank_size_bytes, device_id, dram_channel, profiler_addr);
+        profile_buffer_idx += bank_size_words;
     }
 }
 
@@ -1739,7 +1740,9 @@ void DeviceProfiler::readTsData16BMarkerData(
         }
 
         EMD trailer_metadata(trailer_data[0]);
-        meta_data["dst_addr"] = trailer_metadata.getLocalNocEventDstTrailer().dst_addr;
+        meta_data["dst_addr"] = trailer_metadata.getLocalNocEventDstTrailer().getDstAddr();
+        meta_data["src_addr"] = trailer_metadata.getLocalNocEventDstTrailer().getSrcAddr();
+        meta_data["noc_status_counter"] = trailer_metadata.getLocalNocEventDstTrailer().counter_value;
     } else {
         TT_THROW("TS_DATA_16B marker contains unexpected event contents {:#X}", event_metadata.asU64());
     }
@@ -2045,6 +2048,11 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
     }
 
     this->initializeMissingTracyContexts(/*blocking=*/is_mid_run_dump);
+
+    if (getDeviceDebugDumpEnabled()) {
+        // This was not called before so call it now for the final dump
+        hash_to_zone_src_locations = generateZoneSourceLocationsHashes();
+    }
 
     if (!is_mid_run_dump) {
         for (auto& [core, _] : this->device_markers_per_core_risc_map) {
@@ -2438,8 +2446,6 @@ void DeviceProfiler::pollDebugDumpResults(
     }
 
     TT_ASSERT(device_id == device->id());
-
-    hash_to_zone_src_locations = generateZoneSourceLocationsHashes();
 
     // Handle worker cores: use ping-pong DRAM buffer logic
     if (virtual_cores.empty()) {
