@@ -157,11 +157,13 @@ void JitBuildEnv::init(
             log_info(tt::LogBuildKernels, "CCACHE: Base directory: {}", basedir);
         }
 
-        // Ignore build directories to prevent cache pollution from generated files
-        // This ensures ccache doesn't include headers from build/ or build_Release/ directories
-        std::string ignore_headers = root_ + "build/," + root_ + "build_Release/," + root_ + ".cache/";
+        // Ignore build and generated directories to prevent cache pollution from generated files
+        // This matches patterns from .gitignore to avoid including temporary/generated headers
+        std::string ignore_headers = root_ + "build/," + root_ + "build_*/," + root_ + ".build/," + root_ + ".cache/," +
+                                     root_ + "python_env/," + root_ + "venv/," + root_ + "env/," + root_ +
+                                     "__pycache__/," + root_ + ".cpmcache/," + root_ + "Testing/";
         setenv("CCACHE_IGNOREHEADERS", ignore_headers.c_str(), 0);
-        log_info(tt::LogBuildKernels, "CCACHE: Ignoring headers from: {}", ignore_headers);
+        log_info(tt::LogBuildKernels, "CCACHE: Ignoring headers from build/generated directories");
 
         this->gpp_ = "ccache ";
     } else {
