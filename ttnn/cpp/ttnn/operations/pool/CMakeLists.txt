@@ -46,6 +46,7 @@ target_sources(
         upsample/device/upsample_device_operation.cpp
         upsample/device/upsample_program_factory_multicore_sharded.cpp
         upsample/device/upsample_program_factory_multicore_interleaved.cpp
+        upsample/device/upsample_nearest_float_program_factory.cpp
         upsample/upsample.cpp
 )
 

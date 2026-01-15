@@ -245,8 +245,9 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
     const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     auto& output = output_tensor;
-    const auto& scale_factor_h = operation_attributes.scale_factor_h;
-    const auto& scale_factor_w = operation_attributes.scale_factor_w;
+    // Cast to int since this factory is only used for integer scale factors
+    const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
+    const uint32_t scale_factor_w = static_cast<uint32_t>(operation_attributes.scale_factor_w);
 
     Program program = CreateProgram();
     distributed::MeshDevice* device = input.device();
