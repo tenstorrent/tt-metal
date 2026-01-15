@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "api/debug/dprint.h"
 #else
 #include <tt_stl/assert.hpp>
 #endif
@@ -456,12 +457,22 @@ public:
     }
 
     volatile Derived* to_chip_multicast(const MulticastRoutingCommandHeader& mcast_routing_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        DPRINT << "HELLO FROM TO_CHIP_MULTICAST" << ENDL();
+#else
+        std::cout << "HELLO FROM TO_CHIP_MULTICAST" << std::endl;
+#endif
         static_cast<volatile Derived*>(this)->to_chip_multicast_impl(mcast_routing_command_header);
         return static_cast<volatile Derived*>(this);
     }
 
     volatile Derived* to_chip_sparse_multicast(
         const SparseMulticastRoutingCommandHeader& sparse_mcast_routing_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        DPRINT << "HELLO FROM TO_CHIP_SPARSE_MULTICAST" << ENDL();
+#else
+        std::cout << "HELLO FROM TO_CHIP_SPARSE_MULTICAST" << std::endl;
+#endif
         static_cast<volatile Derived*>(this)->to_chip_sparse_multicast_impl(sparse_mcast_routing_command_header);
         return static_cast<volatile Derived*>(this);
     }
@@ -822,6 +833,11 @@ public:
     // Delegates to routing_encoding::encode_1d_multicast() - see fabric_common.h for encoding details
     static LowLatencyRoutingFieldsT<ExtensionWords> calculate_chip_multicast_routing_fields(
         const MulticastRoutingCommandHeader& chip_multicast_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        DPRINT << "HELLO FROM CHIP_MULTICAST_ROUTING_FIELDS" << ENDL();
+#else
+        std::cout << "HELLO FROM CHIP_MULTICAST_ROUTING_FIELDS" << std::endl;
+#endif
         const uint32_t start_hop = chip_multicast_command_header.start_distance_in_hops;
         const uint32_t range_hops = chip_multicast_command_header.range_hops;
 
@@ -829,6 +845,11 @@ public:
         uint32_t buffer[1 + ExtensionWords];
         routing_encoding::encode_1d_multicast(start_hop, range_hops, buffer, 1 + ExtensionWords);
 
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        DPRINT << "START HOP: " << start_hop << ENDL();
+        DPRINT << "RANGE HOPS: " << range_hops << ENDL();
+        DPRINT << "HEADER: " << buffer[0] << ENDL();
+#endif
         // Unpack using helper
         return LowLatencyRoutingFieldsT<ExtensionWords>::from_buffer(buffer);
     }
@@ -838,8 +859,50 @@ public:
         const SparseMulticastRoutingCommandHeader& chip_sparse_multicast_command_header) {
         // Delegate to canonical encoder
         uint32_t buffer;
-        routing_encoding::encode_1d_sparse_multicast(chip_sparse_multicast_command_header.hops, buffer);
+        using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+
+        auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
+            const uint32_t bit_pos = (hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
+            buffer |= (field_value << bit_pos);
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+            DPRINT << "SET_HOP_FIELD" << ENDL();
+            DPRINT << "Hop Index: " << hop_index << ENDL();
+            DPRINT << "Field Value: " << field_value << ENDL();
+            DPRINT << "Bit Pos: " << bit_pos << ENDL();
+            DPRINT << "Buffer: " << buffer << ENDL();
+#endif
+        };
+
+        buffer = 0;
+        uint32_t hop_index = 0;
+        uint16_t hops = chip_sparse_multicast_command_header.hops;
+        // Treat hops like a shift register, checking LSB each time
+        while (hops > 0) {
+            // Case 1: We've arrived at the last hop. Write and stop.
+            if (hops == 1) {
+                set_hop_field(hop_index, LowLatencyFields::WRITE_ONLY);
+            }
+            // Case 2: This hop involves a write operation. Write and forward.
+            else if (hops & 1) {
+                set_hop_field(hop_index, LowLatencyFields::WRITE_AND_FORWARD);
+            }
+            // Case 3: This hop does not involve a write operation. Forward only.
+            else {
+                set_hop_field(hop_index, LowLatencyFields::FORWARD_ONLY);
+            }
+            hop_index++;
+            hops >>= 1;
+        }
+        // routing_encoding::encode_1d_sparse_multicast(chip_sparse_multicast_command_header.hops, buffer);
         // Unpack using helper
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        DPRINT << "CALCULATE_CHIP_SPARSE_MULTICAST_ROUTING_FIELDS" << ENDL();
+        DPRINT << "Hops: " << chip_sparse_multicast_command_header.hops << ENDL();
+        DPRINT << "Buffer: " << buffer << ENDL();
+#else
+        std::cout << "HELLO WORLD" << std::endl;
+#endif
+
         return LowLatencyRoutingFieldsT<ExtensionWords>::from_buffer(&buffer);
     }
 
@@ -869,13 +932,6 @@ public:
         const SparseMulticastRoutingCommandHeader& chip_sparse_multicast_command_header) volatile {
         auto routing = calculate_chip_sparse_multicast_routing_fields(chip_sparse_multicast_command_header);
         routing.copy_to(&this->routing_fields);
-    }
-
-    void set_and_print_routing_fields(
-        const SparseMulticastRoutingCommandHeader& chip_sparse_multicast_command_header) volatile {
-        std::cout << "Hops: " << chip_sparse_multicast_command_header.hops << std::endl;
-        auto routing = calculate_chip_sparse_multicast_routing_fields(chip_sparse_multicast_command_header);
-        std::cout << "Result: " << routing.value << std::endl;
     }
 };
 

@@ -1871,7 +1871,6 @@ FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
     packet_header->to_chip_sparse_multicast(tt::tt_fabric::SparseMulticastRoutingCommandHeader{hops});
-    packet_header->set_and_print_routing_fields(tt::tt_fabric::SparseMulticastRoutingCommandHeader{hops});
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);

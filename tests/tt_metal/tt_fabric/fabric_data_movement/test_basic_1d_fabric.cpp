@@ -3171,6 +3171,9 @@ void FabricMulticastCommon(
     auto sender_device = fixture->get_device(src_physical_device_id);
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
 
+    // Preserve original lists for connection setup
+    auto original_end_fabric_node_ids_by_dir = end_fabric_node_ids_by_dir;
+
     // Adjust lists to start from start_distance for each direction
     std::vector<FabricNodeId> dest_fabric_node_ids;
     for (auto [dir, start_distance, range] : dir_configs) {
@@ -3179,7 +3182,11 @@ void FabricMulticastCommon(
             physical_end_device_ids_by_dir[dir].end());
         end_fabric_node_ids_by_dir[dir] = std::vector(
             end_fabric_node_ids_by_dir[dir].begin() + (start_distance - 1), end_fabric_node_ids_by_dir[dir].end());
-        dest_fabric_node_ids.push_back(end_fabric_node_ids_by_dir[dir][0]);
+
+        // Connect only to first hop (direct neighbor), regardless of start_distance
+        if (!original_end_fabric_node_ids_by_dir[dir].empty()) {
+            dest_fabric_node_ids.push_back(original_end_fabric_node_ids_by_dir[dir][0]);
+        }
     }
 
     // Choose a receiver device to compute RX core coords (use last device from first configured dir)
@@ -3203,7 +3210,8 @@ void FabricMulticastCommon(
         noc_send_type,
         static_cast<uint32_t>(dir_configs.size()),
         with_state,
-        1  // is_chip_multicast = 1
+        1,  // is_chip_multicast = 1
+        0   // is_sparse_multicast = 0
     };
 
     std::vector<uint32_t> sender_runtime_args = {
@@ -3434,17 +3442,35 @@ void FabricSparseMulticastCommon(
         GTEST_SKIP() << "No sparse multicast destinations found for requested directions";
     }
 
+    // Preserve original lists for connection setup (like FabricMulticastCommon)
+    auto original_physical_end_device_ids_by_dir = physical_end_device_ids_by_dir;
+    auto original_end_fabric_node_ids_by_dir = end_fabric_node_ids_by_dir;
+
+    // Filter device lists to only include devices that should receive packets (like FabricMulticastCommon range
+    // filtering)
+    for (auto [dir, hops] : dir_configs) {
+        std::vector<ChipId> filtered_physical_devices;
+        std::vector<FabricNodeId> filtered_fabric_nodes;
+
+        for (int i = 0; i < physical_end_device_ids_by_dir[dir].size(); i++) {
+            if (hops & (1 << i)) {  // Only include devices where the hop bit is set
+                filtered_physical_devices.push_back(physical_end_device_ids_by_dir[dir][i]);
+                filtered_fabric_nodes.push_back(end_fabric_node_ids_by_dir[dir][i]);
+            }
+        }
+
+        physical_end_device_ids_by_dir[dir] = filtered_physical_devices;
+        end_fabric_node_ids_by_dir[dir] = filtered_fabric_nodes;
+    }
+
     // Build destination fabric node ID list (for routing plane connection manager)
+    // Like regular multicast, only connect to the first hop in each direction
+    // The sparse routing is handled by packet headers, not direct connections
     std::vector<FabricNodeId> dest_fabric_node_ids;
     for (auto [dir, hops] : dir_configs) {
-        // For sparse multicast, we need to add nodes for each bit set in the hops bitmask
-        for (int i = 0; i < 16; i++) {
-            if (hops & (1 << i)) {
-                // Use the fabric node ID at this hop distance from the pre-populated list
-                if (i < end_fabric_node_ids_by_dir[dir].size()) {
-                    dest_fabric_node_ids.push_back(end_fabric_node_ids_by_dir[dir][i]);
-                }
-            }
+        // Use original lists for connections (first hop only)
+        if (!original_end_fabric_node_ids_by_dir[dir].empty()) {
+            dest_fabric_node_ids.push_back(original_end_fabric_node_ids_by_dir[dir][0]);
         }
     }
 
@@ -3463,7 +3489,7 @@ void FabricSparseMulticastCommon(
         NOC_UNICAST_WRITE,  // Only support NOC_UNICAST_WRITE for sparse multicast
         static_cast<uint32_t>(dir_configs.size()),
         0,  // with_state = false (not supported for sparse multicast)
-        0,  // is_chip_multicast = false
+        1,  // is_chip_multicast = true
         1   // is_sparse_multicast = true
     };
 
@@ -3552,7 +3578,7 @@ void FabricSparseMulticastCommon(
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWrite) {
-    FabricMulticastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
+    FabricMulticastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 2, 1)});
 }
 TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWriteMultiDir) {
     FabricMulticastCommon(
@@ -3655,19 +3681,19 @@ TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocAtomicIncMux) {
 
 // Sparse multicast test cases
 TEST_F(NightlyFabric1DFixture, TestLinearFabricSparseMulticastNocUnicastWrite) {
-    FabricSparseMulticastCommon(this, {std::make_tuple(RoutingDirection::E, 0b0110)});  // Write to hops 1 and 2
+    FabricSparseMulticastCommon(this, {std::make_tuple(RoutingDirection::E, 0b0111)});  // Write to hops 1 and 2
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricSparseMulticastNocUnicastWriteSingleHop) {
-    FabricSparseMulticastCommon(this, {std::make_tuple(RoutingDirection::E, 0b0001)});  // Write to hop 0 only
+    FabricSparseMulticastCommon(this, {std::make_tuple(RoutingDirection::E, 0b0100)});  // Write to hop 0 only
 }
 
 TEST_F(NightlyFabric1DFixture, TestLinearFabricSparseMulticastNocUnicastWriteMultiDir) {
     FabricSparseMulticastCommon(
         this,
         {
-            std::make_tuple(RoutingDirection::E, 0b0011),  // Write to hops 0 and 1 eastward
-            std::make_tuple(RoutingDirection::W, 0b0100)   // Write to hop 2 westward
+            std::make_tuple(RoutingDirection::E, 0b1),    // Write to hops 0 and 1 eastward
+            std::make_tuple(RoutingDirection::W, 0b0010)  // Write to hop 2 westward
         });
 }
 
