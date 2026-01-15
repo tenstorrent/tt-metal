@@ -419,13 +419,28 @@ void kernel_main() {
     const uint32_t expert_activation_base = get_write_ptr(expert_activation_cb_id);
     const uint32_t e_t_buffer_base = get_write_ptr(e_t_buffer_id);
 
-    for (uint32_t t = 0; t < tokens; t++) {
-        uint32_t source_device =
-            get_device_idx_from_global_token_idx<linearized_mesh_coord, tokens_per_device, mesh_rows, mesh_cols, axis>(
-                t);
+    // Cache source_device_mapping - only changes every tokens_per_device tokens
+    // Reduces mapping loads from 512 to 16 (dispatch_devices)
+    uint32_t prev_device_in_group = UINT32_MAX;
+    const uint16_t* source_device_mapping = nullptr;
 
-        const uint16_t* source_device_mapping =
-            reinterpret_cast<const uint16_t*>(mapping_base + source_device * aligned_mapping_page_size);
+    for (uint32_t t = 0; t < tokens; t++) {
+        // source_device only changes every tokens_per_device tokens
+        const uint32_t device_in_group = t / tokens_per_device;
+
+        // Only update mapping pointer when device_in_group changes
+        if (device_in_group != prev_device_in_group) {
+            const uint32_t source_device = get_device_idx_from_global_token_idx<
+                linearized_mesh_coord,
+                tokens_per_device,
+                mesh_rows,
+                mesh_cols,
+                axis>(t);
+            source_device_mapping =
+                reinterpret_cast<const uint16_t*>(mapping_base + source_device * aligned_mapping_page_size);
+            prev_device_in_group = device_in_group;
+        }
+
         const uint16_t* token_indices = reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
         const uint16_t* token_scores = reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
 
@@ -472,7 +487,7 @@ void kernel_main() {
     }
 
     // DPRINT << "Number of activated tokens: " << num_activated_tokens << ENDL();
-    print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0, tokens);
+    // print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0, tokens);
 
     // cap off e_t buffer with -1
     for (uint32_t e = 0; e < experts_per_device; e++) {
@@ -481,7 +496,7 @@ void kernel_main() {
         e_t_buffer_ptr[num_activated_tokens_per_expert[e]] = -1;
     }
 
-    print_e_t_buffer<experts_per_device, tokens>(e_t_buffer_id);
+    // print_e_t_buffer<experts_per_device, tokens>(e_t_buffer_id);
 
     // TODO: Implement selective tilize logic
     // 1. Read through all indices to determine which tokens belong to this device's experts
