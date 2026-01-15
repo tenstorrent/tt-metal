@@ -15,7 +15,7 @@
 #include "compute_kernel_api/pack.h"
 #include "api/debug/dprint.h"
 #include "ckernel_sfpu.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 using namespace ckernel;
 
 namespace NAMESPACE {

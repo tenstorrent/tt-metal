@@ -16,7 +16,7 @@
 #include "compute_kernel_api/pack.h"
 #include "ckernel_sfpu.h"
 #include "compute_kernel_api/tilize.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #define DEBUG_PRINT 0
 using namespace ckernel;
