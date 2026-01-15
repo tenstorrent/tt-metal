@@ -12,7 +12,7 @@ set(CMAKE_SHARED_LINKER_FLAGS_INIT "-lc++ -lc++abi")
 set(ENABLE_LIBCXX TRUE CACHE INTERNAL "Using clang's libc++")
 
 # Our build is super slow; put a band-aid on it by choosing a linker that can cope better.
-# We really need to fix out code, though.
+# We really need to fix our code, though.
 find_program(MOLD ld.mold)
 if(MOLD)
     set(CMAKE_LINKER_TYPE MOLD)
