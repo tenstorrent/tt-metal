@@ -101,115 +101,177 @@ class GatherSingleCore:
                 else:
                     noc1_cores.append(core)
 
+        # Create CoreRangeSets for NOC0 and NOC1 cores
+        noc0_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc0_cores])
+        noc1_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc1_cores])
+
+        # Get sender grid dimensions for computing per-core offset in kernel
+        input_core_ranges = list(input_core_grid.ranges())
+        sender_grid_range = input_core_ranges[0]
+        sender_grid_start_x = sender_grid_range.start.x
+        sender_grid_start_y = sender_grid_range.start.y
+        sender_grid_end_x = sender_grid_range.end.x
+        sender_grid_end_y = sender_grid_range.end.y
+
+        # Semaphore IDs
+        noc0_receiver_semaphore_id = 0
+        noc1_receiver_semaphore_id = 1
+
         # Create semaphores
         noc0_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=0,
+            id=noc0_receiver_semaphore_id,
             core_ranges=all_cores,
             initial_value=0,
         )
 
         noc1_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=1,
+            id=noc1_receiver_semaphore_id,
             core_ranges=all_cores,
             initial_value=0,
         )
 
+        # CB indices
+        src_cb = 0  # Input CB (from sharded input tensor)
+        dst_cb = 1  # Output CB (from sharded output tensor)
+
+        # Number of pages
+        num_senders = len(input_cores_list)
+        src_num_pages = 1  # Each sender has one page
+        dst_num_pages = num_senders  # Receiver gets one page per sender
+
         kernels = []
-        semaphores = []
+        semaphores = [noc0_receiver_semaphore_descriptor, noc1_receiver_semaphore_descriptor]
 
-        # Create CoreRangeSets for NOC0 and NOC1 cores
-        noc0_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc0_cores])
-        noc1_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc1_cores])
+        kernel_path = "models/demos/deepseek_v3_b1/micro_ops/gather/kernels/gather_kernel.cpp"
 
-        # Create receiver kernel (only if we have cores on that NOC)
-        if not noc0_core_range_set.empty() or not noc1_core_range_set.empty():
-            # Determine receiver NOC - use the NOC that doesn't conflict with senders
-            # If output core is in the NOC0 sender set, use NOC1 for receiver, and vice versa
-            output_in_noc0 = noc0_core_range_set.contains(gather_core)
-            if output_in_noc0:
-                receiver_noc = ttnn.NOC.NOC_1
-            else:
-                receiver_noc = ttnn.NOC.NOC_0
+        # Get the output tensor's buffer address for receiver data address (runtime arg)
+        # The dst CB doesn't exist on sender cores, so we pass the buffer address as runtime arg
+        receiver_data_addr = output_tensor.buffer_address()
 
-            receiver_compile_args = [
-                len(noc0_cores),
-                len(noc1_cores),
-                noc0_receiver_semaphore_descriptor.id,
-                noc1_receiver_semaphore_descriptor.id,
+        # ========================================================================
+        # Sender kernels (NCRISC) - separate for NOC0 and NOC1
+        # ========================================================================
+        def create_sender_named_compile_time_args(receiver_semaphore_id):
+            return [
+                ("gather_dest_noc_x", gather_dest_noc_core.x),
+                ("gather_dest_noc_y", gather_dest_noc_core.y),
+                ("gather_data_size_bytes", total_size),
+                ("gather_receiver_semaphore_id", receiver_semaphore_id),
+                ("gather_src_cb", src_cb),
+                ("gather_src_num_pages", src_num_pages),
+                ("gather_sender_grid_start_x", sender_grid_start_x),
+                ("gather_sender_grid_start_y", sender_grid_start_y),
+                ("gather_sender_grid_end_x", sender_grid_end_x),
+                ("gather_sender_grid_end_y", sender_grid_end_y),
+                ("gather_row_major", 1),  # 1 = row-major linearization
+                # Role flags
+                ("is_sender_core", 1),
+                ("is_receiver_core", 0),
             ]
 
-            receiver_kernel_descriptor = ttnn.KernelDescriptor(
-                kernel_source="models/demos/deepseek_v3_b1/micro_ops/gather/kernels/gather_receiver.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=output_core_grid,
-                compile_time_args=receiver_compile_args,
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_0,
-                    noc=receiver_noc,
-                ),
-            )
-            kernels.append(receiver_kernel_descriptor)
-            semaphores.append(noc0_receiver_semaphore_descriptor)
-            semaphores.append(noc1_receiver_semaphore_descriptor)
-
-        # Create sender kernels
-        sender_kernel_path = "models/demos/deepseek_v3_b1/micro_ops/gather/kernels/gather_sender.cpp"
-
-        # Build runtime args as 2D list: runtime_args[core_x][core_y] = [args]
-        sender_noc0_runtime_args = ttnn.RuntimeArgs()
-        sender_noc1_runtime_args = ttnn.RuntimeArgs()
-
-        # Set runtime arguments for sender kernels
-        for i, core in enumerate(input_cores_list):
-            sender_runtime_args = [
-                input_tensor.buffer_address(),
-                output_tensor.buffer_address(),
-                i * total_size,
-            ]
-            if noc0_core_range_set.contains(core):
-                sender_noc0_runtime_args[core.x][core.y] = sender_runtime_args
-            else:
-                sender_noc1_runtime_args[core.x][core.y] = sender_runtime_args
-
-        sender_compile_args = [
-            gather_dest_noc_core.x,
-            gather_dest_noc_core.y,
-            total_size,
-            0,  # semaphore (will be set per NOC)
-        ]
+        # NOC0 sender kernel
         if not noc0_core_range_set.empty():
-            sender_compile_args[3] = noc0_receiver_semaphore_descriptor.id
-            sender_noc0_kernel_descriptor = ttnn.KernelDescriptor(
-                kernel_source=sender_kernel_path,
+            noc0_sender_kernel_descriptor = ttnn.KernelDescriptor(
+                kernel_source=kernel_path,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=noc0_core_range_set,
-                compile_time_args=list(sender_compile_args),
-                runtime_args=sender_noc0_runtime_args,
+                named_compile_time_args=create_sender_named_compile_time_args(noc0_receiver_semaphore_id),
+                common_runtime_args=[receiver_data_addr],  # receiver_data_addr passed as runtime arg
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1,
                     noc=ttnn.NOC.NOC_0,
                 ),
             )
-            kernels.append(sender_noc0_kernel_descriptor)
+            kernels.append(noc0_sender_kernel_descriptor)
 
+        # NOC1 sender kernel
         if not noc1_core_range_set.empty():
-            sender_compile_args[3] = noc1_receiver_semaphore_descriptor.id
-            sender_noc1_kernel_descriptor = ttnn.KernelDescriptor(
-                kernel_source=sender_kernel_path,
+            noc1_sender_kernel_descriptor = ttnn.KernelDescriptor(
+                kernel_source=kernel_path,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=noc1_core_range_set,
-                compile_time_args=list(sender_compile_args),
-                runtime_args=sender_noc1_runtime_args,
+                named_compile_time_args=create_sender_named_compile_time_args(noc1_receiver_semaphore_id),
+                common_runtime_args=[receiver_data_addr],  # receiver_data_addr passed as runtime arg
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1,
                     noc=ttnn.NOC.NOC_1,
                 ),
             )
-            kernels.append(sender_noc1_kernel_descriptor)
+            kernels.append(noc1_sender_kernel_descriptor)
+
+        # ========================================================================
+        # Receiver kernel (BRISC)
+        # ========================================================================
+        # Determine receiver NOC - use the NOC that doesn't conflict with senders
+        output_in_noc0 = noc0_core_range_set.contains(gather_core)
+        if output_in_noc0:
+            receiver_noc = ttnn.NOC.NOC_1
+        else:
+            receiver_noc = ttnn.NOC.NOC_0
+
+        receiver_named_compile_time_args = [
+            ("gather_noc0_num_senders", len(noc0_cores)),
+            ("gather_noc1_num_senders", len(noc1_cores)),
+            ("gather_noc0_receiver_semaphore_id", noc0_receiver_semaphore_id),
+            ("gather_noc1_receiver_semaphore_id", noc1_receiver_semaphore_id),
+            ("gather_dst_cb", dst_cb),
+            ("gather_dst_num_pages", dst_num_pages),
+            # Role flags
+            ("is_sender_core", 0),
+            ("is_receiver_core", 1),
+        ]
+
+        receiver_kernel_descriptor = ttnn.KernelDescriptor(
+            kernel_source=kernel_path,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=output_core_grid,
+            named_compile_time_args=receiver_named_compile_time_args,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0,
+                noc=receiver_noc,
+            ),
+        )
+        kernels.append(receiver_kernel_descriptor)
+
+        # ========================================================================
+        # Compute kernels (TRISC) - no-op for gather, but needed for all cores
+        # ========================================================================
+        # Sender cores compute kernel (no-op)
+        if not input_core_grid.empty():
+            sender_compute_kernel_descriptor = ttnn.KernelDescriptor(
+                kernel_source=kernel_path,
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=input_core_grid,
+                named_compile_time_args=[
+                    ("is_sender_core", 1),
+                    ("is_receiver_core", 0),
+                ],
+                config=ttnn.ComputeConfigDescriptor(),
+            )
+            kernels.append(sender_compute_kernel_descriptor)
+
+        # Receiver core compute kernel (no-op) - only if not already covered by sender grid
+        if not input_core_grid.contains(gather_core):
+            receiver_compute_kernel_descriptor = ttnn.KernelDescriptor(
+                kernel_source=kernel_path,
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=output_core_grid,
+                named_compile_time_args=[
+                    ("is_sender_core", 0),
+                    ("is_receiver_core", 1),
+                ],
+                config=ttnn.ComputeConfigDescriptor(),
+            )
+            kernels.append(receiver_compute_kernel_descriptor)
+
+        # Create CB descriptors from sharded tensors
+        src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(src_cb, input_tensor)
+        dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(dst_cb, output_tensor)
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=kernels,
+            cbs=[src_cb_descriptor, dst_cb_descriptor],
             semaphores=semaphores,
         )
 
