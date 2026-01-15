@@ -469,3 +469,25 @@ def flush_subnormal_values_to_zero(tensor):
     mask = torch.abs(tensor) < SUBNORMAL_THRESHOLD
     tensor[mask] = 0.0
     return tensor
+
+
+# Test-only state: used to adjust expectations in program-cache tests.
+# We cannot rely on dynamically attaching Python attributes to device objects
+# (e.g. nanobind/pybind wrapped objects often don't allow it).
+_EXCLUDED_ENTRY_COUNT_BY_DEVICE_ID = {}
+
+
+def reset_excluded_entry_count():
+    _EXCLUDED_ENTRY_COUNT_BY_DEVICE_ID.clear()
+
+
+def set_excluded_entry_count(device, start_entry_count):
+    current_count = device.num_program_cache_entries()
+    excluded_count = current_count - start_entry_count
+    device_id = id(device)
+    excluded_count += _EXCLUDED_ENTRY_COUNT_BY_DEVICE_ID.get(device_id, 0)
+    _EXCLUDED_ENTRY_COUNT_BY_DEVICE_ID[device_id] = excluded_count
+
+
+def get_excluded_entry_count(device):
+    return _EXCLUDED_ENTRY_COUNT_BY_DEVICE_ID.get(id(device), 0)

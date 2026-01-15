@@ -5,6 +5,7 @@
 import math
 import os
 import pathlib
+from this import d
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import ttnn.decorators
@@ -304,7 +305,11 @@ def from_torch(
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
-    return ttnn.Tensor(
+    if False:
+        if device is not None:
+            current_entry_count = device.num_program_cache_entries()
+
+    result = ttnn.Tensor(
         tensor=tensor,
         data_type=dtype,
         device=device,
@@ -315,6 +320,21 @@ def from_torch(
         pad_value=pad_value,
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
     )
+
+    if False:
+        if device is not None:
+            updated_entry_count = device.num_program_cache_entries()
+            if current_entry_count != updated_entry_count:
+                import logging
+
+                logging.info(
+                    f"Conversion from {tensor.dtype} to {result.dtype} generated {updated_entry_count - current_entry_count} cache entries"
+                )
+                logging.info(
+                    f"Parmeter dtype: {dtype}, layout: {layout}, memory_config: {memory_config}, tile: {tile}, cq_id: {cq_id} shape: {tensor.shape}"
+                )
+
+    return result
 
 
 def _golden_function(tensor, *, torch_rank=None, **kwargs):

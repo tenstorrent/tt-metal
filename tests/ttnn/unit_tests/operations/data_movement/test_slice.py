@@ -8,7 +8,12 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_grayskull, is_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    get_excluded_entry_count,
+    reset_excluded_entry_count,
+    set_excluded_entry_count,
+)
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
 
@@ -203,9 +208,11 @@ def slice_test(
     else:
         torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
+    current_entry_count = device.num_program_cache_entries()
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
     )
+    set_excluded_entry_count(device, current_entry_count)
 
     tt_output_tensor = ttnn.slice(
         tt_input_tensor,
@@ -289,6 +296,7 @@ def test_run_slice_test(
     dtype,
     slice_step,
 ):
+    reset_excluded_entry_count()
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
@@ -306,7 +314,7 @@ def test_run_slice_test(
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
-    assert num_cache_entries == 1
+    assert num_cache_entries == 1 + get_excluded_entry_count(device)
 
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.ROW_MAJOR_LAYOUT,
@@ -323,7 +331,7 @@ def test_run_slice_test(
     eq = torch.equal(a_pt, a_ref)
     assert eq
     # different width for row major
-    assert num_cache_entries == 2
+    assert num_cache_entries == 2 + get_excluded_entry_count(device)
 
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.TILE_LAYOUT,
@@ -337,7 +345,7 @@ def test_run_slice_test(
         slice_step,
     )
     # change from RM to TILE
-    assert num_cache_entries == 3
+    assert num_cache_entries == 3 + get_excluded_entry_count(device)
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
@@ -354,7 +362,7 @@ def test_run_slice_test(
         slice_step,
     )
     # CACHE HIT
-    assert num_cache_entries == 4
+    assert num_cache_entries == 4 + get_excluded_entry_count(device)
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq

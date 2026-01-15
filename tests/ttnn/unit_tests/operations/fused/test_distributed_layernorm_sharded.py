@@ -14,6 +14,7 @@ from models.common.utility_functions import (
     comp_allclose,
 )
 
+from tests.ttnn.utils_for_testing import reset_excluded_entry_count, get_excluded_entry_count, set_excluded_entry_count
 from models.common.utility_functions import tt2torch_tensor
 
 PREFETCHER_NOC1_GRID = [
@@ -69,6 +70,7 @@ def create_input_and_weight_tensors(input_width, num_devices, seed, mean, std):
 def create_tt_tensors(
     torch_chunk, device, df, core_grid, input_width, is_weight=False, grid_offset=ttnn.CoreCoord(0, 0)
 ):
+    current_entry_count = device.num_program_cache_entries()
     tt_tensor = ttnn.from_torch(
         torch_chunk,
         layout=ttnn.TILE_LAYOUT,
@@ -76,6 +78,7 @@ def create_tt_tensors(
         memory_config=ttnn.DRAM_MEMORY_CONFIG if is_weight else ttnn.L1_MEMORY_CONFIG,
         dtype=df,
     )
+    set_excluded_entry_count(device, current_entry_count)
 
     if not is_weight:
         core_range = ttnn.CoreRange(
@@ -228,7 +231,6 @@ def run_pre_allgather_layernorm(
             torch_input_chunks[d] = torch_input_chunks[d] + torch_residual_input_chunks[d]
         else:
             tt_residual_input_tensor = None
-        device.clear_program_cache()
 
         tt_pre_allgather_output = compute_pre_allgather_stats(
             tt_input_tensor, core_grid, input_width, is_rmsnorm, tt_residual_input_tensor
@@ -270,7 +272,9 @@ def run_pre_allgather_layernorm(
                 tt_ex2, torch_ex2, atol=max_atol_ex2
             ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
 
-    assert device.num_program_cache_entries() == 2, "Program cache not working as expected"
+    assert device.num_program_cache_entries() == 2 + get_excluded_entry_count(
+        device
+    ), "Program cache not working as expected"
     logger.info("Pre-allgather layernorm test passed for all devices")
 
 
@@ -307,6 +311,7 @@ def test_pre_allgather_layernorm(
     min_pcc_residual_add,
     fuse_residual,
 ):
+    reset_excluded_entry_count()
     run_pre_allgather_layernorm(
         device,
         input_width,

@@ -11,7 +11,12 @@ import math
 import ttnn
 
 from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    get_excluded_entry_count,
+    reset_excluded_entry_count,
+    set_excluded_entry_count,
+)
 from ttnn.operations.activations import get_golden_function_for_activation
 
 
@@ -536,6 +541,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         )
     else:
         in0_memory_config = ttnn.L1_MEMORY_CONFIG
+    current_entry_count = device.num_program_cache_entries()
     in0_t = ttnn.from_torch(
         in0,
         dtype=ttnn.bfloat16,
@@ -550,11 +556,13 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    set_excluded_entry_count(device, current_entry_count)
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
+        current_entry_count = device.num_program_cache_entries()
         bias_t = ttnn.from_torch(
             bias_padded,
             dtype=ttnn.bfloat16,
@@ -562,6 +570,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        set_excluded_entry_count(device, current_entry_count)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -652,6 +661,8 @@ def test_matmul_2d_multiple_output_blocks_per_core(
     if grid_size[1] < required_size:
         pytest.skip("device does not have 8x8 grid")
 
+    reset_excluded_entry_count()
+
     for _ in range(2):
         run_matmul_2d_multiple_output_blocks_per_core(
             mesh_device,
@@ -670,6 +681,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        current_entry_count = mesh_device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -677,7 +689,8 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert mesh_device.num_program_cache_entries() == 1
+        set_excluded_entry_count(mesh_device, current_entry_count)
+    assert mesh_device.num_program_cache_entries() == 1 + get_excluded_entry_count(mesh_device)
 
 
 def run_matmul_2d_tiny_tile(
@@ -704,6 +717,7 @@ def run_matmul_2d_tiny_tile(
         )
     else:
         in0_memory_config = ttnn.L1_MEMORY_CONFIG
+    current_entry_count = device.num_program_cache_entries()
     in0_t = ttnn.from_torch(
         in0,
         tile=ttnn.Tile((tile_h, 32)),
@@ -720,11 +734,13 @@ def run_matmul_2d_tiny_tile(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    set_excluded_entry_count(device, current_entry_count)
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
+        current_entry_count = device.num_program_cache_entries()
         bias_t = ttnn.from_torch(
             bias_padded,
             tile=ttnn.Tile((tile_h, tile_w)),
@@ -733,6 +749,7 @@ def run_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        set_excluded_entry_count(device, current_entry_count)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -817,6 +834,7 @@ def test_matmul_2d_tiny_tile(
     in1_dtype,
     transpose_tile,
 ):
+    reset_excluded_entry_count()
     for _ in range(2):
         run_matmul_2d_tiny_tile(
             device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
@@ -831,7 +849,7 @@ def test_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.num_program_cache_entries() == 1 + get_excluded_entry_count(device)
 
 
 def run_matmul_1d_tiny_tile(

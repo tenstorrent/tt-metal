@@ -8,7 +8,13 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_with_ulp,
+    get_excluded_entry_count,
+    reset_excluded_entry_count,
+    set_excluded_entry_count,
+)
 from models.common.utility_functions import torch_random
 
 
@@ -81,7 +87,9 @@ def run_softmax_stable_with_program_cache(
     attention_mask = (attention_mask > 0.5).float()
     attention_mask = attention_mask.masked_fill(attention_mask == 0, torch.tensor(float("-inf"), dtype=torch.bfloat16))
     attention_mask = attention_mask.masked_fill(attention_mask == 1, 0)
+    current_entry_count = device.num_program_cache_entries()
     attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    set_excluded_entry_count(device, current_entry_count)
 
     torch_input_tensor = torch_random((batch_size, 1, h, w), -1000, 1000, dtype=torch.bfloat16)
     if not skip_scale_mask:
@@ -90,7 +98,9 @@ def run_softmax_stable_with_program_cache(
         torch_output_tensor = torch_input_tensor
     torch_output_tensor = F.softmax(torch_output_tensor, dim=-1, dtype=torch.bfloat16)
 
+    current_entry_count = device.num_program_cache_entries()
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    set_excluded_entry_count(device, current_entry_count)
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -123,6 +133,7 @@ def run_softmax_stable_with_program_cache(
 def test_softmax_stable_with_program_cache(
     device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
 ):
+    reset_excluded_entry_count()
     for _ in range(2):
         run_softmax_stable_with_program_cache(
             device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
@@ -130,6 +141,7 @@ def test_softmax_stable_with_program_cache(
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        current_entry_count = device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -137,8 +149,9 @@ def test_softmax_stable_with_program_cache(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        set_excluded_entry_count(device, current_entry_count)
 
-    assert device.num_program_cache_entries() == 2
+    assert device.num_program_cache_entries() == 1 + get_excluded_entry_count(device)
 
 
 def run_softmax_sharded_stable(
