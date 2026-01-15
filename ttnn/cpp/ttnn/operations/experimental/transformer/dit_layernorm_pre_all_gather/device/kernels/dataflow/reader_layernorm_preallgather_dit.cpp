@@ -9,7 +9,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 
@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t input_block_size = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
     uint32_t scaler = get_arg_val<uint32_t>(4);
-    generate_reduce_scaler(cb_reduce, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_reduce, scaler);
 
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 
