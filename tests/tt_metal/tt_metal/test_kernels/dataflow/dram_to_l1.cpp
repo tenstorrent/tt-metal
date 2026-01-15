@@ -19,29 +19,14 @@ void kernel_main() {
     experimental::CoreLocalMem<std::uint32_t> l1_buffer(l1_dst_address);
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> src_dram;
 
-    // print out all arguments with names
-    DPRINT << "dram_src_address: " << dram_src_address << ENDL();
-    DPRINT << "l1_dst_address: " << l1_dst_address << ENDL();
-    DPRINT << "dram_buffer_size: " << dram_buffer_size << ENDL();
-    DPRINT << "dram_src_bank_id: " << dram_src_bank_id << ENDL();
-    DPRINT << "signal_value: " << signal_value << ENDL();
-
     volatile tt_l1_ptr std::uint32_t* signal_addr = (tt_l1_ptr uint32_t*)(MEM_L1_UNCACHED_BASE);
-    while (*signal_addr != signal_value) {
-        DPRINT << "signal_addr: " << *signal_addr << ENDL();
-    }
+    while (*signal_addr != signal_value);
 
-    DPRINT << "before read" << ENDL();
+    DPRINT << "Reading " << dram_buffer_size << " bytes from DRAM address " << dram_src_address << " in bank "
+           << dram_src_bank_id << " and writing it to L1 address " << l1_dst_address << ENDL();
 
     noc.async_read(src_dram, l1_buffer, dram_buffer_size, {.bank_id = dram_src_bank_id, .addr = dram_src_address}, {});
-    DPRINT << "after read" << ENDL();
     noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>();
-    DPRINT << "after read barrier" << ENDL();
 
-    // semaphore.set(1);
-    DPRINT << "signal_addr before update: " << *signal_addr << ENDL();
     *signal_addr = signal_value + 1;
-    DPRINT << "signal_addr after update: " << *signal_addr << ENDL();
-
-    DPRINT << 9999 << ENDL();
 }
