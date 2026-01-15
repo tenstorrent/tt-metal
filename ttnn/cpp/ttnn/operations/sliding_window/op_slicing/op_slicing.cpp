@@ -160,8 +160,23 @@ Op2DSliceConfig determine_slice_config(
     if (auto_slice_type) {
         // Start with width slicing as it is more memory efficient.
         return_slice_config.slice_type = best_guess_slice_type(input_shape[1], input_shape[2], output_layout);
+        printf(
+            "[Pool2D Automatic DRAM Slicing] Input shape %ux%u, Output shape %ux%u, Layout %s, Available L1: %lu "
+            "bytes\n",
+            (uint32_t)input_shape[1],
+            (uint32_t)input_shape[2],
+            output_height,
+            output_width,
+            output_layout == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
+            L1_stats.total_free_bytes);
+        printf(
+            "[Pool2D Automatic DRAM Slicing] Auto-selected slice direction = %s\n",
+            return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "HEIGHT" : "WIDTH");
     } else {
         return_slice_config.slice_type = slice_config_.value().slice_type;
+        printf(
+            "[Pool2D Automatic DRAM Slicing] User-specified slice direction = %s, determining num_slices...\n",
+            return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "HEIGHT" : "WIDTH");
     }
 
     log_debug(tt::LogOp, "DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);

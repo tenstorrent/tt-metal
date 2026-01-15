@@ -720,6 +720,7 @@ static std::vector<Tensor> pool2d_DRAM(
                     BufferType::DRAM,
                 })),
         input_tensor_on_device.device());
+    printf("[Pool2D DRAM] Created output tensor: %ux%ux%ux%u\n", batch_size, output_height, output_width, channels);
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
     // Currently return_indices is not supported for DRAM Max Pooling.
     Tensor dram_output_indices_tensor;
