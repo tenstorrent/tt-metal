@@ -1995,17 +1995,23 @@ private:
         bool is_grid = (north_hops > 0 || south_hops > 0) && (east_hops > 0 || west_hops > 0);
 
         if (!is_grid) {
-            // Linear multicast: trace in one direction
+            // Linear multicast: must have exactly one non-zero direction
+            std::optional<RoutingDirection> single_dir = std::nullopt;
+            uint32_t single_count = 0;
             for (const auto& [dir, count] : split_hops) {
-                if (count == 0) {
-                    continue;
+                if (count > 0) {
+                    TT_FATAL(!single_dir.has_value(), "Linear multicast map has multiple non-zero directions: invalid");
+                    single_dir = dir;
+                    single_count = count;
                 }
-                auto path = simulate_linear_path(start, dir, count);
-                MeshCoordinate current = start;
-                for (const auto& dest : path) {
-                    edges.push_back({current, dest, dir});
-                    current = dest;
-                }
+            }
+            TT_FATAL(single_dir.has_value(), "Linear multicast map has no non-zero directions: invalid");
+
+            auto path = simulate_linear_path(start, single_dir.value(), single_count);
+            MeshCoordinate current = start;
+            for (const auto& dest : path) {
+                edges.push_back({current, dest, single_dir.value()});
+                current = dest;
             }
         } else {
             // Grid multicast: trunk with spines at each trunk node

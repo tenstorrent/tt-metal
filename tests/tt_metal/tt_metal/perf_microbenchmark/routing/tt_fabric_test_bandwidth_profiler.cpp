@@ -315,7 +315,7 @@ void BandwidthProfiler::calculate_bandwidth(
                 }
             } else if (topology == Topology::Ring) {
                 num_devices = 2 * (mesh_shape[0] - 1 + mesh_shape[1] - 1);
-            } else if (topology == Topology::Mesh) {
+            } else if (topology == Topology::Mesh || topology == Topology::Torus) {
                 num_devices = mesh_shape[0] * mesh_shape[1];
             }
 
