@@ -251,6 +251,7 @@ jobs:
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         HF_HUB_CACHE: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/hub' || '/mnt/MLPerf/huggingface/hub' }}
         HF_HOME: /tmp/hf_home
+        HF_HUB_OFFLINE: ${{ inputs.regenerate-ttnn-cache && '0' || '1' }}
         SD_HF_DOWNLOAD_OVERRIDE: ${{ inputs.regenerate-ttnn-cache && '1' || '0' }}
         TT_CACHE_HOME: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/tt_cache' || '/mnt/MLPerf/huggingface/tt_cache' }}
       volumes:
