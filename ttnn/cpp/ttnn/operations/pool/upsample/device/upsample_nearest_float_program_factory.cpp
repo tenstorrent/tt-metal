@@ -14,15 +14,14 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "upsample/device/upsample_device_operation_types.hpp"
 
 namespace ttnn::operations::pool::upsample::program {
 
 constexpr uint32_t BUFFERING_FACTOR = 2;
 
 UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
 
     tt::tt_metal::Program program = tt::tt_metal::Program{};
@@ -168,9 +167,9 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
 
 void UpsampleNearestFloatProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const UpsampleParams& operation_attributes,
+    const UpsampleInputs& tensor_args,
+    Tensor& output_tensor) {
     tt::tt_metal::Program& program = cached_program.program;
     const tt::tt_metal::KernelHandle reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const tt::tt_metal::KernelHandle writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
