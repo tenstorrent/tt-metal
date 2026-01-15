@@ -411,66 +411,68 @@ void kernel_main() {
     // indices is already in CB as it's sharded in L1
     uint32_t num_activated_tokens = 0;
     uint32_t num_activated_tokens_per_expert[experts_per_device] = {0};
+
+    // Pre-compute base addresses (avoid repeated calls in hot loop)
+    const uint32_t mapping_base = get_read_ptr(mapping_tensor_cb_id);
+    const uint32_t indices_base = get_read_ptr(indices_tensor_cb_id);
+    const uint32_t scores_base = get_read_ptr(scores_tensor_cb_id);
+    const uint32_t expert_activation_base = get_write_ptr(expert_activation_cb_id);
+    const uint32_t e_t_buffer_base = get_write_ptr(e_t_buffer_id);
+
     for (uint32_t t = 0; t < tokens; t++) {
-        // read in the token's source device's mapping
         uint32_t source_device =
             get_device_idx_from_global_token_idx<linearized_mesh_coord, tokens_per_device, mesh_rows, mesh_cols, axis>(
                 t);
 
-        // Pointer arithmetic: add byte offset first, then cast to element pointer
-        uint16_t* source_device_mapping =
-            reinterpret_cast<uint16_t*>(get_read_ptr(mapping_tensor_cb_id) + source_device * aligned_mapping_page_size);
-        uint16_t* token_indices =
-            reinterpret_cast<uint16_t*>(get_read_ptr(indices_tensor_cb_id) + t * aligned_indices_page_size);
-        // scores tensor which is already in CB as it's sharded in L1 (bf16 = uint16_t)
-        uint16_t* token_scores =
-            reinterpret_cast<uint16_t*>(get_read_ptr(scores_tensor_cb_id) + t * aligned_scores_page_size);
+        const uint16_t* source_device_mapping =
+            reinterpret_cast<const uint16_t*>(mapping_base + source_device * aligned_mapping_page_size);
+        const uint16_t* token_indices = reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
+        const uint16_t* token_scores = reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
 
-        // Get pointer to this token's row in expert_activation buffer (using aligned row size)
-        uint32_t expert_activation_l1_addr =
-            get_write_ptr(expert_activation_cb_id) + num_activated_tokens * aligned_activation_row_bytes;
-        volatile tt_l1_ptr uint32_t* expert_activation_l1_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(expert_activation_l1_addr);
-
+        // Defer pointer calculation until we know token is activated
+        uint32_t* expert_activation_l1_ptr = nullptr;
         bool activated = false;
+
         for (uint32_t k = 0; k < selected_experts_k; k++) {
-            // check if this is one of the local experts
-            uint16_t selected_expert = token_indices[k];
-            // if any of the selected experts :
-            // 1) If this is a local expert, and the source device's mapping buffer believes this expert is on this
-            // device, then we need to activate this token 2) If this is a local expert, but the source device's mapping
-            // buffer believes this expert is not on this device, then we need to ignore this token 3) If this is not a
-            // local expert, then we need to ignore this token
+            const uint16_t selected_expert = token_indices[k];
+
+            // Check if this expert maps to our device first (likely to fail, skip early)
+            if (source_device_mapping[selected_expert] != linearized_mesh_coord) {
+                continue;
+            }
+
+            // Now check if it's one of our local experts
             for (uint32_t e = 0; e < local_expert_count; e++) {
                 if (selected_expert == local_expert_ids[e]) {
-                    if (source_device_mapping[selected_expert] == linearized_mesh_coord) {
-                        // set the token id to t (only once per activated token)
-                        if (!activated) {
-                            expert_activation_l1_ptr[0] = t;
-                        }
-                        // set the expert index e to k
-                        expert_activation_l1_ptr[1 + e] = k;
-                        // set the score to the token's score (cast bf16 to uint32_t for storage)
-                        expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
-                        // write to e_t buffer the token id for the expert (compact list per expert)
-                        // e_t buffer is E*T sized, each expert gets T slots
-                        uint32_t write_offset = e * tokens + num_activated_tokens_per_expert[e];
-                        uint32_t e_t_buffer_addr = get_write_ptr(e_t_buffer_id) + write_offset * sizeof(uint32_t);
-                        uint32_t* e_t_buffer_ptr = reinterpret_cast<uint32_t*>(e_t_buffer_addr);
-                        *e_t_buffer_ptr = t;
-                        num_activated_tokens_per_expert[e]++;
+                    // First activation for this token - set up pointer and write token id
+                    if (!activated) {
+                        expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(
+                            expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
+                        expert_activation_l1_ptr[0] = t;
                         activated = true;
                     }
+
+                    // Write k-index and score for this expert
+                    expert_activation_l1_ptr[1 + e] = k;
+                    expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
+
+                    // Write to e_t buffer
+                    const uint32_t e_t_offset = (e * tokens + num_activated_tokens_per_expert[e]) * sizeof(uint32_t);
+                    *reinterpret_cast<uint32_t*>(e_t_buffer_base + e_t_offset) = t;
+                    num_activated_tokens_per_expert[e]++;
+
+                    break;  // Each k can only match one local expert, no need to check others
                 }
             }
         }
+
         if (activated) {
             num_activated_tokens++;
         }
     }
 
     // DPRINT << "Number of activated tokens: " << num_activated_tokens << ENDL();
-    // print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0, tokens);
+    print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0, tokens);
 
     // cap off e_t buffer with -1
     for (uint32_t e = 0; e < experts_per_device; e++) {
@@ -479,7 +481,7 @@ void kernel_main() {
         e_t_buffer_ptr[num_activated_tokens_per_expert[e]] = -1;
     }
 
-    // print_e_t_buffer<experts_per_device, tokens>(e_t_buffer_id);
+    print_e_t_buffer<experts_per_device, tokens>(e_t_buffer_id);
 
     // TODO: Implement selective tilize logic
     // 1. Read through all indices to determine which tokens belong to this device's experts
