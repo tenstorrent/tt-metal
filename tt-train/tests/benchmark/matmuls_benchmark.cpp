@@ -131,7 +131,7 @@ std::tuple<uint64_t, uint64_t, uint64_t> get_mkn_from_shapes(
     uint64_t K = transpose_a ? a_shape[-2] : a_shape[-1];
     uint64_t N = transpose_b ? b_shape[-2] : b_shape[-1];
 
-    uint64_t batch = tt::tt_metal::get_batch_size(a_shape);
+    uint64_t batch = ttnn::get_batch_size(a_shape);
 
     return {batch * M, K, N};
 }
