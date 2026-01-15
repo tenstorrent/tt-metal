@@ -13,14 +13,14 @@
 #include <variant>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::all_gather_matmul_async {
+namespace ttnn::experimental::prim {
 
 struct AllGatherMatmulAsyncDeviceOperation {
-    using operation_attributes_t = all_gather_matmul_async::operation_attributes_t;
-    using tensor_args_t = all_gather_matmul_async::tensor_args_t;
-    using spec_return_value_t = all_gather_matmul_async::spec_return_value_t;
-    using tensor_return_value_t = all_gather_matmul_async::tensor_return_value_t;
-    using program_factory_t = std::variant<all_gather_matmul_async::program::AllGatherMatmulAsyncMeshWorkloadFactory>;
+    using operation_attributes_t = AllGatherMatmulAsyncParams;
+    using tensor_args_t = AllGatherMatmulAsyncInputs;
+    using spec_return_value_t = AllGatherMatmulAsyncResultSpec;
+    using tensor_return_value_t = AllGatherMatmulAsyncResult;
+    using program_factory_t = std::variant<AllGatherMatmulAsyncMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -35,12 +35,11 @@ struct AllGatherMatmulAsyncDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::all_gather_matmul_async::AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t
-all_gather_matmul_async(
+ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,

@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <tt_stl/overloaded.hpp>
 
-namespace ttnn::operations::experimental::ccl::all_gather_matmul_async::program {
+namespace ttnn::experimental::prim {
 
 using Tensors = std::vector<Tensor>;
 
@@ -161,10 +161,10 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
 
 AllGatherMatmulAsyncMeshWorkloadFactory::cached_mesh_workload_t
 AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const AllGatherMatmulAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllGatherMatmulAsyncInputs& tensor_args,
+    AllGatherMatmulAsyncResult& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -229,9 +229,9 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
 
 void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllGatherMatmulAsyncParams& operation_attributes,
+    const AllGatherMatmulAsyncInputs& tensor_args,
+    AllGatherMatmulAsyncResult& tensor_return_value) {
     // Fuse the override runtime arguments callbacks
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
@@ -286,4 +286,4 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async::program
+}  // namespace ttnn::experimental::prim

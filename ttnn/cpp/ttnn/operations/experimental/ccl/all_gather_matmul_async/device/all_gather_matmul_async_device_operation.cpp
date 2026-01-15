@@ -17,11 +17,11 @@
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
 #include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::experimental::ccl::all_gather_matmul_async {
+namespace ttnn::experimental::prim {
 
 AllGatherMatmulAsyncDeviceOperation::program_factory_t AllGatherMatmulAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::AllGatherMatmulAsyncMeshWorkloadFactory{};
+    return AllGatherMatmulAsyncMeshWorkloadFactory{};
 }
 
 void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_hit(
@@ -40,7 +40,7 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.persistent_output_buffer.has_value()) {
         const auto& all_gather_output_tensor = tensor_args.persistent_output_buffer.value();
         // All Gather validate
-        ttnn::experimental::prim::AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
+        AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
         // Matmul validate
@@ -87,10 +87,10 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t AllGatherMatmulAsyncDeviceOperation::compute_output_specs(
+AllGatherMatmulAsyncDeviceOperation::spec_return_value_t AllGatherMatmulAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // All Gather shape
-    auto all_gather_output_specs = ttnn::experimental::prim::AllGatherAsyncDeviceOperation::compute_output_specs(
+    auto all_gather_output_specs = AllGatherAsyncDeviceOperation::compute_output_specs(
         operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
     // Matmul shape
@@ -103,11 +103,11 @@ spec_return_value_t AllGatherMatmulAsyncDeviceOperation::compute_output_specs(
     return {all_gather_output_specs, matmul_output_specs};
 }
 
-tensor_return_value_t AllGatherMatmulAsyncDeviceOperation::create_output_tensors(
+AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t AllGatherMatmulAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     std::vector<std::optional<Tensor>> optional_output_tensors = {tensor_args.persistent_output_buffer};
     // All Gather output tensor
-    auto all_gather_output_tensor = ttnn::experimental::prim::AllGatherAsyncDeviceOperation::create_output_tensors(
+    auto all_gather_output_tensor = AllGatherAsyncDeviceOperation::create_output_tensors(
         operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
     // Matmul output tensor
@@ -154,12 +154,11 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::all_gather_matmul_async::AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t
-all_gather_matmul_async(
+ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
@@ -183,8 +182,7 @@ all_gather_matmul_async(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    using OperationType =
-        ttnn::operations::experimental::ccl::all_gather_matmul_async::AllGatherMatmulAsyncDeviceOperation;
+    using OperationType = ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     /* All Gather setup */
