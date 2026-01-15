@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/split/device/split_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::split::program {
+namespace ttnn::prim {
 
 struct SplitSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id;
@@ -23,15 +23,15 @@ struct SplitProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const split::SplitParams& operation_attributes,
-        const split::SplitInputs& tensor_args,
-        split::tensor_return_value_t& output_tensors);
+        const ttnn::prim::SplitParams& operation_attributes,
+        const ttnn::prim::SplitInputs& tensor_args,
+        std::vector<Tensor>& output_tensors);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const split::SplitParams& operation_attributes,
-        const split::SplitInputs& tensor_args,
-        split::tensor_return_value_t& output_tensors);
+        const ttnn::prim::SplitParams& operation_attributes,
+        const ttnn::prim::SplitInputs& tensor_args,
+        std::vector<Tensor>& output_tensors);
 };
 
-}  // namespace ttnn::operations::data_movement::split::program
+}  // namespace ttnn::prim
