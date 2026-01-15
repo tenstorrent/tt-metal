@@ -197,41 +197,49 @@ void kernel_main() {
                             intermediate_slice_0_tensor_accesor, tiles_read++, 0);
                         intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_0_tensor_accesor, tiles_read++, 0);
+                        break;
                     case 1:
                         intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_1_tensor_accesor, tiles_read++, 0);
                         intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_1_tensor_accesor, tiles_read++, 0);
+                        break;
                     case 2:
                         intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_2_tensor_accesor, tiles_read++, 0);
                         intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_2_tensor_accesor, tiles_read++, 0);
+                        break;
                     case 3:
                         intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_3_tensor_accesor, tiles_read++, 0);
                         intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_3_tensor_accesor, tiles_read++, 0);
+                        break;
                     case 4:
                         intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_4_tensor_accesor, tiles_read++, 0);
                         intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_4_tensor_accesor, tiles_read++, 0);
+                        break;
                     case 5:
                         intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_5_tensor_accesor, tiles_read++, 0);
                         intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_5_tensor_accesor, tiles_read++, 0);
+                        break;
                     case 6:
                         intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_6_tensor_accesor, tiles_read++, 0);
                         intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_6_tensor_accesor, tiles_read++, 0);
+                        break;
                     case 7:
                         intermediate_slice_noc_address_one = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_7_tensor_accesor, tiles_read++, 0);
                         intermediate_slice_noc_address_two = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_slice_7_tensor_accesor, tiles_read++, 0);
+                        break;
                 }
 
                 // op hardcoded for each worker handling even multiple of 2 tiles, so always use scatter_write
