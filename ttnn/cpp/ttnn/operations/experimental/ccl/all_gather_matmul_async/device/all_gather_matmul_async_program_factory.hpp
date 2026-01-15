@@ -21,7 +21,7 @@ struct AllGatherMatmulAsyncSharedVariables {
         operations::matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t,
         operations::matmul::program::MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t>
         matmul_shared_variables;
-    all_gather_async::AllGatherProgramArtifacts all_gather_async_shared_variables;
+    ttnn::experimental::prim::AllGatherProgramArtifacts all_gather_async_shared_variables;
 };
 
 struct AllGatherMatmulAsyncMeshWorkloadFactory {

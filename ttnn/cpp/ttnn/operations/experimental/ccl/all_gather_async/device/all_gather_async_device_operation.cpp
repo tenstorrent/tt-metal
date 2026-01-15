@@ -13,9 +13,9 @@
 
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::ccl::all_gather_async {
+namespace ttnn::experimental::prim {
 
-AllGatherAsyncVersion select_version(const operation_attributes_t& operation_attributes) {
+AllGatherAsyncVersion select_version(const AllGatherAsyncParams& operation_attributes) {
     // Check for minimal sharded case
     if (operation_attributes.use_all_gather_async_llama_sharded) {
         TT_FATAL(
@@ -30,7 +30,7 @@ AllGatherAsyncVersion select_version(const operation_attributes_t& operation_att
 }
 
 AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& /*tensor_args*/) {
     AllGatherAsyncVersion version = select_version(args);
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
     switch (version) {
@@ -45,12 +45,12 @@ AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::
 }
 
 void AllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
 }
 
 void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& layout = input_tensor.layout();
     const auto& dtype = input_tensor.dtype();
@@ -168,7 +168,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
 }
 
 AllGatherAsyncDeviceOperation::spec_return_value_t AllGatherAsyncDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
     shape[args.dim] *= args.ring_size;
@@ -179,7 +179,7 @@ AllGatherAsyncDeviceOperation::spec_return_value_t AllGatherAsyncDeviceOperation
 }
 
 AllGatherAsyncDeviceOperation::tensor_return_value_t AllGatherAsyncDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     if (tensor_args.persistent_output_buffer.has_value() && args.using_persistent_buffers) {
         return tensor_args.persistent_output_buffer.value();
     }
@@ -188,7 +188,7 @@ AllGatherAsyncDeviceOperation::tensor_return_value_t AllGatherAsyncDeviceOperati
 }
 
 tt::stl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     log_trace(tt::LogOp, "compute_program_hash is called");
     const auto& input_tensor = tensor_args.input_tensor;
     auto input_shape = input_tensor.padded_shape();
@@ -225,8 +225,7 @@ tt::stl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-std::tuple<AllGatherAsyncDeviceOperation::operation_attributes_t, AllGatherAsyncDeviceOperation::tensor_args_t>
-AllGatherAsyncDeviceOperation::invoke(
+std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOperation::invoke(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     int32_t dim,
@@ -283,7 +282,7 @@ AllGatherAsyncDeviceOperation::invoke(
     }
 
     return {
-        operation_attributes_t(
+        AllGatherAsyncParams(
             gather_dim,
             num_links,
             num_devices,
@@ -301,7 +300,7 @@ AllGatherAsyncDeviceOperation::invoke(
             num_buffers_per_channel,
             reverse_order,
             sub_core_grid),
-        tensor_args_t{.input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer}};
+        AllGatherAsyncInputs{.input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer}};
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_async
+}  // namespace ttnn::experimental::prim

@@ -106,20 +106,43 @@ for DEVICE_DIR in $DIRS; do
 
   # Create prompt for Claude
   echo "  [Step 4/5] Preparing Claude prompt..."
-  PROMPT="Fix the namespace in these device operation files to use $TARGET_NS.
+  PROMPT="Refactor these device operation files to use $TARGET_NS namespace with simplified types.
 
 Files to modify (in $DEVICE_DIR and $PARENT_DIR):
 $FILES
 
-Rules:
+## Namespace Changes:
 1. Change namespace declarations from ttnn::operations::*::* to $TARGET_NS
-2. Change ttnn::operations::*::*::program namespace to $TARGET_NS
-3. Update closing namespace comments
-4. Replace relative qualifiers like '${OP_NAME}::SomeType' with '$TARGET_NS::SomeType'
-5. Replace 'program::SomeFactory' with '$TARGET_NS::SomeFactory' or just 'SomeFactory' if in same namespace
-6. Update any fully-qualified references ttnn::operations::*::*::Type to $TARGET_NS::Type
-7. Do NOT modify files outside the device/ directory (like nanobind files, public API files)
-8. Keep the struct/class names the same, only change namespaces
+2. Change ttnn::operations::*::*::program namespace to $TARGET_NS (flatten into same namespace)
+3. Update closing namespace comments to match
+4. Remove relative qualifiers like '${OP_NAME}::' and 'program::' since everything is now in same namespace
+5. Update any fully-qualified references ttnn::operations::*::*::Type to $TARGET_NS::Type
+
+## Type Alias Simplification:
+In the *_device_operation_types.hpp file:
+- Rename 'operation_attributes_t' struct to '<OpName>Params' (e.g., UntilizeWithUnpaddingParams)
+- If 'tensor_args_t' is a simple single Tensor wrapper, DELETE the struct entirely
+- If 'tensor_args_t' has multiple fields, rename to '<OpName>Inputs'
+- DELETE 'tensor_return_value_t' and 'spec_return_value_t' type aliases (use Tensor/TensorSpec directly if simple)
+- If return type is complex (multiple tensors), rename to '<OpName>Result' / '<OpName>ResultSpec'
+
+In the *_device_operation.hpp file:
+- Update DeviceOperation struct's type aliases to use new names or concrete types:
+  - using operation_attributes_t = <OpName>Params;
+  - using tensor_args_t = Tensor;  // if simple, otherwise <OpName>Inputs
+  - using spec_return_value_t = TensorSpec;  // if simple, otherwise <OpName>ResultSpec
+  - using tensor_return_value_t = Tensor;  // if simple, otherwise <OpName>Result
+- Update program_factory_t variant to remove 'program::' prefix
+
+In program factory files (*_program_factory.hpp/cpp):
+- Update function signatures to use concrete types instead of aliases
+- e.g., 'const operation_attributes_t&' becomes 'const <OpName>Params&'
+- e.g., 'const tensor_args_t&' becomes 'const Tensor&' (if simple)
+
+## Important:
+- Do NOT modify files outside the device/ directory (nanobind files, public API files)
+- Keep struct/class names the same, only change namespaces and type aliases
+- The public API function in ttnn::prim namespace should stay as-is
 
 After making changes, verify the code compiles by running: ./build_metal.sh -c -e --debug --build-all
 
@@ -187,24 +210,28 @@ If build fails, revert changes with: git checkout -- ttnn/"
         LAST_GIT_STATUS="$CURRENT_GIT_STATUS"
       fi
 
-      # Print status update (always show every 30s, or when something changes)
-      if [ $UPDATE_COUNT -eq 1 ] || [ $LOG_GROWTH -gt 100 ] || [ -n "$GIT_CHANGED" ] || [ $((UPDATE_COUNT % 6)) -eq 0 ]; then
-        STATUS_MSG="  [Step 4/5] Running... (${ELAPSED}s elapsed"
-        if [ $LOG_GROWTH -gt 0 ]; then
-          STATUS_MSG="${STATUS_MSG}, +${LOG_GROWTH} bytes"
-        fi
-        if [ -n "$GIT_CHANGED" ]; then
-          STATUS_MSG="${STATUS_MSG}${GIT_CHANGED}"
-        fi
-        STATUS_MSG="${STATUS_MSG})"
-        echo "$STATUS_MSG" >&2
-
-        # Show last log line if available and meaningful
-        if [ -n "$LAST_LINE" ] && [ ${#LAST_LINE} -gt 5 ]; then
-          echo "    → ${LAST_LINE}..." >&2
-        fi
+      # Print status update every 5 seconds, overwriting the same line
+      STATUS_MSG="  [Step 4/5] Running... (${ELAPSED}s elapsed"
+      if [ $LOG_GROWTH -gt 0 ]; then
+        STATUS_MSG="${STATUS_MSG}, +${LOG_GROWTH} bytes"
       fi
+      if [ -n "$GIT_CHANGED" ]; then
+        STATUS_MSG="${STATUS_MSG}${GIT_CHANGED}"
+      fi
+
+      # Add last log line if available and meaningful
+      if [ -n "$LAST_LINE" ] && [ ${#LAST_LINE} -gt 5 ]; then
+        STATUS_MSG="${STATUS_MSG}) | ${LAST_LINE}"
+      else
+        STATUS_MSG="${STATUS_MSG})"
+      fi
+
+      # Use carriage return to overwrite the same line, clear to end of line
+      # \r moves to start, \033[K clears from cursor to end of line
+      printf "\r%s\033[K" "$STATUS_MSG" >&2
     done
+    # Print newline when monitor exits to ensure next output is on a new line
+    printf "\n" >&2
   ) &
   MONITOR_PID=$!
 
@@ -213,9 +240,10 @@ If build fails, revert changes with: git checkout -- ttnn/"
 
   CLAUDE_EXIT=$?
 
-  # Stop the monitor
+  # Stop the monitor and ensure newline
   kill $MONITOR_PID 2>/dev/null
   wait $MONITOR_PID 2>/dev/null
+  printf "\n" >&2
 
   CLAUDE_ELAPSED=$(($(date +%s) - CLAUDE_START))
   echo "  [Step 4/5] Claude execution completed (exit code: $CLAUDE_EXIT, elapsed: ${CLAUDE_ELAPSED}s)"
@@ -224,17 +252,17 @@ If build fails, revert changes with: git checkout -- ttnn/"
   echo "  [Step 5/5] Checking results..."
   LAST_COMMIT=$(git log -1 --format="%s" 2>/dev/null)
   if echo "$LAST_COMMIT" | grep -q "refactor(namespace): simplify $OP_NAME"; then
-    echo "  [Step 5/5] ✓ SUCCESS: Changes committed"
+    echo "  [Step 5/5] ? SUCCESS: Changes committed"
     echo "$DEVICE_DIR" >> "$PROGRESS_FILE"
     FIXED_COUNT=$((FIXED_COUNT + 1))
   else
     # Check if there are uncommitted changes
     if ! git diff --quiet ttnn/ 2>/dev/null; then
-      echo "  [Step 5/5] ✗ FAILED: Uncommitted changes detected, reverting..."
+      echo "  [Step 5/5] ? FAILED: Uncommitted changes detected, reverting..."
       git checkout -- ttnn/
       echo "  [Step 5/5] Changes reverted"
     else
-      echo "  [Step 5/5] ✗ FAILED: No commit found and no uncommitted changes"
+      echo "  [Step 5/5] ? FAILED: No commit found and no uncommitted changes"
     fi
     echo "  [Step 5/5] Adding to exceptions list"
     echo "$DEVICE_DIR" >> "$EXCEPTIONS_FILE"

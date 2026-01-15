@@ -21,8 +21,8 @@ namespace ttnn::operations::experimental::ccl::all_gather_matmul_async {
 
 struct operation_attributes_t {
     /* All Gather Params */
-    all_gather_async::AllGatherAsyncDeviceOperation::operation_attributes_t all_gather_async_attributes;
-    all_gather_async::AllGatherAsyncDeviceOperation::tensor_args_t all_gather_async_tensor_args;
+    ttnn::experimental::prim::AllGatherAsyncParams all_gather_async_attributes;
+    ttnn::experimental::prim::AllGatherAsyncInputs all_gather_async_tensor_args;
 
     /* Matmul Params */
     operations::matmul::operation_attributes_t matmul{};

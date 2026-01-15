@@ -23,3 +23,7 @@
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/tilize/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/transpose/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/untilize/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/embedding_backward/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/embedding/device
