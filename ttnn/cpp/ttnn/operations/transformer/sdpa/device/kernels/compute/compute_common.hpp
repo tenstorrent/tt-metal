@@ -491,56 +491,56 @@ inline void run_clamp_loadmacro() {
     TTI_SFPLOADMACRO(
         4,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_3,
         0);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  0 is targeting
              // the even columns for rows   3: 0
     TTI_SFPNOP;  // NOP is necessary because the SWAP operation takes 2 cycles and unfortunately is not pipelined
     TTI_SFPLOADMACRO(
         5,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_3,
         2);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset  2 is targeting
              // the odd  columns for rows   3: 0
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         6,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_3,
         4);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset  4 is targeting
              // the even columns for rows   7: 4
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         7,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_3,
         6);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset  6 is targeting
              // the odd  columns for rows   7: 4
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         4,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_3,
         8);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  8 is targeting
              // the even columns for rows  11: 8
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         5,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_3,
         10);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset 10 is
               // targeting the even columns for rows  11: 8
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         6,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_3,
         12);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset 12 is
               // targeting the odd  columns for rows  15:12
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         7,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_3,
         14);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset 14 is
               // targeting the even columns for rows  15:12
     // NOP not needed in this spot because the next LoadMacro is a computational macro which doesn't immediately use the
@@ -643,10 +643,12 @@ void calculate_exponential_polynomial() {
 
         if constexpr (SCALE_EN) {
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG11, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+            TTI_SFPNOP;
         }
 
         // Multiply by 1/ln(2) and round.
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPNOP;
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
@@ -665,30 +667,39 @@ void calculate_exponential_polynomial() {
 #endif
         } else {
             TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            TTI_SFPNOP;
 
             // Calculate polynomial.
             if constexpr (POLY_DEGREE == 1) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else if constexpr (POLY_DEGREE == 2) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else if constexpr (POLY_DEGREE == 3) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else {  // degree 4.
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG2, 0);
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             }
         }
 
         // Multiply by 2^k.
         TT_SFPADDI(0x42fe, p_sfpu::LREG1, 0);  // Add 127.
+        TTI_SFPNOP;
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
         TTI_SFPSETEXP(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+        TTI_SFPNOP;
 
         // Store the result.
         if constexpr (!is_fp32_dest_acc_en) {
@@ -696,8 +707,8 @@ void calculate_exponential_polynomial() {
             // so convert to bfloat16 using round-to-nearest-even.
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
-        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_7, 0);
-        sfpi::dst_reg += 2;  // Skip odd columns.
+        TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0);
+        TTI_INCRWC(0, 4, 0, 0);  // Skip odd columns.
     }
 }
 
