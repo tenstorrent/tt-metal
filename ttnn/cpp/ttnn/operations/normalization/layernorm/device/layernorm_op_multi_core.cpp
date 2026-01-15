@@ -87,7 +87,7 @@ bool CB_can_fit_in_L1(
 }  // namespace
 
 LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
@@ -548,8 +548,8 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
 
 void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const LayerNormParams& /*operation_attributes*/,
+    const LayerNormInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto* const src_a_dram_buffer = tensor_args.input.buffer();
     const auto& src_b_tensor = tensor_args.residual_input_tensor;

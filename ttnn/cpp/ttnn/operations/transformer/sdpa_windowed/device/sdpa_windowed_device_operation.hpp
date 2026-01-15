@@ -24,8 +24,8 @@ constexpr uint32_t cu_window_seqlens_nelements = 4096;
 static_assert(cu_window_seqlens_nelements == 4096, "cu_window_seqlens_nelements must be 4096");
 
 struct WindowedScaledDotProductAttentionDeviceOperation {
-    using operation_attributes_t = sdpa_windowed::operation_attributes_t;
-    using tensor_args_t = sdpa_windowed::tensor_args_t;
+    using operation_attributes_t = SdpaWindowedParams;
+    using tensor_args_t = SdpaWindowedInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::WindowedSDPAProgramFactory>;

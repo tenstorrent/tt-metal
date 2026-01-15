@@ -8,14 +8,14 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement::gather {
-struct operation_attributes_t {
+struct GatherParams {
     const int8_t dim;
     const bool sparse_grad;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const std::optional<CoreRangeSet> sub_core_grids;
 };
 
-struct tensor_args_t {
+struct GatherInputs {
     const Tensor& input_tensor;
     const Tensor& input_index_tensor;
     std::optional<Tensor> output_tensor;

@@ -13,8 +13,8 @@
 namespace ttnn::operations::experimental::nlp_concat_heads_decode {
 
 struct NLPConcatHeadsDecodeDeviceOperation {
-    using operation_attributes_t = nlp_concat_heads_decode::operation_attributes_t;
-    using tensor_args_t = nlp_concat_heads_decode::tensor_args_t;
+    using operation_attributes_t = NlpConcatHeadsDecodeParams;
+    using tensor_args_t = NlpConcatHeadsDecodeInputs;
     using spec_return_value_t = nlp_concat_heads_decode::spec_return_value_t;
     using tensor_return_value_t = nlp_concat_heads_decode::tensor_return_value_t;
     using program_factory_t = std::

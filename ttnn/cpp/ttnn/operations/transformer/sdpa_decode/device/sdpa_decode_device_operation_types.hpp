@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::transformer::sdpa_decode {
 
-struct operation_attributes_t {
+struct SdpaDecodeParams {
     bool is_causal = false;
     bool paged_attention = false;
     std::vector<uint32_t> cur_pos;
@@ -30,7 +30,7 @@ struct operation_attributes_t {
     std::optional<uint32_t> head_dim_v = std::nullopt;
 };
 
-struct tensor_args_t {
+struct SdpaDecodeInputs {
     // Mandatory tensors
     Tensor q;
     Tensor k;
