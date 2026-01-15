@@ -15,15 +15,15 @@
 
 #include "prefix_scan_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ssm::prefix_scan {
+namespace ttnn::experimental::prim {
 
 struct PrefixScanDeviceOperation {
     using operation_attributes_t = PrefixScanParams;
     using tensor_args_t = PrefixScanInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::PrefixScanProgramFactory>;
-    using shared_variables_t = program::PrefixScanProgramFactory::shared_variables_t;
+    using program_factory_t = std::variant<PrefixScanProgramFactory>;
+    using shared_variables_t = PrefixScanProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -38,11 +38,11 @@ struct PrefixScanDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::ssm::prefix_scan
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ssm::prefix_scan::PrefixScanDeviceOperation::tensor_return_value_t prefix_scan(
+ttnn::experimental::prim::PrefixScanDeviceOperation::tensor_return_value_t prefix_scan(
     const Tensor& a,
     const Tensor& bx,
     const Tensor& h_prev,

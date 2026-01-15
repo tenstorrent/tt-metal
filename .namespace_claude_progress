@@ -54,3 +54,9 @@
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device
 /home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/padded_slice/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/plusone/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/reduction/integral_image/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/slice_write/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device
+/home/boxx/tt-metal/ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device
