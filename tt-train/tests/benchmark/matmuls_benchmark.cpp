@@ -62,7 +62,7 @@ struct BenchmarkResult {
 
 struct TestConfig {
     int num_warmup_iterations = 2;
-    int num_measurement_iterations = 10;
+    int num_measurement_iterations = 25;
 };
 
 // CoreGrid configurations to compare
@@ -70,8 +70,10 @@ const std::vector<CoreGridConfig> core_grid_configs = {
     {std::nullopt, "std::nullopt"},
     {ttnn::CoreGrid{7, 8}, "7x8"},
     {ttnn::CoreGrid{8, 8}, "8x8"},
-    {ttnn::CoreGrid{13, 10}, "13x10"},
+    {ttnn::CoreGrid{10, 10}, "10x10"},
+    {ttnn::CoreGrid{11, 10}, "11x10"},
     {ttnn::CoreGrid{12, 10}, "12x10"},
+    {ttnn::CoreGrid{13, 10}, "13x10"},
 };
 
 // Test shapes from tt-train workloads
