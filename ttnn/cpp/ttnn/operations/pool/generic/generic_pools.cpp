@@ -496,10 +496,58 @@ public:
     }
 
     uint32_t get_L1_usage(
-        const IOShape& /*output_slice_start*/,
-        const IOShape& /*output_slice_end*/,
+        const IOShape& output_slice_start,
+        const IOShape& output_slice_end,
         const op_slicing::Op2DSliceConfig& /*slice_config*/) const override {
-        return 0;
+        auto [input_slice, this_slice_padding, this_ceil_pad, this_output_width] =
+            get_input_slice_and_padding(output_slice_start, output_slice_end);
+        auto [input_slice_start, input_slice_end] = input_slice;
+        uint32_t input_slice_height = std::get<0>(input_slice_end) - std::get<0>(input_slice_start);
+        uint32_t input_slice_width = std::get<1>(input_slice_end) - std::get<1>(input_slice_start);
+        uint32_t output_slice_height = std::get<0>(output_slice_end) - std::get<0>(output_slice_start);
+
+        // Get the memory config for this slice
+        auto sliced_input_memory_config = get_input_memory_config(output_slice_start, output_slice_end);
+
+        // Calculate complete L1 usage for this slice
+        auto pool_l1_usage = pool::calculate_L1_usage_for_pool2d_slice(
+            batch_size,
+            input_slice_height,
+            input_slice_width,
+            output_slice_height,
+            this_output_width,
+            channels,
+            kernel_size,
+            stride,
+            this_slice_padding,
+            dilation,
+            this_ceil_pad,
+            ceil_mode,
+            return_indices,
+            pool_type,
+            count_include_pad,
+            divisor_override,
+            dtype,
+            input_layout,
+            output_layout,
+            sliced_input_memory_config,
+            sliding_window_config);
+
+        log_trace(
+            tt::LogOp,
+            "Pool2D DRAM Auto slicing: L1 usage = {} for slice output {}x{} (input {}x{}), breakdown: "
+            "halo_input={}, halo_output={}, pool_cb={}, output_tensor={}",
+            pool_l1_usage.total_size,
+            output_slice_height,
+            this_output_width,
+            input_slice_height,
+            input_slice_width,
+            pool_l1_usage.halo_input_size,
+            pool_l1_usage.halo_output_size,
+            pool_l1_usage.pool_cb_size,
+            pool_l1_usage.output_tensor_size);
+
+        return pool_l1_usage.total_size;
     }
 
     tt::tt_metal::MemoryConfig get_input_memory_config(
@@ -605,9 +653,11 @@ static std::vector<Tensor> pool2d_DRAM(
     const DataType dtype = DataType::BFLOAT16,
     const Layout output_layout = Layout::ROW_MAJOR,
     bool config_tensor_in_dram = false) {
-    if (!dram_slice_config_.has_value() ||
-        dram_slice_config_->slice_type == op_slicing::Op2DSliceConfig::SliceType::L1_FULL ||
-        dram_slice_config_->num_slices == 1) {
+    // Check if we should use L1 path instead of DRAM slicing
+    // Only use L1 if explicitly requested via L1_FULL or if manual num_slices==1
+    if (dram_slice_config_.has_value() &&
+        (dram_slice_config_->slice_type == op_slicing::Op2DSliceConfig::SliceType::L1_FULL ||
+         dram_slice_config_->num_slices == 1)) {
         return pool2d_L1(
             input_tensor,
             pool_type,
@@ -676,6 +726,7 @@ static std::vector<Tensor> pool2d_DRAM(
                     BufferType::DRAM,
                 })),
         input_tensor_on_device.device());
+    printf("[Pool2D DRAM] Created output tensor: %ux%ux%ux%u\n", batch_size, output_height, output_width, channels);
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
     // Currently return_indices is not supported for DRAM Max Pooling.
     Tensor dram_output_indices_tensor;
@@ -694,8 +745,7 @@ static std::vector<Tensor> pool2d_DRAM(
         output_tensors.push_back(std::ref(dram_output_indices_tensor));
     }
 
-    auto dram_slice_config = dram_slice_config_.value();
-    TT_FATAL(dram_slice_config.num_slices > 0, "Number of slices must be greater than zero for DRAM slicing.");
+    // Create pool slice attribute for slice configuration
     auto pool_slice_attr = Pool2dSliceAttr(
         batch_size,
         Pool2dSliceAttr::IOShape{input_h, input_w},
@@ -716,6 +766,30 @@ static std::vector<Tensor> pool2d_DRAM(
         compute_kernel_config,
         config_tensor_in_dram,
         input_tensor_on_device.device());
+
+    // Determine slice configuration (automatic if not provided or num_slices==0)
+    Op2DSliceConfig dram_slice_config;
+    printf("[Pool2D DRAM] About to determine slice config: has_value=%d\n", dram_slice_config_.has_value());
+    if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices > 0) {
+        printf("[Pool2D DRAM] Using manual config: num_slices=%u\n", dram_slice_config_.value().num_slices);
+        dram_slice_config = dram_slice_config_.value();
+    } else {
+        printf("[Pool2D DRAM] Calling determine_slice_config()...\n");
+        dram_slice_config = op_slicing::determine_slice_config(
+            &pool_slice_attr,
+            ttnn::Shape{batch_size, input_h, input_w, channels},
+            ttnn::Shape{batch_size, output_height, output_width, channels},
+            dram_slice_config_,
+            output_layout,
+            input_tensor_on_device.device());
+        printf(
+            "[Pool2D] Auto determined DRAM Slice Config as num_slices=%u, slice_type=%s\n",
+            dram_slice_config.num_slices,
+            dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "HEIGHT" : "WIDTH");
+    }
+
+    printf("[Pool2D DRAM] About to run sliced op with num_slices=%u\n", dram_slice_config.num_slices);
+    TT_FATAL(dram_slice_config.num_slices > 0, "Number of slices must be greater than zero for DRAM slicing.");
     ttnn::operations::op_slicing::run_sliced_op(
         input_tensor_on_device, output_tensors, &pool_slice_attr, dram_slice_config);
 
@@ -737,14 +811,19 @@ enum class Pool2dExecutionPath {
 // Helper function to determine which pool2d execution path to take based on
 // slice configuration and input tensor properties
 Pool2dExecutionPath determine_pool2d_execution_path(
-    const ttnn::Tensor& /*input_tensor*/, const std::optional<const Op2DSliceConfig>& slice_config) {
-    // If slice config explicitly specifies DRAM slicing, use DRAM path
-    if (slice_config.has_value() && slice_config->slice_type != Op2DSliceConfig::SliceType::L1_FULL) {
-        return Pool2dExecutionPath::DRAM;
+    const ttnn::Tensor& input_tensor, const std::optional<const Op2DSliceConfig>& slice_config) {
+    // If slice config explicitly specifies L1_FULL, use L1 path
+    if (slice_config.has_value() && slice_config->slice_type == Op2DSliceConfig::SliceType::L1_FULL) {
+        return Pool2dExecutionPath::L1;
     }
 
-    // Otherwise, use L1 path
-    return Pool2dExecutionPath::L1;
+    // If no slice config and input is already on device in L1, use L1 path
+    if (!slice_config.has_value() && input_tensor.memory_config().is_l1()) {
+        return Pool2dExecutionPath::L1;
+    }
+
+    // Otherwise, use DRAM path (with automatic slicing if slice_config is None)
+    return Pool2dExecutionPath::DRAM;
 }
 
 static std::vector<Tensor> pool2d(
@@ -771,7 +850,13 @@ static std::vector<Tensor> pool2d(
     const DataType dtype = DataType::BFLOAT16,
     const Layout output_layout = Layout::ROW_MAJOR,
     bool config_tensor_in_dram = false) {
-    if (determine_pool2d_execution_path(input_tensor, dram_slice_config) == Pool2dExecutionPath::L1) {
+    auto exec_path = determine_pool2d_execution_path(input_tensor, dram_slice_config);
+    printf(
+        "[Pool2D] Execution path: %s (input in DRAM=%d, slice_config.has_value=%d)\n",
+        exec_path == Pool2dExecutionPath::L1 ? "L1" : "DRAM",
+        input_tensor.memory_config().is_dram(),
+        dram_slice_config.has_value());
+    if (exec_path == Pool2dExecutionPath::L1) {
         return pool2d_L1(
             input_tensor,
             pool_type,

@@ -510,4 +510,127 @@ void validate_input_params(
         padded_input_w);
 }
 
+pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t output_height,
+    uint32_t output_width,
+    uint32_t channels,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    const std::array<uint32_t, 4>& padding,
+    const std::array<uint32_t, 2>& dilation,
+    const std::array<uint32_t, 2>& ceil_pad,
+    bool ceil_mode,
+    bool return_indices,
+    Pool2DType pool_type,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override,
+    DataType dtype,
+    Layout /*input_layout*/,
+    Layout output_layout,
+    const tt::tt_metal::MemoryConfig& input_memory_config,
+    const sliding_window::SlidingWindowConfig& sliding_window_config) {
+    // Calculate halo input size (input shard size)
+    auto input_shard_shape = input_memory_config.shard_spec().value().shape;
+    const tt::tt_metal::DataType pool_input_dtype =
+        (dtype == tt::tt_metal::DataType::FLOAT32) ? tt::tt_metal::DataType::FLOAT32 : tt::tt_metal::DataType::BFLOAT16;
+    const uint32_t input_datum_size = pool_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
+    uint32_t halo_input_size = input_shard_shape[0] * input_shard_shape[1] * input_datum_size;
+
+    // Calculate halo output size using sliding window calculation
+    // Create a sliding window config with proper core distribution for halo calculation
+    sliding_window::SlidingWindowConfig halo_config = sliding_window_config;
+    halo_config.batch_size = batch_size;
+    halo_config.input_hw = {input_height, input_width};
+    halo_config.window_hw = {kernel_size[0], kernel_size[1]};
+    halo_config.stride_hw = {stride[0], stride[1]};
+    halo_config.padding = padding;
+    halo_config.dilation_hw = {dilation[0], dilation[1]};
+    halo_config.core_range_set = input_memory_config.shard_spec().value().grid;
+    halo_config.snap_to_tile = (output_layout == tt::tt_metal::Layout::TILE);
+    halo_config.ceil_mode = ceil_mode;
+
+    // Get num_cores from parallel config
+    uint32_t num_cores_nhw = 1;
+    if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_cores_nhw = input_memory_config.shard_spec().value().grid.num_cores();
+    } else if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        auto grid_size = input_memory_config.shard_spec().value().grid.bounding_box().grid_size();
+        auto shard_orientation = input_memory_config.shard_spec().value().orientation;
+        if (shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+            num_cores_nhw = grid_size.x;
+        } else {
+            num_cores_nhw = grid_size.y;
+        }
+    } else if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        num_cores_nhw = 1;
+    }
+    halo_config.num_cores_nhw = num_cores_nhw;
+
+    uint32_t precise_halo_output_size =
+        sliding_window::calculate_precise_halo_output_elems(halo_config, input_shard_shape);
+    uint32_t halo_output_size = precise_halo_output_size * input_datum_size;
+
+    // Calculate CB usage for pool operation using existing function
+    // Create output memory config (same sharding as input for pool)
+    auto output_memory_config = input_memory_config;
+
+    uint32_t pool_cb_usage = calculate_L1_usage(
+        dtype,
+        channels,
+        padding[0],  // pad_h (top)
+        padding[2],  // pad_w (left)
+        ceil_pad[0],
+        ceil_pad[1],
+        ceil_mode,
+        return_indices,
+        kernel_size[0],
+        kernel_size[1],
+        output_height,
+        output_width,
+        input_memory_config,
+        output_memory_config,
+        pool_type,
+        count_include_pad,
+        divisor_override,
+        output_layout,
+        dtype);
+
+    // Calculate output tensor allocation size
+    // Output is allocated per core, similar to input
+    auto output_shard_shape = output_memory_config.shard_spec().value().shape;
+    uint32_t output_datum_size = input_datum_size;  // Pool output has same dtype as input
+    uint32_t output_tensor_size = output_shard_shape[0] * output_shard_shape[1] * output_datum_size;
+
+    // Total size calculation:
+    // During halo phase: halo_input + halo_output
+    // During pool phase: halo_output (becomes input to pool) + CB + output_tensor
+    // We need max of these two phases
+    uint32_t halo_phase_size = halo_input_size + halo_output_size;
+    uint32_t pool_phase_size = halo_output_size + pool_cb_usage;  // Note: output_tensor is part of CB usage calculation
+
+    uint32_t total_size = std::max(halo_phase_size, pool_phase_size);
+
+    log_trace(
+        tt::LogOp,
+        "Pool2D L1 Usage Calculation: halo_input={}, halo_output={}, pool_cb={}, output_tensor={}, "
+        "halo_phase={}, pool_phase={}, total={}",
+        halo_input_size,
+        halo_output_size,
+        pool_cb_usage,
+        output_tensor_size,
+        halo_phase_size,
+        pool_phase_size,
+        total_size);
+
+    return pool2d_slice_l1_usage{
+        .halo_input_size = halo_input_size,
+        .halo_output_size = halo_output_size,
+        .pool_cb_size = pool_cb_usage,
+        .output_tensor_size = output_tensor_size,
+        .total_size = total_size};
+}
+
 }  // namespace ttnn::operations::pool
