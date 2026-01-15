@@ -41,7 +41,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
 }
 
 Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output_tensor) {
+    const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
@@ -653,8 +653,8 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
 
 void Conv2dWidthShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const Conv2dParams& /*operation_attributes*/,
+    const Conv2dInputs& tensor_args,
     Tensor& output_tensor) {
     auto* src_buffer_a = tensor_args.a.buffer();
     auto* src_buffer_b = tensor_args.b.buffer();

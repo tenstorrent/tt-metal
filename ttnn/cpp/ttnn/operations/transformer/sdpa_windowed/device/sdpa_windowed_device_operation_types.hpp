@@ -12,14 +12,14 @@
 
 namespace ttnn::operations::transformer::sdpa_windowed {
 
-struct operation_attributes_t {
+struct SdpaWindowedParams {
     std::optional<float> scale;
     tt::tt_metal::MemoryConfig output_mem_config;
     std::optional<SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct SdpaWindowedInputs {
     Tensor q;
     Tensor k;
     Tensor v;

@@ -9,13 +9,13 @@
 
 namespace ttnn::operations::experimental::reduction::detail {
 
-struct operation_attributes_t {
+struct DetailParams {
     const int32_t dim;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct DetailInputs {
     const Tensor input;
     std::optional<Tensor> preallocated_output;
 };

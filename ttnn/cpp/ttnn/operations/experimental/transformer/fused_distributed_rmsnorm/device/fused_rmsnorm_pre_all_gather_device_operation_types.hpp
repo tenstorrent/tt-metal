@@ -11,12 +11,12 @@
 
 namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather {
 
-struct operation_attributes_t {
+struct FusedRmsnormPreAllGatherParams {
     tt::tt_metal::DataType dtype;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct FusedRmsnormPreAllGatherInputs {
     Tensor input_tensor;
 };
 

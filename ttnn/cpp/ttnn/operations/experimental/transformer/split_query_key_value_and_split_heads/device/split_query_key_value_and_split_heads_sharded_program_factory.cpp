@@ -12,8 +12,8 @@ using namespace tt_metal;
 
 SplitFusedQKVAndSplitHeadsShardedProgramFactory::cached_program_t
 SplitFusedQKVAndSplitHeadsShardedProgramFactory::create(
-    const split_query_key_value_and_split_heads::operation_attributes_t& /*operation_attributes*/,
-    const split_query_key_value_and_split_heads::tensor_args_t& tensor_args,
+    const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsParams& /*operation_attributes*/,
+    const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
     std::vector<Tensor>& output_tensors) {
     const auto& a = tensor_args.input_tensor;
     auto& output = output_tensors;
@@ -145,8 +145,8 @@ SplitFusedQKVAndSplitHeadsShardedProgramFactory::create(
 
 void SplitFusedQKVAndSplitHeadsShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const split_query_key_value_and_split_heads::operation_attributes_t& /*operation_attributes*/,
-    const split_query_key_value_and_split_heads::tensor_args_t& tensor_args,
+    const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsParams& /*operation_attributes*/,
+    const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
     std::vector<Tensor>& output_tensors) {
     auto& program = cached_program.program;
     auto& shared = cached_program.shared_variables;
