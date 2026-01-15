@@ -160,7 +160,7 @@ void test_raw_host_memory_pointer() {
 
     Tensor d_dev = a_dev;
     auto d_cpu_buffer = tt::tt_metal::host_buffer::get_host_buffer(d_cpu);
-    fill_tensor_from_host_buffer(d_cpu.device()->mesh_command_queue(), d_dev, d_cpu_buffer.view_bytes().data());
+    fill_tensor_from_host_buffer(d_dev.device()->mesh_command_queue(), d_dev, d_cpu_buffer.view_bytes().data());
 
     Tensor e_dev = ttnn::add(c_dev, d_dev);
 
