@@ -139,7 +139,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
                 center_logits, (center_logits.shape[0], current_h, current_w, center_logits.shape[3])
             )
 
-        # Convert to interleaved DRAM if sharded
+        # Convert to interleaved L1 if sharded
         if center_logits.is_sharded():
             center_logits = ttnn.sharded_to_interleaved(center_logits, ttnn.L1_MEMORY_CONFIG)
         else:
@@ -162,7 +162,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
                 offset_logits, (offset_logits.shape[0], current_h, current_w, offset_logits.shape[3])
             )
 
-        # Convert to interleaved DRAM if sharded
+        # Convert to interleaved L1 if sharded
         if offset_logits.is_sharded():
             offset_logits = ttnn.sharded_to_interleaved(offset_logits, ttnn.L1_MEMORY_CONFIG)
         else:
@@ -172,6 +172,16 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         # Matmul based upsample
         offset_logits = self.final_upsample(offset_logits)
 
+        if self.is_20_core:
+            # Shard before
+            mem_config = ttnn.create_sharded_memory_config_(
+                offset_logits.shape,
+                core_grid=ttnn.CoreGrid(x=8, y=8),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            offset_logits = ttnn.to_memory_config(offset_logits, mem_config)
+
         # Apply offset scaling
         offset_logits = ttnn.mul(offset_logits, self.common_stride)
         logger.debug(f"TtPanopticDeepLabInsEmbedHead offset upsample complete - shape: {offset_logits.shape}")
@@ -180,7 +190,13 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         return center_logits, offset_logits, {}, {}
 
     def layers(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        y = super().layers(features)
+        if self.is_20_core:
+            return self.layers_20_cores(features)
+        else:
+            return self.layers_110_cores(features)
+
+    def layers_20_cores(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        y = super().layers_20_cores(features)
 
         y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -219,6 +235,38 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             offset_y = ttnn.sharded_to_interleaved(offset_y, ttnn.DRAM_MEMORY_CONFIG)
         else:
             offset_y = ttnn.to_memory_config(offset_y, ttnn.DRAM_MEMORY_CONFIG)
+
+        logger.info(f"🔷 Executing conv: instance_head.offset_predictor")
+        offset_logits = self.offset_predictor(offset_y)
+
+        return center_logits, offset_logits
+
+    def layers_110_cores(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        y = super().layers_110_cores(features)
+
+        # Save spatial dimensions for upsample (head convs have stride=1)
+        self._center_predictor_h = y.shape[1]
+        self._center_predictor_w = y.shape[2]
+        self._offset_predictor_h = y.shape[1]
+        self._offset_predictor_w = y.shape[2]
+        logger.debug(f"Saved predictor spatial dimensions: H={self._center_predictor_h}, W={self._center_predictor_w}")
+
+        # --- Center Prediction Branch ---
+        logger.info(f"🔷 Executing conv: instance_head.center_head.0")
+        center_y = self.center_head_0(y)
+
+        logger.info(f"🔷 Executing conv: instance_head.center_head.1")
+        center_y = self.center_head_1(center_y)
+
+        logger.info(f"🔷 Executing conv: instance_head.center_predictor")
+        center_logits = self.center_predictor(center_y)
+
+        # --- Offset Prediction Branch ---
+        logger.info(f"🔷 Executing conv: instance_head.offset_head.0")
+        offset_y = self.offset_head_0(y)
+
+        logger.info(f"🔷 Executing conv: instance_head.offset_head.1")
+        offset_y = self.offset_head_1(offset_y)
 
         logger.info(f"🔷 Executing conv: instance_head.offset_predictor")
         offset_logits = self.offset_predictor(offset_y)
