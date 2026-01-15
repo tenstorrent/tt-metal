@@ -46,4 +46,18 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler);
 
+
+// Shared implementation for variable number of output tensors (used by both minimal_matmul and minimal_matmul_split)
+MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_shared(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<const Tensor>& bias_tensor,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
+    const std::optional<const MinimalMatmulConfig>& config,
+    const std::vector<Tensor>& output_tensors,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    uint32_t N_chunks);
+
 }  // namespace ttnn::experimental::prim
