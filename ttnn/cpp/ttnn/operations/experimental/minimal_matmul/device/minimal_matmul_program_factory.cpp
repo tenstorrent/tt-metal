@@ -375,7 +375,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        true,  // is_injector_core
+        true,     // is_injector_core
+        1,        // N_chunks (always 1 for regular minimal_matmul)
+        N_tiles,  // N_tiles_per_chunk (entire width for N_chunks=1)
         in3_tile_size,
     };
     append_accessors(
@@ -413,7 +415,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        false,  // is_injector_core
+        false,    // is_injector_core
+        1,        // N_chunks (always 1 for regular minimal_matmul)
+        N_tiles,  // N_tiles_per_chunk (entire width for N_chunks=1)
         in3_tile_size,
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor, bias_tensor);
@@ -444,7 +448,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        true,  // is_injector_core
+        true,     // is_injector_core
+        1,        // N_chunks (always 1 for regular minimal_matmul)
+        N_tiles,  // N_tiles_per_chunk (entire width for N_chunks=1)
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor, bias_tensor);
     auto in1_sender_kernels_id = CreateKernel(
@@ -473,7 +479,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        false,  // is_injector_core
+        false,    // is_injector_core
+        1,        // N_chunks (always 1 for regular minimal_matmul)
+        N_tiles,  // N_tiles_per_chunk (entire width for N_chunks=1)
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor, bias_tensor);
     auto in1_receiver_kernels_id = CreateKernel(
@@ -589,7 +597,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
 
         std::vector<uint32_t> in0_args = {
             in0_addr,
-            out_addr,
             in2_addr,
             in3_addr,
             is_in0_sink,
@@ -602,6 +609,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            out_addr,  // Output address at end for unified layout
         };
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
@@ -616,7 +624,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
 
         std::vector<uint32_t> in1_args = {
             in1_addr,
-            out_addr,
             in2_addr,
             is_in1_sink,
             (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
@@ -628,6 +635,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            out_addr,  // Output address at end for unified layout
         };
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
@@ -710,23 +718,23 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
         if (in1_idx == 0) {
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
             in0_sender_args[0] = in0_addr;
-            in0_sender_args[1] = output_addr;
-            in0_sender_args[2] = in2_addr;
-            in0_sender_args[3] = in3_addr;
+            in0_sender_args[1] = in2_addr;
+            in0_sender_args[2] = in3_addr;
+            in0_sender_args[13] = output_addr;  // Output address at position 13 (after defer_write_k_block)
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
-            in0_receiver_args[1] = output_addr;
-            in0_receiver_args[2] = in2_addr;
+            in0_receiver_args[1] = in2_addr;
+            in0_receiver_args[13] = output_addr;  // Output address at position 13
         }
         if (in0_idx == 0) {
             auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
             in1_sender_args[0] = in1_addr;
-            in1_sender_args[1] = output_addr;
-            in1_sender_args[2] = in2_addr;
+            in1_sender_args[1] = in2_addr;
+            in1_sender_args[12] = output_addr;  // Output address at position 12 (after defer_write_k_block)
         } else {
             auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-            in1_receiver_args[1] = output_addr;
-            in1_receiver_args[2] = in2_addr;
+            in1_receiver_args[1] = in2_addr;
+            in1_receiver_args[12] = output_addr;  // Output address at position 12
         }
     }
 }

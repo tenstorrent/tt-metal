@@ -341,7 +341,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
 
     auto in0_sender_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_split.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
         in0_sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc, .noc = in0_noc, .compile_args = in0_sender_compile_time_args, .defines = defines});
@@ -374,7 +374,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
 
     auto in0_receiver_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_split.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
         in0_receiver_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args, .defines = defines});
@@ -407,7 +407,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
 
     auto in1_sender_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_split.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
         in1_sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in1_risc, .noc = in1_noc, .compile_args = in1_sender_compile_time_args, .defines = defines});
@@ -440,7 +440,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
 
     auto in1_receiver_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_split.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
         in1_receiver_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in1_risc, .noc = in1_noc, .compile_args = in1_receiver_compile_time_args, .defines = defines});
