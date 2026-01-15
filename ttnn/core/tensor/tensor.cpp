@@ -679,7 +679,7 @@ auto get_datatype_tile_size(DataType dtype) {
 
 // Check if typecast and layout operations can be safely executed on the device
 // for particular data type.
-bool can_exec_ops_on_device(DataType type) {
+bool can_launch_ops_with_type(DataType type) {
     switch (type) {
         case DataType::FLOAT32:
             // https://github.com/tenstorrent/tt-metal/issues/23405 (layout precision loss)
@@ -703,7 +703,7 @@ bool can_exec_ops_on_device(DataType type) {
 
 // Check if the tensor with the specified memory config and tiling can be
 // constructed and used on the device, ignoring details of the type conversion.
-bool can_construct_on_device(
+bool can_exec_ops_on_device(
     ttnn::distributed::MeshDevice* device,
     const ttnn::Shape& tensor_shape,
     const std::optional<Tile>& optional_tile,
@@ -721,20 +721,10 @@ bool can_construct_on_device(
         !memory_config.is_sharded() &&
         // on-device tiling operation expects 32x32. In some cases (`test_tiny_tiles_bfloat` test for example)
         // the tile size is provided explicitly and does not match x32 pattern.
-        (optional_tile.has_value() && ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
-         ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0)));
-}
 
-template <typename T>
-bool can_borrow_data(
-    const Layout& layout,
-    const TensorLayout& src_tensor_layout,
-    const ttnn::Shape& tensor_shape,
-    const DataType& src_dtype) {
-    return layout == Layout::ROW_MAJOR &&
-           src_tensor_layout.compute_physical_shape(tensor_shape) ==
-               src_tensor_layout.compute_logical_2d_shape(tensor_shape) &&
-           src_dtype == convert_to_data_type<T>();
+        (!optional_tile.has_value() ||
+         (optional_tile.has_value() && ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
+          ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0))));
 }
 
 Tensor create_tt_tensor_from_host_data(
@@ -749,23 +739,23 @@ Tensor create_tt_tensor_from_host_data(
     const ttnn::distributed::TensorToMesh* mesh_mapper,
     std::optional<ttnn::QueueId> cq_id,
     ttnn::distributed::MeshDevice* device) {
+    // std::cout << "create_tt_tensor_from_host_data" << std::endl;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
-        const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile, memory_config);
-        const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
+        const bool no_limitations = can_exec_ops_on_device(device, tensor_shape, optional_tile, memory_config);
+        const bool can_exec_on_device = can_launch_ops_with_type(dst_dtype) && can_launch_ops_with_type(src_dtype);
+        const bool pydata_borrowable = src_dtype == convert_to_data_type<T>();
 
-        const Layout dst_layout =
-            src_dtype == DataType::BFLOAT8_B || src_dtype == DataType::BFLOAT4_B ? Layout::TILE : layout;
-
-        TensorLayout src_tensor_layout(src_dtype, PageConfig(layout, optional_tile), memory_config);
-        TensorLayout dst_tensor_layout(dst_dtype, PageConfig(dst_layout, optional_tile), memory_config);
-
-        const bool pydata_borrowable = can_borrow_data<T>(layout, src_tensor_layout, tensor_shape, src_dtype);
-
-        if (exec_on_device && construct_on_device && pydata_borrowable) {
+        if (can_exec_on_device && no_limitations && pydata_borrowable) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
 
+        if (device == nullptr && pydata_borrowable && src_dtype == dst_dtype) {
+            return Tensor::from_borrowed_data(
+                host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
+        }
+
+        TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
         if (mesh_mapper != nullptr) {
             // sharded tensor must be created using factory function to avoid validation errors in the
             // `TensorSpec` constructor. Example `test_paged_cache_mask.py::test_update_cache`, fails
@@ -777,8 +767,9 @@ Tensor create_tt_tensor_from_host_data(
                 // BFLOAT4/8. In this case the type conversion should be done on host.
                 (memory_config.is_sharded() &&
                  get_datatype_tile_size(src_dtype) != get_datatype_tile_size(dst_dtype)) ||
-                !exec_on_device;
+                !can_exec_on_device;
 
+            TensorLayout src_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
