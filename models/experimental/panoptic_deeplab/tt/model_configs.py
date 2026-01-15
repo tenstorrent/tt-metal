@@ -1008,8 +1008,6 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             path,
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
-            # deallocate_activation=False,
-            activation=None,
             enable_weights_double_buffer=True,
         )
 
@@ -1020,7 +1018,6 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             enable_weights_double_buffer=True,
-            # deallocate_activation=False,
         )
 
     def setup_semantic_head(self):
