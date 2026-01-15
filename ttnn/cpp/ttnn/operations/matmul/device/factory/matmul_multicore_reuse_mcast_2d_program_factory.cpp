@@ -22,7 +22,7 @@
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 namespace reuse_mcast_optimized_helpers {
 
@@ -113,13 +113,13 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     uint32_t in0_block_tiles = out_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
     if (B * num_blocks > 1) {
-        in0_CB_tiles *= utilities::MCAST_INPUT_BUFFERING_DEPTH;
+        in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
-        in1_CB_tiles *= utilities::MCAST_INPUT_BUFFERING_DEPTH;
+        in1_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -1460,7 +1460,7 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     std::vector<ttnn::Tensor>& tensor_return_value,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     using namespace tt;
-    using namespace matmul::utilities;
+    using namespace operations::matmul::utilities;
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
@@ -1473,8 +1473,8 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     bool transpose_a = operation_attributes.transpose_a;
     bool transpose_b = operation_attributes.transpose_b;
 
-    auto program_config =
-        std::get<MatmulMultiCoreReuseMultiCastProgramConfig>(operation_attributes.program_config.value());
+    auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
+        operation_attributes.program_config.value());
 
     auto fuse_batch = program_config.fuse_batch;
     auto in0_block_w = program_config.in0_block_w;
@@ -1728,7 +1728,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_core_re
     Tensor& output_tensor,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig& program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     auto attributes = ttnn::prim::MatmulParams{.program_config = program_config, .bcast_batch = broadcast_batch};
@@ -1740,4 +1740,4 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_core_re
         program, attributes, ttnn::prim::MatmulInputs{{a, b}, {bias}, {}}, output_tensors, fused_op_signaler);
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

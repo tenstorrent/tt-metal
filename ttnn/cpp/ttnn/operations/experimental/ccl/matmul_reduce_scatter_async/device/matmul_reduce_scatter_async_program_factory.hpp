@@ -15,8 +15,7 @@ namespace ttnn::experimental::prim {
 
 struct MatmulReduceScatterAsyncSharedVariables {
     ttnn::experimental::prim::ReduceScatterProgramArtifacts reduce_scatter_artifacts;
-    ttnn::operations::matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t
-        matmul_shared_variables;
+    ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t matmul_shared_variables;
 };
 
 struct MatmulReduceScatterAsyncProgramFactory {

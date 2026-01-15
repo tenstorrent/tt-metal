@@ -29,7 +29,7 @@ namespace ttnn::operations::llama_agmm_fusion_helpers {
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
-static ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t
+static ttnn::prim::matmul_mcast_1d_common_override_variables_t
 process_agmm_fusion_program_and_create_override_variables(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& /*a*/,
@@ -642,7 +642,7 @@ process_agmm_fusion_program_and_create_override_variables(
     std::vector<tt::tt_metal::CBHandle> shared_cbs = {cb_src0, cb_src1};
     shared_cbs.insert(shared_cbs.end(), cb_outputs.begin(), cb_outputs.end());
 
-    return ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t{
+    return ttnn::prim::matmul_mcast_1d_common_override_variables_t{
         {mm_kernel_in1_sender_writer_id},
         shared_cbs,
         false,
@@ -656,7 +656,7 @@ process_agmm_fusion_program_and_create_override_variables(
 namespace ttnn::operations::llama_matmul {
 
 void override_agmm_fusion_program_parameters(
-    const ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t& override_variables,
+    const ttnn::prim::matmul_mcast_1d_common_override_variables_t& override_variables,
     const ttnn::prim::MatmulParams& operation,
     tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
@@ -701,7 +701,7 @@ void override_agmm_fusion_program_parameters(
     }
 }
 
-static ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_(
+static ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_(
     tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -905,7 +905,7 @@ static ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variab
         fused_op_signaler);
 }
 
-ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_helper(
+ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_helper(
     tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,

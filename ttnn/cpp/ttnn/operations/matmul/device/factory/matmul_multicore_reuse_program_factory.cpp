@@ -13,7 +13,7 @@
 using namespace tt::constants;
 using namespace tt;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
     tt_metal::IDevice* device,
@@ -377,4 +377,4 @@ void MatmulMeshWorkloadMultiCoreReuseFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

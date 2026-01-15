@@ -11,7 +11,7 @@
 using namespace tt;
 using namespace tt::constants;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::create(
     const ttnn::prim::MatmulParams& operation_attributes,
@@ -250,4 +250,4 @@ void MatmulMeshWorkloadMultiCoreFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

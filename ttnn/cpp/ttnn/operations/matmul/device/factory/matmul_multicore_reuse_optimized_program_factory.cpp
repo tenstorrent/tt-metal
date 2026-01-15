@@ -15,7 +15,7 @@
 using namespace tt;
 using tt::tt_metal::Tensor;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 namespace reuse_optimized_helpers {
 
 MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
@@ -530,10 +530,10 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_
     uint32_t per_core_N,
     bool fuse_batch,
     bool untilize_out) {
-    const auto& ashape = utilities::get_matmul_tensor_padded_shape(a, transpose_a);
-    const auto& bshape = utilities::get_matmul_tensor_padded_shape(b, transpose_b);
-    auto in0_tile = utilities::get_matmul_tile(a, transpose_a);
-    auto in1_tile = utilities::get_matmul_tile(b, transpose_b);
+    const auto& ashape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
+    const auto& bshape = operations::matmul::utilities::get_matmul_tensor_padded_shape(b, transpose_b);
+    auto in0_tile = operations::matmul::utilities::get_matmul_tile(a, transpose_a);
+    auto in1_tile = operations::matmul::utilities::get_matmul_tile(b, transpose_b);
 
     TT_FATAL(
         (bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),
@@ -561,11 +561,11 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = utilities::get_M_dim(ashape, in0_tile, fuse_batch);
-    uint32_t Kt = utilities::get_K_dim(ashape, in0_tile);
-    uint32_t Nt = utilities::get_N_dim(bshape, in1_tile);
+    uint32_t Mt = operations::matmul::utilities::get_M_dim(ashape, in0_tile, fuse_batch);
+    uint32_t Kt = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
+    uint32_t Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
 
-    const auto ashape_logical = utilities::get_matmul_tensor_logical_shape(a, transpose_a);
+    const auto ashape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = ashape_logical[-1] % in0_tile.get_width();
 
     // TODO: Generalize
@@ -632,7 +632,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
      */
 
     const auto& program_config =
-        std::get<MatmulMultiCoreReuseProgramConfig>(operation_attributes.program_config.value());
+        std::get<operations::matmul::MatmulMultiCoreReuseProgramConfig>(operation_attributes.program_config.value());
 
     TT_FATAL(operation_attributes.output_dtype.has_value(), "Output dtype should have been provided");
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
@@ -751,4 +751,4 @@ void MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory::override_runtime_a
     }
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

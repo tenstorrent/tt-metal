@@ -8,7 +8,7 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 struct MatmulMultiCoreReuseMcast2DProgramFactory {
     struct shared_variables_t {
@@ -76,8 +76,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_core_re
     Tensor& output_tensor,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig& program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

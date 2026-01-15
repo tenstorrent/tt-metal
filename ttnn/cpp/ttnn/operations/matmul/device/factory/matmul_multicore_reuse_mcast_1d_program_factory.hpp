@@ -9,7 +9,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_1d_type.hpp"
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 struct matmul_mcast_1d_common_override_variables_t {
     std::vector<tt::tt_metal::KernelHandle> kernels;
@@ -70,7 +70,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     const std::vector<Tensor>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig& program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
@@ -86,7 +86,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t matmul_multi_core_re
     const std::vector<Tensor>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig& program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
@@ -100,4 +100,4 @@ void override_program_parameters(
     const ttnn::prim::MatmulInputs& tensor_args,
     const std::vector<ttnn::Tensor>& tensor_return_value);
 }  // namespace reuse_mcast_1d_optimized_helpers
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

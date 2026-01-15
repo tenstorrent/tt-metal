@@ -17,7 +17,7 @@ struct LlamaAllGatherMatmulAsyncSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
     std::vector<tt::tt_metal::CoreCoord> intermediate_cores_vec;
     uint32_t ring_index{};
-    ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t matmul_shared_variables;
+    ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_shared_variables;
 };
 
 struct LlamaAllGatherMatmulAsyncProgramFactory {

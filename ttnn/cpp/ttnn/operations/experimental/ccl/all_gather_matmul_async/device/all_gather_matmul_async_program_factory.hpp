@@ -18,8 +18,8 @@ namespace ttnn::experimental::prim {
 struct AllGatherMatmulAsyncSharedVariables {
     std::variant<
         std::monostate,
-        operations::matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t,
-        operations::matmul::program::MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t>
+        ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t,
+        ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t>
         matmul_shared_variables;
     AllGatherProgramArtifacts all_gather_async_shared_variables;
 };

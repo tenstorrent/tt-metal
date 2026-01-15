@@ -20,7 +20,7 @@ using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 namespace reuse_dram_sharded_optimized_helpers {
 
 // This type of access pattern cannot be copied.
@@ -166,8 +166,8 @@ create_program_dram_sharded(
 
     uint32_t per_core_N_compute = (N + num_dram_banks - 1) / num_dram_banks;
     uint32_t per_core_N_in1_sender = per_core_N_compute;
-    auto subblock_hw =
-        bmm_op_utils::get_matmul_subblock_params(per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
+    auto subblock_hw = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
+        per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
     auto out_subblock_h = std::get<0>(subblock_hw);
     auto out_subblock_w = std::get<1>(subblock_hw);
 
@@ -995,8 +995,8 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
         in1_tile_shape[1]);
 
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
-    const auto& program_config =
-        std::get<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(operation_attributes.program_config.value());
+    const auto& program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
+        operation_attributes.program_config.value());
     const auto& in0_block_w = program_config.in0_block_w;
     const auto& per_core_M = program_config.per_core_M;
     const auto& per_core_N = program_config.per_core_N;
@@ -1132,4 +1132,4 @@ void MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::override_runtime_ar
     }
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

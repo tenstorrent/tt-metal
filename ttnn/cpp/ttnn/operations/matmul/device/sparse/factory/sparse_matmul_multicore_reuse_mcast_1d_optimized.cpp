@@ -11,7 +11,7 @@
 #include "tt-metalium/work_split.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
 
-namespace ttnn::operations::sparse_matmul::program {
+namespace ttnn::prim {
 
 SparseMatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t
 SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
@@ -834,4 +834,4 @@ void SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::override_runtime_argu
     }
 }
 
-}  // namespace ttnn::operations::sparse_matmul::program
+}  // namespace ttnn::prim

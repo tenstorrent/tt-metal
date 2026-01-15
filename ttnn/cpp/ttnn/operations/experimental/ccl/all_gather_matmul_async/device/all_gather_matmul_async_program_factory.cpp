@@ -82,7 +82,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
     std::visit(
         ttsl::overloaded{
             [&](const operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& config) {
-                auto cached_program = operations::matmul::program::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+                auto cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_2d_optimized_helper(
                     program,
                     all_gather_output_tensor,
                     weight_tensor,
@@ -97,7 +97,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
                 matmul_shared_variables = std::move(cached_program.shared_variables);
             },
             [&](const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
-                auto cached_program = operations::matmul::program::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+                auto cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
                     program,
                     all_gather_output_tensor,
                     {weight_tensor},
@@ -238,10 +238,10 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
 
         std::visit(
             ttsl::overloaded{
-                [&](const operations::matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t&
+                [&](const ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t&
                         mm_shared_variables) {
                     std::vector<Tensor> matmul_output_tensors = {tensor_return_value[1]};
-                    operations::matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+                    ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
                         program,
                         mm_shared_variables,
                         operation_attributes.matmul,
@@ -250,10 +250,10 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
                          {tensor_return_value[1]}},
                         matmul_output_tensors);
                 },
-                [&](const operations::matmul::program::MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t&
+                [&](const ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t&
                         mm_shared_variables) {
                     std::vector<Tensor> matmul_output_tensors = {tensor_return_value[1]};
-                    operations::matmul::program::MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
+                    ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
                         program,
                         mm_shared_variables,
                         operation_attributes.matmul,

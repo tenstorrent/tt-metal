@@ -66,17 +66,17 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
         [](const auto& c) -> program_factory_t {
             using T = std::decay_t<decltype(c)>;
             if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
-                return operations::matmul::program::MatmulMeshWorkloadMultiCoreFactory{};
+                return MatmulMeshWorkloadMultiCoreFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                return operations::matmul::program::MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory{};
+                return MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                return operations::matmul::program::MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory{};
+                return MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                return operations::matmul::program::MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
+                return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
             } else if constexpr (std::is_same_v<
                                      T,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                return operations::matmul::program::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory{};
+                return MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory{};
             } else {
                 TT_THROW("Unknown program config type");
             }

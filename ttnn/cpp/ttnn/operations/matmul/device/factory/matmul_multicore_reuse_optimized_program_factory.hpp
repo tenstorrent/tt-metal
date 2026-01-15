@@ -6,7 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 struct MatmulMultiCoreReuseOptimizedProgramFactory {
     struct shared_variables_t {
@@ -50,4 +50,4 @@ struct MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory {
         std::vector<ttnn::Tensor>& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

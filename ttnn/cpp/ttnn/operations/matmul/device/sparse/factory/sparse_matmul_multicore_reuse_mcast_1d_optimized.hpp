@@ -8,7 +8,7 @@
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_1d_type.hpp"
 
-namespace ttnn::operations::sparse_matmul::program {
+namespace ttnn::prim {
 
 struct SparseMatmulMultiCoreReuseMcast1DProgramFactory {
     struct shared_variables_t {
@@ -52,4 +52,4 @@ struct SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory {
         std::vector<Tensor>& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::sparse_matmul::program
+}  // namespace ttnn::prim

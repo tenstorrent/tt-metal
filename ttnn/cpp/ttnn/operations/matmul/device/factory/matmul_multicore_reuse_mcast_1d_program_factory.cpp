@@ -24,7 +24,7 @@ using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 namespace reuse_mcast_1d_optimized_helpers {
 
@@ -142,7 +142,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
     if (B * num_blocks > 1) {
-        in0_CB_tiles *= utilities::MCAST_INPUT_BUFFERING_DEPTH;
+        in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
@@ -160,7 +160,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
-        in1_CB_tiles *= utilities::MCAST_INPUT_BUFFERING_DEPTH;
+        in1_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     if (in1_is_sharded) {
         uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_height();
@@ -277,7 +277,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    const auto& a_shape_logical = utilities::get_matmul_tensor_logical_shape(a, transpose_a);
+    const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
     const auto in0_tensor_stride_w = transpose_a ? M : 1;
@@ -1081,7 +1081,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
-    const auto& a_shape_logical = utilities::get_matmul_tensor_logical_shape(a, transpose_a);
+    const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
     bool extract_shard_sub_blocks = false;
@@ -1886,7 +1886,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     uint32_t in1_shard_width_in_tiles = 0;
     uint32_t in1_CB_tiles = 0;
 
-    const auto& bshape = utilities::get_matmul_tensor_padded_shape(b, /*transpose=*/false);
+    const auto& bshape = operations::matmul::utilities::get_matmul_tensor_padded_shape(b, /*transpose=*/false);
     uint32_t in1_tensor_width_in_tiles = bshape[-1] / in1_tile.get_width();
 
     if (in1_is_dram_sharded || in1_is_dram_interleaved) {
@@ -2662,10 +2662,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
 
     TT_FATAL(output_tensors.size() == b_tensors.size(), "number of outputs must match number of inputs b");
 
-    const auto& ashape = utilities::get_matmul_tensor_padded_shape(a, transpose_a);
-    const auto& bshape = utilities::get_matmul_tensor_padded_shape(b, transpose_b);
-    auto in0_tile = utilities::get_matmul_tile(a, transpose_a);
-    auto in1_tile = utilities::get_matmul_tile(b, transpose_b);
+    const auto& ashape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
+    const auto& bshape = operations::matmul::utilities::get_matmul_tensor_padded_shape(b, transpose_b);
+    auto in0_tile = operations::matmul::utilities::get_matmul_tile(a, transpose_a);
+    auto in1_tile = operations::matmul::utilities::get_matmul_tile(b, transpose_b);
     // cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
@@ -2740,9 +2740,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     const auto B = fuse_batch ? 1 : get_batch_size(ashape);
-    const auto Mt = utilities::get_M_dim(ashape, in0_tile, fuse_batch);
-    const auto Kt = utilities::get_K_dim(ashape, in0_tile);
-    const auto Nt = utilities::get_N_dim(bshape, in1_tile);
+    const auto Mt = operations::matmul::utilities::get_M_dim(ashape, in0_tile, fuse_batch);
+    const auto Kt = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
+    const auto Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
@@ -2925,8 +2925,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t MatmulMultiCoreReuse
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
-    auto program_config =
-        std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(operation_attributes.program_config.value());
+    auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+        operation_attributes.program_config.value());
     DeviceComputeKernelConfig compute_kernel_config = operation_attributes.compute_kernel_config.value();
 
     tt_metal::Program program{};
@@ -2999,15 +2999,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     const std::vector<Tensor>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig& program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores) {
-    MatmulMultiCoreReuseMultiCast1DProgramConfig config =
-        std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
+    operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig config =
+        std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
     return matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
@@ -3083,7 +3083,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t matmul_multi_core_re
     const std::vector<Tensor>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig& program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
@@ -3108,4 +3108,4 @@ MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t matmul_multi_core_re
     return {std::move(program), std::move(shared_vars)};
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim
