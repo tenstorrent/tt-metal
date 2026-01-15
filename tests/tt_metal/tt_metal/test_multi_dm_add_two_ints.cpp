@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -13,39 +15,32 @@
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 
-int main() {
-    using namespace tt;
-    using namespace tt::tt_metal;
-    std::cout << "Test started" << std::endl;
+using namespace tt;
+using namespace tt::tt_metal;
 
+// This test requires simulator environment
+TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
+    // Skip if simulator is not available
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
-        std::cerr
-            << "ERROR: This test can only be run using a simulator. Please set Environment Variable TT_METAL_SIMULATOR"
-            << std::endl;
-        std::cerr << "ERROR: with a valid simulator path" << std::endl;
-        return 1;
+        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
-    env_var = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    env_var = std::getenv("TT_METAL_DPRINT_CORES");
     if (env_var == nullptr) {
-        std::cerr << "ERROR: This test can only be run in slow dispatch mode. Please set Environment Variable "
-                     "TT_METAL_SLOW_DISPATCH_MODE"
+        std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
+                     "the Data Movement kernels."
                   << std::endl;
-        std::cerr << "ERROR: using export TT_METAL_SLOW_DISPATCH_MODE=1" << std::endl;
-        return 1;
+        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
     }
 
-    // Initialize mesh device (1x1), command queue, workload, device range, and program.
-    // We are going to use the first device (0) and the first core (0, 0) on the device.
-    constexpr CoreCoord core = {0, 0};
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+    IDevice* dev = devices_[0]->get_devices()[0];
+    auto mesh_device = devices_[0];
 
-    // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
+    constexpr CoreCoord core = {0, 0};
 
     KernelHandle kernel_0 = experimental::CreateKernel(
         program,
@@ -68,19 +63,8 @@ int main() {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result{0, 0};
-    tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], core, MEM_L1_UNCACHED_BASE, sizeof(int) * 2, result);
+    tt_metal::detail::ReadFromDeviceL1(dev, core, MEM_L1_UNCACHED_BASE, sizeof(int) * 2, result);
 
-    mesh_device->close();
-
-    if (result[0] == 300 && result[1] == 700) {
-        std::cout << "Test passed!" << std::endl;
-        return 0;
-    } else if (result[0] != 300) {
-        std::cout << "Test failed! Got the value " << result[0] << " instead of " << 300 << std::endl;
-        return 1;
-    } else if (result[1] != 700) {
-        std::cout << "Test failed! Got the value " << result[1] << " instead of " << 700 << std::endl;
-        return 1;
-    }
+    ASSERT_EQ(result[0], 300) << "Got the value " << result[0] << " instead of " << 300;
+    ASSERT_EQ(result[1], 700) << "Got the value " << result[1] << " instead of " << 700;
 }
