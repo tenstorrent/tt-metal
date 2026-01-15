@@ -48,12 +48,20 @@ void kernel_main() {
         get_write_ptr(mcast_sender_cb));
     noc_async_write_multicast(
         get_read_ptr(mcast_cb), mcast_sender_noc_addr, get_tile_size(mcast_sender_cb) * num_senders, num_senders);
-    for (uint64_t y = mcast_sender_noc_coord_y_start; y <= mcast_sender_noc_coord_y_end; ++y) {
-        for (uint64_t x = mcast_sender_noc_coord_x_start; x <= mcast_sender_noc_coord_x_end; ++x) {
-            const uint64_t sender_semaphore_noc_addr = get_noc_addr(x, y, mcast_sender_semaphore_addr);
-            noc_semaphore_inc(sender_semaphore_noc_addr, VALID);
-        }
-    }
+
+    // Set up local L1 scratch to hold VALID value for multicast semaphore set
+    uint32_t semaphore_valid_addr = get_write_ptr(mcast_sender_cb);
+    volatile tt_l1_ptr uint32_t* semaphore_valid_addr_ptr = (volatile tt_l1_ptr uint32_t*)semaphore_valid_addr;
+    semaphore_valid_addr_ptr[0] = VALID;
+
+    // Multicast semaphore set to all sender cores
+    const uint64_t mcast_sender_semaphore_noc_addr = get_noc_multicast_addr(
+        mcast_sender_noc_coord_x_start,
+        mcast_sender_noc_coord_y_start,
+        mcast_sender_noc_coord_x_end,
+        mcast_sender_noc_coord_y_end,
+        mcast_sender_semaphore_addr);
+    noc_semaphore_set_multicast(semaphore_valid_addr, mcast_sender_semaphore_noc_addr, num_senders);
     noc_async_posted_writes_flushed();
     if (debug_enabled) {
         DPRINT << "mcast: sent (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()

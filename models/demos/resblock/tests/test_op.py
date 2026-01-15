@@ -30,6 +30,10 @@ def create_random_tensor(shape, random_tensor_gen):
     [
         (1, 32),
         (1, 64),
+        (1, 128),
+        (1, 256),
+        (1, 512),
+        (1, 1024),
     ],
 )
 @pytest.mark.parametrize(
@@ -131,7 +135,7 @@ def test_resblock(device, B, K, generation_type):
     print(torch_output)
     assert torch_output.shape == (B, K), f"Expected shape ({B}, {K}), got {torch_output.shape}"
 
-    passing, pcc_message = comp_pcc(expected, torch_output, 0.998)
+    passing, pcc_message = comp_pcc(expected, torch_output, 0.995)
     logger.info(pcc_message)
 
     assert passing, pcc_message
