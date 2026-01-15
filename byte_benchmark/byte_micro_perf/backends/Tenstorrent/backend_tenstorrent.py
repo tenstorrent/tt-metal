@@ -58,7 +58,7 @@ class BackendTenstorrent(Backend):
                 # else:
                 # Wormhole
                 self.total_memory = 12 * (1024**3)
-                self.free_memory = 10 * (1024**3)
+                self.free_memory = 12 * (1024**3)
                 print(
                     f"TTNN initialized: total_memory={self.total_memory/(1024**3)}GB, free_memory={self.free_memory/(1024**3)}GB"
                 )
@@ -85,13 +85,10 @@ class BackendTenstorrent(Backend):
 
     def get_device_name(self, index=0):
         """Get Tenstorrent device name"""
-        if self.ttnn_available:
-            import ttnn
+        import ttnn
 
-            arch_string = "Blackhole" if "blackhole" in ttnn.get_arch_name() else "Wormhole"
-            return f"Tenstorrent {arch_string}"
-        else:
-            return f"Tenstorrent Device {index} (Simulated)"
+        arch_string = "Blackhole" if "blackhole" in ttnn.get_arch_name() else "Wormhole"
+        return f"Tenstorrent {arch_string}"
 
     def get_device_properties(self, index=0):
         """Get device properties similar to torch.cuda.get_device_properties"""
