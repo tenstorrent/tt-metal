@@ -343,16 +343,11 @@ tests: {stage7 results}
 
 ## Breadcrumbs (Conditional)
 
-Breadcrumbs are **CONDITIONAL**. Check your invocation prompt:
-- "with execution logging", "enable logging", "with breadcrumbs" → **ENABLED**
-- None of these phrases → **DISABLED**
+Check if logging is enabled at startup:
+```bash
+.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
+```
 
 **If DISABLED**: Skip breadcrumb steps. Git commits still required.
 
-**If ENABLED**: You MUST follow ALL breadcrumb instructions in `.claude/references/agent-execution-logging.md` Part 2:
-- **Agent name**: `ttnn-kernel-writer`
-- **Predecessor**: `ttnn-kernel-designer`
-- **Agent-specific events**: `design_compliance`, `cb_wrapper_check`, `correctness_test`, `numerical_debug`, `design_compliance_summary`, `host_file_modified`
-- **Agent-specific log sections**: Design Compliance, Redundant CB Operation Check, Correctness Test Results, Host Files Modified
-
-**CRITICAL if breadcrumbs enabled**: You MUST log `design_compliance_summary` before completing.
+**If ENABLED**: Read `.claude/references/logging/common.md` and `.claude/references/logging/kernel-writer.md` for logging protocol. You MUST log `design_compliance_summary` before completing.

@@ -56,7 +56,14 @@ fi
 echo "Syncing reference documents..."
 if [ -d "$REPO_ROOT/.claude/references" ]; then
     cp "$REPO_ROOT/.claude/references/"*.md "$SCRIPT_DIR/references/" 2>/dev/null || true
-    echo "  - Synced reference documents"
+    # Sync logging subdirectory
+    if [ -d "$REPO_ROOT/.claude/references/logging" ]; then
+        mkdir -p "$SCRIPT_DIR/references/logging"
+        cp "$REPO_ROOT/.claude/references/logging/"*.md "$SCRIPT_DIR/references/logging/" 2>/dev/null || true
+        echo "  - Synced reference documents (including logging/)"
+    else
+        echo "  - Synced reference documents"
+    fi
 else
     echo "  - Skipping references (directory not found)"
 fi

@@ -291,14 +291,11 @@ EOF
 
 ## Breadcrumbs (Conditional)
 
-Breadcrumbs are **CONDITIONAL**. Check your invocation prompt:
-- "with execution logging", "enable logging", "with breadcrumbs" → **ENABLED**
-- None of these phrases → **DISABLED**
+Check if logging is enabled at startup:
+```bash
+.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
+```
 
 **If DISABLED**: Skip breadcrumb steps. Git commits still required.
 
-**If ENABLED**: You MUST follow ALL breadcrumb instructions in `.claude/references/agent-execution-logging.md` Part 2:
-- **Agent name**: `ttnn-kernel-designer`
-- **Predecessor**: `ttnn-factory-builder`
-- **Agent-specific events**: Use standard `action/result` events for file reads and design decisions
-- Write execution log to `{operation_dir}/agent_logs/ttnn-kernel-designer_execution_log.md`
+**If ENABLED**: Read `.claude/references/logging/common.md` and `.claude/references/logging/kernel-designer.md` for logging protocol.

@@ -658,14 +658,11 @@ EOF
 
 ## Breadcrumbs (Conditional)
 
-Breadcrumbs are **CONDITIONAL**. Check your invocation prompt:
-- "with execution logging", "enable logging", "with breadcrumbs" → **ENABLED**
-- None of these phrases → **DISABLED**
+Check if logging is enabled at startup:
+```bash
+.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
+```
 
 **If DISABLED**: Skip breadcrumb steps. Git commits still required.
 
-**If ENABLED**: You MUST follow ALL breadcrumb instructions in `.claude/references/agent-execution-logging.md` Part 2:
-- **Agent name**: `ttnn-operation-scaffolder`
-- **Predecessor**: `""` (first in pipeline) or `ttnn-operation-planner`
-- **Agent-specific events**: Uses standard `action/result` with `type: "script_run"` for script executions
-- **Agent-specific log section**: Script Execution Log table (see reference)
+**If ENABLED**: Read `.claude/references/logging/common.md` and `.claude/references/logging/scaffolder.md` for logging protocol.

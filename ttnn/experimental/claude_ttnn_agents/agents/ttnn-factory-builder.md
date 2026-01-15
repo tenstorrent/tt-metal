@@ -451,16 +451,11 @@ EOF
 
 ## Breadcrumbs (Conditional)
 
-Breadcrumbs are **CONDITIONAL**. Check your invocation prompt:
-- "with execution logging", "enable logging", "with breadcrumbs" → **ENABLED**
-- None of these phrases → **DISABLED**
+Check if logging is enabled at startup:
+```bash
+.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
+```
 
 **If DISABLED**: Skip breadcrumb steps. Git commits still required.
 
-**If ENABLED**: You MUST follow ALL breadcrumb instructions in `.claude/references/agent-execution-logging.md` Part 2:
-- **Agent name**: `ttnn-factory-builder`
-- **Predecessor**: `ttnn-operation-scaffolder`
-- **Agent-specific events**: `cb_config`, `work_distribution`, `tdd_cycle`, `cb_audit`, `cb_sync_summary`, `hang_debug`
-- **Agent-specific log sections**: CB Configuration Audit, CB Sync Verification, Work Distribution
-
-**CRITICAL if breadcrumbs enabled**: You MUST log `cb_sync_summary` before completing Stage 6 to verify push/pop balance.
+**If ENABLED**: Read `.claude/references/logging/common.md` and `.claude/references/logging/factory-builder.md` for logging protocol. You MUST log `cb_sync_summary` before completing Stage 6.

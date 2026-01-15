@@ -68,12 +68,17 @@ Proceed with analysis, or suggest different references?"
 
 ### Step 6: Post-Agent Log Review (If Logging Enabled)
 
-Agent logging is **OPTIONAL**. To enable logging for an agent, include "with execution logging" in the prompt when invoking it.
+Agent logging is **OPTIONAL**. To enable logging for an operation, run BEFORE invoking agents:
+```bash
+.claude/scripts/logging/set_logging_config.sh {operation_path} --enable
+```
 
-**Example prompt with logging enabled:**
+To disable:
+```bash
+.claude/scripts/logging/set_logging_config.sh {operation_path} --disable
 ```
-Scaffold the operation at path/to/spec.md with execution logging
-```
+
+Agents automatically detect logging status via `check_logging_enabled.sh`.
 
 **If logging was enabled**, after each agent completes:
 
@@ -102,7 +107,7 @@ Scaffold the operation at path/to/spec.md with execution logging
 
 **Log location** (when enabled): `{operation_path}/agent_logs/`
 
-See `agent-execution-logging.md` for logging instructions and `agent-log-template.md` for log format.
+See `.claude/references/logging/` for per-agent logging instructions.
 
 ## Additional Resources
 

@@ -448,107 +448,13 @@ EOF
 
 ---
 
-## Execution Logging (Conditional)
+## Breadcrumbs (Conditional)
 
-If the caller includes **"enable detailed logging"**, **"with execution log"**, or **"with breadcrumbs"** in the prompt, you MUST create a detailed execution log file alongside your spec output.
-
-### Log File Location
-`{new_operation}_planner_execution_log.md` in the same directory as the spec output.
-
-### Log Format
-```markdown
-# Execution Log: {New Operation} Planning
-
-## Session Info
-- **Started**: {timestamp or "session start"}
-- **Planning Mode**: {Derivative | Hybrid}
-- **New Operation**: {new_operation_name}
-- **Reference Analysis/Analyses**: {path(s) with roles if hybrid}
-
-## Execution Timeline
-
-### Step 1: {Description}
-**Action**: {What you did - e.g., "Read reference analysis file"}
-**Command/Tool**: {Tool used and parameters}
-**Result**:
-```
-{Full output or summary if very long}
-```
-**Decision**: {What you decided based on this result}
-
-### Step 2: {Description}
-...
-
-## Reference Analysis Extraction
-| Reference | Role | Section | Key Information Extracted |
-|-----------|------|---------|---------------------------|
-| {ref1} | {role} | Work Unit | {extracted info} |
-| {ref1} | {role} | Data Flow | {extracted info} |
-| {ref2} | {role} | CB Configuration | {extracted info} |
-| ... | ... | ... | ... |
-
-## Component Mapping (Hybrid Mode)
-| Component | Source Reference | Extraction Notes |
-|-----------|-----------------|------------------|
-| Reader kernel | {ref} | {notes} |
-| Compute phase 1 | {ref} | {notes} |
-| ... | ... | ... |
-
-## Interface Analysis (Hybrid Mode)
-| Interface | Status | Notes |
-|-----------|--------|-------|
-| Reader→Compute | Compatible | {details} |
-| Compute→Writer | Compatible | {details} |
-
-## Files Read
-| File | Purpose | Key Findings |
-|------|---------|--------------|
-| {path} | {why read} | {what learned} |
-
-## DeepWiki Queries
-| Query | Response Summary | How Used |
-|-------|------------------|----------|
-| {question} | {answer summary} | {how it informed design} |
-
-## Design Decisions Made
-| Decision | Options Considered | Choice | Rationale |
-|----------|-------------------|--------|-----------|
-| {topic} | {options} | {choice} | {why} |
-
-## Comparison Analysis (Derivative) / Composition Analysis (Hybrid)
-| Aspect | Reference Op(s) | New Op | Impact |
-|--------|-----------------|--------|--------|
-| {aspect} | {ref behavior} | {new behavior} | {implementation impact} |
-
-## Errors/Issues Encountered
-| Issue | Context | Resolution |
-|-------|---------|------------|
-| {issue} | {what caused it} | {how resolved} |
-
-## Files Created/Modified
-| File | Action | Description |
-|------|--------|-------------|
-| {path} | Created/Modified | {what was done} |
-
-## Final Status
-- **Completed**: Yes/No
-- **Output File**: {path to spec.md}
-- **Open Questions**: {list any unresolved questions}
+Check if logging is enabled at startup:
+```bash
+.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
 ```
 
-### What to Log
-1. **Reference analysis reading** - what was extracted and how it informed the design
-2. **Every file read** - path, why, key findings
-3. **Every DeepWiki query** - question, response summary, how it was used
-4. **Every design decision** - what options existed, what was chosen, why
-5. **Comparison/Composition analysis** - how new op differs from or combines references
-6. **Interface analysis** (Hybrid) - compatibility checks performed
-7. **Any errors or issues** - what happened, how resolved
-8. **All files created** - path and description
+**If DISABLED**: Skip breadcrumb steps. Git commits still required.
 
-### Logging Guidelines
-- Log in real-time as you work, not retrospectively
-- Include enough detail that someone could understand your design rationale
-- Document WHY design choices were made, not just WHAT was chosen
-- If output is very long (>50 lines), summarize but note "full output available in {file}"
-- Be explicit about assumptions and areas of uncertainty
+**If ENABLED**: Read `.claude/references/logging/common.md` and `.claude/references/logging/planner.md` for logging protocol.
