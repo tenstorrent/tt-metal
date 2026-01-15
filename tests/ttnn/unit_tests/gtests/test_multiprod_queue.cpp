@@ -23,6 +23,7 @@
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -125,9 +126,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             // Create tensor and transfer to device
             std::iota(host_data.begin(), host_data.end(), j);
             const Tensor host_tensor = Tensor::from_vector(host_data, tensor_spec);
-            auto src_buffer = host_buffer::get_host_buffer(host_tensor);
-            fill_tensor_from_host_buffer(
-                device->mesh_command_queue(*write_cq), device_tensor, src_buffer.view_bytes().data());
+            tensor_impl::copy_to_device(host_tensor, device_tensor, write_cq);
             EXPECT_TRUE(is_device_tensor(device_tensor));
 
             {
