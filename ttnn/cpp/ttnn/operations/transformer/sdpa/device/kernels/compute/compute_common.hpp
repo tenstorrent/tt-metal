@@ -654,7 +654,8 @@ void calculate_exponential_polynomial() {
 
     for (int d = 0; d < ITERATIONS; d++) {
         // Load the input.
-        TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 0);
+        constexpr uint32_t input_type = is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
+        TTI_SFPLOAD(p_sfpu::LREG2, input_type, ADDR_MOD_7, 0);
 
         if constexpr (SCALE_EN) {
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG11, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
@@ -663,7 +664,7 @@ void calculate_exponential_polynomial() {
 
         // Multiply by 1/ln(2) and round.
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-
+        INSERT_SFPNOP();
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
@@ -722,7 +723,7 @@ void calculate_exponential_polynomial() {
             // so convert to bfloat16 using round-to-nearest-even.
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
-        TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG2, input_type, ADDR_MOD_7, 0);
         TTI_INCRWC(0, 4, 0, 0);  // Skip odd columns.
     }
 }
@@ -748,7 +749,7 @@ void calculate_exponential_first_column(int scale_bf16) {
         if constexpr (DST_ACCUM_MODE) {
             calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 4>();
         } else {
-            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 2>();
+            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 2, true>();
         }
     }
 }
