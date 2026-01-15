@@ -16,17 +16,17 @@
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
 
-namespace ttnn::operations::pool::upsample {
+namespace ttnn::prim {
 
 struct UpsampleOperation {
     using operation_attributes_t = UpsampleParams;
-    using tensor_args_t = UpsampleInputs;
+    using tensor_args_t = Tensor;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::UpsampleBilinearProgramFactory,
-        program::UpsampleMultiCoreInterleavedProgramFactory,
-        program::UpsampleMultiCoreShardedProgramFactory>;
+        UpsampleBilinearProgramFactory,
+        UpsampleMultiCoreInterleavedProgramFactory,
+        UpsampleMultiCoreShardedProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
@@ -38,9 +38,6 @@ struct UpsampleOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::pool::upsample
-
-namespace ttnn::prim {
 ttnn::Tensor upsample(
     const ttnn::Tensor& input_tensor,
     int scale_factor_h,
@@ -49,4 +46,5 @@ ttnn::Tensor upsample(
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config = std::nullopt);
+
 }  // namespace ttnn::prim

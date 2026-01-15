@@ -10,14 +10,15 @@
 
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::pool::upsample {
+namespace ttnn::prim {
 
-static std::array<uint32_t, 4> get_input_shape(const UpsampleParams& args, const UpsampleInputs& tensor_args) {
-    const Tensor& input = tensor_args.input_tensor;
+static std::array<uint32_t, 4> get_input_shape(const UpsampleParams& args, const Tensor& input_tensor) {
+    const Tensor& input = input_tensor;
 
     // For bilinear mode, input is the HALOED tensor, so we must use sliding_window_config for dimensions
     if (args.mode == "bilinear" && args.sliding_window_config.has_value()) {
-        const sliding_window::SlidingWindowConfig& slidingWindowConfig = args.sliding_window_config.value();
+        const ttnn::operations::sliding_window::SlidingWindowConfig& slidingWindowConfig =
+            args.sliding_window_config.value();
         return {
             slidingWindowConfig.batch_size,
             slidingWindowConfig.input_hw.first,
@@ -29,25 +30,24 @@ static std::array<uint32_t, 4> get_input_shape(const UpsampleParams& args, const
 }
 
 UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const Tensor& input_tensor_0 = tensor_args.input_tensor;
+    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
     if (args.mode == "bilinear") {
         // Bilinear is only supported for sharded inputs
         // In case of interleaved input, autosharding had previously been performed
-        return program::UpsampleBilinearProgramFactory{};
+        return UpsampleBilinearProgramFactory{};
     }
     if (args.mode == "nearest") {
-        if (input_tensor_0.is_sharded()) {
-            return program::UpsampleMultiCoreShardedProgramFactory{};
+        if (input_tensor.is_sharded()) {
+            return UpsampleMultiCoreShardedProgramFactory{};
         }
-        return program::UpsampleMultiCoreInterleavedProgramFactory{};
+        return UpsampleMultiCoreInterleavedProgramFactory{};
     }
     TT_THROW("Unsupported mode: only supported modes are nearest and bilinear");
 }
 
 void UpsampleOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor;
+    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
+    const auto& input_tensor_a = input_tensor;
     TT_FATAL(
         input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
@@ -88,14 +88,14 @@ void UpsampleOperation::validate_on_program_cache_miss(
 }
 
 void UpsampleOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
+    validate_on_program_cache_miss(args, input_tensor);
 }
 
 UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const Tensor& input = tensor_args.input_tensor;
-    const std::array<uint32_t, 4> input_shape = get_input_shape(args, tensor_args);
+    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
+    const Tensor& input = input_tensor;
+    const std::array<uint32_t, 4> input_shape = get_input_shape(args, input_tensor);
 
     const uint32_t out_n = input_shape[0];
     const uint32_t out_h = input_shape[1] * args.scale_factor_h;
@@ -150,14 +150,11 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
 }
 
 UpsampleOperation::tensor_return_value_t UpsampleOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
+    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
+    auto output_spec = compute_output_specs(args, input_tensor);
+    return create_device_tensor(output_spec, input_tensor.device());
 }
 
-}  // namespace ttnn::operations::pool::upsample
-
-namespace ttnn::prim {
 ttnn::Tensor upsample(
     const ttnn::Tensor& input_tensor,
     const int scale_factor_h,
@@ -166,15 +163,15 @@ ttnn::Tensor upsample(
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config) {
-    using OperationType = ttnn::operations::pool::upsample::UpsampleOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<UpsampleOperation>(
+        UpsampleParams{
             .scale_factor_h = scale_factor_h,
             .scale_factor_w = scale_factor_w,
             .mode = mode,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config,
             .sliding_window_config = sliding_window_config},
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        input_tensor);
 }
+
 }  // namespace ttnn::prim

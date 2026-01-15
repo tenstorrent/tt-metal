@@ -11,7 +11,7 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 
-namespace ttnn::operations::pool::upsample::program {
+namespace ttnn::prim {
 
 using FixedPoint = int32_t;
 constexpr int32_t FIXED_POINT_SHIFT = 16;
@@ -20,8 +20,8 @@ constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
 static FixedPoint float_to_fixed(float value) { return static_cast<FixedPoint>(value * FIXED_ONE); }
 
 UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory::create(
-    const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
-    const ttnn::Tensor& input = tensor_args.input_tensor;
+    const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
+    const ttnn::Tensor& input = input_tensor;
     const ttnn::Tensor& output = output_tensor;
     const uint32_t scale_factor_h = operation_attributes.scale_factor_h;
     const uint32_t scale_factor_w = operation_attributes.scale_factor_w;
@@ -33,7 +33,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     TT_FATAL(
         operation_attributes.sliding_window_config.has_value(),
         "Bilinear upsample requires sliding_window_config to be provided");
-    const sliding_window::SlidingWindowConfig sliding_window_config =
+    const ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config =
         operation_attributes.sliding_window_config.value();
 
     // Extract original (pre-halo) dimensions from sliding_window_config
@@ -78,7 +78,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     const std::array<uint32_t, 2> halo_shard_shape = halo_in.shard_spec().value().shape;
 
     const std::vector<uint32_t> op_trace_metadata =
-        sliding_window::generate_op_trace_metadata_bilinear(sliding_window_config);
+        ttnn::operations::sliding_window::generate_op_trace_metadata_bilinear(sliding_window_config);
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t buffering_factor = 2;
@@ -280,7 +280,8 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
 
         // Find the minimum input index for this core's output range
         const std::pair<uint32_t, uint32_t> minmax_indices =
-            sliding_window::find_minmax_trace_indices(op_trace_metadata, output_index_start, output_index_end);
+            ttnn::operations::sliding_window::find_minmax_trace_indices(
+                op_trace_metadata, output_index_start, output_index_end);
         const uint32_t min_trace_idx = minmax_indices.first;
         const uint32_t min_input_offset = op_trace_metadata[min_trace_idx];
 
@@ -314,16 +315,14 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
 void UpsampleBilinearProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const UpsampleParams& /*operation_attributes*/,
-    const UpsampleInputs& tensor_args,
+    const Tensor& input_tensor,
     Tensor& output_tensor) {
     tt::tt_metal::Program& program = cached_program.program;
     tt::tt_metal::CBHandle& cb_src0 = cached_program.shared_variables.cb_src0;
     tt::tt_metal::CBHandle& out_cb = cached_program.shared_variables.out_cb;
 
-    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *input_tensor.buffer());
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *output_tensor.buffer());
 }
 
-}  // namespace ttnn::operations::pool::upsample::program
+}  // namespace ttnn::prim
