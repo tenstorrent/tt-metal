@@ -7,7 +7,7 @@
 
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::reduction::prod_all::program {
+namespace ttnn::prim {
 
 struct ProdAllProgramFactory {
     struct shared_variables_t {
@@ -27,4 +27,4 @@ struct ProdAllProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::reduction::prod_all::program
+}  // namespace ttnn::prim

@@ -11,7 +11,7 @@
 
 #include <string>
 
-namespace ttnn::operations::reduction::prod_nc::program {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 
@@ -212,4 +212,4 @@ void ProdNcProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::prod_nc::program
+}  // namespace ttnn::prim

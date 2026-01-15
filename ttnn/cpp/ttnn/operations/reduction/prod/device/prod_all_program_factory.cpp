@@ -7,7 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::reduction::prod_all::program {
+namespace ttnn::prim {
 
 ProdAllProgramFactory::cached_program_t ProdAllProgramFactory::create(
     const ProdAllParams& /*operation_attributes*/, const ProdAllInputs& tensor_args, Tensor& tensor_return_value) {
@@ -115,4 +115,4 @@ void ProdAllProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::prod_all::program
+}  // namespace ttnn::prim
