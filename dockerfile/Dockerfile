@@ -71,6 +71,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PYTHON_ENV_DIR=/opt/venv
 RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
 
+# Make venv writable by all users (allows uv pip install at runtime)
+RUN chmod -R a+rwX $PYTHON_ENV_DIR
+
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
@@ -196,6 +199,9 @@ FROM base AS release
 ENV PYTHON_ENV_DIR=/opt/venv
 RUN uv venv $PYTHON_ENV_DIR
 
+# Make venv writable by all users (allows uv pip install at runtime)
+RUN chmod -R a+rwX $PYTHON_ENV_DIR
+
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
@@ -236,6 +242,9 @@ RUN /bin/bash -c "./build_metal.sh \
     && ./create_venv.sh \
     && source $PYTHON_ENV_DIR/bin/activate \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
+
+# Make venv writable by all users (allows uv pip install at runtime)
+RUN chmod -R a+rwX $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
