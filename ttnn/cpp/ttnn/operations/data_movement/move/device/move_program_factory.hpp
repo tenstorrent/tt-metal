@@ -12,8 +12,8 @@ namespace ttnn::operations::data_movement::move::program {
 
 // Program factory for MULTI_CORE and MULTI_CORE_OVERLAP strategies
 struct MoveProgramFactory {
-    using shared_variables_t = ttnn::operations::data_movement::copy::program::CopySharedVariables;
-    using cached_program_t = ttnn::operations::data_movement::copy::program::CopyProgramFactory::cached_program_t;
+    using shared_variables_t = ttnn::prim::CopySharedVariables;
+    using cached_program_t = ttnn::prim::CopyProgramFactory::cached_program_t;
 
     static cached_program_t create(
         const operation_attributes_t& operation_attributes,
