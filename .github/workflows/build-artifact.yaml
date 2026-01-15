@@ -68,11 +68,6 @@ on:
         type: boolean
         default: false
         description: "Build UMD tests"
-      build-ttnn-tests:
-        required: false
-        type: boolean
-        default: false
-        description: "Build TTNN tests"
       enable-lto:
         required: false
         type: boolean
@@ -167,11 +162,6 @@ on:
         type: boolean
         default: false
         description: "Build UMD tests"
-      build-ttnn-tests:
-        required: false
-        type: boolean
-        default: false
-        description: "Build TTNN tests"
       enable-lto:
         required: false
         type: boolean
@@ -333,9 +323,6 @@ jobs:
           fi
           if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
             build_command="$build_command --build-umd-tests"
-          fi
-          if [ "${{ inputs.build-ttnn-tests }}" = "true" ]; then
-            build_command="$build_command --build-ttnn-tests"
           fi
           if [ "${{ inputs.enable-lto }}" = "true" ]; then
             build_command="$build_command --enable-lto"

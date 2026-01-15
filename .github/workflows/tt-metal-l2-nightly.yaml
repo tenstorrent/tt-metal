@@ -81,7 +81,6 @@ jobs:
       build-wheel: true
       tracy: true
       skip-tt-train: false
-      build-ttnn-tests: true
       version: 22.04
   generate-arch-matrix:
     runs-on: ubuntu-latest
