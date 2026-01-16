@@ -215,7 +215,8 @@ cached_workload_t ReduceToAllOp::ReduceToAll::create_at(
     const auto& root_coordinate = operation_attributes.root_coord;
     const float scale_fp32 = operation_attributes.scale_fp32;
 
-    return reduce_to_all_program_factory(
+    // TODO: Switch back to reduce_to_all_program_factory after testing
+    return reduce_to_all_simplified_program_factory(
         tensor_args,
         operation_attributes,
         root_coordinate,

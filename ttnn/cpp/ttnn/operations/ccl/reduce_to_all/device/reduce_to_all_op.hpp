@@ -118,6 +118,19 @@ device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t> 
     std::optional<MeshCoordinate>& backward_coord,
     ReduceToAllOp::tensor_return_value_t& output_tensor,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
+
+// Simplified version: 2 kernels on shard cores only, full zero-copy
+device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t>
+reduce_to_all_simplified_program_factory(
+    const ReduceToAllOp::tensor_args_t& tensor_args,
+    const ReduceToAllOp::operation_attributes_t& operation_attributes,
+    const MeshCoordinate& root_coord,
+    float scale_fp32,
+    const MeshCoordinate& device_coordinate,
+    std::optional<MeshCoordinate>& forward_coord,
+    std::optional<MeshCoordinate>& backward_coord,
+    ReduceToAllOp::tensor_return_value_t& output_tensor,
+    std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
 }  // namespace operations::ccl
 
 namespace prim {

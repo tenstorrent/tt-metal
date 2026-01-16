@@ -92,7 +92,7 @@ def compute_reference_reduce_to_all(
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 389120}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 393232}),
     ],
     indirect=["device_params"],
     ids=["fabric_1d_ring_trace"],

@@ -1,0 +1,144 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+///
+// Simplified reader kernel for reduce_to_all operation.
+// This kernel runs on SHARD CORES (data cores) - no mux connection needed.
+//
+// ZERO-COPY OPTIMIZATIONS:
+// 1. LOCAL INPUT: CB aliased to input tensor shard (set_globally_allocated_address)
+//    - Data already at CB address, just cb_push_back()
+//
+// 2. NEIGHBOR DATA (L only): CB aliased to MeshBuffer base (offset 0)
+//    - Sender packs [L|S|M] and sends to MeshBuffer address
+//    - L is at offset 0, so cb_r1_neighbor_l can be aliased directly
+//    - Wait for semaphore, then cb_push_back() - NO memcpy for L!
+//
+// 3. NEIGHBOR DATA (S and M): Small memcpy needed
+//    - CB aliasing doesn't support offsets, so S/M CBs are regular CBs
+//    - After packet arrives, we memcpy S and M from buffer to their CBs
+//    - S and M are tiny (~256 bytes each) - negligible overhead
+//
+// WHY SEPARATE BUFFERS FOR R1 AND R2:
+//    R1 and R2 have DIFFERENT neighbors (different senders).
+//    Race condition if shared buffer (see detailed comments in original).
+
+#include "api/dataflow/dataflow_api.h"
+#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include <cstdint>
+
+using tt::data_movement::common::tt_memmove;
+
+void kernel_main() {
+    // ==========================================================================
+    // Compile-time args
+    // ==========================================================================
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(0);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(1);
+    [[maybe_unused]] constexpr uint32_t page_size_bytes = get_compile_time_arg_val(2);
+    [[maybe_unused]] constexpr uint32_t alignment = get_compile_time_arg_val(3);
+
+    // CBs for local input (aliased to input tensor shard - zero-copy)
+    constexpr uint32_t cb_local_l = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_local_s = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_local_m = get_compile_time_arg_val(6);
+
+    // CBs for R1 neighbor data
+    // cb_r1_neighbor_l is ALIASED to R1 MeshBuffer (zero-copy for L)
+    // cb_r1_neighbor_s and cb_r1_neighbor_m are regular CBs (need memcpy)
+    constexpr uint32_t cb_r1_neighbor_l = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_r1_neighbor_s = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_r1_neighbor_m = get_compile_time_arg_val(9);
+
+    // CBs for R2 neighbor data (separate buffer for race condition prevention)
+    constexpr uint32_t cb_r2_neighbor_l = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_r2_neighbor_s = get_compile_time_arg_val(11);
+    constexpr uint32_t cb_r2_neighbor_m = get_compile_time_arg_val(12);
+
+    // Offsets and sizes for memcpy
+    constexpr uint32_t s_offset_in_buffer = get_compile_time_arg_val(13);  // payload_size_bytes
+    constexpr uint32_t s_size_bytes = get_compile_time_arg_val(14);
+    constexpr uint32_t m_size_bytes = get_compile_time_arg_val(15);
+    constexpr uint32_t m_offset_in_buffer = s_offset_in_buffer + s_size_bytes;
+
+    // Derived constants
+    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+
+    // ==========================================================================
+    // Runtime args
+    // ==========================================================================
+    size_t arg_idx = 0;
+    const uint32_t r1_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t r2_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t r1_recv_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t r2_recv_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
+
+    // =========================================================================
+    // ROUND 1: Local input (zero-copy) + Neighbor data
+    // =========================================================================
+
+    // LOCAL INPUT: CB aliased to input tensor shard - data already there!
+    cb_reserve_back(cb_local_l, out_tiles);
+    cb_push_back(cb_local_l, out_tiles);
+
+    cb_reserve_back(cb_local_s, Sq_chunk_t);
+    cb_push_back(cb_local_s, Sq_chunk_t);
+
+    cb_reserve_back(cb_local_m, Sq_chunk_t);
+    cb_push_back(cb_local_m, Sq_chunk_t);
+
+    // R1 NEIGHBOR DATA:
+    // - L: cb_r1_neighbor_l is aliased to R1 MeshBuffer base (zero-copy!)
+    // - S, M: Need memcpy from buffer offsets to CB addresses
+    volatile tt_l1_ptr uint32_t* r1_neighbor_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_neighbor_sem_addr);
+
+    // Reserve CB space
+    cb_reserve_back(cb_r1_neighbor_l, out_tiles);
+    cb_reserve_back(cb_r1_neighbor_s, Sq_chunk_t);
+    cb_reserve_back(cb_r1_neighbor_m, Sq_chunk_t);
+
+    // Wait for R1 data arrival
+    noc_semaphore_wait(r1_neighbor_sem_ptr, 1);
+    noc_semaphore_set(r1_neighbor_sem_ptr, 0);
+
+    // L is zero-copy (aliased to buffer base), just push
+    cb_push_back(cb_r1_neighbor_l, out_tiles);
+
+    // S and M need memcpy from buffer to CB
+    uint32_t r1_s_cb_addr = get_write_ptr(cb_r1_neighbor_s);
+    uint32_t r1_m_cb_addr = get_write_ptr(cb_r1_neighbor_m);
+    tt_memmove<true, false, false, 0>(r1_s_cb_addr, r1_recv_buffer_addr + s_offset_in_buffer, s_size_bytes);
+    tt_memmove<true, false, false, 0>(r1_m_cb_addr, r1_recv_buffer_addr + m_offset_in_buffer, m_size_bytes);
+
+    cb_push_back(cb_r1_neighbor_s, Sq_chunk_t);
+    cb_push_back(cb_r1_neighbor_m, Sq_chunk_t);
+
+    // =========================================================================
+    // ROUND 2: Neighbor data from DIFFERENT sender (separate buffer)
+    // =========================================================================
+    volatile tt_l1_ptr uint32_t* r2_neighbor_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_neighbor_sem_addr);
+
+    cb_reserve_back(cb_r2_neighbor_l, out_tiles);
+    cb_reserve_back(cb_r2_neighbor_s, Sq_chunk_t);
+    cb_reserve_back(cb_r2_neighbor_m, Sq_chunk_t);
+
+    // Wait for R2 data arrival
+    noc_semaphore_wait(r2_neighbor_sem_ptr, 1);
+    noc_semaphore_set(r2_neighbor_sem_ptr, 0);
+
+    // L is zero-copy
+    cb_push_back(cb_r2_neighbor_l, out_tiles);
+
+    // S and M need memcpy
+    uint32_t r2_s_cb_addr = get_write_ptr(cb_r2_neighbor_s);
+    uint32_t r2_m_cb_addr = get_write_ptr(cb_r2_neighbor_m);
+    tt_memmove<true, false, false, 0>(r2_s_cb_addr, r2_recv_buffer_addr + s_offset_in_buffer, s_size_bytes);
+    tt_memmove<true, false, false, 0>(r2_m_cb_addr, r2_recv_buffer_addr + m_offset_in_buffer, m_size_bytes);
+
+    cb_push_back(cb_r2_neighbor_s, Sq_chunk_t);
+    cb_push_back(cb_r2_neighbor_m, Sq_chunk_t);
+
+    // Done! Compute kernel handles R1 reduction, R2 reduction, and final output.
+}
