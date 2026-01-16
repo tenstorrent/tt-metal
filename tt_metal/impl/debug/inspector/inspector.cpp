@@ -347,8 +347,8 @@ void Inspector::mesh_workload_set_program_binary_status(
 
 void Inspector::mesh_workload_set_operation_name_and_parameters(
     const distributed::MeshWorkloadImpl* mesh_workload,
-    const std::string_view operation_name,
-    const std::string_view operation_parameters) noexcept {
+    std::string_view operation_name,
+    std::string_view operation_parameters) noexcept {
     if (!is_enabled()) {
         return;
     }
