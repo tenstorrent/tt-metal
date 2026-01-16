@@ -350,24 +350,6 @@ def post_process_ops_log(
     return results
 
 
-# TABLE_CONFIGS for split: N must be divisible by 192 (LCM of 64, 96, 192 for chunks 2, 3, 6)
-# This ensures N/chunks is tile-aligned (divisible by 32) for all chunk values
-TABLE_CONFIGS_SPLIT = [
-    (512, 512, 576),  # N=576=192*3
-    (512, 1024, 1152),  # N=1152=192*6
-    (1024, 1024, 1152),  # N=1152=192*6
-    (1024, 1024, 2304),  # N=2304=192*12
-    (1024, 2048, 2304),  # N=2304=192*12
-    (2048, 2048, 2304),  # N=2304=192*12
-    (2048, 2048, 3072),  # N=3072=192*16
-    (3072, 3072, 3072),  # N=3072=192*16
-    (3072, 3072, 4608),  # N=4608=192*24
-    (4096, 4096, 4608),  # N=4608=192*24
-    (8192, 8192, 9216),  # N=9216=192*48
-    (16384, 16384, 16128),  # N=16128=192*84
-]
-
-
 @pytest.mark.parametrize(
     "chunks, shape",
     [
@@ -437,7 +419,6 @@ def test_performance_split(chunks, shape):
     if ttnn.device.is_blackhole():
         expected_util = 0.895
     else:
-        # expected_util = 0.47
         expected_util = 0.582
 
     tolerance = 0.03
