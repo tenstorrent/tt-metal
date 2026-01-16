@@ -37,6 +37,7 @@
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include <umd/device/types/arch.hpp>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -382,14 +383,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         src = env_.root_ + src;
     }
 
-    // Create list of object files for link
-    for (const string& obj : this->objs_) {
-        this->link_objs_ += obj + " ";
-    }
-
     // Append hw build objects compiled offline
     {
-        auto it = std::back_inserter(this->link_objs_);
+        auto it = std::back_inserter(this->extra_link_objs_);
         for (const auto& obj : jit_build_query.link_objs(params)) {
             fmt::format_to(it, "{}{} ", env_.root_, obj);
         }
@@ -401,7 +397,11 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 }
 
 void JitBuildState::compile_one(
-    const string& out_dir, const JitBuildSettings* settings, const string& src, const string& obj) const {
+    const string& out_dir,
+    const JitBuildSettings* settings,
+    const string& src,
+    const string& obj,
+    const string& obj_temp_path) const {
     // ZoneScoped;
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
@@ -452,8 +452,7 @@ void JitBuildState::compile_one(
 
     // Append common args provided by the build state
     std::string obj_path = out_dir + obj;
-    jit_build::utils::FileRenamer obj_file(obj_path);
-    fs::path temp_d_path = obj_file.path();
+    fs::path temp_d_path = obj_temp_path;
     temp_d_path.replace_extension("d");
     cmd += this->cflags_;
     cmd += this->includes_;
@@ -461,7 +460,7 @@ void JitBuildState::compile_one(
     if (settings) {
         settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
     }
-    cmd += fmt::format("-c -o {} {} -MF {} ", obj_file.path(), src, temp_d_path.string());
+    cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, src, temp_d_path.string());
     cmd += defines;
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
@@ -472,13 +471,15 @@ void JitBuildState::compile_one(
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
+    // log file and dephash file can be renamed after compilation, but the .o file
+    // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
     jit_build::utils::FileRenamer dephash_file(obj_path + ".dephash");
-    jit_build::write_dependency_hashes(out_dir, obj_file.path(), dephash_file.path());
+    jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_file.path());
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
@@ -487,13 +488,21 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
-size_t JitBuildState::compile(const string& out_dir, const JitBuildSettings* settings) const {
+size_t JitBuildState::compile(
+    const string& out_dir,
+    const JitBuildSettings* settings,
+    vector_cache_aligned<std::string>& objs,
+    std::vector<jit_build::utils::FileRenamer>& obj_files) const {
     // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        if (need_compile(out_dir, this->objs_[i])) {
+        if (need_compile(out_dir, objs[i])) {
+            obj_files.emplace_back(out_dir + objs[i]);
             launch_build_step(
-                [this, &out_dir, settings, i] { this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i]); },
+                [this, &out_dir, &objs, settings, i, obj_path = obj_files.back().path()]() {
+                    this->compile_one(out_dir, settings, this->srcs_[i], objs[i], obj_path);
+                    objs[i] = obj_path;
+                },
                 events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
@@ -549,6 +558,10 @@ void JitBuildState::link_impl(const string& out_dir, const JitBuildSettings* set
 
     // Append common args provided by the build state
     cmd += lflags;
+    // must use the temp paths for obj files because they are renamed after linking
+    for (const auto& obj : objs) {
+        cmd += obj + " ";
+    }
     cmd += link_objs;
     std::string elf_name = out_dir + this->target_name_ + ".elf";
     jit_build::utils::FileRenamer elf_file(elf_name);
@@ -571,8 +584,14 @@ void JitBuildState::link_impl(const string& out_dir, const JitBuildSettings* set
     }
 }
 
-void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings) const {
-    link_impl(out_dir, settings, this->link_objs_);
+void JitBuildState::link(
+    const string& out_dir, const vector_cache_aligned<std::string>& objs, const JitBuildSettings* settings) const {
+    string link_objs;
+    for (const auto& obj : objs) {
+        link_objs += obj + " ";
+    }
+    link_objs += this->extra_link_objs_;
+    link_impl(out_dir, settings, link_objs);
 }
 
 // Given this elf (A) and a later elf (B):
@@ -632,10 +651,17 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
 
     fs::create_directories(out_dir);
-    if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
-        link(out_dir, settings);
-        if (this->is_fw_) {
-            weaken(out_dir);
+    {
+        // object files will be created at unique names and renamed after linking
+        vector_cache_aligned<std::string> objs = this->objs_;
+        std::vector<jit_build::utils::FileRenamer> obj_files;
+        obj_files.reserve(objs.size());  // lets preallocate and avoid invalidating objects while things are running
+
+        if (compile(out_dir, settings, objs, obj_files) > 0 || need_link(out_dir)) {
+            link(out_dir, objs, settings);
+            if (this->is_fw_) {
+                weaken(out_dir);
+            }
         }
     }
 
