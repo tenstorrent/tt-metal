@@ -44,6 +44,6 @@ void kernel_main() {
     {
         constexpr uint32_t cb_reduce_scaler = tt::CBIndex::c_1;
         const uint32_t reduce_scaler = get_arg_val<uint32_t>(0);
-        ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+        dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
     }
 }

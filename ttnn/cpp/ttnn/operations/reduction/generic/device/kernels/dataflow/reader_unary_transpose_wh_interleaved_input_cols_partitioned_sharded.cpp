@@ -20,7 +20,7 @@ void kernel_main() {
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
     uint32_t scalar = get_arg_val<uint32_t>(6);
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_id_in2, scalar);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_id_in2, scalar);
 #endif
 
     constexpr uint32_t onetile = 1;

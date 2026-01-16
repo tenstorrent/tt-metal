@@ -23,7 +23,7 @@ void kernel_main() {
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     constexpr uint32_t scale_cb_index = tt::CBIndex::c_3;
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
+    dataflow_kernel_lib::generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
 
     const auto interleaved_accessor0 = TensorAccessor(out_args, dst_addr0, tile_bytes);
 

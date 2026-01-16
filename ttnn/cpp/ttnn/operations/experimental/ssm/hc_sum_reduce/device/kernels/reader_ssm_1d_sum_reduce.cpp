@@ -16,7 +16,7 @@ void kernel_main() {
     constexpr uint32_t scaler = get_compile_time_arg_val(0);
 
     constexpr uint32_t cb_id_in2 = 2;
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_id_in2, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_id_in2, scaler);
 
     constexpr uint32_t cb_id_in0 = 0;
 

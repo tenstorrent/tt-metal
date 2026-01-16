@@ -29,7 +29,7 @@ void kernel_main() {
 #ifdef USE_FPU
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t scaler = 0;
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_id_in1, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_id_in1, scaler);
 #endif
 
     uint32_t l1_write_addr_in0;

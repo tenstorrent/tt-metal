@@ -28,7 +28,7 @@ void kernel_main() {
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_id_in2, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_id_in2, scaler);
 #endif
 
     constexpr uint32_t cb_id_mask_h = tt::CBIndex::c_3;

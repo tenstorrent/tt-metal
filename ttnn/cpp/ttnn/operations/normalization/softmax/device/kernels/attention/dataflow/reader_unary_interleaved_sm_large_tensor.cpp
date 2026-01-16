@@ -54,7 +54,7 @@ void kernel_main() {
 
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_in_2, reduce_scaler);
+        dataflow_kernel_lib::generate_reduce_scaler(cb_in_2, reduce_scaler);
     }
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker

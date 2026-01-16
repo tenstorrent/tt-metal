@@ -55,7 +55,7 @@ void kernel_main() {
     if constexpr (!use_welford) {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
-        ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_in_2, scaler);
+        dataflow_kernel_lib::generate_reduce_scaler(cb_in_2, scaler);
     }
     constexpr uint32_t eps_cb_id = 3;
     const uint32_t eps = get_arg_val<uint32_t>(5);

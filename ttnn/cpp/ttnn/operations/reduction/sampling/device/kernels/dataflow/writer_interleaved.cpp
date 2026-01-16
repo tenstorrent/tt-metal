@@ -246,7 +246,7 @@ void kernel_main() {
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
     constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
+    dataflow_kernel_lib::generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
     // read k, p, temp
 
     const auto addrg_k = TensorAccessor(k_args, k_addr, 128);

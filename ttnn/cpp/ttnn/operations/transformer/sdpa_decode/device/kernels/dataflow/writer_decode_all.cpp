@@ -135,8 +135,8 @@ void kernel_main() {
 
     // generate and send scaler to compute
     // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     if (k_chunk_start == window_start_chunk && window_start_unaligned > 0) {

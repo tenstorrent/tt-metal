@@ -23,7 +23,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_scaler = 1;
     constexpr uint32_t cb_id_mask_h_w = 2;
 
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_id_scaler, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_id_scaler, scaler);
 
     if (do_mask_h || do_mask_w) {
         generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);

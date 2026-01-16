@@ -6,14 +6,12 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-namespace ttnn::kernel_lib::dataflow {
+namespace dataflow_kernel_lib {
 
 // Face size in uint32 (128 u32 = 256 bf16 = 16x16 face)
 constexpr uint32_t FACE_SIZE_U32 = 128;
 // Row size in uint32 (8 u32 = 16 bf16)
 constexpr uint32_t ROW_SIZE_U32 = 8;
-
-namespace detail {
 
 template <bool half_tile>
 FORCE_INLINE void zero_faces(uint32_t write_addr) {
@@ -43,8 +41,6 @@ FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
     }
 }
 
-}  // namespace detail
-
 /**
  * @brief Generate a reduce scaler tile
  *
@@ -67,14 +63,14 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
     cb_reserve_back(cb_id, 1);
     uint32_t write_addr = get_write_ptr(cb_id);
 
-    detail::zero_faces<half_tile>(write_addr);
+    zero_faces<half_tile>(write_addr);
 
     if (scaler != 0) {
         volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-        detail::fill_row0<half_tile>(ptr, scaler);
+        fill_row0<half_tile>(ptr, scaler);
     }
 
     cb_push_back(cb_id, 1);
 }
 
-}  // namespace ttnn::kernel_lib::dataflow
+}  // namespace dataflow_kernel_lib

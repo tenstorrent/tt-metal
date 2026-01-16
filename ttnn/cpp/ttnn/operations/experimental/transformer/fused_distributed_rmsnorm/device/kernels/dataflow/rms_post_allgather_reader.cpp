@@ -72,7 +72,7 @@ void kernel_main() {
     constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
 
     // Generate constant tiles for layernorm compute
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(reduce_scalar_cb, scalar_value);
+    dataflow_kernel_lib::generate_reduce_scaler(reduce_scalar_cb, scalar_value);
     generate_bcast_col_scalar(epsilon_cb, epsilon_value);
 
     if constexpr (fuse_rope) {

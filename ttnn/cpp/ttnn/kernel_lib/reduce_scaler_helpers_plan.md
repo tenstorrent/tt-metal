@@ -33,7 +33,7 @@ The scaler is placed in a circular buffer tile with a specific fill pattern that
 
 | Helper | Location | Status |
 |--------|----------|--------|
-| `ttnn::kernel_lib::dataflow::generate_reduce_scaler<half_tile>` | `ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp` | ✅ New library (use this) |
+| `dataflow_kernel_lib::generate_reduce_scaler<half_tile>` | `ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp` | ✅ New library (use this) |
 | `generate_reduce_scaler<half_tile>` | `ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp` | ⚠️ Deprecated (migrate away) |
 
 ### Fill Patterns Explained
@@ -54,7 +54,7 @@ Face layout (each face is 16x16 elements):
 ### Direct Duplicates
 
 1. **`ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_h.cpp`**
-   - ✅ **MIGRATED** - Now uses `ttnn::kernel_lib::dataflow::generate_reduce_scaler`
+   - ✅ **MIGRATED** - Now uses `dataflow_kernel_lib::generate_reduce_scaler`
 
 ### Kernels Migration Status
 
@@ -138,7 +138,7 @@ All files have been successfully migrated to the new helper library!
 #pragma once
 #include "dataflow_api.h"
 
-namespace ttnn::kernel_lib::dataflow {
+namespace dataflow_kernel_lib {
 
 /**
  * @brief Generate a reduce scaler tile
@@ -156,7 +156,7 @@ namespace ttnn::kernel_lib::dataflow {
 template <bool half_tile = false>
 FORCE_INLINE void generate_reduce_scaler(uint32_t cb_id, uint32_t scaler);
 
-} // namespace ttnn::kernel_lib::dataflow
+} // namespace dataflow_kernel_lib
 ```
 
 ### Implementation
@@ -164,16 +164,14 @@ FORCE_INLINE void generate_reduce_scaler(uint32_t cb_id, uint32_t scaler);
 ```cpp
 #pragma once
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
-namespace ttnn::kernel_lib::dataflow {
+namespace dataflow_kernel_lib {
 
 // Face size in uint32 (128 u32 = 256 bf16 = 16x16 face)
 constexpr uint32_t FACE_SIZE_U32 = 128;
 // Row size in uint32 (8 u32 = 16 bf16)
 constexpr uint32_t ROW_SIZE_U32 = 8;
-
-namespace detail {
 
 template <bool half_tile>
 FORCE_INLINE void zero_faces(uint32_t write_addr) {
@@ -195,32 +193,30 @@ template <bool half_tile>
 FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
     constexpr uint32_t num_faces = half_tile ? 2 : 4;
 
-    #pragma unroll
     for (uint32_t face = 0; face < num_faces; ++face) {
         uint32_t face_offset = face * FACE_SIZE_U32;
-        #pragma unroll
         for (uint32_t col = 0; col < ROW_SIZE_U32; ++col) {
             ptr[face_offset + col] = scaler;
         }
     }
 }
 
-}  // namespace detail
-
-template <bool half_tile>
-FORCE_INLINE void generate_reduce_scaler(uint32_t cb_id, uint32_t scaler) {
+template <bool half_tile = false>
+FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t scaler) {
     cb_reserve_back(cb_id, 1);
     uint32_t write_addr = get_write_ptr(cb_id);
 
-    detail::zero_faces<half_tile>(write_addr);
+    zero_faces<half_tile>(write_addr);
 
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-    detail::fill_row0<half_tile>(ptr, scaler);
+    if (scaler != 0) {
+        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+        fill_row0<half_tile>(ptr, scaler);
+    }
 
     cb_push_back(cb_id, 1);
 }
 
-}  // namespace ttnn::kernel_lib::dataflow
+}  // namespace dataflow_kernel_lib
 ```
 
 ### Usage Examples
@@ -239,7 +235,7 @@ void kernel_main() {
 ```cpp
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"
 
-using ttnn::kernel_lib::dataflow::generate_reduce_scaler;
+using dataflow_kernel_lib::generate_reduce_scaler;
 
 void kernel_main() {
     // ...
@@ -303,7 +299,7 @@ All 20 remaining kernel files have been successfully migrated to use the new hel
 All migrations followed the same pattern:
 - Replace `#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"`
 - With `#include "ttnn/cpp/ttnn/kernel_lib/reduce_scaler_helpers.hpp"`
-- Add `using ttnn::kernel_lib::dataflow::generate_reduce_scaler;`
+- Add `using dataflow_kernel_lib::generate_reduce_scaler;`
 
 Tests have been run and are passing successfully.
 
@@ -313,7 +309,7 @@ Tests have been run and are passing successfully.
 
 1. **✅ `ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/device/kernels/dataflow/reader_layernorm_preallgather_dit.cpp`**
    - ✅ Migrated: Replaced deprecated include with `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp`
-   - ✅ Updated function call to use full namespace: `ttnn::kernel_lib::dataflow::generate_reduce_scaler`
+   - ✅ Updated function call to use full namespace: `dataflow_kernel_lib::generate_reduce_scaler`
    - ✅ All 172 DIT LayerNorm tests passing
 
 2. **✅ `ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/dataflow/reader_layernorm_postallgather_dit.cpp`**
@@ -324,15 +320,15 @@ Tests have been run and are passing successfully.
 
 3. **✅ `tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/kernels/dataflow_reduce.cpp`**
    - ✅ Migrated: Replaced deprecated include with `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp`
-   - ✅ Updated function call to use full namespace: `ttnn::kernel_lib::dataflow::generate_reduce_scaler`
+   - ✅ Updated function call to use full namespace: `dataflow_kernel_lib::generate_reduce_scaler`
 
 4. **✅ `tests/ttnn/unit_tests/gtests/udm/reduction/sharded/kernels/reader_receiver_unary_sharded_reduce.cpp`**
    - ✅ Migrated: Replaced deprecated include with `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp`
-   - ✅ Updated function call to use full namespace: `ttnn::kernel_lib::dataflow::generate_reduce_scaler`
+   - ✅ Updated function call to use full namespace: `dataflow_kernel_lib::generate_reduce_scaler`
 
 5. **✅ `tests/ttnn/unit_tests/gtests/udm/reduction/sharded/kernels/reader_sender_unary_sharded_reduce.cpp`**
    - ✅ Migrated: Replaced deprecated include with `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp`
-   - ✅ Updated function call to use full namespace: `ttnn::kernel_lib::dataflow::generate_reduce_scaler`
+   - ✅ Updated function call to use full namespace: `dataflow_kernel_lib::generate_reduce_scaler`
 
 **Testing:**
 - ✅ DIT LayerNorm: 172 tests passed (test_distributed_dit_layernorm.py)
@@ -342,7 +338,7 @@ Tests have been run and are passing successfully.
 
 1. **Add deprecation warning to old helper**
     ```cpp
-    [[deprecated("Use ttnn::kernel_lib::dataflow::generate_reduce_scaler instead")]]
+    [[deprecated("Use dataflow_kernel_lib::generate_reduce_scaler instead")]]
     ```
 
 2. **Update documentation**

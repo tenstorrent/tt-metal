@@ -29,7 +29,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     constexpr uint32_t scalar = get_compile_time_arg_val(3);  // Now arg 3 instead of 4
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_id_in2, scalar);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_id_in2, scalar);
 
     constexpr auto tensor_args = TensorAccessorArgs<4>();  // 4 args now (removed row_chunk)
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);

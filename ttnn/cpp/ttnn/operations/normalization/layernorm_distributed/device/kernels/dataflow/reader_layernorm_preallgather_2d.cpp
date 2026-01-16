@@ -49,9 +49,9 @@ void kernel_main() {
     // Generate constant tiles for reduce scalar
     uint32_t scaler = get_arg_val<uint32_t>(8);
 
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_reduce, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler(cb_reduce, scaler);
     if (is_merge_core) {
-        ttnn::kernel_lib::dataflow::generate_reduce_scaler(cb_zero, 0);
+        dataflow_kernel_lib::generate_reduce_scaler(cb_zero, 0);
     }
 
     uint32_t inp_tile_idx = tile_offset;

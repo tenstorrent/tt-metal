@@ -29,7 +29,7 @@ void kernel_main() {
     const auto input_accessor = TensorAccessor(input_args, input_addr, input_tile_bytes);
 
     // Generate constant tiles for reduce scalar
-    ttnn::kernel_lib::dataflow::generate_reduce_scaler(reduce_scalar_cb, scalar_val);
+    dataflow_kernel_lib::generate_reduce_scaler(reduce_scalar_cb, scalar_val);
 
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t input_tile_idx = tile_row * num_tile_cols;
