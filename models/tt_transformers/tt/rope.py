@@ -121,6 +121,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         beta_slow: float,
         mscale: float,
         mscale_all_dim: float,
+        truncate: bool = True,
         device: Optional[Any] = None,
     ) -> None:
         self.scaling_factor = factor
@@ -129,6 +130,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         self.beta_slow = beta_slow
         self.mscale = mscale
         self.mscale_all_dim = mscale_all_dim
+        self.truncate = truncate
         super().__init__(dim, max_position_embeddings, base, device)
 
     # Inverse dim formula to find dim based on number of rotations
@@ -139,10 +141,13 @@ class YarnRotaryEmbedding(RotaryEmbedding):
     # Find dim range bounds based on rotations
     @staticmethod
     def yarn_find_correction_range(
-        low_rot: float, high_rot: float, dim: int, base: float, max_position_embeddings: int
-    ) -> Tuple[int, int]:
-        low = math.floor(YarnRotaryEmbedding.yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings))
-        high = math.ceil(YarnRotaryEmbedding.yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings))
+        low_rot: float, high_rot: float, dim: int, base: float, max_position_embeddings: int, truncate: bool = True
+    ) -> Tuple[float, float]:
+        low = YarnRotaryEmbedding.yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings)
+        high = YarnRotaryEmbedding.yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings)
+        if truncate:
+            low = math.floor(low)
+            high = math.ceil(high)
         return max(low, 0), min(high, dim - 1)  # Clamp values just in case
 
     @staticmethod
@@ -175,6 +180,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
             dim,
             self.base,
             self.original_max_position_embeddings,
+            self.truncate,
         )
         inv_freq_mask = 1.0 - YarnRotaryEmbedding.yarn_linear_ramp_mask(low, high, dim // 2).to(
             device=device, dtype=torch.float32

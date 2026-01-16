@@ -16,6 +16,49 @@ from .layer import DecoderLayer
 from .rms_norm import RMSNorm
 
 
+def create_rope_setup(
+    mesh_device,
+    hf_config,
+    max_local_batch_size=1,
+    users_row_sharded=False,
+    datatype=ttnn.bfloat16,
+    shard_batch_to_mesh_dim=0,
+):
+    """
+    Create and return a RotarySetup instance for the GPT-OSS model.
+
+    This function extracts the rope setup logic from the Model class to allow
+    for independent testing and comparison with HuggingFace reference implementations.
+
+    Args:
+        mesh_device: TTNN mesh device for computation
+        hf_config: HuggingFace model configuration containing rope_scaling, rope_theta, etc.
+        max_local_batch_size: Maximum local batch size (default: 1)
+        users_row_sharded: Whether users are row-sharded across devices (default: False)
+        datatype: TTNN data type for tensors (default: ttnn.bfloat16)
+        shard_batch_to_mesh_dim: Mesh dimension to shard batch to (default: 0)
+
+    Returns:
+        RotarySetup: Configured rotary setup instance with cos/sin matrices
+    """
+    max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
+    rope_scaling = rope_scaling_model_factory(hf_config.rope_scaling)
+    batch_size = max_local_batch_size * mesh_device.shape[0] if users_row_sharded else max_local_batch_size
+
+    rope_setup = RotarySetup(
+        device=mesh_device,
+        batch_size=batch_size,
+        head_dim=hf_config.head_dim,
+        max_seq_len=max_seq_len,
+        rope_theta=getattr(hf_config, "rope_theta", 150000.0),
+        rope_scaling=rope_scaling,
+        datatype=datatype,
+        shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
+    )
+
+    return rope_setup
+
+
 class Model:
     """
     GPT-OSS TTNN Model Implementation
@@ -77,15 +120,11 @@ class Model:
 
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
-        max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
-        rope_scaling = rope_scaling_model_factory(hf_config.rope_scaling)
-        self.rope_setup = RotarySetup(
-            device=mesh_device,
-            batch_size=max_local_batch_size * mesh_device.shape[0] if users_row_sharded else max_local_batch_size,
-            head_dim=hf_config.head_dim,
-            max_seq_len=max_seq_len,
-            rope_theta=getattr(hf_config, "rope_theta", 150000.0),
-            rope_scaling=rope_scaling,
+        self.rope_setup = create_rope_setup(
+            mesh_device=mesh_device,
+            hf_config=hf_config,
+            max_local_batch_size=max_local_batch_size,
+            users_row_sharded=users_row_sharded,
             datatype=ttnn.bfloat16,
             shard_batch_to_mesh_dim=0,
         )
