@@ -29,7 +29,7 @@ constexpr uint32_t num_slices = 1;
 constexpr uint32_t slice_index = 0;
 
 InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t&  /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
@@ -381,7 +381,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
 
 void InterleavedToShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t&  /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto* src_buffer = tensor_args.input_tensor.buffer();

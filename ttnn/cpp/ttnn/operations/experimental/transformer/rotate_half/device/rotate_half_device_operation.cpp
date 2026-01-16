@@ -13,7 +13,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 RotateHalfDeviceOperation::program_factory_t RotateHalfDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return program::RotateHalfProgramFactory{};
 }
 

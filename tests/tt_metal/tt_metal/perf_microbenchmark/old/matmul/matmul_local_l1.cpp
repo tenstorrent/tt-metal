@@ -42,6 +42,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 #define LAUNCH
 

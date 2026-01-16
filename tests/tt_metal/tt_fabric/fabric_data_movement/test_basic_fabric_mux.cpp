@@ -112,7 +112,7 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 
 // first generates the physical chip id matrix and then returns the sequence of connected chip ids
 std::vector<ChipId> get_physical_chip_sequence(uint32_t num_seq_chips) {
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     tt::tt_fabric::MeshId mesh_id = control_plane.get_user_physical_mesh_ids()[0];
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -515,17 +515,14 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         if (is_2d_fabric) {
             if (src_device_idx == 0) {
                 return hops;
-            } else {
-                return src_device_idx - hops;
             }
-        } else {
-            // for 1D return the neighboring device only
-            if (src_device_idx == 0) {
-                return 1;
-            } else {
-                return src_device_idx - 1;
-            }
+            return src_device_idx - hops;
+
+        }  // for 1D return the neighboring device only
+        if (src_device_idx == 0) {
+            return 1;
         }
+        return src_device_idx - 1;
     };
 
     for (auto i = 0; i < devices.size(); i++) {

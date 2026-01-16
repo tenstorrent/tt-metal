@@ -45,7 +45,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     const size_t total_size_bytes = test_config.pages_per_transaction * test_config.bytes_per_page;
 
     // DRAM Address
-    DramAddressInfo dram_info = unit_tests::dm::get_dram_address_and_size(mesh_device);
+    DramAddressInfo dram_info = unit_tests::dm::get_dram_address_and_size();
 
     uint32_t input_dram_address = dram_info.base_address;
     uint32_t output_dram_address = input_dram_address + total_size_bytes;
@@ -150,18 +150,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
         device, test_config.dram_channel, output_dram_address, total_size_bytes, packed_output);
 
     // Results comparison
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal = (packed_output == packed_golden);
 
-    if (!pcc) {
-        log_error(LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(LogTest, "Equality Check failed");
         log_info(LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
         log_info(LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(

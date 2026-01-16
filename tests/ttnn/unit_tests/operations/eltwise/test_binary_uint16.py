@@ -730,3 +730,37 @@ def test_binary_rsub_uint16_edge_cases(device):
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_binary_bitwise_left_shift(device):
+    x_torch = torch.tensor([0, 1, 2, 3, 15, 31, 255, 127, 63, 31, 15, 1], dtype=torch.int32)
+
+    y_torch = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_left_shift)
+    z_torch = golden_fn(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn.bitwise_left_shift(x_tt, y_tt)
+
+    z_tt_out = ttnn.typecast(z_tt_out, dtype=ttnn.uint32)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
+    assert torch.equal(tt_out, z_torch)
+
+
+def test_binary_bitwise_right_shift(device):
+    x_torch = torch.tensor(
+        [0, 1, 2, 3, 15, 31, 255, 127, 63, 31, 15, 1, 65535, 32768, 16384, 8192, 1], dtype=torch.int32
+    )
+
+    y_torch = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 0, 1, 1, 13, 20], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_right_shift)
+    z_torch = golden_fn(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn.bitwise_right_shift(x_tt, y_tt)
+
+    z_tt_out = ttnn.typecast(z_tt_out, dtype=ttnn.uint32)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
+    assert torch.equal(tt_out, z_torch)

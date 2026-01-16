@@ -16,7 +16,7 @@
 // Validate assumptions on mailbox layout on host compile
 // Constexpr definitions allow for printing of breaking values at compile time
 // These are only used in ncrisc-halt.S
-static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, subordinate_sync.dm1) == MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS);
+static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, subordinate_sync.map) == MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS);
 static_assert(
     MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) == MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS);
 
@@ -29,6 +29,7 @@ static_assert(TENSIX_LAUNCH_CHECK == 0);
 static_assert(TENSIX_PROFILER_CHECK == 0);
 static_assert(sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, go_message_index)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+static_assert(offsetof(subordinate_map_t, dm1) == 0);
 
 static_assert(sizeof(tt::tt_fabric::routing_l1_info_t) == MEM_ROUTING_TABLE_SIZE, "Struct size mismatch!");
 static_assert(

@@ -26,20 +26,17 @@ ManualSeedDeviceOperation::program_factory_t ManualSeedDeviceOperation::select_p
         return program::ManualSeedSingleSeedToAllCoresProgramFactory{};
     }
     // Case 2: seed=uint32_t, user_ids=uint32_t - set seed to one core based on user_id
-    else if (
-        operation_attributes.seeds.has_value() && operation_attributes.user_ids.has_value() &&
+    if (operation_attributes.seeds.has_value() && operation_attributes.user_ids.has_value() &&
         !tensor_args.seeds.has_value() && !tensor_args.user_ids.has_value()) {
         return program::ManualSeedSingleSeedSingleCoreProgramFactory{};
     }
     // Case 3: seed=uint32_t, user_ids=Tensor - set seeds to cores in user_ids tensor
-    else if (
-        operation_attributes.seeds.has_value() && !operation_attributes.user_ids.has_value() &&
+    if (operation_attributes.seeds.has_value() && !operation_attributes.user_ids.has_value() &&
         !tensor_args.seeds.has_value() && tensor_args.user_ids.has_value()) {
         return program::ManualSeedSingleSeedSetCoresProgramFactory{};
     }
     // Case 4: seed=Tensor, user_ids=Tensor - set mapping seeds to cores based on tensors
-    else if (
-        !operation_attributes.seeds.has_value() && !operation_attributes.user_ids.has_value() &&
+    if (!operation_attributes.seeds.has_value() && !operation_attributes.user_ids.has_value() &&
         tensor_args.seeds.has_value() && tensor_args.user_ids.has_value()) {
         return program::ManualSeedSetSeedsSetCoresProgramFactory{};
     }

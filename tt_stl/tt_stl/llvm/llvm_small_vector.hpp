@@ -195,7 +195,7 @@ protected:
     }
 
     /// Check whether Elt will be invalidated by resizing the vector to NewSize.
-    void assertSafeToReferenceAfterResize(const void* Elt, size_t NewSize) {
+    void assertSafeToReferenceAfterResize([[maybe_unused]] const void* Elt, [[maybe_unused]] size_t NewSize) {
         assert(
             isSafeToReferenceAfterResize(Elt, NewSize) &&
             "Attempting to reference an element of the vector in an operation "
@@ -404,7 +404,7 @@ protected:
         size_t NewCapacity;
         T* NewElts = mallocForGrow(NumElts, NewCapacity);
         std::uninitialized_fill_n(NewElts, NumElts, Elt);
-        this->destroy_range(this->begin(), this->end());
+        this->destroy_range(this->begin(), this->end());  // NOLINT(readability-static-accessed-through-instance)
         takeAllocationForGrow(NewElts, NewCapacity);
         this->set_size(NumElts);
     }

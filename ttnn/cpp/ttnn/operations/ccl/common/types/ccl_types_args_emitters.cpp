@@ -22,7 +22,7 @@ args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) 
         edm_interface_args.num_buffers_per_channel};
 }
 
-args_list_t emit_compile_time(WorkerEdmInterfaceArgs const& edm_interface_args) { return {}; }
+args_list_t emit_compile_time(const WorkerEdmInterfaceArgs& /*edm_interface_args*/) { return {}; }
 
 args_list_t legacy_emit_address_generator_runtime_args(
     const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
@@ -52,7 +52,8 @@ args_list_t legacy_emit_address_generator_runtime_args(
     };
 }
 
-args_list_t emit_address_generator_runtime_args(const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
+args_list_t emit_address_generator_runtime_args(
+    const tt::tt_metal::IDevice* const /*d*/, const tt::tt_metal::Tensor& t) {
     args_list_t args;
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
@@ -218,7 +219,7 @@ bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
     return shard_grid_transposed;
 }
 
-void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix) {
+void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(const Tensor& t, const std::string& prefix) {
     auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
     [[maybe_unused]] const auto& [shard_grid_start, shard_grid_end] =
         shard_grid_from_shard_spec(t.shard_spec().value());

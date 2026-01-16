@@ -34,10 +34,19 @@ jobs:
             runs-on: ["cloud-virtual-machine", "N300", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
-              ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json
+              ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json --benchmark_repetitions=11
               # Ignore times because they're not consistent across runs yet.
               ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json --ignore-times
             timeout: 15
+          - name: "WH N300 dispatch bandwidth IOMMU nightly"
+            arch: wormhole_b0
+            runs-on: ["tt-ubuntu-2204-N300-viommu-stable"]
+            run-args: |
+              mkdir -p generated/test_reports
+              ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json --benchmark_repetitions=5
+              # Ignore times because they're not consistent across runs yet.
+              ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json --ignore-times --golden tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer_n300_iommu_golden.json
+            timeout: 25
           - name: "BH P150 pgm dispatch nightly"
             arch: blackhole
             runs-on: ["pipeline-perf", "P150", "in-service"]
@@ -51,7 +60,7 @@ jobs:
             runs-on: ["pipeline-perf", "P150", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
-              ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json
+              ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json --benchmark_repetitions=11
               # We shouldn't fail the job for now as this benchmark is not yet stable
               ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py --golden tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer_blackhole_golden.json buffer_bench.json --ignore-times
             timeout: 10

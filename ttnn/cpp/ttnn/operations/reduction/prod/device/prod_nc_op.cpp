@@ -24,8 +24,11 @@ Tensor create_output_tensor(
         input_tensor.storage_type() == tt_metal::StorageType::DEVICE,
         "Input tensor must be stored on device. Storage type: {}",
         input_tensor.storage_type());
-    return tt_metal::create_device_tensor(
-        output_shape, input_tensor.dtype(), tt_metal::Layout::TILE, input_tensor.device(), mem_config);
+    return create_device_tensor(
+        ttnn::TensorSpec(
+            output_shape,
+            tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config)),
+        input_tensor.device());
 }
 
 // output as arg

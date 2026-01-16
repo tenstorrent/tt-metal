@@ -14,17 +14,16 @@ namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::det
 
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
 ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
         return RingReduceScatterMeshWorkloadFactory{};
-    } else {
-        TT_FATAL(operation_attributes.topology == ttnn::ccl::Topology::Linear, "Topology must be Ring or Linear");
-        return LineReduceScatterMeshWorkloadFactory{};
     }
+    TT_FATAL(operation_attributes.topology == ttnn::ccl::Topology::Linear, "Topology must be Ring or Linear");
+    return LineReduceScatterMeshWorkloadFactory{};
 }
 
 void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Lightweight validation for cache hits
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
@@ -141,9 +140,16 @@ tensor_return_value_t ReduceScatterMinimalAsyncDeviceOperation::create_output_te
 
 tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    log_trace(tt::LogOp, "ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash is called");
 
-    return tt::stl::hash::hash_objects(
+    auto subdevice_id = operation_attributes.sub_device_id;
+    auto* mesh_device = tensor_args.input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
+    return tt::tt_metal::operation::hash_operation<ReduceScatterMinimalAsyncDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
         operation_attributes.ring_size,
@@ -152,21 +158,13 @@ tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_
         operation_attributes.topology,
         operation_attributes.barrier_semaphore.has_value(),
         operation_attributes.using_persistent_buffers,
-        operation_attributes.sub_device_id.has_value(),
-        operation_attributes.sub_device_id.has_value()
-            ? input_tensor.device()->worker_cores(
-                  tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value())
-            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         operation_attributes.cluster_axis,
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
-        input_tensor.logical_shape(),
-        input_tensor.padded_shape(),
-        input_tensor.tensor_spec().page_config(),
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config());
+        subdevice_core_range_set,
+        tensor_args,
+        program_factory.index());
 }
 
 // Common validation function implementation

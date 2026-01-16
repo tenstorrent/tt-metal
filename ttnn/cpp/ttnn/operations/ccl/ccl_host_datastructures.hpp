@@ -78,8 +78,8 @@ private:
             uint32_t worker_semaphore_id,
             uint32_t num_eth_messages_to_forward,
             uint32_t channel,
-            uint32_t num_buffers,
-            std::vector<ccl::WorkerXY> const& worker_coords,
+            uint32_t /*num_buffers*/,
+            const std::vector<ccl::WorkerXY>& worker_coords,
             uint32_t largest_message_size_bytes = 0) :
             worker_coords(worker_coords),
             worker_semaphore_id(worker_semaphore_id),
@@ -245,7 +245,7 @@ public:
     }
 
     [[nodiscard]]
-    std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const {
+    std::vector<uint32_t> get_compile_time_args(uint32_t /*risc_id*/) const {
         // TODO: use risc_id accordingly
         return std::vector<uint32_t>{
             static_cast<uint32_t>(this->enable_sender ? 1 : 0),

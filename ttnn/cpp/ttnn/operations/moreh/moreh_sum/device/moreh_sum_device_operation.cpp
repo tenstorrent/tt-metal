@@ -21,20 +21,20 @@ MorehSumOperation::program_factory_t MorehSumOperation::select_program_factory(
     if (tensor_args.input.dtype() == DataType::INT32) {
         if (operation_attributes.dim == input_rank - 1) {
             return MorehSumWIntFactory{};
-        } else if (operation_attributes.dim == input_rank - 2) {
-            return MorehSumHIntFactory{};
-        } else {
-            return MorehSumNCIntFactory{};
         }
+        if (operation_attributes.dim == input_rank - 2) {
+            return MorehSumHIntFactory{};
+        }
+        return MorehSumNCIntFactory{};
     }
 
     if (operation_attributes.dim == input_rank - 1) {
         return MorehSumWFactory{};
-    } else if (operation_attributes.dim == input_rank - 2) {
-        return MorehSumHFactory{};
-    } else {
-        return MorehSumNCFactory{};
     }
+    if (operation_attributes.dim == input_rank - 2) {
+        return MorehSumHFactory{};
+    }
+    return MorehSumNCFactory{};
 }
 
 void validate_tensors(
