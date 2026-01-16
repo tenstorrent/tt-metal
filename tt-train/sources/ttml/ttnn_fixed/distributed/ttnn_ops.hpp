@@ -15,7 +15,9 @@ tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim)
  * Ring shift operation - shifts tensor to next/previous device in the ring.
  *
  * @param tensor The input tensor to shift
- * @param cluster_axis The axis of the mesh to perform the ring shift on
+ * @param cluster_axis Optional axis of the device mesh along which to perform the ring shift.
+ *        If std::nullopt (the default) and the device fabric is 1D, axis 1 is used.
+ *        For multi-dimensional fabrics, this parameter must be explicitly specified.
  * @param forward If true, shift forward (device i sends to i+1), else backward (device i sends to i-1)
  * @return The tensor received from the neighbor device
  */

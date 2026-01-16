@@ -81,6 +81,9 @@ void validate_fabric_config_for_sockets(
         tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same
                                            // physical device
     };
+
+    bool fabric_config_supported = supported_fabrics.contains(fabric_config);
+    TT_FATAL(fabric_config_supported, "Unsupported Fabric Config for Sockets specified {}", fabric_config);
 }
 
 // This does not return a FabricNodeId because for 1D fabric, we return a distance between the sender and receiver

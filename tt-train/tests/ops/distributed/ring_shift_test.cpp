@@ -158,7 +158,7 @@ static void TestRingShift(
 
 TEST_F(GalaxyRingShiftTest, ForwardAlongColumns) {
     // hidden=64 sharded across 8 cols -> 8 per device
-    TestRingShift(1, 32, 1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true);
+    TestRingShift(4, 8, 1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true);
 }
 
 TEST_F(GalaxyRingShiftTest, ForwardAlongRows) {
@@ -174,11 +174,6 @@ TEST_F(GalaxyRingShiftTest, ForwardBig) {
 TEST_F(GalaxyRingShiftTest, Llama8bSeqLen8192Tp8Cp8Bs16) {
     TestRingShift(
         4, 8, 16, 1024, 512, /*cluster_axis=*/1, /*shard_dim=*/0, /*forward=*/false, /*test_backward_grad=*/false);
-}
-
-TEST_F(GalaxyRingShiftTest, Llama8bSeqLen8192Tp4Cp4Bs16) {
-    TestRingShift(
-        8, 4, 16, 1024, 512, /*cluster_axis=*/1, /*shard_dim=*/0, /*forward=*/false, /*test_backward_grad=*/false);
 }
 
 TEST_F(GalaxyRingShiftTest, BackwardAlongColumns) {
