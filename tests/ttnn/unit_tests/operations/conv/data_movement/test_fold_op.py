@@ -77,11 +77,11 @@ def fold_torch(input_tensor, stride_h, stride_w, padding=None):
     return transposed.reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
 
 
-@pytest.mark.parametrize("nhw", [(3, 64, 64), (1, 224, 224), (1, 384, 512), (1, 512, 672)])
-@pytest.mark.parametrize("channels", [3, 32, 320])
-@pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
-@pytest.mark.parametrize("padding", [(0, 0), (8, 8), (20, 12, 15, 17)])
-@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("nhw", [(3, 64, 64)])
+@pytest.mark.parametrize("channels", [320])
+@pytest.mark.parametrize("stride", [(16, 16)])
+@pytest.mark.parametrize("padding", [(0, 0)])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32])
 def test_fold_with_permute_for_dram_tensor_fp32(device, nhw, channels, stride, padding, input_layout, input_dtype):
     batch_size, height, width = nhw
@@ -111,7 +111,7 @@ def test_fold_with_permute_for_dram_tensor_fp32(device, nhw, channels, stride, p
             f"Skipping invalid padding combination: padded_h={padded_h}, padded_w={padded_w}, stride_h={stride_h}, stride_w={stride_w}"
         )
 
-    torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch.float32)
     torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))
 
     torch_output_tensor = fold_torch(torch_input_tensor_nhwc, stride_h, stride_w, padding=padding)

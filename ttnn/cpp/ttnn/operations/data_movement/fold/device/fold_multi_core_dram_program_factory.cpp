@@ -26,6 +26,7 @@ using namespace tt::tt_metal;
 
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
+    std::cout << "fold_multi_core_tiled_interleaved" << std::endl;
     // Get device and create a new program
     auto* device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
@@ -55,6 +56,9 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto stick_nbytes =
         output_padded_shape[3] * tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output.dtype()));
     uint32_t ntiles = input_tensor.physical_volume() / TILE_HW;
+    std::cout << "input_tensor_shape: " << input_tensor.logical_shape() << std::endl;
+    std::cout << "input_padded_shape[-1]: " << input_padded_shape[-1] << std::endl;
+    std::cout << "input_padded_shape" << input_padded_shape << std::endl;
     uint32_t tiles_per_channel_dim = tt::div_up(input_padded_shape[-1], TILE_WIDTH);
     uint32_t tiles_per_width_dim = tt::div_up(input_padded_shape[-2], TILE_HEIGHT);
     uint32_t tiles_per_complete_row = tiles_per_width_dim * tiles_per_channel_dim;
@@ -142,11 +146,14 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         src0_cb_index,
         src1_cb_index,
     };
-
+    std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << std::endl;
+    std::cout << "tiles_per_channel_dim: " << tiles_per_channel_dim << std::endl;
+    std::cout << "MAX_PACK_UNTILIZE_WIDTH: " << MAX_PACK_UNTILIZE_WIDTH << std::endl;
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     std::string compute_kernel_name =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
     if (tiles_per_channel_dim > MAX_PACK_UNTILIZE_WIDTH) {
+        std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << std::endl;
         std::cout << "Using slow untilize in fold_multi_core_dram_program_factory.cpp" << std::endl;
         compute_kernel_name = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
@@ -393,6 +400,8 @@ Fold::MultiCoreDRAMFold::cached_program_t Fold::MultiCoreDRAMFold::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
+    std::cout << "Fold::MultiCoreDRAMFold::create" << std::endl;
+    std::cout << "tensor_args.input_tensor.layout(): " << tensor_args.input_tensor.layout() << std::endl;
     if (tensor_args.input_tensor.layout() == Layout::TILE) {
         log_debug(tt::LogOp, "Fold operation with DRAM tiled input");
         return fold_multi_core_tiled_interleaved(
