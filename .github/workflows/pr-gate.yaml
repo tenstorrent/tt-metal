@@ -152,7 +152,7 @@ jobs:
     secrets: inherit
     with:
       version: "22.04"
-      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       # Cannot do a Sanitizer build as that's not compatible with the downstream test.
       # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
       # name clashes.
@@ -359,7 +359,7 @@ jobs:
         cat .clang-tidy
     - name: Prepare compile_commands.json
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+        cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
         cmake --build build --target all_generated_files
     - name: 'Install jq'
       uses: dcarbone/install-jq-action@v2
