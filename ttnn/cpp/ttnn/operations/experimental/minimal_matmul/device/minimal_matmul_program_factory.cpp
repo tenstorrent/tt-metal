@@ -84,8 +84,8 @@ CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
     return order.at(index >= last ? last : index + 1);
 }
 
-// Append tensor accessors in a consistent order - unified version for vector of outputs
-void append_accessors_unified(
+// Append tensor accessors in a consistent order
+void append_accessors(
     std::vector<uint32_t>& args,
     const Tensor& main_tensor,
     const std::vector<Tensor>& output_tensors,
@@ -106,7 +106,7 @@ void append_accessors_unified(
 }  // namespace
 
 // SHARED IMPLEMENTATION - works with vector of output tensors (exposed for minimal_matmul_split)
-MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_shared(
+MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_common(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
@@ -347,7 +347,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_sh
     uint32_t in0_addr = input_tensor.buffer()->address();
     uint32_t in1_addr = weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
-    // Note: output addresses will be added to runtime args as a vector
+    // Note: Dataflow kernels can take a variable number of output tensors.
+    // They are appended as a variable-length array at the end of the runtime-args:
+    //   - for in0 output-writer cores the first output address is at index 13
+    //   - for in1 output-writer cores the first output address is at index 12
     uint32_t in3_addr = (fuse_op && fused_op_signaler->read_local_slice_from_input)
                             ? fused_op_signaler->ag_input.value().buffer()->address()
                             : 0;
@@ -388,7 +391,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_sh
         N_tiles_per_chunk,  // N_tiles_per_chunk
         in3_tile_size,
     };
-    append_accessors_unified(
+    append_accessors(
         in0_sender_compile_time_args,
         input_tensor,
         output_tensors,
@@ -428,7 +431,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_sh
         N_tiles_per_chunk,  // N_tiles_per_chunk
         in3_tile_size,
     };
-    append_accessors_unified(in0_receiver_compile_time_args, input_tensor, output_tensors, bias_tensor);
+    append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensors, bias_tensor);
 
     auto in0_receiver_kernels_id = CreateKernel(
         program,
@@ -460,7 +463,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_sh
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
     };
-    append_accessors_unified(in1_sender_compile_time_args, weight_tensor, output_tensors, bias_tensor);
+    append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensors, bias_tensor);
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -491,7 +494,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_sh
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
     };
-    append_accessors_unified(in1_receiver_compile_time_args, weight_tensor, output_tensors, bias_tensor);
+    append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensors, bias_tensor);
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -695,7 +698,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler) {
     // Wrap single output in vector and call shared implementation
     std::vector<Tensor> output_tensors = {output_tensor};
-    return minimal_matmul_factory_helper_shared(
+    return minimal_matmul_factory_helper_common(
         program,
         input_tensor,
         weight_tensor,

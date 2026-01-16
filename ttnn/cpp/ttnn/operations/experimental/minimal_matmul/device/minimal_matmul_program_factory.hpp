@@ -48,7 +48,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
 
 
 // Shared implementation for variable number of output tensors (used by both minimal_matmul and minimal_matmul_split)
-MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_shared(
+// Unlike minimal_matmul_factory_helper, this function takes a number of output tensors as an argument (N_chunks) and
+// a vector of output tensors.
+MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_common(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& weight_tensor,

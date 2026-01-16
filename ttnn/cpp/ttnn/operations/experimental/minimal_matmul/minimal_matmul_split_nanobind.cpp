@@ -57,8 +57,8 @@ void bind_minimal_matmul_split(nb::module_& mod) {
             - N must be divisible by `chunks`, and N/chunks must be a multiple of 32 (tile-aligned).
 
         chunks : int, default: 3
-            Number of output tensors to split into. **Currently only chunks=3 is supported.**
-            Output dimension N will be split into `chunks` equal parts along dim=-1.
+            Number of output tensors to split into. Any number of chunks is supported as long as N is divisible by `chunks`.
+            Output dimension N will be split into `chunks` equal parts along dimension `dim`.
 
         dim : int, default: -1
             Dimension along which to split. **Currently only dim=-1 is supported.**
@@ -98,7 +98,6 @@ void bind_minimal_matmul_split(nb::module_& mod) {
 
         Constraints
         -----------
-        - chunks must be 3 (hardcoded for now; future versions may support other values)
         - dim must be -1 (last dimension)
         - N must be divisible by chunks (N % chunks == 0)
         - N/chunks must be a multiple of 32 (tile-aligned: (N/chunks) % 32 == 0)
