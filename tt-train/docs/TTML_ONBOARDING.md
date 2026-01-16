@@ -829,7 +829,7 @@ tt-train/
 
 The global singleton managing TT-Train's runtime state:
 
-```c
+```cpp
 class AutoContext {
 public:
     static AutoContext& get_instance();
@@ -840,18 +840,18 @@ public:
     ttnn::MeshDevice& get_device();
     
     // Graph management
-    Graph& get_graph();
+    Graph& get_graph();  // Access to underlying graph (advanced usage)
     void reset_graph();
     
     // Gradient tracking
     void set_gradient_mode(GradMode mode);
-    bool is_gradient_enabled() const;
+    GradMode get_gradient_mode() const;
     
     // RNG
     void set_seed(uint32_t seed);
     
     // Backward node registration
-    NodeId add_backward_node(GradFunction&& fn, std::span<NodeId> links);
+    std::optional<NodeId> add_backward_node(GradFunction&& fn, std::span<NodeId> links);
 };
 
 // Convenience accessor
@@ -862,11 +862,21 @@ inline AutoContext& ctx() { return AutoContext::get_instance(); }
 
 Stores backward functions and dependencies:
 
-```c
+```cpp
 using GradFunction = std::function<void()>;
 
 struct GraphNode {
     GradFunction grad_function;
+};
+
+class NodeId {
+public:
+    NodeId(size_t node_id, Graph* graph);
+    size_t get_id() const;
+    Graph& get_graph() const;
+private:
+    size_t m_node_id;
+    Graph* m_graph;
 };
 
 class Graph {
@@ -883,7 +893,7 @@ public:
 
 The core tensor abstraction with autograd support:
 
-```c
+```cpp
 class Tensor : public std::enable_shared_from_this<Tensor> {
     AutocastTensor m_value;           // Forward value
     tt::tt_metal::Tensor m_grad;      // Accumulated gradient
@@ -898,7 +908,8 @@ public:
     // Gradient operations
     void set_grad(const tt::tt_metal::Tensor& grad);
     void add_grad(const tt::tt_metal::Tensor& grad);  // Accumulates!
-    tt::tt_metal::Tensor& get_grad();
+    const tt::tt_metal::Tensor& get_grad() const;
+    tt::tt_metal::Tensor& get_grad();  // Non-const version
     
     // Backward pass
     void backward(bool retain_graph = false);
@@ -911,7 +922,7 @@ using TensorPtr = std::shared_ptr<Tensor>;
 
 Every operation must implement both forward and backward:
 
-```c
+```cpp
 // Example: Element-wise multiplication
 namespace ttml::ops {
 
@@ -939,6 +950,7 @@ autograd::TensorPtr mul(
     
     // 4. Register in computation graph
     auto links = autograd::get_links(a, b);
+    // Note: add_backward_node returns std::optional<NodeId> (nullopt if grads disabled)
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
     
     return out;
@@ -951,7 +963,7 @@ autograd::TensorPtr mul(
 
 Modules encapsulate parameters and forward logic:
 
-```c
+```cpp
 // Example: Custom layer
 class MyLayer : public ModuleBase {
     LinearLayer m_linear;
@@ -980,7 +992,7 @@ public:
 
 Use gradient checkpointing for large models:
 
-```c
+```cpp
 #include <ttml/models/common/transformer_common.hpp>
 
 // Wrap block forward in memory_efficient_runner
@@ -1012,7 +1024,7 @@ ctest --test-dir build -V
 
 Tests use Google Test:
 
-```c
+```cpp
 #include <gtest/gtest.h>
 #include <ttml/ttml.hpp>
 
@@ -1063,7 +1075,7 @@ python -m tracy -r -v -p ./build/sources/examples/nano_gpt/nano_gpt
 
 ### **Memory Tracking**
 
-```c
+```cpp
 #include <ttml/utils/memory_utils.hpp>
 
 // Start tracking
