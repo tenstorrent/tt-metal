@@ -77,6 +77,14 @@ void kernel_main() {
     constexpr bool uint16_output = get_compile_time_arg_val(5) == 1;
     constexpr auto s_args = TensorAccessorArgs<6>();
 
+#if not GENERATE_INDICES
+    // Precomputed indices tensor accessor
+    constexpr auto indices_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
+    const uint32_t src_indices_addr = get_arg_val<uint32_t>(3);
+    constexpr uint32_t indices_tile_bytes = get_tile_size(cb_intermed_index);
+    const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr, indices_tile_bytes);
+#endif  // not GENERATE_INDICES
+
     // Constants
     constexpr uint32_t onetile = 1;
 
@@ -93,7 +101,16 @@ void kernel_main() {
             noc_async_read_tile(i * Wt + j, s, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, onetile);
+#if GENERATE_INDICES
             generate_index_tile(cb_intermed_index, j, uint16_output);
+#else
+            // Read precomputed indices to circular buffer
+            cb_reserve_back(cb_intermed_index, onetile);
+            const uint32_t l1_write_addr_ind = get_write_ptr(cb_intermed_index);
+            noc_async_read_tile(i * Wt + j, indices_accessor, l1_write_addr_ind);
+            noc_async_read_barrier();
+            cb_push_back(cb_intermed_index, onetile);
+#endif  // GENERATE_INDICES
         }
     }
 }

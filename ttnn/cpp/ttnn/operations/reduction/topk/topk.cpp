@@ -5,9 +5,11 @@
 #include "ttnn/operations/reduction/topk/topk.hpp"
 
 #include "tt-metalium/work_split.hpp"
+#include "tt_stl/assert.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -37,9 +39,37 @@ uint32_t get_nearest_supported_k_value(const uint32_t k) {
 }
 
 /**
+ * @brief Prepares a tensor for TopK operation by applying required preprocessing transformations
+ *
+ * The TopK operation has specific input format requirements that necessitate preprocessing:
+ * 1. Target dimension must be the last dimension for efficient computation
+ * 2. Tensor must be in 4D format for consistent kernel execution
+ *
+ * This function applies these transformations in the correct sequence to ensure
+ * the input tensor is properly formatted for the TopK device operation.
+ *
+ * Transformation sequence:
+ * 1. **Dimension reordering**: If the target dimension is not already last, transpose
+ *    the tensor to move the target dimension to the last position (-1 index)
+ * 2. **Rank normalization**: Convert tensor to 4D format if it's not already,
+ *    either by padding with unit dimensions or reshaping higher-rank tensors
+ *
+ * @param input_tensor The tensor to be preprocessed for TopK operation
+ * @param dim The target dimension along which TopK will be performed (original index)
+ * @param is_dim_last_idx Whether the target dimension is already the last dimension
+ * @param is_rank_le_4d Whether the original tensor rank is less than or equal to 4D
+ * @return Preprocessed tensor ready for TopK device operation
+ */
+Tensor pre_topk_transform_tensor(
+    const Tensor& input_tensor, const int8_t dim, const bool is_dim_last_idx, const bool is_rank_le_4d) {
+    auto transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    return reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
+}
+
+/**
  * @brief Applies post-processing transformations after TopK execution
  *
- * After the hardware TopK operation executes, several transformations are needed
+ * After the TopK operation executes, several transformations are needed
  * to restore the output tensors to the expected format:
  *
  * 1. Slice adjustment: If K was rounded up for tile alignment, slice to actual K
@@ -48,14 +78,14 @@ uint32_t get_nearest_supported_k_value(const uint32_t k) {
  * 4. Shape correction: Final slicing to match exact logical output shape
  *
  * This function consolidates all these transformations in correct order to ensure
- * the output matches user expectations while handling hardware constraints.
+ * the output matches user expectations while handling OP constraints.
  *
  * @param input_tensor Original input tensor (for memory config reference)
  * @param result Vector containing [values_tensor, indices_tensor] from TopK op
  * @param dim The dimension along which TopK was performed
  * @param is_dim_last_idx Whether the target dimension was already last
  * @param k The actual requested K value
- * @param adjusted_k The tile-aligned K value used by hardware
+ * @param adjusted_k The tile-aligned K value used by OP
  * @param original_lshape The original logical shape before transformations
  * @param input_memory_config Memory configuration to use for operations
  * @param sub_core_grids Core grid configuration (unused currently)
@@ -79,10 +109,10 @@ std::vector<Tensor> post_topk_transform_tensor(
     final_lshape[dim] = std::min(original_lshape[dim], k);
 
     // Slice adjustment for tile-aligned K values
-    // Hardware requires K to be tile-aligned (multiples of 32), but user wants exact K
-    // If we had to round up K for hardware, slice down to the requested K value
+    // OP requires K to be tile-aligned (multiples of 32), but user wants exact K
+    // If we had to round up K for op, slice down to the requested K value
     if (adjusted_k != k) {
-        auto output_shape = result[0].padded_shape();
+        const auto output_shape = result[0].padded_shape();
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
@@ -92,7 +122,7 @@ std::vector<Tensor> post_topk_transform_tensor(
         result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
     }
 
-    // Rank restoration - convert from hardware-required 4D back to original rank
+    // Rank restoration - convert from op-required 4D back to original rank
     if (orig_rank < 4) {
         // For tensors originally < 4D, squeeze out the extra dimensions that were added
         result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
@@ -106,7 +136,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     }
 
     // Dimension reordering - restore original dimension order
-    // If we transposed the target dimension to be last for hardware processing,
+    // If we transposed the target dimension to be last for op processing,
     // transpose it back to its original position
     if (!is_dim_last_idx) {
         result[0] = ttnn::transpose(result[0], dim, -1, input_tensor.memory_config());
@@ -115,7 +145,7 @@ std::vector<Tensor> post_topk_transform_tensor(
 
     // Final shape correction - ensure exact logical shape match
     // After all rank and dimension transformations, the logical shape might still not
-    // match exactly due to padding or other hardware-imposed constraints.
+    // match exactly due to padding or other op-imposed constraints.
     // This final slice ensures the output has the exact expected logical shape.
     if (result[0].logical_shape() != final_lshape) {
         int rank = final_lshape.rank();
@@ -171,6 +201,8 @@ std::vector<Tensor> ExecuteTopK::invoke(
         "K cannot be larger than the dimension size! K={}, dimension size={}",
         k,
         input_tensor.logical_shape()[adjusted_dim]);
+    ttnn::Shape desired_final_shape = original_lshape;
+    desired_final_shape[adjusted_dim] = k;
 
     // Set up memory and execution configurations with defaults if not provided
     const auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
@@ -180,8 +212,8 @@ std::vector<Tensor> ExecuteTopK::invoke(
         tt::tt_metal::num_cores_to_corerangeset(max_number_of_cores, compute_with_storage_grid_size, true);
     const auto used_sub_core_grids = sub_core_grids.value_or(full_core_grids);
 
-    // Hardware constraint: K must be tile-aligned (multiple of 32 elements)
-    // Round up to nearest supported value for hardware execution
+    // OP constraint: K must be tile-aligned (multiple of 32 elements)
+    // Round up to nearest supported value for OP execution
     const uint32_t adjusted_k = CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k);
 
     // Dimension reordering - move target dimension to last position
@@ -211,6 +243,28 @@ std::vector<Tensor> ExecuteTopK::invoke(
     // Fill any implicit tile padding with appropriate values
     padded_tensor = ttnn::fill_implicit_tile_padding(padded_tensor, pad_val);
 
+    // Preprocess optional output tensors if provided
+    std::optional<std::tuple<Tensor, Tensor>> output_tensors = std::nullopt;
+    if (preallocated_output_tensors.has_value()) {
+        TT_FATAL(
+            std::get<0>(preallocated_output_tensors.value()).logical_shape() == desired_final_shape,
+            "Preallocated values tensor has incorrect shape! Got : {}, expected: {}",
+            std::get<0>(preallocated_output_tensors.value()).logical_shape(),
+            desired_final_shape);
+        TT_FATAL(
+            std::get<1>(preallocated_output_tensors.value()).logical_shape() == desired_final_shape,
+            "Preallocated indices tensor has incorrect shape! Got : {}, expected: {}",
+            std::get<1>(preallocated_output_tensors.value()).logical_shape(),
+            desired_final_shape);
+        const auto values_tensor = CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
+            std::get<0>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
+        const auto indices_tensor = CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
+            std::get<1>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
+        output_tensors = {values_tensor, indices_tensor};
+    } else {
+        output_tensors = std::optional<std::tuple<Tensor, Tensor>>{std::nullopt};
+    }
+
     // Execute TopK operation
     auto [output_value_tensor, output_index_tensor] = ttnn::prim::topk(
         padded_tensor,
@@ -221,7 +275,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
         input_memory_config,
         used_sub_core_grids,
         indices_tensor,
-        preallocated_output_tensors);
+        output_tensors);
 
     // Package results into vector format expected by post-processing
     std::vector<Tensor> output_tensor_vec;

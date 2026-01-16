@@ -265,7 +265,8 @@ TopKDeviceOperation::tensor_return_value_t TopKDeviceOperation::create_output_te
     }
 
     // Create new tensors based on computed specifications
-    auto output_specs = compute_output_specs(args, tensor_args);
+    const auto output_specs = compute_output_specs(args, tensor_args);
+
     return {
         create_device_tensor(std::get<0>(output_specs), tensor_args.input.device()),  // Values tensor
         create_device_tensor(std::get<1>(output_specs), tensor_args.input.device()),  // Indices tensor
