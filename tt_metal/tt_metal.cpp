@@ -1540,7 +1540,7 @@ std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
         "Currently, data movement kernels can only be created on a single cluster in Quasar.");
 
     TT_FATAL(
-        1 <= num_processors_per_cluster && num_processors_per_cluster <= 8,
+        1 <= num_processors_per_cluster && num_processors_per_cluster <= QUASAR_NUM_DM_CORES_PER_CLUSTER,
         "Requested number of data movement processors per cluster must be between 1 and {} (inclusive)",
         QUASAR_NUM_DM_CORES_PER_CLUSTER);
 
