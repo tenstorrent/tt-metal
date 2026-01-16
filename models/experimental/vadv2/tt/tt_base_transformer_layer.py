@@ -3,6 +3,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+
+
+def get_layernorm_program_config(device, embed_dims=256):
+    """Get LayerNorm sharded program config optimized for VAD-v2"""
+    # Use 8x8 core grid for VAD-v2
+    core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+
+    # VAD-v2 embed_dims = 256, so in tiles: 256/32 = 8
+    embed_dim_tiles = embed_dims // 32  # 8 tiles
+
+    # For layer norm sharding, use reasonable block dimensions
+    # These are conservative values for VAD-v2
+    return ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+        subblock_w=embed_dim_tiles,  # 8 tiles (full embed dim)
+        block_h=4,  # Conservative block height
+        block_w=embed_dim_tiles,  # 8 tiles (full embed dim)
+        inplace=False,
+    )
+
+
 import copy
 import warnings
 from models.experimental.vadv2.tt.tt_ffn import TtFFN
@@ -99,6 +120,9 @@ class TtBaseTransformerLayer:
 
         self.embed_dims = self.attentions[0].embed_dims
 
+        # STEP 5: Add LayerNorm sharded program config for optimized layer normalization
+        self.layernorm_program_config = get_layernorm_program_config(self.device, self.embed_dims)
+
         num_attn = operation_order.count("self_attn") + operation_order.count("cross_attn")
         if isinstance(attn_cfgs, dict):
             attn_cfgs = [copy.deepcopy(attn_cfgs) for _ in range(num_attn)]
@@ -133,6 +157,8 @@ class TtBaseTransformerLayer:
         attn_index = 0
         ffn_index = 0
         identity = query
+        original_query = query  # Track original input to avoid deallocating it
+
         if attn_masks is None:
             attn_masks = [None for _ in range(self.num_attn)]
         elif isinstance(attn_masks, ttnn.Tensor):
@@ -149,6 +175,8 @@ class TtBaseTransformerLayer:
         for layer in self.operation_order:
             if layer == "self_attn":
                 temp_key = temp_value = query
+                prev_query = query
+
                 query = self.attentions[attn_index](
                     query,
                     temp_key,
@@ -161,19 +189,34 @@ class TtBaseTransformerLayer:
                     **kwargs,
                 )
                 attn_index += 1
+
+                # Deallocate previous query if it's an intermediate tensor
+                # Don't deallocate if it's the original input or current identity
+                if prev_query is not original_query and prev_query is not identity:
+                    ttnn.deallocate(prev_query)
+
                 identity = query
 
             elif layer == "norm":
+                prev_query = query
+
+                # STEP 5: Use LayerNorm sharded program config for optimized layer normalization
                 query = ttnn.layer_norm(
                     query,
                     weight=self.params.norms[f"norm{norm_index}"].weight,
                     bias=self.params.norms[f"norm{norm_index}"].bias,
+                    program_config=self.layernorm_program_config,
                 )
-                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
-                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
 
+                # Deallocate previous query if it's an intermediate tensor
+                # Don't deallocate model weights - they need to persist across iterations
+                if prev_query is not original_query and prev_query is not identity:
+                    ttnn.deallocate(prev_query)
+
             elif layer == "cross_attn":
+                prev_query = query
+
                 query = self.attentions[attn_index](
                     query,
                     key,
@@ -186,10 +229,23 @@ class TtBaseTransformerLayer:
                     **kwargs,
                 )
                 attn_index += 1
+
+                # Deallocate previous query if it's an intermediate tensor
+                if prev_query is not original_query and prev_query is not identity:
+                    ttnn.deallocate(prev_query)
+
                 identity = query
 
             elif layer == "ffn":
-                query = self.ffns[ffn_index](query, identity if self.pre_norm else None)
+                prev_query = query
+                prev_identity = identity if self.pre_norm else None
+
+                query = self.ffns[ffn_index](query, prev_identity)
                 ffn_index += 1
+
+                # FFN internally deallocates identity, so we only deallocate prev_query
+                # Don't deallocate if it's the original input or was the identity
+                if prev_query is not original_query and prev_query is not prev_identity:
+                    ttnn.deallocate(prev_query)
 
         return query

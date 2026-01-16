@@ -9,6 +9,13 @@ from torchvision.transforms.functional import rotate
 from models.experimental.vadv2.tt.tt_encoder import TtBEVFormerEncoder
 from models.experimental.vadv2.tt.tt_decoder import TtDetectionTransformerDecoder, TtMapDetectionTransformerDecoder
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtVADPerceptionTransformer:
     def __init__(
@@ -137,15 +144,32 @@ class TtVADPerceptionTransformer:
             if prev_bev.shape[1] == bev_h * bev_w:
                 prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             if self.rotate_prev_bev:
+                # Convert to PyTorch for the rotation loop because:
+                # 1. rotate() is a torchvision function that requires PyTorch tensors
+                # 2. We need item assignment (prev_bev[:, i] = ...) which ttnn doesn't support
+                # 3. Doing conversion once (before loop) is more efficient than per-iteration
+                if isinstance(prev_bev, ttnn.Tensor):
+                    prev_bev_torch = ttnn.to_torch(prev_bev)
+                else:
+                    # Already a PyTorch tensor
+                    prev_bev_torch = prev_bev
+
                 for i in range(bs):
                     rotation_angle = kwargs["img_metas"][i]["can_bus"][-1]
-                    tmp_prev_bev = prev_bev[:, i]
-                    tmp_prev_bev = ttnn.reshape(tmp_prev_bev, (bev_h, bev_w, -1))
-                    tmp_prev_bev = ttnn.permute(tmp_prev_bev, (2, 0, 1))
+                    # Extract and process slice (all in PyTorch)
+                    tmp_prev_bev = prev_bev_torch[:, i]
+                    tmp_prev_bev = tmp_prev_bev.reshape(bev_h, bev_w, -1)
+                    tmp_prev_bev = tmp_prev_bev.permute(2, 0, 1)
                     tmp_prev_bev = rotate(tmp_prev_bev, rotation_angle, center=self.rotate_center)
-                    tmp_prev_bev = ttnn.permute(tmp_prev_bev, (1, 2, 0))
-                    tmp_prev_bev = ttnn.reshape(tmp_prev_bev, (bev_h * bev_w, 1, -1))
-                    prev_bev[:, i] = tmp_prev_bev[:, 0]
+                    tmp_prev_bev = tmp_prev_bev.permute(1, 2, 0)
+                    tmp_prev_bev = tmp_prev_bev.reshape(bev_h * bev_w, -1)
+                    # Update the slice (PyTorch supports assignment)
+                    prev_bev_torch[:, i] = tmp_prev_bev
+
+                # Convert back to ttnn after all rotations are done
+                prev_bev = ttnn.from_torch(
+                    prev_bev_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                )
 
         # add can bus signals
         can_bus = bev_queries.new_tensor([each["can_bus"] for each in kwargs["img_metas"]])
@@ -269,7 +293,7 @@ class TtVADPerceptionTransformer:
             can_bus=can_bus,
             **kwargs,
         )  # bev_embed shape: bs, bev_h*bev_w, embed_dims
-
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
         bs = mlvl_feats[0].shape[0]
         object_query_embed = ttnn.to_layout(object_query_embed, layout=ttnn.ROW_MAJOR_LAYOUT)
         query_pos, query = ttnn.split(object_query_embed, self.embed_dims, dim=1)
@@ -303,7 +327,7 @@ class TtVADPerceptionTransformer:
         map_query = ttnn.permute(map_query, (1, 0, 2))
         map_query_pos = ttnn.permute(map_query_pos, (1, 0, 2))
         bev_embed = ttnn.permute(bev_embed, (1, 0, 2))
-
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
         if self.decoder is not None:
             spatial_shapes = torch.tensor([[bev_h, bev_w]], device="cpu")
             spatial_shapes = ttnn.from_torch(
@@ -349,6 +373,8 @@ class TtVADPerceptionTransformer:
             map_inter_states = ttnn.unsqueeze(map_query, 0)
             map_inter_references_out = ttnn.unsqueeze(map_reference_points, 0)
 
+        if use_signpost:
+            signpost(header="TtVADPerceptionTransformer_call_end")
         return (
             bev_embed,
             inter_states,

@@ -242,3 +242,81 @@ class BaseInstance3DBoxes(object):
 
 class LiDARInstance3DBoxes(BaseInstance3DBoxes):
     YAW_AXIS = 2
+
+    @property
+    def gravity_center(self):
+        """torch.Tensor: A tensor with center of each box in the gravity center (middle of z-axis)."""
+        bottom_center = self.tensor[:, :3]
+        gravity_center = torch.zeros_like(bottom_center)
+        gravity_center[:, :2] = bottom_center[:, :2]  # x, y same as bottom
+        gravity_center[:, 2] = bottom_center[:, 2] + self.tensor[:, 5] * 0.5  # z + height/2
+        return gravity_center
+
+    @property
+    def corners(self):
+        """torch.Tensor: A tensor with 8 corners of each box in shape (N, 8, 3).
+
+        Box format: (x, y, z, w, l, h, yaw) where (x,y,z) is bottom center
+        Returns 8 corners for each box in order:
+        Bottom face (z=bottom): front-right, rear-right, rear-left, front-left
+        Top face (z=top): front-right, rear-right, rear-left, front-left
+        """
+        if self.tensor.numel() == 0:
+            return torch.empty([0, 8, 3], device=self.tensor.device)
+
+        # Extract box parameters
+        # LiDAR format: x, y, z, w, l, h, yaw (and possibly vx, vy)
+        centers = self.tensor[:, :3]  # (N, 3) - bottom center (x, y, z)
+        dims = self.tensor[:, 3:6]  # (N, 3) - (w, l, h)
+        yaw = self.tensor[:, 6]  # (N,) - rotation around z-axis
+
+        # Get dimensions
+        w, l, h = dims[:, 0:1], dims[:, 1:2], dims[:, 2:3]  # Each (N, 1)
+
+        # Create corners in local coordinate system (before rotation)
+        # Shape: (N, 8, 3) where 8 corners are ordered as described above
+        corners_norm = torch.stack(
+            [
+                # Bottom 4 corners (z = 0 in local coords)
+                torch.cat([l / 2, w / 2, torch.zeros_like(l)], dim=1),  # front-right
+                torch.cat([-l / 2, w / 2, torch.zeros_like(l)], dim=1),  # rear-right
+                torch.cat([-l / 2, -w / 2, torch.zeros_like(l)], dim=1),  # rear-left
+                torch.cat([l / 2, -w / 2, torch.zeros_like(l)], dim=1),  # front-left
+                # Top 4 corners (z = h in local coords)
+                torch.cat([l / 2, w / 2, h], dim=1),  # front-right
+                torch.cat([-l / 2, w / 2, h], dim=1),  # rear-right
+                torch.cat([-l / 2, -w / 2, h], dim=1),  # rear-left
+                torch.cat([l / 2, -w / 2, h], dim=1),  # front-left
+            ],
+            dim=1,
+        ).reshape(
+            -1, 8, 3
+        )  # (N, 8, 3)
+
+        # Rotation matrix around z-axis (yaw)
+        # R = [[cos(yaw), -sin(yaw), 0],
+        #      [sin(yaw),  cos(yaw), 0],
+        #      [0,         0,        1]]
+        cos_yaw = torch.cos(yaw)
+        sin_yaw = torch.sin(yaw)
+        ones = torch.ones_like(yaw)
+        zeros = torch.zeros_like(yaw)
+
+        # Create rotation matrix (N, 3, 3)
+        rot_mat = torch.stack(
+            [
+                torch.stack([cos_yaw, -sin_yaw, zeros], dim=1),
+                torch.stack([sin_yaw, cos_yaw, zeros], dim=1),
+                torch.stack([zeros, zeros, ones], dim=1),
+            ],
+            dim=1,
+        )  # (N, 3, 3)
+
+        # Apply rotation: corners_rotated = corners_norm @ rot_mat.T
+        # (N, 8, 3) @ (N, 3, 3) -> (N, 8, 3)
+        corners_rotated = torch.matmul(corners_norm, rot_mat.transpose(1, 2))
+
+        # Translate to actual position (add bottom center coordinates)
+        corners = corners_rotated + centers.unsqueeze(1)  # (N, 8, 3) + (N, 1, 3) -> (N, 8, 3)
+
+        return corners
