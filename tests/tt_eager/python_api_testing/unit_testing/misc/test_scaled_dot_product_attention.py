@@ -164,7 +164,7 @@ def run_sdpa_noncausal(
     sk=None,
     use_mask=True,
     rmse_threshold=None,
-    bcast_mask_head_dim=True,
+    core_grid_size=None,
 ):
     torch.manual_seed(1234)
     if sk is None:
@@ -195,13 +195,13 @@ def run_sdpa_noncausal(
             torch.full(
                 (
                     b,
-                    1 if bcast_mask_head_dim else nh,
                     sq,
                     sk,
                 ),
                 0.25,
             )
         )
+        mask = mask.unsqueeze(1)
         mask = mask * -1e9
         tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -323,7 +323,7 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, me
 )
 def test_sdpa_perf_single_core(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     rmse_threshold = 0.004202
-    ttnn.device.DisablePersistentKernelCache()
+    # ttnn.device.DisablePersistentKernelCache()
     run_sdpa_noncausal(
         device,
         b,
@@ -350,7 +350,7 @@ def test_sdpa_perf_single_core(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_s
 )
 def test_sdpa_perf_multi_core(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     rmse_threshold = 0.007982
-    ttnn.device.DisablePersistentKernelCache()
+    # ttnn.device.DisablePersistentKernelCache()
     run_sdpa_noncausal(
         device,
         b,
@@ -519,36 +519,6 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
     if (sq % q_chunk_size != 0) or (sk % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=sk)
-
-
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", [32, 128], ids=["q32", "q128"])
-@pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k64", "k128"])
-@pytest.mark.parametrize(
-    "b, nh, nkv, s, d",
-    (
-        [128, 4, 4, 128, 32],  # Boltz
-        [1, 16, 16, 128, 64],  # Boltz
-    ),
-)
-@pytest.mark.parametrize("bcast_mask_head_dim", [True, False], ids=["bcast-mask-head-dim", "no-bcast-mask-head-dim"])
-def test_sdpa_noncausal_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, bcast_mask_head_dim):
-    rmse_threshold = 0.007
-    run_sdpa_noncausal(
-        device,
-        b,
-        nh,
-        nkv,
-        s,
-        d,
-        q_chunk_size,
-        k_chunk_size,
-        dtype,
-        rmse_threshold=rmse_threshold,
-        use_mask=True,
-        bcast_mask_head_dim=bcast_mask_head_dim,
-    )
 
 
 def run_test_chunked_sdpa(

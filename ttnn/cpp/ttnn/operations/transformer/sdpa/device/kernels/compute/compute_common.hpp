@@ -18,20 +18,9 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/reduce_custom.h"
-
-ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        transpose, true /*transpose within 16x16 face*/, cbid)));
-
-    MATH((llk_math_eltwise_unary_datacopy_init<
-          A2D,
-          DST_ACCUM_MODE,
-          BroadcastType::NONE,
-          false,  // is_int_fpu_en
-          false   // tilize
-          >(cbid)));
-}
+#include "compute_kernel_api/transpose_wh.h"
+#include "tools/profiler/kernel_profiler.hpp"
+#include "ckernel_mutex_guard.h"
 
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
@@ -936,12 +925,8 @@ void matmul_blocks(
             uint32_t dst_idx = 0;
             uint32_t out_col_offset = in1_subblock * subblock_w;
             for (uint32_t r = 0; r < subblock_h; r++) {
-<<<<<<< HEAD
-                uint32_t out_row_offset = r * N;
-=======
                 uint32_t global_r = r + subblock_h * in0_subblock;
                 // uint32_t out_row_offset = (r + subblock_h * in0_subblock) * N;
->>>>>>> 8da8b7e9d9 (Test passes)
                 for (uint32_t c = 0; c < subblock_w; c++) {
                     uint32_t global_c = c + out_col_offset;
                     uint32_t global_idx = output_transpose_order ? global_c * M + global_r : global_r * N + global_c;
@@ -954,12 +939,8 @@ void matmul_blocks(
         }
         in0_index_offset += subblock_h * in0_block_w;
     }
-<<<<<<< HEAD
-    cb_pop_front(in1_cb, K * N);
-=======
     // cb_pop_front(in1_cb, K * N);
     cb_push_back(out_cb, output_num_tiles);
->>>>>>> 8da8b7e9d9 (Test passes)
 }
 
 void matmul_reduce_blocks(
