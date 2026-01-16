@@ -7,3 +7,4 @@
 // File description:
 // This is meant to be where Shape class is moved to.
 #include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape2d.hpp>

@@ -2,11 +2,97 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: This file is a copy of TTNN's ttnn/api/ttnn/tensor/tensor_spec.hpp
+// at commit 9f3856801448f589170defe41b23c8b9b43e33a2, with modifications to
+// use experimental tensor types.
+
 #pragma once
 
-namespace tt::tt_metal /*::tensor*/ {
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/experimental/tensor/spec/shape/shape.hpp>
 
-// TODO: Implement tensor specification
-struct TensorSpec {};
+namespace tt::tt_metal {
+
+class TensorSpec final {
+public:
+    TensorSpec(Shape logical_shape, TensorLayout tensor_layout);
+    TensorSpec(TensorSpec&&) noexcept = default;
+    TensorSpec& operator=(TensorSpec&&) = default;
+    TensorSpec(const TensorSpec&) = default;
+    TensorSpec& operator=(const TensorSpec&) = default;
+    bool operator==(const TensorSpec&) const = default;
+    bool operator!=(const TensorSpec&) const = default;
+
+    const Shape& logical_shape() const { return logical_shape_; }
+    const TensorLayout& tensor_layout() const { return tensor_layout_; }
+    DataType data_type() const { return tensor_layout_.get_data_type(); }
+    Layout layout() const { return tensor_layout_.get_layout(); }
+    PageConfig page_config() const { return tensor_layout_.get_page_config(); }
+    const MemoryConfig& memory_config() const { return tensor_layout_.get_memory_config(); }
+    const Shape& padded_shape() const { return cached_padded_shape_; }
+    const Shape2D& logical_2d_shape() const { return cached_logical_2d_shape_; }
+    const Shape2D& physical_shape() const { return cached_physical_shape_; }
+
+    Tile tile() const { return tensor_layout_.get_tile(); }
+
+    TensorSpec sharded_across_dims(
+        std::span<const int32_t> dims,
+        CoreRangeSet grid,
+        ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    TensorSpec sharded_across_dims_except(
+        std::span<const int32_t> dims,
+        CoreRangeSet grid,
+        ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    TensorSpec height_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    TensorSpec width_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    TensorSpec block_sharded(CoreRange grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+
+    enum class ShardShapeAlignment {
+        NONE,
+        REQUIRED,
+        RECOMMENDED,
+    };
+    TensorSpec sharded(
+        Shape shard_shape,
+        CoreRangeSet grid,
+        ShardShapeAlignment shard_alignment,
+        ShardOrientation orientation = ShardOrientation::ROW_MAJOR,
+        ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D) const;
+    TensorSpec sharded(NdShardSpec nd_shard_spec, ShardShapeAlignment shard_alignment) const;
+
+    Strides compute_strides() const { return tensor_layout_.compute_strides(logical_shape_); }
+    BufferShardingArgs compute_buffer_sharding_args() const {
+        return tensor_layout_.compute_buffer_sharding_args(logical_shape_);
+    }
+    size_t compute_packed_buffer_size_bytes() const {
+        return tensor_layout_.compute_packed_buffer_size_bytes(logical_shape_);
+    }
+    size_t compute_page_size_bytes() const { return tensor_layout_.compute_page_size_bytes(logical_shape_); }
+
+    size_t compute_consumed_memory_bytes_per_bank(const IDevice& device) const {
+        return tensor_layout_.compute_consumed_memory_bytes_per_bank(logical_shape_, device);
+    }
+    size_t compute_consumed_memory_bytes_per_bank(size_t page_alignment, size_t num_banks) const {
+        return tensor_layout_.compute_consumed_memory_bytes_per_bank(logical_shape_, page_alignment, num_banks);
+    }
+
+    TensorSpec with_memory_config(MemoryConfig memory_config) const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("logical_shape", "tensor_layout");
+    auto attribute_values() const { return std::forward_as_tuple(logical_shape_, tensor_layout_); }
+
+private:
+    void populate_sharding_specs();
+    MemoryConfig populate_nd_shard_spec_from_legacy() const;
+    std::optional<MemoryConfig> populate_legacy_shard_spec_from_nd() const;
+
+    Shape logical_shape_;
+    TensorLayout tensor_layout_;
+
+    Shape cached_padded_shape_;
+    Shape2D cached_logical_2d_shape_;
+    Shape2D cached_physical_shape_;
+};
 
 }  // namespace tt::tt_metal
