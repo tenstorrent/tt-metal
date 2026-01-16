@@ -8,10 +8,9 @@ import random
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, is_unsigned_tensor
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from tests.ttnn.utils_for_testing import convert_to_signed_tensor
 
 from tracy import signpost
 
@@ -449,7 +448,8 @@ def run_all_to_all_dispatch_test(
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
         )
 
-        tt_metadata_tensor = convert_to_signed_tensor(tt_metadata_tensor)
+        if is_unsigned_tensor(tt_metadata_tensor):
+            tt_metadata_tensor = tt_metadata_tensor.to(output_metadata_goldens_list[tensor_index].dtype)
 
         batch = tt_torch_tensor.shape[1]
         devices = tt_metadata_tensor.shape[0]

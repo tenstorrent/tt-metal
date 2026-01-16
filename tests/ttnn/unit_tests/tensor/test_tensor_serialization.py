@@ -11,7 +11,7 @@ import torch
 import numpy as np
 
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, convert_to_signed_tensor
+from tests.ttnn.utils_for_testing import is_unsigned_tensor, tt_dtype_to_torch_dtype
 
 pytestmark = pytest.mark.use_module_device
 
@@ -44,7 +44,8 @@ def test_serialization(tmp_path, shape, tt_dtype):
     ttnn.dump_tensor(str(file_name), tt_tensor)
     torch_tensor_from_file = ttnn.load_tensor(str(file_name)).to_torch()
 
-    torch_tensor_from_file = convert_to_signed_tensor(torch_tensor_from_file)
+    if is_unsigned_tensor(torch_tensor_from_file):
+        torch_tensor_from_file = torch_tensor_from_file.to(torch_tensor.dtype)
 
     assert torch_tensor.dtype == torch_tensor_from_file.dtype
     assert torch_tensor.shape == torch_tensor_from_file.shape

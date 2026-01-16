@@ -405,6 +405,17 @@ def maybe_trace(op_func, enable_trace, device):
     return output
 
 
+def is_unsigned_tensor(py_tensor):
+    return py_tensor.dtype in [torch.uint16, torch.uint32, np.uint16, np.uint32, torch.uint8, np.ubyte]
+
+
+def match_type_post_conversion(roundtrip_tensor, py_tensor):
+    if isinstance(roundtrip_tensor, torch.Tensor):
+        return roundtrip_tensor.to(py_tensor.dtype)
+    else:
+        return roundtrip_tensor.astype(py_tensor.dtype)
+
+
 # Originally, `to_torch` function converted unsigned TTNN tensors to the signed variants directly.
 # This was changed to convert to unsigned types instead to address issue with the value truncation
 # https://github.com/tenstorrent/tt-metal/issues/31150 -- the function below is necessary to make

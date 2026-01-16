@@ -11,7 +11,13 @@ import torch
 import numpy as np
 
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, tt_dtype_to_np_dtype, convert_to_signed_tensor
+from tests.ttnn.utils_for_testing import (
+    is_unsigned_tensor,
+    match_type_post_conversion,
+    tt_dtype_to_torch_dtype,
+    tt_dtype_to_np_dtype,
+    convert_to_signed_tensor,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -72,9 +78,11 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
     elif python_lib == np:
         py_tensor_after_round_trip = tt_tensor.to_numpy()
 
-    py_tensor_after_round_trip = convert_to_signed_tensor(py_tensor_after_round_trip)
+    if not is_unsigned_tensor(py_tensor_after_round_trip):
+        assert py_tensor.dtype == py_tensor_after_round_trip.dtype
 
-    assert py_tensor.dtype == py_tensor_after_round_trip.dtype
+    py_tensor_after_round_trip = match_type_post_conversion(py_tensor_after_round_trip, py_tensor)
+
     assert py_tensor.shape == py_tensor_after_round_trip.shape
 
     allclose_kwargs = {}
@@ -158,8 +166,6 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
     elif python_lib == np:
         py_tensor_after_round_trip = tt_tensor.to_numpy()
 
-    py_tensor_after_round_trip = convert_to_signed_tensor(py_tensor_after_round_trip)
-
     if python_dtype_str in ("int64", "float16"):
         pytest.xfail(
             "{} dtype is incorrectly handled in ttnn tensors, so roundtrip tests are not working!".format(
@@ -167,7 +173,11 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
             )
         )
 
-    assert py_tensor.dtype == py_tensor_after_round_trip.dtype
+    if not is_unsigned_tensor(py_tensor_after_round_trip):
+        assert py_tensor.dtype == py_tensor_after_round_trip.dtype
+
+    py_tensor_after_round_trip = match_type_post_conversion(py_tensor_after_round_trip, py_tensor)
+
     assert py_tensor.shape == py_tensor_after_round_trip.shape
 
     allclose_kwargs = {}
