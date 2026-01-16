@@ -23,6 +23,7 @@ struct DeepseekReduceScatterProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id;
     tt::tt_metal::KernelHandle writer_kernel_id;
     std::vector<tt::tt_metal::CoreCoord> all_cores;
+    uint32_t clamped_num_links;
     uint32_t num_directions_per_link;
     std::vector<tt::tt_metal::CBHandle> input_cb_handles;
     std::vector<tt::tt_metal::CBHandle> intermediate_cb_handles;

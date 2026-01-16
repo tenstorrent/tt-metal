@@ -43,6 +43,43 @@ using ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::Deep
 
 namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
 
+/*
+ * Core Assignment:
+ * - First core will be backward on link 0
+ * - Second core will be forward on link 0
+ * - Third core will be backward on link 1
+ * - etc
+ * Note:
+ * - Always need a forward and backward core for each link, even if the worker isn't being used
+ * - May need to add a single additional forward core to even it out (on top of the shard cores)
+ */
+std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
+    const NdShardSpec& input_nd_shard_spec, uint32_t num_directions_per_link) {
+    std::vector<CoreCoord> worker_cores = corerange_to_cores(input_nd_shard_spec.grid);
+    uint32_t clamped_num_links = tt::div_up(worker_cores.size(), num_directions_per_link);
+
+    // add additional forward core if needed
+    if (worker_cores.size() % 2 != 0) {
+        // TODO: (GR) handle when selected core is already one of the shard cores (non optimal placement)
+        // which core to use based on which link it's being used for
+        const std::vector<CoreCoord> supplemental_cores = {
+            CoreCoord(0, 0),
+            CoreCoord(0, 0),
+            CoreCoord(0, 0),
+            CoreCoord(0, 0),
+        };
+        worker_cores.emplace_back(supplemental_cores.at(clamped_num_links - 1));
+    }
+
+    std::vector<CoreRange> worker_core_ranges;
+    for (const CoreCoord& worker_core : worker_cores) {
+        worker_core_ranges.emplace_back(worker_core);
+    }
+    CoreRangeSet worker_core_range_set = CoreRangeSet(worker_core_ranges);
+
+    return {clamped_num_links, worker_core_range_set, worker_cores};
+}
+
 DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_artifacts(
     tt::tt_metal::Program& program,
     const std::vector<ttnn::Tensor>& input_tensors,
@@ -62,22 +99,22 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     const uint32_t num_directions_per_link = 2;
 
     // choose cores
-    // TODO: (GR) need to add an extra dummy core when moving to 4 links and the proper shape
     const NdShardSpec& input_nd_shard_spec = input_tensors.at(0).nd_shard_spec().value();
-    std::vector<CoreCoord> worker_cores = corerange_to_cores(input_nd_shard_spec.grid);
-    std::vector<CoreRange> worker_core_ranges;
-    for (const CoreCoord& worker_core : worker_cores) {
-        worker_core_ranges.emplace_back(worker_core);
-    }
-    CoreRangeSet worker_core_range_set = CoreRangeSet(worker_core_ranges);
+    const auto [clamped_num_links, worker_core_range_set, worker_cores] =
+        get_cores(input_nd_shard_spec, num_directions_per_link);
+
+    // tensor details
+    const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
+
+    const uint32_t num_pages_per_shard = input_nd_shard_spec.shard_shape.volume() / num_tile_elements;
+    const uint32_t num_pages_per_slice = input_tensors.at(0).buffer()->num_pages();
+    const uint32_t page_size = input_tensors.at(0).buffer()->page_size();
+
+    // NOTE: writer kernel hardcoded to always use scatter_write with 2 tiles
+    const uint32_t tile_granularity = 2;
 
     // L1 scratch CB creation
-    const uint32_t page_size = input_tensors.at(0).buffer()->page_size();
-    const uint32_t tile_granularity = 2;  // NOTE: writer kernel hardcoded to always use scatter_write with 2 tiles
-
-    const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
-    const uint32_t compute_input_cb_num_pages =
-        input_nd_shard_spec.shard_shape.volume() / num_tile_elements;  // entire shard
+    const uint32_t compute_input_cb_num_pages = num_pages_per_shard;   // entire shard
     const uint32_t compute_ouput_cb_num_pages = 2 * tile_granularity;  // double buffer
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
@@ -346,16 +383,8 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     auto reduce_kernel_id =
         tt::tt_metal::CreateKernel(program, reduce_kernel_path, worker_core_range_set, reduce_kernel_config);
 
-    // NOTE: kernels work in sets of 2 pages
-    const uint32_t total_num_workers_per_device = num_directions_per_link * num_links;
-
-    const uint32_t num_slice_pages = input_tensors.at(0).buffer()->num_pages();
-    const uint32_t num_slice_page_sets = num_slice_pages / tile_granularity;
-    const uint32_t num_slice_page_sets_per_worker = tt::div_up(num_slice_page_sets, total_num_workers_per_device);
-    const uint32_t num_tiles_per_worker = num_slice_page_sets_per_worker * tile_granularity;
-
     // runtime args
-    for (uint32_t link = 0; link < num_links; link++) {
+    for (uint32_t link = 0; link < clamped_num_links; link++) {
         for (uint32_t direction = 0; direction < num_directions_per_link; direction++) {
             uint32_t worker_id = (link * num_directions_per_link) + direction;
             uint32_t opposite_direction_worker_id =
@@ -373,9 +402,9 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
              * - need to create kernels even if worker not processing tiles, required for pre and post op barrier/sync
              * - min so that we don't try to process non-existent tiles on that dummy worker
              */
-            uint32_t start_tiles_read = num_tiles_per_worker * worker_id;
-            uint32_t start_tiles_to_read = num_tiles_per_worker * (worker_id + 1);
-            start_tiles_to_read = std::min(start_tiles_to_read, num_slice_pages);
+            uint32_t start_tiles_read = num_pages_per_shard * worker_id;
+            uint32_t start_tiles_to_read = num_pages_per_shard * (worker_id + 1);
+            start_tiles_to_read = std::min(start_tiles_to_read, num_pages_per_slice);
 
             // reader
             std::vector<uint32_t> reader_rt_args = {
@@ -439,6 +468,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         reader_kernel_id,
         writer_kernel_id,
         worker_cores,
+        clamped_num_links,
         num_directions_per_link,
         input_cb_handles,
         intermediate_cb_handles};
@@ -449,12 +479,12 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     const tt::tt_metal::KernelHandle reader_kernel_id,
     const tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+    uint32_t clamped_num_links,
     uint32_t num_directions_per_link,
     const std::vector<tt::tt_metal::CBHandle>& input_cb_handles,
     const std::vector<tt::tt_metal::CBHandle>& intermediate_cb_handles,
     const tt::tt_metal::GlobalSemaphore& op_semaphore,
     const tt::tt_metal::GlobalSemaphore& pre_op_barrier_semaphore,
-    uint32_t num_links,
     const std::vector<ttnn::Tensor>& input_tensors,
     const std::vector<ttnn::Tensor>& intermediate_slice_tensors,
     const ttnn::Tensor& output_tensor) {
@@ -487,7 +517,7 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
         program, intermediate_cb_handles.at(7), *intermediate_slice_tensors.at(7).buffer());
 
     // update senders
-    for (uint32_t link = 0; link < num_links; link++) {
+    for (uint32_t link = 0; link < clamped_num_links; link++) {
         for (uint32_t direction = 0; direction < num_directions_per_link; direction++) {
             CoreCoord core = all_cores[link * num_directions_per_link + direction];
             std::vector<std::vector<RuntimeArgsData>> reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
@@ -616,12 +646,12 @@ void DeepseekReduceScatterMeshWorkloadFactory::override_runtime_arguments(
             shared_vars.program_artifacts.reader_kernel_id,
             shared_vars.program_artifacts.writer_kernel_id,
             shared_vars.program_artifacts.all_cores,
+            shared_vars.program_artifacts.clamped_num_links,
             shared_vars.program_artifacts.num_directions_per_link,
             shared_vars.program_artifacts.input_cb_handles,
             shared_vars.program_artifacts.intermediate_cb_handles,
             shared_vars.op_semaphore,
             shared_vars.pre_op_barrier_semaphore,
-            operation_attributes.num_links,
             input_tensors,
             intermediate_slice_tensors,
             output_tensor);
