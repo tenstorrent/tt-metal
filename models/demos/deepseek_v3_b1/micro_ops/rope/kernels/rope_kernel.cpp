@@ -79,10 +79,6 @@ KERNEL_ENTRY {
     // CTArgs, IsActiveCore
     // ========================================================================
     deepseek_b1_ops::Rope::Op<RopeCTArgs, Core::is_active_core> rope;
-
-    {
-        DeviceZoneScopedN("RoPE");
-        rope(rope_args);
-    }
+    rope(rope_args);
 }
 KERNEL_END
