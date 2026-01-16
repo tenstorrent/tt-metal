@@ -76,11 +76,13 @@ def _apply_prefill_sampling_state(
     *,
     sampling_params: SamplingParams,
     prompt_tokens: torch.Tensor | None,
+    empty_slots: list[int],
 ):
-    sampling_module = getattr(model_instance, "sampling_prefill", None)
+    sampling_module = getattr(model_instance, "sampling", None)
     assert sampling_module is not None, "Sampling module not found in model for sampling on device."
     sampling_module.reset_sampling_params(sampling_params)
-    sampling_module.reset_seed(sampling_params.seed)
+    sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
+    sampling_module.seed_manager.get_new_values(empty_slots, replicate_seeds=True)
     if prompt_tokens is not None:
         sampling_module.reset_prompt_tokens(prompt_tokens)
     sampling_module.reset_output_state()
@@ -392,6 +394,7 @@ class Generator:
                     self.model[model_id],
                     sampling_params=per_request_params,
                     prompt_tokens=prefill_ids[:, :seq_len].repeat(32, 1),
+                    empty_slots=[user_id % 32],
                 )
 
             if enable_trace_current_prompt:
@@ -422,7 +425,7 @@ class Generator:
                 )
             # Defer blocking work to a second phase so other sub-meshes can keep running
             if sampling_enabled:
-                tt_tokens, tt_log_probs = self.model[model_id].sampling_prefill.sample(
+                tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
                     logits,
                     enable_trace=False,
                 )
@@ -638,8 +641,8 @@ class Generator:
                 sampling_module = getattr(self.model[i], "sampling", None)
                 assert sampling_module is not None, "Sampling module not found in model for sampling on device."
                 sampling_module.reset_sampling_params(formatted_params)
+                sampling_module.seed_manager.get_new_values()
                 if reset_batch:
-                    sampling_module.reset_seed(formatted_params.seed)
                     sampling_module.reset_prompt_tokens(prompt_chunks[i])
                     sampling_module.reset_output_state(output_chunks[i])
 
