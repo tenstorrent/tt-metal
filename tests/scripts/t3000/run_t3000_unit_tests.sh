@@ -520,7 +520,7 @@ run_t3000_qwen25_vl_unit_tests() {
   start_time=$(date +%s)
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -539,7 +539,7 @@ run_t3000_qwen25_vl_unit_tests() {
 }
 
 run_t3000_deepseek_tests() {
-  pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+  uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
 
   export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
   export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
@@ -677,7 +677,7 @@ run_t3000_gpt_oss_unit_tests() {
   echo "LOG_METAL: Running run_t3000_gpt_oss_unit_tests"
 
   # Install gpt-oss requirements
-  pip install -r models/demos/gpt_oss/requirements.txt
+  uv pip install -r models/demos/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
   HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
