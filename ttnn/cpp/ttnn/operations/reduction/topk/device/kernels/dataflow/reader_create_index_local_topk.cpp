@@ -20,26 +20,42 @@
  * @param cb_id Circular buffer index to write the generated index tile
  * @param wt    Width tile position [0, Wt_local) identifying which tile position along width
  */
+template <typename T = uint16_t>
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
-    // TODO: investigate moving to compile time (binary size is at risk)
-    cb_reserve_back(cb_id, 1);
-    uint32_t write_addr = get_write_ptr(cb_id);
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-    uint16_t wt_offset = wt << 5;
+    // Constants
+    constexpr uint32_t one_tile = 1;
 
+    // Reserve space
+    cb_reserve_back(cb_id, one_tile);
+
+    // Writer config
+    const uint32_t writer_addr = get_write_ptr(cb_id);
+    volatile tt_l1_ptr T* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(writer_addr);
+    const uint32_t w = wt << 5;  // wt * 2^(5)
+
+    // Writer loop
     uint32_t count = 0;
-    for (uint32_t i = 0; i < 2; ++i) {
-        for (uint32_t j = 0; j < 2; ++j) {
-            for (uint32_t k = 0; k < 16; ++k) {
-                for (uint32_t l = 0; l < 16; l += 2) {
-                    uint16_t value = l + 16 * j + wt_offset;
-                    ptr[count] = (value + 1) << 16 | value;
+    /*
+    The 32x32 tile is subdivided into four 16x16 quadrants(faces): top-left, top-right, bottom-left, and bottom-right.
+    These quadrants are stored contiguously in memory. Therefore, indices must be written in memory according
+    to their respective quadrant, rather than sequentially from left to right across the entire tile.
+    */
+    constexpr uint32_t tile_faces = 2;
+    constexpr uint32_t face_size = 16;
+    for (uint32_t i = 0; i < tile_faces; ++i) {
+        for (uint32_t j = 0; j < tile_faces; ++j) {
+            for (uint32_t k = 0; k < face_size; ++k) {
+                for (uint32_t l = 0; l < face_size; l++) {
+                    const T value = l + face_size * j + w;
+                    ptr[count] = value;
                     count++;
-                }
-            }
-        }
-    }
-    cb_push_back(cb_id, 1);
+                }  // l loop
+            }  // k loop
+        }  // j loop
+    }  // i loop
+
+    // Push the tile
+    cb_push_back(cb_id, one_tile);
 }
 
 /**
@@ -56,25 +72,33 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
  * - Index generation happens on-demand to minimize DRAM access
  */
 void kernel_main() {
-    // Runtime arguments - core-specific work assignment
+    // Runtime arguments
     uint32_t src_addr = get_arg_val<uint32_t>(0);  // DRAM address of input tensor
     uint32_t start_ht = get_arg_val<uint32_t>(1);  // Starting height tile index
     uint32_t start_wt = get_arg_val<uint32_t>(2);  // Starting width tile index for this core
 
-    // Compile-time configuration
+    // Compiletime args
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);  // Input values circular buffer
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);  // Generated indices circular buffer
-    // Note: Skipping indices tensor arg get_compile_time_arg_val(3) as we generate indices locally
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);         // Total height tiles in tensor
+    constexpr uint32_t Wt_local = get_compile_time_arg_val(3);   // Width tiles assigned to this core
+    constexpr uint32_t Wt = get_compile_time_arg_val(4);         // Total width tiles in tensor
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);        // Total height tiles in tensor
-    constexpr uint32_t Wt_local = get_compile_time_arg_val(3);  // Width tiles assigned to this core
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);        // Total width tiles in tensor
+    // Constants
+    constexpr uint32_t onetile = 1;
 
     // DRAM tensor accessor configuration
     constexpr auto s_args = TensorAccessorArgs<5>();
-    constexpr uint32_t onetile = 1;
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
     const auto s = TensorAccessor(s_args, src_addr, tile_bytes);
+
+#if not GENERATE_INDICES
+    // Precomputed indices tensor accessor
+    constexpr auto indices_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
+    const uint32_t src_indices_addr = get_arg_val<uint32_t>(3);
+    constexpr uint32_t indices_tile_bytes = get_tile_size(cb_id_in1);
+    const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr, indices_tile_bytes);
+#endif  // not GENERATE_INDICES
 
     // MAIN DATA STREAMING LOOP
     // Process each height row sequentially, streaming this core's assigned width chunk
@@ -93,9 +117,17 @@ void kernel_main() {
             noc_async_read_tile(i * Wt + j, s, l1_write_addr);  // Read tile at (i,j) position
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, onetile);
-
+#if GENERATE_INDICES
             // Generate corresponding index tile for position tracking during sort
             generate_index_tile(cb_id_in1, j);  // Generate indices for width position j
+#else
+            // Read precomputed indices to circular buffer
+            cb_reserve_back(cb_id_in1, onetile);
+            const uint32_t l1_write_addr_index = get_write_ptr(cb_id_in1);
+            noc_async_read_tile(i * Wt + j, indices_accessor, l1_write_addr_index);
+            noc_async_read_barrier();
+            cb_push_back(cb_id_in1, onetile);
+#endif  // GENERATE_INDICES
         }
     }
 }
