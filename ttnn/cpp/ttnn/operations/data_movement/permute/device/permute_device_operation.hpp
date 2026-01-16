@@ -180,5 +180,5 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     const SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    const float pad_value = 0.0f);
+    float pad_value = 0.0f);
 }  // namespace ttnn::prim
