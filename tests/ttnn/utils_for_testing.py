@@ -108,15 +108,28 @@ def assert_allclose(
          AssertionError: If the tensor shapes don't match or if tensors are not close enough according to
                          the aforementioned formula.
     """
-    if isinstance(expected_result, ttnn.Tensor):
-        expected_result = ttnn.to_torch(expected_result)
+
+    def post_to_torch_conversion(tensor):
+        # Originally, `to_torch` function converted unsigned TTNN tensors to the signed variants directly.
+        # This was changed to convert to unsigned types instead to address issue with the value truncation
+        # https://github.com/tenstorrent/tt-metal/issues/31150
+
         # Torch does not support max/abs operation on the unsigned tensors, failing with "RuntimeError: "add_stub" not implemented for 'UInt32'"
         # so ttnn tensor must have a post-conversion correction to avoid this error.
-        expected_result = convert_to_signed_tensor(expected_result)
+        if tensor.dtype == torch.uint16:
+            return tensor.to(torch.int32)
+
+        elif tensor.dtype == torch.uint32:
+            return tensor.to(torch.int64)
+
+        else:
+            return tensor
+
+    if isinstance(expected_result, ttnn.Tensor):
+        expected_result = post_to_torch_conversion(ttnn.to_torch(expected_result))
 
     if isinstance(actual_result, ttnn.Tensor):
-        actual_result = ttnn.to_torch(actual_result)
-        actual_result = convert_to_signed_tensor(actual_result)
+        actual_result = post_to_torch_conversion(ttnn.to_torch(actual_result))
 
     assert list(expected_result.shape) == list(
         actual_result.shape
@@ -414,30 +427,6 @@ def match_type_post_conversion(roundtrip_tensor, py_tensor):
         return roundtrip_tensor.to(py_tensor.dtype)
     else:
         return roundtrip_tensor.astype(py_tensor.dtype)
-
-
-# Originally, `to_torch` function converted unsigned TTNN tensors to the signed variants directly.
-# This was changed to convert to unsigned types instead to address issue with the value truncation
-# https://github.com/tenstorrent/tt-metal/issues/31150 -- the function below is necessary to make
-# the tests relying on the older signed behavior work.
-def convert_to_signed_tensor(py_tensor):
-    """
-    Use on the result of the `to_torch` function to convert the tensor to the signed type.
-    """
-    if py_tensor.dtype == torch.uint16:
-        return py_tensor.to(torch.int16)
-
-    elif py_tensor.dtype == torch.uint32:
-        return py_tensor.to(torch.int32)
-
-    elif py_tensor.dtype == np.uint16:
-        return py_tensor.astype(np.int16)
-
-    elif py_tensor.dtype == np.uint32:
-        return py_tensor.astype(np.int32)
-
-    else:
-        return py_tensor
 
 
 def generate_all_bfloat16_bitpatterns(dtype=torch.bfloat16):
