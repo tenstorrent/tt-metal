@@ -75,16 +75,16 @@ jobs:
           # Define device-compatible TT-Transformers models
           case "${{ inputs.device-type }}" in
             n150)
-              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "mistral-7b", "qwen2.5-7b", "phi-3-mini-128k"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "mistral-7b", "phi-3-mini-128k"]'
               ;;
             n300)
               tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "phi-3-mini-128k"]'
               ;;
             p100)
-              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "phi-3-mini-128k"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "phi-3-mini-128k"]'
               ;;
             p150)
-              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "phi-3-mini-128k"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "phi-3-mini-128k"]'
               ;;
             p300)
               tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b", "phi-3-mini-128k"]'
