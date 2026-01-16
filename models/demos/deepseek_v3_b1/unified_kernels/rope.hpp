@@ -123,9 +123,14 @@ struct Rope {
             cb_wait_front(args.cos_cb, Wt);       // Cos: Wt tiles
 
             // ================================================================
-            // Main loop: process each head tile row
+            // Initialize matmul and binary ops (done once before loop)
             // ================================================================
             mm_init(args.in_cb, args.trans_mat_cb, args.rotated_in_interm_cb);
+            binary_op_init_common(args.rotated_in_interm_cb, args.sin_cb, args.sin_interm_cb);
+
+            // ================================================================
+            // Main loop: process each head tile row
+            // ================================================================
             for (uint32_t ht = 0; ht < Ht; ht++) {
                 // Reserve intermediate and output buffers
                 cb_reserve_back(args.rotated_in_interm_cb, Wt);
@@ -139,7 +144,7 @@ struct Rope {
                 // ============================================================
                 // Step 1: rotated = input @ trans_mat (matmul for rotate_half)
                 // ============================================================
-                mm_init_short(args.in_cb, args.trans_mat_cb, args.rotated_in_interm_cb);
+                mm_init_short(args.in_cb, args.trans_mat_cb);
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     matmul_tiles(args.in_cb, args.trans_mat_cb, j, 0, j);
@@ -156,7 +161,6 @@ struct Rope {
                 // ============================================================
                 // Step 2: sin_interm = rotated * sin (broadcast multiply)
                 // ============================================================
-
                 mul_bcast_rows_init_short(args.rotated_in_interm_cb, args.sin_cb);
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
