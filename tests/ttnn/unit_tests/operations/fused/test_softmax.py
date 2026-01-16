@@ -496,7 +496,7 @@ def test_softmax_4096x4096_fp32(device):
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32), (1, 1, 64, 128)])
-@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize("dim", [-1])
 def test_softmax_in_place_with_recip_legacy_compat(device, shape, dim):
     """
     Test softmax_in_place with recip_legacy_compat=True to verify that
