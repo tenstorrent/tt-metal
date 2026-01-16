@@ -87,7 +87,7 @@ template <
     typename ScatterPacketHdrType,
     typename UnicastPacketHdrType,
     typename SemIncPacketHdrType>
-void forward_tile_to_fabric_neighbor(
+void forward_block_to_fabric_neighbor(
     uint32_t m_tile_start,
     uint32_t k_tile_start,
     uint32_t m_block_tiles,
@@ -107,12 +107,11 @@ void forward_tile_to_fabric_neighbor(
     uint32_t tile_id_start = m_tile_start * output_tensor_Wt + k_tile_start;
     uint32_t row_offset = 0;
     uint32_t pages_read_in_row = 0;
-    uint32_t l1_read_addr = in0_start_address;
+    size_t l1_read_addr = in0_start_address;
     while (tiles_read < tiles_to_read) {
         uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
         uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
         uint64_t noc_addrs[4] = {0, 0, 0, 0};
         for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
             uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -124,20 +123,19 @@ void forward_tile_to_fabric_neighbor(
             noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
         }
         if (tiles_to_put_in_current_packet > 1) {
-            fabric_unicast_noc_scatter_write_with_state<
-                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                UnicastScatterWriteUpdateMask::PayloadSize>(
+            fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                 mux_connection_handle,
                 pkt_scatter_hdr,
                 l1_read_addr,
-                NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                page_size * tiles_to_put_in_current_packet);
+                NocUnicastScatterCommandHeader({noc_addrs[0], noc_addrs[1]}, {0}));
         } else {
             fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                 mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
         }
+
+        noc_async_writes_flushed();
         tiles_read += tiles_to_put_in_current_packet;
-        l1_read_addr += tiles_to_put_in_current_packet;
+        l1_read_addr += (tiles_to_put_in_current_packet * page_size);
     }
 
     // unicast output ready semaphore
