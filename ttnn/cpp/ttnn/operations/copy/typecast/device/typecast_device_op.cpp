@@ -86,8 +86,8 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 preallocated_output_tensor.value().layout() == input_tensor.layout(),
                 "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
-                static_cast<int>(input_tensor.layout()),
-                static_cast<int>(preallocated_output_tensor.value().layout()));
+                input_tensor.layout(),
+                preallocated_output_tensor.value().layout());
         }
     }
 }

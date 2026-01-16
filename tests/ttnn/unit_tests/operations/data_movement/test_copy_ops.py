@@ -300,27 +300,12 @@ def run_typecast_row_major_test(shape, memory_config, input_dtype, output_dtype,
     # Convert original input to match output dtype for comparison
     torch_expected = input.to(torch_output_dtype)
 
-    # For unsigned types, clamp negative values to 0 (unsigned types can't represent negatives)
-    if output_dtype == ttnn.uint32:
-        torch_expected = torch.clamp(torch_expected, min=0)
-
-    # Use appropriate assertion based on dtype
-    # ULP is only applicable for floating-point types, not integers
-    is_integer_type = output_dtype in (ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32)
-    is_float_type = output_dtype in (ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b)
-
-    if is_integer_type:
+    if output_dtype == ttnn.int32:
         # For integer types, use exact equality (typecast from float to int may have rounding)
         assert torch.equal(
             torch_expected, torch_output
         ), f"Integer typecast mismatch: expected {torch_expected}, got {torch_output}"
-    elif output_dtype == ttnn.bfloat8_b or input_dtype == ttnn.bfloat8_b:
-        # Use tighter tolerances for bfloat8_b due to lower precision
-        assert_with_ulp(torch_expected, torch_output, ulp_threshold=5)
-    elif is_float_type:
-        assert_with_ulp(torch_expected, torch_output, ulp_threshold=2)
     else:
-        # Fallback for other types
         assert_with_ulp(torch_expected, torch_output, ulp_threshold=2)
 
 
