@@ -423,6 +423,12 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
         return std::vector<MuxConnectionInfo>();
     }
 
+    // Z direction muxes don't participate in inter-mux forwarding
+    // MUX_TO_MUX channels only support mesh directions (E/W/N/S)
+    if (direction == eth_chan_directions::Z) {
+        return std::vector<MuxConnectionInfo>();
+    }
+
     // UDM mode - collect downstream mux connection info
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
@@ -1040,6 +1046,12 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
         case ChannelTypes::MUX_TO_MUX_CHANNEL: {
             // Mux-to-Mux channels: check if muxes exist in other directions (UDM mode only)
             TT_FATAL(num_channels == 3, "MUX_TO_MUX_CHANNEL should have exactly 3 channels (got {})", num_channels);
+
+            // Z direction muxes don't have inter-mux connections
+            // MUX_TO_MUX channels only support mesh directions (E/W/N/S)
+            if (direction_ == eth_chan_directions::Z) {
+                break;
+            }
 
             // Exclude Z direction - MUX mode only supports mesh directions (E/W/N/S)
             auto upstream_mux_dirs = builder::get_all_other_directions(direction_, /*exclude_z=*/true);
