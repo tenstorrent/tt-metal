@@ -88,9 +88,18 @@ class DRAMStreamingMatmul:
     def golden(
         input_a: torch.Tensor,
         input_b: torch.Tensor,
+        fused_activation: str = None,
     ) -> torch.Tensor:
-        """PyTorch reference implementation."""
-        return input_a @ input_b
+        """PyTorch reference implementation with optional fused activation."""
+        result = input_a @ input_b
+        if fused_activation is not None:
+            activation_fn = {
+                "silu": torch.nn.functional.silu,
+            }.get(fused_activation.lower())
+            if activation_fn is None:
+                raise ValueError(f"Unknown activation for golden: {fused_activation}")
+            result = activation_fn(result)
+        return result
 
     @staticmethod
     def op(
@@ -101,6 +110,7 @@ class DRAMStreamingMatmul:
         math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
         math_approx_mode: bool = False,
         subblock_k: int = None,  # K subblock size in tiles, None means full K
+        fused_activation: str = None,  # "silu" to fuse SiLU activation
     ) -> ttnn.Tensor:
         """
         Execute simplified DRAM streaming matmul.
@@ -262,6 +272,12 @@ class DRAMStreamingMatmul:
         mm_kernel_defines = []
         if fp32_dest_acc_en:
             mm_kernel_defines.append(("FP32_DEST_ACC_EN", "1"))
+
+        # Fused SiLU activation (only silu supported for now)
+        if fused_activation is not None:
+            if fused_activation.lower() != "silu":
+                raise ValueError(f"Only 'silu' activation is supported, got: {fused_activation}")
+            mm_kernel_defines.append(("FUSE_SILU", "1"))
 
         # Get buffer addresses
         in1_buffer_addr = input_b.buffer_address()
