@@ -9,6 +9,21 @@
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 
+template <uint32_t CbOut, uint32_t NumTiles>
+FORCE_INLINE void wait_for_mcast(volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr, uint32_t debug_enabled) {
+    if (debug_enabled) {
+        DPRINT << "mcast: wait sender (" << (uint32_t)get_absolute_logical_x() << ","
+               << (uint32_t)get_absolute_logical_y() << ")" << ENDL();
+    }
+    noc_semaphore_wait(mcast_sender_semaphore_addr_ptr, VALID);
+    cb_push_back(CbOut, NumTiles);
+    noc_semaphore_set(mcast_sender_semaphore_addr_ptr, 0);
+    if (debug_enabled) {
+        DPRINT << "mcast: got sender (" << (uint32_t)get_absolute_logical_x() << ","
+               << (uint32_t)get_absolute_logical_y() << ")" << ENDL();
+    }
+}
+
 template <
     uint32_t CbIn,
     uint32_t CbOut,
@@ -84,7 +99,6 @@ void kernel_main() {
     cb_push_back(weight1_cb, num_tiles_k);
 
     // Gather after first matmul so that we can mcast full result to all cores
-    cb_reserve_back(intermediate_full_cb, num_tiles_k);
     const uint32_t gather_destination_tile_offset_bytes =
         compute_sender_tile_offset_bytes<sender_logical_x_start, sender_logical_y_start, sender_grid_width>(
             get_tile_size(intermediate_pregather_cb));
@@ -96,7 +110,6 @@ void kernel_main() {
         mcast_receiver_noc_y,
         mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
 
-    // Wait for mcast to complete before pushing back to intermediate_full_cb which will start the second matmul
-    noc_semaphore_wait(mcast_sender_semaphore_addr_ptr, VALID);
-    cb_push_back(intermediate_full_cb, num_tiles_k);
+    // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
+    wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
 }
