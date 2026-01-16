@@ -124,7 +124,6 @@ int main(int argc, char** argv) {
         for (const auto& [data, targets] : train_dataloader) {
             optimizer.zero_grad();
             auto output = (*model)(data);
-            auto output_values = ttml::core::to_xtensor(output->get_value(), ttml::core::IdentityComposer{});
 
             auto loss = ttml::ops::mse_loss(output, targets);
             auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
