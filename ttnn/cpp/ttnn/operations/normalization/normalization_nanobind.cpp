@@ -7,6 +7,7 @@
 #include <nanobind/nanobind.h>
 
 #include "softmax/softmax_nanobind.hpp"
+#include "softmax_backward/softmax_backward_nanobind.hpp"
 #include "layernorm/layernorm_nanobind.hpp"
 #include "rmsnorm/rmsnorm_nanobind.hpp"
 #include "groupnorm/groupnorm_nanobind.hpp"
@@ -18,6 +19,7 @@ namespace ttnn::operations::normalization {
 
 void py_module(nb::module_& mod) {
     detail::bind_normalization_softmax(mod);
+    detail::bind_normalization_softmax_backward(mod);
     detail::bind_normalization_layernorm(mod);
     detail::bind_normalization_rms_norm(mod);
     detail::bind_normalization_group_norm(mod);
