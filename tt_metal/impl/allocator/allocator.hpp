@@ -71,6 +71,8 @@ public:
     void shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
     void reset_allocator_size(const BufferType& buffer_type);
 
+    void expand_trace_region_size(const size_t previous_trace_region_size, const size_t trace_region_size);
+
     void mark_allocations_unsafe();
     void mark_allocations_safe();
 

@@ -510,55 +510,106 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     if (shrink_size == 0) {
         return;
     }
-    TT_FATAL(bottom_up, "Shrinking from the top is currently not supported");
     TT_FATAL(
         shrink_size <= this->max_size_bytes_,
         "Shrink size {} must be smaller than max size {}",
         shrink_size,
         max_size_bytes_);
 
-    // loop and scan the block list to find if the shrink cut into any allocated block
-    size_t block_to_shrink = -1;
-    DeviceAddr shrunk_address = shrink_size_ + shrink_size;
-    // TODO: There must be a way to force the beginning of all blocks be at index 0
-    for (size_t i = 0; i < block_address_.size(); i++) {
-        if (!meta_block_is_allocated_[i]) {
-            continue;
+    if (bottom_up) {
+        // loop and scan the block list to find if the shrink cut into any allocated block
+        size_t block_to_shrink = -1;
+        DeviceAddr shrunk_address = shrink_size_ + shrink_size;
+        // TODO: There must be a way to force the beginning of all blocks be at index 0
+        for (size_t i = 0; i < block_address_.size(); i++) {
+            if (!meta_block_is_allocated_[i]) {
+                continue;
+            }
+            if (block_is_allocated_[i]) {
+                TT_FATAL(
+                    block_address_[i] >= shrunk_address,
+                    "Shrink size {} cuts into allocated block at address {}",
+                    shrunk_address,
+                    block_address_[i]);
+            } else if (block_address_[i] <= shrunk_address && block_address_[i] + block_size_[i] >= shrunk_address) {
+                block_to_shrink = i;
+                break;
+            }
         }
-        if (block_is_allocated_[i]) {
-            TT_FATAL(
-                block_address_[i] >= shrunk_address,
-                "Shrink size {} cuts into allocated block at address {}",
-                shrunk_address,
-                block_address_[i]);
-        } else if (block_address_[i] <= shrunk_address && block_address_[i] + block_size_[i] >= shrunk_address) {
-            block_to_shrink = i;
-            break;
+
+        TT_FATAL(
+            block_to_shrink != -1, "Shrink size {} does not align with any block. This must be a bug", shrunk_address);
+
+        // Find the relevant size segregated list
+        size_t size_segregated_index = get_size_segregated_index(block_size_[block_to_shrink]);
+        std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
+        for (size_t i = 0; i < segregated_list.size(); i++) {
+            if (segregated_list[i] == block_to_shrink) {
+                segregated_list.erase(segregated_list.begin() + i);
+                break;
+            }
         }
-    }
 
-    TT_FATAL(block_to_shrink != -1, "Shrink size {} does not align with any block. This must be a bug", shrunk_address);
-
-    // Find the relevant size segregated list
-    size_t size_segregated_index = get_size_segregated_index(block_size_[block_to_shrink]);
-    std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
-    for (size_t i = 0; i < segregated_list.size(); i++) {
-        if (segregated_list[i] == block_to_shrink) {
-            segregated_list.erase(segregated_list.begin() + i);
-            break;
+        // Shrink the block
+        block_size_[block_to_shrink] -= shrink_size;
+        max_size_bytes_ -= shrink_size;
+        shrink_size_ += shrink_size;
+        if (block_size_[block_to_shrink] == 0) {
+            block_prev_block_[block_next_block_[block_to_shrink]] = block_prev_block_[block_to_shrink];
+            free_meta_block(block_to_shrink);
+        } else {
+            block_address_[block_to_shrink] += shrink_size;
+            insert_block_to_segregated_list(block_to_shrink);
         }
-    }
-
-    // Shrink the block
-    block_size_[block_to_shrink] -= shrink_size;
-    max_size_bytes_ -= shrink_size;
-    shrink_size_ += shrink_size;
-    if (block_size_[block_to_shrink] == 0) {
-        block_prev_block_[block_next_block_[block_to_shrink]] = block_prev_block_[block_to_shrink];
-        free_meta_block(block_to_shrink);
     } else {
-        block_address_[block_to_shrink] += shrink_size;
-        insert_block_to_segregated_list(block_to_shrink);
+        // loop and scan the block list to find if the shrink cut into any allocated block
+        size_t block_to_shrink = -1;
+        // DeviceAddr shrunk_address = shrink_size_ + shrink_size;
+        DeviceAddr shrunk_address = max_size_bytes_ - (shrink_size_ + shrink_size);
+
+        // TODO: There must be a way to force the beginning of all blocks be at index 0
+        uint32_t num_blocks = block_address_.size();
+        for (size_t i = 0; i < block_address_.size(); i++) {
+            uint32_t idx = num_blocks - i - 1;
+            if (!meta_block_is_allocated_[idx]) {
+                continue;
+            }
+            if (block_address_[idx] <= shrunk_address && block_address_[idx] + block_size_[idx] >= shrunk_address) {
+                if (block_is_allocated_[idx]) {
+                    TT_FATAL(
+                        block_address_[idx] >= shrunk_address,
+                        "Shrink size {} cuts into allocated block at address {}",
+                        shrunk_address,
+                        block_address_[idx]);
+                }
+                block_to_shrink = idx;
+                break;
+            }
+        }
+
+        TT_FATAL(
+            block_to_shrink != -1, "Shrink size {} does not align with any block. This must be a bug", shrunk_address);
+
+        // Find the relevant size segregated list
+        size_t size_segregated_index = get_size_segregated_index(block_size_[block_to_shrink]);
+        std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
+        for (size_t i = 0; i < segregated_list.size(); i++) {
+            if (segregated_list[i] == block_to_shrink) {
+                segregated_list.erase(segregated_list.begin() + i);
+                break;
+            }
+        }
+
+        // Shrink the block
+        block_size_[block_to_shrink] -= shrink_size;
+        max_size_bytes_ -= shrink_size;
+        shrink_size_ += shrink_size;
+        if (block_size_[block_to_shrink] == 0) {
+            block_prev_block_[block_next_block_[block_to_shrink]] = block_prev_block_[block_to_shrink];
+            free_meta_block(block_to_shrink);
+        } else {
+            insert_block_to_segregated_list(block_to_shrink);
+        }
     }
 }
 
@@ -578,7 +629,7 @@ void FreeListOpt::reset_size() {
             break;
         }
     }
-    TT_ASSERT(lowest_block_index != -1, "Lowest block not found during reset size");
+    TT_FATAL(lowest_block_index != -1, "Lowest block not found during reset size");
 
     // There 2 cases to consider:
     // 1. The lowest block is is free, which means we can just modify it's attributes
@@ -597,7 +648,7 @@ void FreeListOpt::reset_size() {
         insert_block_to_segregated_list(lowest_block_index);
     } else {
         size_t new_block_index = alloc_meta_block(0, shrink_size_, -1, lowest_block_index, false);
-        TT_ASSERT(block_prev_block_[lowest_block_index] == -1, "Lowest block should not have a previous block");
+        TT_FATAL(block_prev_block_[lowest_block_index] == -1, "Lowest block should not have a previous block");
         block_prev_block_[lowest_block_index] = new_block_index;
         insert_block_to_segregated_list(new_block_index);
     }

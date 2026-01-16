@@ -152,19 +152,26 @@ std::shared_ptr<MeshTraceBuffer> MeshTrace::create_empty_mesh_trace_buffer() {
 
 void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<MeshTraceBuffer>& trace_buffer) {
     uint64_t unpadded_size = trace_buffer->desc->total_trace_size;
-    size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
-        unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
-    size_t padded_size = round_up(unpadded_size, page_size);
+    auto num_banks = mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM);
+    size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(unpadded_size, num_banks);
+    size_t padded_size = round_up(unpadded_size, page_size * num_banks);
 
     const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
     mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
+    const auto new_trace_buffer_size = mesh_cq.device()->get_trace_buffers_size();
+
+    // check trace_regin_size if it's not zero
     auto trace_region_size = mesh_cq.device()->allocator_impl()->get_config().trace_region_size;
-    TT_FATAL(
-        mesh_cq.device()->get_trace_buffers_size() <= trace_region_size,
-        "Creating trace buffers of size {}B on MeshDevice {}, but only {}B is allocated for trace region.",
-        mesh_cq.device()->get_trace_buffers_size(),
-        mesh_cq.device()->id(),
-        trace_region_size);
+    if (trace_region_size != 0) {
+        TT_FATAL(
+            new_trace_buffer_size <= trace_region_size,
+            "Creating trace buffers of size {}B on MeshDevice {}, but only {}B is allocated for trace region.",
+            new_trace_buffer_size,
+            mesh_cq.device()->id(),
+            trace_region_size);
+    } else {
+        mesh_cq.device()->allocator_impl()->expand_trace_region_size(current_trace_buffers_size, new_trace_buffer_size);
+    }
 
     DeviceLocalBufferConfig device_local_trace_buf_config = {
         .page_size = page_size,

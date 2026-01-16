@@ -23,6 +23,18 @@
 
 namespace tt::tt_metal {
 
+size_t get_trace_region_size_per_bank(size_t trace_region_size, size_t num_dram_channels) {
+    size_t trace_region_size_per_bank = 0;
+    if (trace_region_size == 0) {
+        // TODO: Change this to 0 once the runtime error with zero-sized trace regions is resolved.
+        // Currently, a non-zero size is required to prevent a runtime crash.
+        trace_region_size_per_bank = 1024;
+    } else {
+        trace_region_size_per_bank = trace_region_size / num_dram_channels;
+    }
+    return trace_region_size_per_bank;
+}
+
 AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     config_(std::make_unique<AllocatorConfig>(alloc_config)), view_(std::make_unique<Allocator>(this)) {}
 
@@ -34,7 +46,15 @@ void AllocatorImpl::validate_bank_assignments() const {
 
 void AllocatorImpl::init_one_bank_per_channel() {
     // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
-    DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - config_->trace_region_size;
+    TT_FATAL(
+        config_->trace_region_size % config_->num_dram_channels == 0,
+        "config_->trace_region_size {} should be multiple of config_->num_dram_channels {}",
+        config_->trace_region_size,
+        config_->num_dram_channels);
+    auto trace_region_size_per_bank =
+        get_trace_region_size_per_bank(config_->trace_region_size, config_->num_dram_channels);
+    DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - trace_region_size_per_bank;
+    DeviceAddr trace_bank_size = dram_bank_size + trace_region_size_per_bank;
     std::vector<int64_t> bank_offsets(config_->num_dram_channels);
     for (uint32_t channel_id = 0; channel_id < config_->num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(config_->dram_bank_offsets.at(channel_id));
@@ -53,19 +73,49 @@ void AllocatorImpl::init_one_bank_per_channel() {
         logical_core_to_bank_ids_[BufferType::DRAM].insert({logical_core, {bank_id}});
     }
     // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED
-    // offset
+    // initialize trace buffer with large size, and shrink it
+    // because BankManager doesn't have extend function
     trace_buffer_manager_ = std::make_unique<BankManager>(
         BufferType::TRACE,
         bank_offsets,
-        config_->trace_region_size,
+        trace_bank_size,
         config_->dram_alignment,
-        dram_bank_size + config_->dram_unreserved_base,
+        config_->dram_unreserved_base,
         config_->disable_interleaved);
+
+    trace_buffer_manager_->shrink_size(trace_bank_size - trace_region_size_per_bank);
+
     for (uint32_t bank_id = 0; bank_id < config_->num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         bank_id_to_dram_channel_.insert({bank_id, bank_id});
         dram_channel_to_bank_ids_.insert({bank_id, {bank_id}});
         logical_core_to_bank_ids_[BufferType::TRACE].insert({logical_core, {bank_id}});
+    }
+}
+
+void AllocatorImpl::expand_trace_region_size(
+    const size_t previous_trace_region_size, const size_t new_trace_region_size) {
+    {
+        auto bottom_up = false;
+        auto dram_shrink_size_per_bank =
+            (new_trace_region_size - previous_trace_region_size) / config_->num_dram_channels;
+        dram_manager_->shrink_size(dram_shrink_size_per_bank, bottom_up);
+    }
+
+    // do reset and shrink, because bank manager dosen't have expand function
+    {
+        trace_buffer_manager_->reset_size();
+
+        auto trace_region_size_per_bank =
+            get_trace_region_size_per_bank(config_->trace_region_size, config_->num_dram_channels);
+        DeviceAddr dram_bank_size =
+            config_->dram_bank_size - config_->dram_unreserved_base - trace_region_size_per_bank;
+        DeviceAddr trace_bank_size = dram_bank_size + trace_region_size_per_bank;
+
+        // bottom up shirnk
+        auto trace_shrink_size = trace_bank_size - new_trace_region_size / config_->num_dram_channels;
+        auto bottom_up = true;
+        trace_buffer_manager_->shrink_size(trace_shrink_size, bottom_up);
     }
 }
 
