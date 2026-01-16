@@ -70,7 +70,6 @@ int main(int argc, char** argv) {
             const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
             auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
                 data, ttnn::Shape{batch_size, 1, 1, num_features}, device, ttnn::Layout::TILE, mapper.get()));
-
             auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
                 targets, ttnn::Shape{batch_size, 1, 1, num_targets}, device, ttnn::Layout::TILE, mapper.get()));
 
@@ -81,12 +80,12 @@ int main(int argc, char** argv) {
 
     auto model = ttml::models::linear_regression::create(num_features, num_targets);
 
-    float learning_rate = 0.05F * num_targets * (batch_size / 128.F);
+    float learning_rate = 0.1F * num_targets * (batch_size / 128.F);
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
 
     int training_step = 0;
-    const int num_epochs = 100;
+    const int num_epochs = 10;
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         for (const auto& [data, targets] : train_dataloader) {
             optimizer.zero_grad();
@@ -95,7 +94,6 @@ int main(int argc, char** argv) {
 
             auto loss = ttml::ops::mse_loss(output, targets);
             auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
-            std::cout << "loss_xtensors size: " << loss_xtensors.size() << std::endl;
             float mean_loss = 0.0F;
             for (const auto& loss_xtensor : loss_xtensors) {
                 mean_loss += loss_xtensor(0);
