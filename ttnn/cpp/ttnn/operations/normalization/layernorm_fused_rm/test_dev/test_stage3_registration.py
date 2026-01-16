@@ -1,0 +1,153 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Stage 3 Test: Operation Registration
+
+Verifies that the layernorm_fused_rm operation is properly registered and
+reaches the device execution path (program factory is called).
+
+At this stage, it's OK if the operation fails in the program factory
+(kernels not implemented yet) - we just need to verify it gets past validation.
+"""
+
+import pytest
+import torch
+import ttnn
+
+
+@pytest.fixture
+def device():
+    """Get a device for testing."""
+    device = ttnn.open_device(device_id=0)
+    yield device
+    ttnn.close_device(device)
+
+
+def _get_valid_shape(tensor_info):
+    """Get a valid shape for a tensor based on its requirements."""
+    rank = tensor_info.get("required_rank")
+    if rank == 4:
+        return (1, 1, 32, 32)
+    elif rank == 3:
+        return (1, 32, 32)
+    elif rank == 2:
+        return (32, 32)
+    elif rank == 1:
+        return (32,)
+    elif rank:
+        return tuple([32] * rank)
+    else:
+        return (1, 1, 32, 32)  # Default 4D
+
+
+def _get_layout(tensor_info):
+    """Get the appropriate layout for a tensor."""
+    layout = tensor_info.get("required_layout")
+    if layout == "Layout::ROW_MAJOR":
+        return ttnn.ROW_MAJOR_LAYOUT
+    else:
+        return ttnn.TILE_LAYOUT
+
+
+def _create_tensor(device, tensor_info, override_shape=None, override_layout=None):
+    """Create a tensor based on tensor requirements."""
+    shape = override_shape or _get_valid_shape(tensor_info)
+    torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    layout = override_layout or _get_layout(tensor_info)
+    return ttnn.from_torch(torch_tensor, device=device, layout=layout)
+
+
+# Store tensor info for helper functions
+_tensor_infos = [
+    {
+        "name": "input_tensor",
+        "cpp_name": "input",
+        "required_rank": 2,
+        "required_layout": "Layout::ROW_MAJOR",
+    },
+    {
+        "name": "gamma",
+        "cpp_name": "gamma",
+        "required_rank": 1,
+        "required_layout": "Layout::ROW_MAJOR",
+    },
+    {
+        "name": "beta",
+        "cpp_name": "beta",
+        "required_rank": 1,
+        "required_layout": "Layout::ROW_MAJOR",
+    },
+]
+
+# Store parameter info for helper functions
+_param_defaults = {
+    "epsilon": 1e-5,
+}
+
+
+def _call_operation(tensors, **kwargs):
+    """Call the operation with all required tensors and parameters."""
+    params = {**_param_defaults, **kwargs}
+    # Filter out None values
+    params = {k: v for k, v in params.items() if v is not None}
+    return ttnn.layernorm_fused_rm(tensors[0], tensors[1], tensors[2], **params)
+
+
+def test_reaches_program_factory(device):
+    """
+    Verify operation reaches program factory (may fail there, but gets past validation).
+
+    This test passes if:
+    1. The operation completes successfully, OR
+    2. The operation fails with a kernel/program error (not validation error)
+
+    This test fails if:
+    1. The operation fails with a validation error (Stage 2 issue)
+    2. The operation is not found (Stage 1 issue)
+    """
+    # Create all tensors with valid configurations
+    tensors = [_create_tensor(device, info) for info in _tensor_infos]
+
+    try:
+        result = _call_operation(tensors)
+        # If we get here, operation completed successfully - great!
+        assert result is not None, "Operation returned None"
+        print(f"Operation completed successfully with output shape: {result.shape}")
+    except RuntimeError as e:
+        error_msg = str(e).lower()
+
+        # These keywords indicate we reached the program factory / kernel level
+        program_keywords = ["kernel", "program", "circular buffer", "cb_", "noc", "risc"]
+
+        # These keywords indicate we failed at validation (Stage 2 issue)
+        validation_keywords = ["rank", "layout", "dtype", "must be", "expected", "invalid"]
+
+        reached_program_factory = any(kw in error_msg for kw in program_keywords)
+        failed_at_validation = any(kw in error_msg for kw in validation_keywords) and not reached_program_factory
+
+        if failed_at_validation:
+            pytest.fail(
+                f"Operation failed at validation, not program factory. "
+                f"This is a Stage 2 issue, not Stage 3. Error: {e}"
+            )
+
+        # If we got a program/kernel error, that's expected at this stage
+        print(f"Operation reached program factory (expected failure at this stage): {e}")
+
+
+def test_operation_returns_tensor_or_fails_in_program(device):
+    """
+    Verify operation either returns a tensor or fails in program factory.
+    """
+    # Create all tensors with valid configurations
+    tensors = [_create_tensor(device, info) for info in _tensor_infos]
+
+    try:
+        result = _call_operation(tensors)
+        # Verify it's a tensor
+        assert isinstance(result, ttnn.Tensor), f"Expected ttnn.Tensor, got {type(result)}"
+    except RuntimeError:
+        # At Stage 3, runtime errors in program factory are acceptable
+        pass

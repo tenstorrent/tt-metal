@@ -1,0 +1,138 @@
+{
+  "operation_name": "layernorm_fused_rm",
+  "operation_name_pascal": "LayernormFusedRm",
+  "category": "normalization",
+  "namespace": "ttnn::operations::normalization::layernorm_fused_rm",
+  "operation_path": "ttnn/cpp/ttnn/operations/normalization/layernorm_fused_rm",
+  "parameters": [
+    {
+      "name": "epsilon",
+      "cpp_type": "float",
+      "py_type": "float",
+      "default": "1e-5f",
+      "description": "Small constant for numerical stability"
+    }
+  ],
+  "input_tensors": [
+    {
+      "name": "input_tensor",
+      "cpp_name": "input",
+      "required_rank": 2,
+      "required_dtypes": ["DataType::BFLOAT16"],
+      "required_layout": "Layout::ROW_MAJOR"
+    },
+    {
+      "name": "gamma",
+      "cpp_name": "gamma",
+      "required_rank": 1,
+      "required_dtypes": ["DataType::BFLOAT16"],
+      "required_layout": "Layout::ROW_MAJOR"
+    },
+    {
+      "name": "beta",
+      "cpp_name": "beta",
+      "required_rank": 1,
+      "required_dtypes": ["DataType::BFLOAT16"],
+      "required_layout": "Layout::ROW_MAJOR"
+    }
+  ],
+  "validations": [
+    {
+      "condition": "input.is_allocated()",
+      "error_message": "Input must be allocated on device",
+      "error_args": []
+    },
+    {
+      "condition": "input.layout() == Layout::ROW_MAJOR",
+      "error_message": "Input must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Input must be in INTERLEAVED memory",
+      "error_args": []
+    },
+    {
+      "condition": "input.logical_shape().rank() >= 2",
+      "error_message": "Input must have at least 2 dimensions, got rank {}",
+      "error_args": ["input.logical_shape().rank()"]
+    },
+    {
+      "condition": "input.dtype() == DataType::BFLOAT16",
+      "error_message": "Input must be BFLOAT16, got {}",
+      "error_args": ["input.dtype()"]
+    },
+    {
+      "condition": "input.logical_shape()[-1] % 32 == 0",
+      "error_message": "Width must be multiple of 32, got {}",
+      "error_args": ["input.logical_shape()[-1]"]
+    },
+    {
+      "condition": "input.logical_shape()[-2] % 32 == 0",
+      "error_message": "Height must be multiple of 32, got {}",
+      "error_args": ["input.logical_shape()[-2]"]
+    },
+    {
+      "condition": "gamma.is_allocated()",
+      "error_message": "Gamma must be allocated on device",
+      "error_args": []
+    },
+    {
+      "condition": "gamma.layout() == Layout::ROW_MAJOR",
+      "error_message": "Gamma must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "gamma.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Gamma must be in INTERLEAVED memory",
+      "error_args": []
+    },
+    {
+      "condition": "gamma.dtype() == DataType::BFLOAT16",
+      "error_message": "Gamma must be BFLOAT16, got {}",
+      "error_args": ["gamma.dtype()"]
+    },
+    {
+      "condition": "gamma.logical_shape()[-1] == input.logical_shape()[-1]",
+      "error_message": "Gamma last dimension {} must match input last dimension {}",
+      "error_args": ["gamma.logical_shape()[-1]", "input.logical_shape()[-1]"]
+    },
+    {
+      "condition": "beta.is_allocated()",
+      "error_message": "Beta must be allocated on device",
+      "error_args": []
+    },
+    {
+      "condition": "beta.layout() == Layout::ROW_MAJOR",
+      "error_message": "Beta must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "beta.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Beta must be in INTERLEAVED memory",
+      "error_args": []
+    },
+    {
+      "condition": "beta.dtype() == DataType::BFLOAT16",
+      "error_message": "Beta must be BFLOAT16, got {}",
+      "error_args": ["beta.dtype()"]
+    },
+    {
+      "condition": "beta.logical_shape()[-1] == input.logical_shape()[-1]",
+      "error_message": "Beta last dimension {} must match input last dimension {}",
+      "error_args": ["beta.logical_shape()[-1]", "input.logical_shape()[-1]"]
+    },
+    {
+      "condition": "epsilon > 0.0f",
+      "error_message": "Epsilon must be positive, got {}",
+      "error_args": ["epsilon"]
+    }
+  ],
+  "output_shape": {
+    "formula": "same_as_input",
+    "cpp_code": "ttnn::Shape output_shape = input.logical_shape();"
+  },
+  "output_dtype": "same_as_input",
+  "output_layout": "Layout::ROW_MAJOR",
+  "docstring": "LayerNorm operation that accepts row-major input and produces row-major output. Normalizes each row by computing mean and variance across the last dimension, then applies learnable affine transformation (gamma and beta)."
+}
