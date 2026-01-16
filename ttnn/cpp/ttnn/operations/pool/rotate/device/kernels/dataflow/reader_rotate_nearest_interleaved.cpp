@@ -63,16 +63,18 @@ void kernel_main() {
             const uint32_t y_out = spatial_idx / input_width;
             const uint32_t x_out = spatial_idx % input_width;
 
-            const int32_t x_out_fixed = int_to_fixed(x_out);
-            const int32_t y_out_fixed = int_to_fixed(y_out);
+            const int32_t x_out_fixed = fixed_point_arithmetic::int_to_fixed(x_out);
+            const int32_t y_out_fixed = fixed_point_arithmetic::int_to_fixed(y_out);
             const int32_t x_centered = x_out_fixed - center_x;
             const int32_t y_centered = y_out_fixed - center_y;
 
-            const int32_t x_in = fixed_mul_sub_add(x_centered, cos_angle, y_centered, sin_angle, center_x);
-            const int32_t y_in = fixed_mul_add_add(x_centered, sin_angle, y_centered, cos_angle, center_y);
+            const int32_t x_in =
+                fixed_point_arithmetic::fixed_mul_sub_add(x_centered, cos_angle, y_centered, sin_angle, center_x);
+            const int32_t y_in =
+                fixed_point_arithmetic::fixed_mul_add_add(x_centered, sin_angle, y_centered, cos_angle, center_y);
 
-            const int32_t nearest_x = fixed_to_int_round(x_in);
-            const int32_t nearest_y = fixed_to_int_round(y_in);
+            const int32_t nearest_x = fixed_point_arithmetic::fixed_to_int_round(x_in);
+            const int32_t nearest_y = fixed_point_arithmetic::fixed_to_int_round(y_in);
 
             const bool x_valid = nearest_x >= 0 && nearest_x < static_cast<int32_t>(input_width);
             const bool y_valid = nearest_y >= 0 && nearest_y < static_cast<int32_t>(input_height);

@@ -227,10 +227,10 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
                 input_tensor.buffer()->address(),
                 input_nsticks_per_core,
                 start_stick_id,
-                static_cast<uint32_t>(float_to_fixed(cos_angle)),
-                static_cast<uint32_t>(float_to_fixed(sin_angle)),
-                static_cast<uint32_t>(float_to_fixed(center_x)),
-                static_cast<uint32_t>(float_to_fixed(center_y)),
+                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
+                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
+                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
+                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
                 static_cast<uint32_t>(fill_value_bf16),
             };
 
@@ -254,10 +254,10 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
                 input_tensor.buffer()->address(),
                 num_sticks,
                 sticks_processed,
-                static_cast<uint32_t>(float_to_fixed(cos_angle)),
-                static_cast<uint32_t>(float_to_fixed(sin_angle)),
-                static_cast<uint32_t>(float_to_fixed(center_x)),
-                static_cast<uint32_t>(float_to_fixed(center_y)),
+                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
+                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
+                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
+                static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
                 static_cast<uint32_t>(fill_value_bf16),
             };
 
@@ -332,10 +332,10 @@ void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
 
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            runtime_args[3] = static_cast<uint32_t>(float_to_fixed(cos_angle));
-            runtime_args[4] = static_cast<uint32_t>(float_to_fixed(sin_angle));
-            runtime_args[5] = static_cast<uint32_t>(float_to_fixed(center_x));
-            runtime_args[6] = static_cast<uint32_t>(float_to_fixed(center_y));
+            runtime_args[3] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle));
+            runtime_args[4] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle));
+            runtime_args[5] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x));
+            runtime_args[6] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y));
             runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);
 
             auto& writer_args = GetRuntimeArgs(program, writer_kernel_id, core);
@@ -347,10 +347,10 @@ void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
 
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            runtime_args[3] = static_cast<uint32_t>(float_to_fixed(cos_angle));
-            runtime_args[4] = static_cast<uint32_t>(float_to_fixed(sin_angle));
-            runtime_args[5] = static_cast<uint32_t>(float_to_fixed(center_x));
-            runtime_args[6] = static_cast<uint32_t>(float_to_fixed(center_y));
+            runtime_args[3] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle));
+            runtime_args[4] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle));
+            runtime_args[5] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x));
+            runtime_args[6] = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y));
             runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);
 
             auto& writer_args = GetRuntimeArgs(program, writer_kernel_id, core);
