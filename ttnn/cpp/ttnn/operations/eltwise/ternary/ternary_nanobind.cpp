@@ -279,7 +279,7 @@ void bind_ternary_addcmul(nb::module_& mod, const ternary_operation_t& operation
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - BFLOAT16, BFLOAT8_B
+               * - FLOAT32, BFLOAT16, BFLOAT8_B, INT32
                  - TILE
                  - 2, 3, 4
 

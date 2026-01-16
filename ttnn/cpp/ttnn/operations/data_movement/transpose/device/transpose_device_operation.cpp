@@ -25,9 +25,8 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
             if (is_l1) {
                 if (is_row_major) {
                     return program::TransposeWHShardedRMProgramFactory{};
-                } else {
-                    return program::TransposeWHShardedProgramFactory{};
                 }
+                return program::TransposeWHShardedProgramFactory{};
             }
             return program::TransposeWHProgramFactory{};
 
@@ -48,7 +47,7 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
 }
 
 TransposeOpParallelizationStrategy TransposeDeviceOperation::get_parallelization_strategy(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     switch (operation_attributes.dim) {
         case TransposeOpDim::WH: return TransposeOpParallelizationStrategy::MULTI_CORE_WH;
         case TransposeOpDim::HC: return TransposeOpParallelizationStrategy::MULTI_CORE_HC;
@@ -66,15 +65,15 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& dim = operation_attributes.dim;
-    const auto& pad_value = operation_attributes.pad_value;
+    const float pad_value = operation_attributes.pad_value;
     const auto& output_mem_config = operation_attributes.output_mem_config;
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to transpose need to be allocated in buffers on device!");
     TT_FATAL(
-        !(dim != TransposeOpDim::HC && pad_value.has_value() && pad_value != 0.0f),
+        !(dim != TransposeOpDim::HC && pad_value != 0.0f),
         "Non-zero padding {} is not supported for any transpose other than HC.",
-        pad_value.value());
+        pad_value);
     TT_FATAL(
         dim == TransposeOpDim::HC || dim == TransposeOpDim::WH || dim == TransposeOpDim::CN,
         "Transpose HC, WH, CN are the only supported transpose operations. Transpose {} is not supported.",
@@ -177,9 +176,9 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
             !(input_tensor.is_sharded() && input_tensor.layout() == Layout::TILE),
             "HC transpose does not support sharded+tilized inputs");
         TT_FATAL(
-            !(input_tensor.is_sharded() && pad_value.has_value() && pad_value.value() != 0.0f),
+            !(input_tensor.is_sharded() && pad_value != 0.0f),
             "Sharded HC transpose does not support non-zero padding {}",
-            pad_value.value());
+            pad_value);
     }
 }
 
@@ -271,7 +270,7 @@ TransposeDeviceOperation::tensor_return_value_t TransposeDeviceOperation::create
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<TransposeDeviceOperation::tensor_return_value_t>
 TransposeDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, const Tensor& output) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args, const Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
@@ -286,7 +285,7 @@ ttnn::Tensor transpose(
     const Tensor& input_tensor,
     ttnn::operations::data_movement::transpose::TransposeOpDim dim,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<float>& pad_value) {
+    float pad_value) {
     using OperationType = ttnn::operations::data_movement::transpose::TransposeDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{

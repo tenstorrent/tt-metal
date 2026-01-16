@@ -17,8 +17,8 @@
 namespace ttnn::operations::experimental::plusone {
 
 struct PlusOneDeviceOperation {
-    using operation_attributes_t = plusone::operation_attributes_t;
-    using tensor_args_t = plusone::tensor_args_t;
+    using operation_attributes_t = PlusoneParams;
+    using tensor_args_t = PlusoneInputs;
     using spec_return_value_t = plusone::spec_return_value_t;
     using tensor_return_value_t = plusone::tensor_return_value_t;
     using program_factory_t = std::variant<program::PlusOneProgramFactory>;

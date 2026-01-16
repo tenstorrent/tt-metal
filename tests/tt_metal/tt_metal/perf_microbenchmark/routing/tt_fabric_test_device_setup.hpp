@@ -102,9 +102,10 @@ public:
     // Helper: Determine required channel type for a worker type
     static FabricMuxChannelType get_required_channel_type(TestWorkerType worker_type) {
         switch (worker_type) {
-            case TestWorkerType::SENDER: return FabricMuxChannelType::FULL_SIZE_CHANNEL;      // Full payload packets
-            case TestWorkerType::RECEIVER: return FabricMuxChannelType::HEADER_ONLY_CHANNEL;  // Credit return packets
-            case TestWorkerType::SYNC: return FabricMuxChannelType::HEADER_ONLY_CHANNEL;      // Atomic inc sync packets
+            case TestWorkerType::SENDER: return FabricMuxChannelType::FULL_SIZE_CHANNEL;  // Full payload packets
+            case TestWorkerType::RECEIVER:                                                // Credit return packets
+            case TestWorkerType::SYNC:                                                    // Atomic inc sync packets
+                return FabricMuxChannelType::HEADER_ONLY_CHANNEL;
             default:
                 TT_FATAL(
                     false,
@@ -254,7 +255,7 @@ struct TestMux : TestWorker {
 public:
     TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_config(FabricMuxConfig* config, ConnectionKey connection_key);
-    bool validate_results(std::vector<uint32_t>& data) const override { return true; }  // Mux doesn't validate
+    bool validate_results(std::vector<uint32_t>& /*data*/) const override { return true; }  // Mux doesn't validate
 
     FabricMuxConfig* config_ = nullptr;
     ConnectionKey connection_key_{};

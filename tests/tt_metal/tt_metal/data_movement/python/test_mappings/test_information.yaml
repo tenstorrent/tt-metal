@@ -520,12 +520,16 @@ tests:
     comment: |
       Measures the latency (in cycles) of NOC unicast write API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
+      Important: The increasing latency for larger transactions is due to the congestion on the NoC.
+      The transaction size has very little impact on the api latency.
 
   701:
     name: "NOC API Latency - Unicast Read"
     comment: |
       Measures the latency (in cycles) of NOC unicast read API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
+      Important: The increasing latency for larger transactions is due to the congestion on the NoC.
+      The transaction size has very little impact on the api latency.
 
   702:
     name: "NOC API Latency - Stateful Write"
@@ -533,6 +537,8 @@ tests:
       Measures the latency (in cycles) of NOC stateful write API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
       The state setup is done outside the measurement window.
+      Important: The increasing latency for larger transactions is due to the congestion on the NoC.
+      The transaction size has very little impact on the api latency.
 
   703:
     name: "NOC API Latency - Stateful Read"
@@ -540,18 +546,24 @@ tests:
       Measures the latency (in cycles) of NOC stateful read API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
       The state setup is done outside the measurement window.
+      Important: The increasing latency for larger transactions is due to the congestion on the NoC.
+      The transaction size has very little impact on the api latency.
 
   704:
     name: "NOC API Latency - Multicast Write 2x2"
     comment: |
       Measures the latency (in cycles) of NOC multicast write API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256) with a 2x2 multicast grid.
+      Important: Since the multicast is transferring a lot of data, the NoC gets congested quickly.
+      Because of this, for larger number of transactions, the noc api latency is increasing.
 
   705:
     name: "NOC API Latency - Multicast Write 5x5"
     comment: |
       Measures the latency (in cycles) of NOC multicast write API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256) with a 5x5 multicast grid.
+      Important: Since the multicast is transferring a lot of data, the NoC gets congested quickly.
+      Because of this, for larger number of transactions, the noc api latency is increasing.
 
   706:
     name: "NOC API Latency - Multicast Write All Cores"
@@ -559,3 +571,5 @@ tests:
       Measures the latency (in cycles) of NOC multicast write API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256) with a multicast grid
       covering all compute cores in the device.
+      Important: Since the multicast is transferring a lot of data, the NoC gets congested quickly.
+      Because of this, for larger number of transactions, the noc api latency is increasing.

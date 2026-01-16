@@ -20,7 +20,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const std::optional<Tensor>& divisor,
     const Tensor& output_grad,
     const Tensor& input_grad,
-    const bool reduction_mean,
+    const bool /*reduction_mean*/,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
@@ -197,7 +197,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const std::optional<Tensor>& divisor,
     const Tensor& output_grad,
     const Tensor& input_grad,
-    const bool reduction_mean,
+    const bool /*reduction_mean*/,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
@@ -376,7 +376,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const std::optional<Tensor>& divisor,
     const Tensor& output_grad,
     const Tensor& input_grad,
-    const bool reduction_mean,
+    const bool /*reduction_mean*/,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work

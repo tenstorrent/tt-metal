@@ -13,7 +13,7 @@ namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_ga
 
 FusedRMSNormPostAllGatherDeviceOperation::program_factory_t
 FusedRMSNormPostAllGatherDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::FusedRMSNormPostAllGatherProgramFactory{};
 }
 

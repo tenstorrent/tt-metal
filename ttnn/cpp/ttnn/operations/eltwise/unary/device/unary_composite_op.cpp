@@ -20,7 +20,7 @@
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
@@ -33,8 +33,9 @@ Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output
     Tensor t_log_out = ttnn::log(input, true, output_mem_config);  // negative log is not useful here
 
     // 1/2(z)
-    Tensor output = ttnn::multiply(ttnn::reciprocal(input, output_mem_config), 0.5f, std::nullopt, output_mem_config);
-    Tensor tmp = ttnn::square(ttnn::reciprocal(input, output_mem_config), output_mem_config);
+    Tensor input_recip = ttnn::reciprocal(input, output_mem_config);
+    Tensor output = ttnn::multiply(input_recip, 0.5f, std::nullopt, output_mem_config);
+    Tensor tmp = ttnn::square(input_recip, output_mem_config);
     Tensor val_square = tmp;
     // (1/12) * x^2
     output = ttnn::subtract(output, ttnn::multiply(tmp, 0.083333333f), std::nullopt, output_mem_config);
@@ -194,7 +195,7 @@ Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_
 // Tensor variance(const Tensor& y,const Tensor& mean_y);
 Tensor _variance_impl(
     const Tensor& y,
-    const Tensor& mean_y,
+    const Tensor& /*mean_y*/,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
     ttnn::SmallVector<int> dims = {2, 3};
@@ -300,12 +301,10 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
             max.has_value() ? std::get<int32_t>(max.value())
                             : 16775716;  // max_val and min_val will be updated once unary infra supports int32 scalar.
         return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
-    } else {
-        // All scalars are float (or null)
-        float min_val = min.has_value() ? std::get<float>(min.value()) : std::numeric_limits<float>::lowest();
-        float max_val = max.has_value() ? std::get<float>(max.value()) : std::numeric_limits<float>::max();
-        return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
-    }
+    }  // All scalars are float (or null)
+    float min_val = min.has_value() ? std::get<float>(min.value()) : std::numeric_limits<float>::lowest();
+    float max_val = max.has_value() ? std::get<float>(max.value()) : std::numeric_limits<float>::max();
+    return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
 }
 
 Tensor ExecuteUnaryCompositeClamp::invoke(
@@ -313,13 +312,14 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     std::optional<Tensor> min,
     std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& output_tensor) {
+    const std::optional<Tensor>& /*output_tensor*/) {
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         return ttnn::where(
             ttnn::ge(a, min.value(), std::nullopt, output_memory_config), a, min.value(), output_memory_config);
-    } else if (!min.has_value()) {
+    }
+    if (!min.has_value()) {
         return ttnn::where(
             ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
     }

@@ -284,7 +284,7 @@ inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool 
                     counted = true;
                 }
 
-                TT_ASSERT(this->all_data.contains(core));
+                TT_FATAL(this->all_data.contains(core), "Core {} not found in all_data", core);
                 this->all_data[core][0].data.push_back(datum);
                 this->all_data[core][0].valid.push_back(true);
             }
@@ -404,7 +404,7 @@ inline bool DeviceData::validate_one_core(
         core_string = "PCIE";
     } else {
         log_fatal(tt::LogTest, "Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
-        TT_ASSERT(false, "Core type not found");
+        TT_FATAL(false, "Core type not found");
     }
 
     // Read results from device and compare to expected for this core.
@@ -771,7 +771,7 @@ public:
     // Helper for random number generation in a range [min, max]
     template <typename T>
     T get_rand(T min, T max) {
-        static_assert(std::is_integral<T>::value, "T must be an integral type");
+        static_assert(std::is_integral_v<T>, "T must be an integral type");
         std::uniform_int_distribution<T> dist(min, max);
         return dist(rng_);
     }

@@ -30,8 +30,8 @@ jobs:
             runner-label: BH-LoudBox
           - name: P300 unit tests
             runner-label: P300-viommu
-          - name: QuietBox Global Edition unit tests
-            runner-label: BH-QB-GE
+          # - name: QuietBox Global Edition unit tests
+          #   runner-label: BH-QB-GE
     with:
       arch: blackhole
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}

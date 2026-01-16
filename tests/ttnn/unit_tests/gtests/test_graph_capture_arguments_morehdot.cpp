@@ -66,6 +66,15 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     // operations[1]: MorehDotOperation (device operation)
     const auto& operation1 = operations[1];
     EXPECT_EQ(operation1.operation_name, "MorehDotOperation");
+    EXPECT_EQ(operation1.arguments.size(), 2);
+    EXPECT_EQ(
+        operation1.arguments[0],
+        "[ unsupported type , "
+        "std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t const>]");
+    EXPECT_EQ(
+        operation1.arguments[1],
+        "[ unsupported type , std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, "
+        "std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >]");
 
     // operations[2]: tt::tt_metal::create_device_tensor (output tensor creation)
     const auto& operation2 = operations[2];
@@ -74,11 +83,8 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation2.arguments[0], "Shape([1, 1, 1, 1])");
     EXPECT_EQ(operation2.arguments[1], "DataType::BFLOAT16");
     EXPECT_EQ(operation2.arguments[2], "Layout::TILE");
-    EXPECT_EQ(operation2.arguments[3], "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]");
-    EXPECT_EQ(
-        operation2.arguments[4],
-        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,"
-        "nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)");
+    EXPECT_EQ(operation2.arguments[0], "Shape([1, 1, 1, 1])");
+    EXPECT_EQ(operation2.arguments[1], "DataType::BFLOAT16");
 }
 
 }  // namespace
