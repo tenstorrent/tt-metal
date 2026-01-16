@@ -32,6 +32,7 @@ class TTNNLinear(TTNNModule):
         )
         new_linear._fallback_torch_layer = linear
         new_linear.weight = linear.weight
+        new_linear.bias = linear.bias
         return new_linear
 
     @property
