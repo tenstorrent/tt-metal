@@ -316,7 +316,8 @@ void JitBuildEnv::init(
     // Includes
     // TODO(pgk) this list is insane
     std::vector<std::string> includeDirs = {
-        ".",  // Needed for generated/output headers in the build directory
+        ".",
+        "..",
         root_,
         root_ + "ttnn",
         root_ + "ttnn/cpp",
