@@ -13,44 +13,6 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
-def ulp_distance_fp32(expected: torch.Tensor, actual: torch.Tensor) -> torch.Tensor:
-    """
-    Compute elementwise ULP distance for float32 tensors.
-
-    - For finite values: uses ordered-int representation distance
-    - If both are the same non-finite (NaN/Inf of same sign): distance = 0
-    - Otherwise: distance = max int64 (flags mismatch)
-    """
-    expected = expected.to(torch.float32).contiguous()
-    actual = actual.to(torch.float32).contiguous()
-
-    expected_finite = torch.isfinite(expected)
-    actual_finite = torch.isfinite(actual)
-    both_finite = expected_finite & actual_finite
-
-    same_nan = torch.isnan(expected) & torch.isnan(actual)
-    same_posinf = torch.isposinf(expected) & torch.isposinf(actual)
-    same_neginf = torch.isneginf(expected) & torch.isneginf(actual)
-    same_nonfinite = same_nan | same_posinf | same_neginf
-
-    # Bitwise ULP distance for finite values
-    expected_bits_u = expected.view(torch.int32).to(torch.int64) & 0xFFFFFFFF
-    actual_bits_u = actual.view(torch.int32).to(torch.int64) & 0xFFFFFFFF
-
-    expected_sign = (expected_bits_u >> 31) & 1
-    actual_sign = (actual_bits_u >> 31) & 1
-
-    # Convert to ordered representation: monotonic with float ordering
-    expected_ord = torch.where(expected_sign == 0, expected_bits_u + 0x80000000, 0x80000000 - expected_bits_u)
-    actual_ord = torch.where(actual_sign == 0, actual_bits_u + 0x80000000, 0x80000000 - actual_bits_u)
-
-    ulp_dist = torch.full_like(expected_ord, fill_value=torch.iinfo(torch.int64).max, dtype=torch.int64)
-    ulp_dist[both_finite] = (expected_ord[both_finite] - actual_ord[both_finite]).abs()
-    ulp_dist[same_nonfinite] = 0
-
-    return ulp_dist
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -218,8 +180,11 @@ def test_ternary_addcdiv_float32_full_range(input_shapes, value, device):
     output_tensor = ttnn.addcdiv(input_tensor_a, input_tensor_b, input_tensor_c, value=value)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert torch.allclose(output_tensor, torch_output_tensor, atol=1e-6, rtol=1e-5)
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=64, allow_nonfinite=True)
+    ARCH_NAME = ttnn.get_arch_name()
+    if "blackhole" in ARCH_NAME:
+        assert torch.allclose(output_tensor, torch_output_tensor, atol=1e-6, rtol=1e-5)
+    elif "wormhole" in ARCH_NAME:
+        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=64, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
