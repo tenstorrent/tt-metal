@@ -14,6 +14,14 @@ import ttnn.operation_tracer
 pytestmark = pytest.mark.use_module_device
 
 
+def count_elements(obj):
+    """Recursively count elements in a nested list structure."""
+    if isinstance(obj, list):
+        return sum(count_elements(item) for item in obj)
+    else:
+        return 1
+
+
 @pytest.fixture(scope="function", autouse=True)
 def enable_tracing_for_test(request):
     """Enable tracing for each test and restore it after.
@@ -152,13 +160,6 @@ def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype):
         # Verify values structure matches shape
         values = tensor_data["values"]
 
-        # Recursively count elements in nested list
-        def count_elements(obj):
-            if isinstance(obj, list):
-                return sum(count_elements(item) for item in obj)
-            else:
-                return 1
-
         actual_elements = count_elements(values)
         assert (
             actual_elements == expected_elements
@@ -198,20 +199,14 @@ def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype):
 
     return_values = return_value_data["values"]
 
-    def count_elements(obj):
-        if isinstance(obj, list):
-            return sum(count_elements(item) for item in obj)
-        else:
-            return 1
-
     actual_return_elements = count_elements(return_values)
     assert (
         actual_return_elements == expected_return_elements
     ), f"Return value element count mismatch: expected {expected_return_elements}, got {actual_return_elements}"
 
     # Clean up trace directory
-    if trace_dir.exists():
-        shutil.rmtree(trace_dir)
+    # if trace_dir.exists():
+    #    shutil.rmtree(trace_dir)
 
     # Restore original state
     ttnn.operation_tracer._OPERATION_COUNTER = original_operation_counter
@@ -243,7 +238,7 @@ def test_tracing_disabled_no_files_created(tmp_path, device):
     ttnn.synchronize_device(device)
 
     # Verify NO trace files were created
-    trace_files = sorted(trace_dir.glob("*_ttnn_*.json")) if trace_dir.exists() else []
+    trace_files = list(trace_dir.glob("*_ttnn_*.json")) if trace_dir.exists() else []
     assert (
         len(trace_files) == 0
     ), f"Expected no trace files when tracing is disabled, but found {len(trace_files)} files: {[f.name for f in trace_files]}"
@@ -320,8 +315,8 @@ def test_from_torch_to_device_tracing(tmp_path, device):
     assert first_arg["type"] == "ttnn.Tensor", f"Expected ttnn.Tensor, got {first_arg.get('type')}"
 
     # Clean up trace directory
-    if trace_dir.exists():
-        shutil.rmtree(trace_dir)
+    # if trace_dir.exists():
+    #    shutil.rmtree(trace_dir)
 
     # Restore
     ttnn.operation_tracer._OPERATION_COUNTER = original_counter
