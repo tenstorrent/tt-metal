@@ -11,7 +11,7 @@ using ttml's C++ operations for computation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict
 
 import numpy as np
 import ml_dtypes
@@ -28,9 +28,51 @@ from .embedding import Embedding
 from .gpt_block import GPTBlock
 
 
+def initialize_weights_gpt2(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
+    """Initialize weights matching C++ initialize_weights_gpt2.
+
+    This function re-initializes all model parameters to match the C++ gpt2 model:
+    - All "weight" parameters: normal(mean=0, stddev=0.02)
+    - All "bias" parameters: constant 0
+    - "gamma" and "beta" (LayerNorm) are NOT touched (they keep their initial values)
+
+    This is called after model construction to ensure weights match the C++ initialization.
+
+    Args:
+        parameters: Dictionary of parameter name to tensor
+    """
+    for name, tensor in parameters.items():
+        # Get current shape from tensor
+        shape = tensor.shape()
+
+        if "weight" in name:
+            # Re-initialize weights with normal(0, 0.02)
+            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(
+                ml_dtypes.bfloat16
+            )
+            new_tensor = ttml.autograd.Tensor.from_numpy(
+                weight_np, layout=ttnn.Layout.TILE
+            )
+            tensor.assign(new_tensor)
+        elif "bias" in name:
+            # Re-initialize biases with 0
+            bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
+            new_tensor = ttml.autograd.Tensor.from_numpy(
+                bias_np, layout=ttnn.Layout.TILE
+            )
+            tensor.assign(new_tensor)
+
+
 @dataclass
 class NanoGPTConfig:
-    """Configuration for NanoGPT model."""
+    """Configuration for NanoGPT model.
+
+    Note: The following C++ features are not yet implemented in Python:
+    - TODO: runner_type (Default/MemoryEfficient) - for memory efficient block execution
+    - TODO: weight_tying (Enabled/Disabled) - ties tok_emb and fc weights
+    - TODO: positional_embedding_type (Trainable/Fixed) - only Trainable is implemented
+    - TODO: experimental.use_composite_layernorm - use composite vs fused layernorm
+    """
 
     vocab_size: int = 50304  # GPT-2 vocab size
     block_size: int = 1024  # Maximum sequence length
@@ -100,7 +142,11 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
 
 
 class NanoGPT(AbstractModuleBase):
-    """NanoGPT model implemented in Python using ttml operations."""
+    """NanoGPT model implemented in Python using ttml operations.
+
+    This implementation matches the C++ ttml::models::gpt2::Transformer class.
+    See tt-train/sources/ttml/models/gpt2.cpp for reference.
+    """
 
     def __init__(self, config: NanoGPTConfig) -> None:
         """Initialize NanoGPT model.
@@ -114,7 +160,8 @@ class NanoGPT(AbstractModuleBase):
         # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
         # Use get_run_mode() to check, train()/eval() to set
 
-        # TODO: Add weight tying
+        # TODO: Implement weight_tying - when enabled, tok_emb shares weights with fc
+        # C++ creates fc first, then passes fc->get_weight() to Embedding constructor
         self.fc = LinearLayer(
             config.n_embd, config.vocab_size, False
         )  # False - no bias
@@ -150,6 +197,10 @@ class NanoGPT(AbstractModuleBase):
         else:
             self.ln_f_beta = None
 
+        # Initialize weights
+        # This re-initializes all "weight" to normal(0, 0.02) and all "bias" to 0
+        initialize_weights_gpt2(self.parameters())
+
     # train() and eval() are inherited from AbstractModuleBase
     # They automatically propagate RunMode to all registered submodules
 
@@ -169,6 +220,8 @@ class NanoGPT(AbstractModuleBase):
         tok_emb_out = self.tok_emb(idx)
         out = self.pos_emb(tok_emb_out)
 
+        # TODO: Implement runner_type for memory efficient execution
+        # C++ supports RunnerType::MemoryEfficient which uses memory_efficient_runner()
         for block in self.blocks:
             out = block(out, mask=mask)
 
@@ -202,4 +255,5 @@ __all__ = [
     "NanoGPT",
     "NanoGPTConfig",
     "create_nanogpt",
+    "initialize_weights_gpt2",
 ]
