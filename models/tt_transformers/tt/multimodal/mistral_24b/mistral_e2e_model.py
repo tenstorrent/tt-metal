@@ -45,45 +45,59 @@ class MistralTransformer(Transformer):
             tt_ccl=self.tt_ccl,
         )
 
-    def prepare_inputs_prefill(self, pt_tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
+    def prepare_inputs_prefill(
+        self, pt_tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, **kwargs
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
-        tensors on device.
+        tensors on device if trace is disabled or on host if trace is enabled.
         TODO: Debate whether this function is responsible for padding
         """
+
+        # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
+        # We will send them to device later (copy_host_to_device)
+        device = None if trace_enabled else self.mesh_device
 
         S = pt_tokens.shape[-1]
         tokens = ttnn.from_torch(
             pt_tokens.reshape(1, 1, 1, -1),
-            device=self.mesh_device,
+            device=device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        tokens_embd = self.embd(tokens)
 
-        # Extract only the parameters that compute_vision_token needs
-        pixel_values = kwargs.get("pixel_values", None)
-        image_sizes = kwargs.get("image_sizes", None)
-        vision_output = self.compute_vision_token(pixel_values, image_sizes)
+        # self.embd expects that tokens are on device; if trace is enabled, the tensors will be later on device, so we will do these steps when we copy the tokens to the device
+        if not trace_enabled:
+            tokens_embd = self.embd(tokens)
 
-        if vision_output is not None:
-            tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
-            comp_vision_output = ttnn.to_torch(
-                vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-            )[: vision_output.shape[0], :]
+            # Extract only the parameters that compute_vision_token needs
+            pixel_values = kwargs.get("pixel_values", None)
+            image_sizes = kwargs.get("image_sizes", None)
+            vision_output = self.compute_vision_token(pixel_values, image_sizes)
 
-            image_features = comp_vision_output.squeeze(0)
-            special_image_mask = (pt_tokens == 10).unsqueeze(-1)
-            special_image_mask = special_image_mask.expand_as(tokens_embd)
-            image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
-            tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+            if vision_output is not None:
+                tokens_embd = ttnn.to_torch(
+                    tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+                )
+                comp_vision_output = ttnn.to_torch(
+                    vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                )[: vision_output.shape[0], :]
 
-            tokens_embd = self.args.prepare_residual_tensor_prefill(
-                tokens_embd,
-            )
+                image_features = comp_vision_output.squeeze(0)
+                special_image_mask = (pt_tokens == 10).unsqueeze(-1)
+                special_image_mask = special_image_mask.expand_as(tokens_embd)
+                image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
+                tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
 
-        tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+                tokens_embd = self.args.prepare_residual_tensor_prefill(
+                    tokens_embd,
+                )
+
+            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+        else:
+            # When trace is enabled, skip vision processing and embedding - these will be done later
+            tokens_embd = tokens
         # Slice the rot mats to the prefill seqlen
         assert (
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
@@ -105,7 +119,7 @@ class MistralTransformer(Transformer):
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
-                device=self.mesh_device,
+                device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -116,7 +130,7 @@ class MistralTransformer(Transformer):
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
-                device=self.mesh_device,
+                device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
