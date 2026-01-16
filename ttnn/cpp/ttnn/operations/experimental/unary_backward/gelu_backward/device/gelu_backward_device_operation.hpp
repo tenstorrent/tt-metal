@@ -31,24 +31,21 @@ struct GeluBackwardDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& grad_output,
-        const Tensor& input,
-        const std::string& approximate,
-        DataType output_dtype,
-        const MemoryConfig& output_memory_config,
-        const std::optional<Tensor>& preallocated_input_grad);
 };
 
 }  // namespace ttnn::operations::experimental::gelu_backward
 
 namespace ttnn::prim {
-constexpr auto gelu_bw = ttnn::register_operation<
-    "ttnn::prim::gelu_bw",
-    ttnn::operations::experimental::gelu_backward::GeluBackwardDeviceOperation>();
+
+ttnn::operations::experimental::gelu_backward::GeluBackwardDeviceOperation::tensor_return_value_t gelu_bw(
+    const Tensor& grad_output,
+    const Tensor& input,
+    const std::string& approximate,
+    DataType output_dtype,
+    const MemoryConfig& output_memory_config,
+    const std::optional<Tensor>& preallocated_output);
+
 }  // namespace ttnn::prim

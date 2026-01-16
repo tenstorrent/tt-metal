@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "impl/program/program_impl.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 
 namespace tt::tt_metal {
     class Inspector;
@@ -52,6 +53,13 @@ struct MeshWorkloadData {
     const distributed::MeshWorkloadImpl* mesh_workload = nullptr;
     uint64_t mesh_workload_id{};
     std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device;
+};
+
+struct CoreInfo {
+    tt::tt_metal::DispatchWorkerType worker_type;
+    ChipId device_id;
+    ChipId servicing_device_id;
+    uint8_t cq_id;
 };
 
 }  // namespace tt::tt_metal::inspector

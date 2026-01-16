@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/reduce.h"
+#include "experimental/circular_buffer.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -14,7 +15,11 @@ void MAIN {
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
     reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
-    cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
+    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
+    experimental::CircularBuffer cb2(tt::CBIndex::c_2);
+    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+
+    cb2.wait_front(1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
         constexpr int onetile = 1;
         int reduce_dst_idx = 0;
@@ -24,7 +29,7 @@ void MAIN {
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             acquire_dst();
             for (uint32_t wt = 0; wt < Wt; ++wt) {
-                cb_wait_front(tt::CBIndex::c_0, onetile);
+                cb0.wait_front(onetile);
 #if (MATH_ONLY == 1)
                 UNPACK((llk_unpack_AB(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
                 // REDUCE_OP is expected to come from add_define
@@ -33,12 +38,12 @@ void MAIN {
                 // REDUCE_OP is expected to come from add_define
                 reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
 #endif
-                cb_pop_front(tt::CBIndex::c_0, onetile);
+                cb0.pop_front(onetile);
             }
 
-            cb_reserve_back(tt::CBIndex::c_16, onetile);
+            cb16.reserve_back(onetile);
             pack_tile(reduce_dst_idx, tt::CBIndex::c_16);
-            cb_push_back(tt::CBIndex::c_16, onetile);
+            cb16.push_back(onetile);
             release_dst();
         }
     }

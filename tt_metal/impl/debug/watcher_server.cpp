@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <condition_variable>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <map>
 #include <mutex>
@@ -21,12 +22,12 @@
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
-#include "debug/ring_buffer.h"
+#include "api/debug/ring_buffer.h"
 #include "debug_helpers.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -170,7 +171,7 @@ void WatcherServer::Impl::detach_devices() {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
         for (ChipId device_id : all_devices) {
-            TT_ASSERT(device_id_to_reader_.count(device_id) > 0);
+            TT_ASSERT(device_id_to_reader_.contains(device_id));
             device_id_to_reader_.erase(device_id);
             log_info(LogLLRuntime, "Watcher detached device {}", device_id);
             fprintf(logfile_, "At %.3lfs detach device %d\n", get_elapsed_secs(), device_id);
@@ -204,7 +205,7 @@ void WatcherServer::Impl::isolated_dump(std::vector<ChipId>& device_ids) {
 }
 
 std::string WatcherServer::Impl::log_file_name() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + LOG_FILE_PATH + LOG_FILE_NAME;
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + LOG_FILE_PATH + LOG_FILE_NAME;
 }
 
 int WatcherServer::Impl::register_kernel(const std::string& name) {
@@ -235,19 +236,16 @@ void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::str
 }
 
 void WatcherServer::Impl::read_kernel_ids_from_file() {
-    std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + LOG_FILE_PATH);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
-    FILE* f = fopen(fname.c_str(), "r");
+    std::ifstream f(fname);
     if (!f) {
         TT_THROW("Watcher failed to open kernel name file: {}\n", fname);
     }
 
-    char* line = nullptr;
-    size_t len;
-    while (getline(&line, &len, f) != -1) {
-        std::string s(line);
-        s = s.substr(0, s.length() - 1);  // Strip newline
-        kernel_names_.push_back(s.substr(s.find(":") + 2));
+    std::string line;
+    while (std::getline(f, line)) {
+        kernel_names_.push_back(line.substr(line.find(':') + 2));
     }
 }
 
@@ -270,7 +268,7 @@ double WatcherServer::Impl::get_elapsed_secs() {
 void WatcherServer::Impl::create_log_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + LOG_FILE_NAME;
     if (rtoptions.get_watcher_skip_logging()) {
@@ -309,7 +307,7 @@ void WatcherServer::Impl::create_log_file() {
 void WatcherServer::Impl::create_kernel_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
     FILE* f = fopen(fname.c_str(), fmode);
@@ -326,7 +324,7 @@ void WatcherServer::Impl::create_kernel_file() {
 
 void WatcherServer::Impl::create_kernel_elf_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_ELF_FILE_NAME;
     FILE* f = fopen(fname.c_str(), "w");
@@ -360,21 +358,21 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         }
 
         // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
-        for (auto sanitize_noc : data.sanitize_noc()) {
-            sanitize_noc.noc_addr() = DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
-            sanitize_noc.l1_addr() = DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
-            sanitize_noc.len() = DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
-            sanitize_noc.which_risc() = DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-            sanitize_noc.return_code() = dev_msgs::DebugSanitizeNocOK;
-            sanitize_noc.is_multicast() = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
-            sanitize_noc.is_write() = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
-            sanitize_noc.is_target() = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
+        for (auto sanitize : data.sanitize()) {
+            sanitize.noc_addr() = DEBUG_SANITIZE_SENTINEL_OK_64;
+            sanitize.l1_addr() = DEBUG_SANITIZE_SENTINEL_OK_32;
+            sanitize.len() = DEBUG_SANITIZE_SENTINEL_OK_32;
+            sanitize.which_risc() = DEBUG_SANITIZE_SENTINEL_OK_16;
+            sanitize.return_code() = dev_msgs::DebugSanitizeOK;
+            sanitize.is_multicast() = DEBUG_SANITIZE_SENTINEL_OK_8;
+            sanitize.is_write() = DEBUG_SANITIZE_SENTINEL_OK_8;
+            sanitize.is_target() = DEBUG_SANITIZE_SENTINEL_OK_8;
         }
 
         // Initialize debug asserts to not tripped.
-        data.assert_status().line_num() = DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data.assert_status().line_num() = DEBUG_SANITIZE_SENTINEL_OK_16;
         data.assert_status().tripped() = dev_msgs::DebugAssertOK;
-        data.assert_status().which() = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
+        data.assert_status().which() = DEBUG_SANITIZE_SENTINEL_OK_8;
 
         // Initialize debug ring buffer to a known init val, we'll check against this to see if any
         // data has been written.
@@ -475,7 +473,7 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
             std::fill_n(data.debug_insert_delays().data(), data.debug_insert_delays().size(), std::byte{0});
         }
         auto addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER);
-        cluster.write_core(data.data(), data.size(), {device_id, virtual_core}, addr);
+        cluster.write_core(data.data(), data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
     };
 
     // Initialize worker cores debug values
@@ -508,9 +506,9 @@ void WatcherServer::Impl::poll_watcher_data() {
 
     // Print to the user which features are disabled via env vars.
     std::string disabled_features;
-    auto& disabled_features_set = rtoptions.get_watcher_disabled_features();
+    const auto& disabled_features_set = rtoptions.get_watcher_disabled_features();
     if (!disabled_features_set.empty()) {
-        for (auto& feature : disabled_features_set) {
+        for (const auto& feature : disabled_features_set) {
             disabled_features += feature + ",";
         }
         disabled_features.pop_back();
@@ -539,9 +537,8 @@ void WatcherServer::Impl::poll_watcher_data() {
             if (rtoptions.get_test_mode_enabled()) {
                 server_killed_due_to_error_ = true;
                 break;
-            } else {
-                throw e;
             }
+            throw e;
         }
 
         fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());

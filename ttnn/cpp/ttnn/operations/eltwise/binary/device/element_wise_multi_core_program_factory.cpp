@@ -99,7 +99,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     std::map<std::string, std::string> eltwise_defines = utils::get_defines(
         op_type, a.dtype(), output.dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
 
-    if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
+    if (eltwise_defines.contains("SFPU_OP_INIT_PRE_IN0_0")) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
             op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb0_format = tt::DataFormat::Float16_b;
@@ -111,7 +111,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
                 .set_page_size(tt::CBIndex::c_3, interim0_single_tile_size);
         tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
     }
-    if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
+    if (eltwise_defines.contains("SFPU_OP_INIT_PRE_IN1_0")) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
             op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb1_format = tt::DataFormat::Float16_b;
@@ -210,7 +210,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
 void BinaryDeviceOperation::ElementWiseMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;

@@ -13,20 +13,19 @@
 
 inline std::string get_string_lowercase(tt::ARCH arch) {
     switch (arch) {
-        case tt::ARCH::GRAYSKULL: return "grayskull"; break;
-        case tt::ARCH::WORMHOLE_B0: return "wormhole_b0"; break;
-        case tt::ARCH::BLACKHOLE: return "blackhole"; break;
-        case tt::ARCH::Invalid: return "invalid"; break;
-        default: return "invalid"; break;
+        case tt::ARCH::GRAYSKULL: return "grayskull";
+        case tt::ARCH::WORMHOLE_B0: return "wormhole_b0";
+        case tt::ARCH::BLACKHOLE: return "blackhole";
+        case tt::ARCH::Invalid:
+        default: return "invalid";
     }
 }
 
-namespace tt {
-namespace test_utils {
+namespace tt::test_utils {
 inline std::string get_env_arch_name() {
     constexpr auto ARCH_NAME_ENV_VAR = "ARCH_NAME";
 
-    auto arch_name_ptr = std::getenv(ARCH_NAME_ENV_VAR);
+    auto* arch_name_ptr = std::getenv(ARCH_NAME_ENV_VAR);
     if (!arch_name_ptr) {
         TT_THROW("Env var {} is not set.", ARCH_NAME_ENV_VAR);
     }
@@ -58,6 +57,4 @@ inline std::string get_umd_arch_name() {
 
 }
 
-
-}  // namespace test_utils
-}  // namespace tt
+}  // namespace tt::test_utils

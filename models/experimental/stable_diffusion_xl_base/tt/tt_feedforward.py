@@ -25,10 +25,12 @@ class TtFeedForward(LightweightModule):
         weights = state_dict[f"{module_path}.net.2.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.net.2.bias"]
 
-        self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, model_config.ff_weights_dtype)
+        ff_weights_dtype = model_config.ff_weights_dtype
+        self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, ff_weights_dtype)
+
         self.ff2_model_config = model_config.get_matmul_config(f"{module_path}.net.2")
-        assert self.ff2_model_config is not None, "ff2_model_config should not be None"
         self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
+        self.ff2_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.net.2")
 
     def forward(self, hidden_states):
         hidden_states = self.tt_geglu(hidden_states)
@@ -38,9 +40,8 @@ class TtFeedForward(LightweightModule):
             self.tt_weights,
             bias=self.tt_bias,
             program_config=self.ff2_model_config,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            memory_config=self.ff2_memory_config,
             compute_kernel_config=self.default_compute_kernel_config,
         )
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states

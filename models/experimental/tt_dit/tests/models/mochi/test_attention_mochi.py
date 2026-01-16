@@ -12,6 +12,7 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ....utils.check import assert_quality
 from ....models.transformers.attention_mochi import MochiAttention
 from ....parallel.manager import CCLManager
+from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....utils.padding import pad_vision_seq_parallel
 from diffusers import MochiTransformer3DModel
 from models.tt_transformers.tt.common import get_rot_transformation_mat
@@ -113,18 +114,11 @@ def test_mochi_attention(
         topology=ttnn.Topology.Linear,
     )
 
-    # Create a simple parallel config mock for the attention module
-    class SimpleParallelConfig:
-        def __init__(self, mesh_axis, factor):
-            self.mesh_axis = mesh_axis
-            self.factor = factor
-
-    class MockParallelConfig:
-        def __init__(self, tp_axis, tp_factor, sp_axis, sp_factor):
-            self.tensor_parallel = SimpleParallelConfig(tp_axis, tp_factor)
-            self.sequence_parallel = SimpleParallelConfig(sp_axis, sp_factor)
-
-    parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+    )
 
     # Create TT model
     tt_model = MochiAttention(
@@ -159,9 +153,9 @@ def test_mochi_attention(
         rope_cos.unsqueeze(0).permute(0, 2, 1, 3), rope_sin.unsqueeze(0).permute(0, 2, 1, 3)
     )
 
-    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), chunk_size_lcm=512, num_devices=sp_factor)
-    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, chunk_size_lcm=512, num_devices=sp_factor)
-    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, chunk_size_lcm=512, num_devices=sp_factor)
+    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), num_devices=sp_factor)
+    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, num_devices=sp_factor)
+    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, num_devices=sp_factor)
 
     # Sequence fractured spatial
     tt_spatial = bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)

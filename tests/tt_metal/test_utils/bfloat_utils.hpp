@@ -8,7 +8,7 @@
 #include <random>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/blockfloat_common.hpp>
+#include "impl/data_format/blockfloat_common.hpp"
 #include <vector>
 #include <tt_stl/assert.hpp>
 
@@ -27,8 +27,8 @@ auto create_random_vector_of_bfp(uint32_t num_bytes, bool is_exp_a, int rand_max
     int float_data_size = num_tiles * num_float_in_tile;
 
     std::vector<float> fp32_vec(float_data_size, 0);
-    for (int i = 0; i < fp32_vec.size(); i++) {
-        fp32_vec.at(i) = rand_float() + offset;
+    for (float& val : fp32_vec) {
+        val = rand_float() + offset;
     }
 
     std::vector<uint32_t> packed_result =
@@ -59,8 +59,8 @@ inline std::vector<uint32_t> create_constant_vector_of_bfp8(uint32_t num_bytes, 
     int float_data_size = num_tiles * num_float_in_tile;
 
     std::vector<float> fp32_vec(float_data_size, 0);
-    for (int i = 0; i < fp32_vec.size(); i++) {
-        fp32_vec.at(i) = value;
+    for (float& val : fp32_vec) {
+        val = value;
     }
 
     std::vector<uint32_t> packed_result =

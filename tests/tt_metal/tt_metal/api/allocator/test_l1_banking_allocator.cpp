@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -19,32 +19,19 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 
 using namespace tt::tt_metal;
 namespace unit_tests::test_l1_banking_allocator {
 
 uint64_t get_alloc_limit(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     const metal_SocDescriptor& soc_desc =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    auto dispatch_core_config = tt::tt_metal::get_dispatch_core_config();
-    auto storage_core_bank_size =
-        tt::get_storage_core_bank_size(device->id(), mesh_device->num_hw_cqs(), dispatch_core_config);
-    const uint32_t allocator_alignment = mesh_device->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
-    const uint32_t interleaved_l1_bank_size = storage_core_bank_size.has_value()
-                                                  ? storage_core_bank_size.value()
-                                                  : (soc_desc.worker_l1_size - l1_unreserved_base);
-    uint32_t storage_core_unreserved_base =
-        ((tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-              tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::MAILBOX) +
-          allocator_alignment - 1) /
-         allocator_alignment) *
-        allocator_alignment;
-    uint64_t alloc_limit = interleaved_l1_bank_size - storage_core_unreserved_base;
-    return alloc_limit;
+    const uint32_t interleaved_l1_bank_size = soc_desc.worker_l1_size - l1_unreserved_base;
+    return interleaved_l1_bank_size;
 }
 
 }  // namespace unit_tests::test_l1_banking_allocator

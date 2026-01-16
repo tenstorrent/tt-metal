@@ -17,7 +17,6 @@
 #include <tracy/TracyC.h>
 
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -25,11 +24,7 @@
 
 using json = nlohmann::json;
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace op_profiler {
+namespace tt::tt_metal::op_profiler {
 
 enum class OpType { python_fallback, tt_dnn_cpu, tt_dnn_device, unknown };
 
@@ -158,9 +153,8 @@ public:
         auto it = map.find(key);
         if (it != map.end()) {
             return it->second;
-        } else {
-            return "";
         }
+        return "";
     }
     void insert(const KeyType& key, std::string opname) {
         std::scoped_lock<std::mutex> lock(map_mutex);
@@ -175,7 +169,10 @@ private:
 inline ProgramHashToOpName program_hash_to_opname_{};
 
 inline void start_tracy_zone(
-    const std::string& source, const std::string& functName, uint32_t lineNum, uint32_t color = 0) {
+    [[maybe_unused]] const std::string& source,
+    [[maybe_unused]] const std::string& functName,
+    [[maybe_unused]] uint32_t lineNum,
+    [[maybe_unused]] uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
     auto tracySrcLoc =
         ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length());
@@ -188,7 +185,7 @@ inline void start_tracy_zone(
 #endif
 }
 
-inline bool stop_tracy_zone(const std::string& name = "", uint32_t color = 0) {
+inline bool stop_tracy_zone([[maybe_unused]] const std::string& name = "", [[maybe_unused]] uint32_t color = 0) {
     bool callStackWasEmpty = true;
 #if defined(TRACY_ENABLE)
     if (!call_stack.empty()) {
@@ -210,7 +207,7 @@ inline bool stop_tracy_zone(const std::string& name = "", uint32_t color = 0) {
 constexpr auto tracy_max_message_length =
     static_cast<size_t>(std::numeric_limits<uint16_t>::max());  // Tracy hard limit is 64KiB including null terminator
 
-inline void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) {
+inline void tracy_message([[maybe_unused]] const std::string& source, [[maybe_unused]] uint32_t color = 0xf0f8ff) {
 #if defined(TRACY_ENABLE)
     const auto truncated_size = std::min(source.size(), tracy_max_message_length - 1);
     if (source.size() > truncated_size) {
@@ -236,10 +233,7 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
 
-    IDevice* device = nullptr;
-    if (tt::DevicePool::instance().is_device_active(device_id)) {
-        device = tt::DevicePool::instance().get_active_device(device_id);
-    }
+    IDevice* device = tt::tt_metal::detail::GetActiveDevice(device_id);
 
     json kernelSizes;
     // TODO(HalProcessorClassType): all the combinations can be queried from HAL instead of hardcoded here, but
@@ -274,7 +268,7 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
         auto core_type_name = enchantum::to_string(core_type);
         auto processor_class_name = enchantum::to_string(kernel.processor_class);
 
-        for (auto const& binary_meta : kernel.binary_meta) {
+        for (const auto& binary_meta : kernel.binary_meta) {
             auto key = fmt::format(
                 "{}_{}_{}_max_kernel_size", core_type_name, processor_class_name, binary_meta.processor_type);
             if (kernelSizes.value(key, 0) < binary_meta.packed_size) {
@@ -292,7 +286,6 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
 
 static inline json get_tensor_json(const Tensor& tensor) {
     json ret;
-    std::string tensorStorageStr;
     if (tensor.storage_type() == StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
         ret["storage_type"]["memory_config"]["buffer_type"] =
@@ -328,7 +321,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tens
     ZoneScoped;
     std::vector<json> ret;
     ret.reserve(tensors.size());
-    for (auto& tensor : tensors) {
+    for (const auto& tensor : tensors) {
         ret.push_back(get_tensor_json(tensor));
     }
     return ret;
@@ -337,7 +330,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tens
 static inline std::vector<json> get_tensors_json(const std::vector<std::optional<const Tensor>>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
-    for (auto& tensor : tensors) {
+    for (const auto& tensor : tensors) {
         if (tensor.has_value()) {
             ret.push_back(get_tensor_json(tensor.value()));
         }
@@ -348,7 +341,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<std::optional
 static inline std::vector<json> get_tensors_json(const std::vector<std::optional<Tensor>>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
-    for (auto& tensor : tensors) {
+    for (const auto& tensor : tensors) {
         if (tensor.has_value()) {
             ret.push_back(get_tensor_json(tensor.value()));
         }
@@ -468,7 +461,7 @@ inline std::string op_meta_data_serialized_json(
 
 template <typename device_operation_t>
 inline std::string op_meta_data_serialized_json(
-    const device_operation_t& operation,
+    const device_operation_t& /*operation*/,
     uint32_t operation_id,
     auto device_id,
     const auto& program,
@@ -525,11 +518,10 @@ inline std::string op_meta_data_serialized_json(
             msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
         }
         return msg;
-    } else {
-        auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
-        runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
-        return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
     }
+    auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
+    runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
+    return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
 #else
     return {};
 #endif
@@ -589,6 +581,4 @@ inline std::string op_meta_data_serialized_json(
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)
 
 #endif
-}  // namespace op_profiler
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::op_profiler

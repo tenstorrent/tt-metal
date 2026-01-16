@@ -10,7 +10,7 @@ TensorTopology TensorTopology::create_fully_replicated_tensor_topology(
     const tt::tt_metal::distributed::MeshShape& mesh_shape) {
     tt::tt_metal::distributed::MeshShape distribution_shape =
         tt::tt_metal::distributed::MeshShape(mesh_shape.mesh_size());
-    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements = {
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements = {
         tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
     mesh_coords.reserve(mesh_shape.mesh_size());
@@ -27,7 +27,7 @@ TensorTopology TensorTopology::create_sharded_tensor_topology(
     const tt::tt_metal::distributed::MeshShape& mesh_shape, int shard_dim) {
     tt::tt_metal::distributed::MeshShape distribution_shape =
         tt::tt_metal::distributed::MeshShape(mesh_shape.mesh_size());
-    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements = {
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements = {
         tt::tt_metal::distributed::MeshMapperConfig::Shard{shard_dim}};
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
     mesh_coords.reserve(mesh_shape.mesh_size());
@@ -102,7 +102,7 @@ std::optional<tt::tt_metal::distributed::MeshCoordinate> TensorTopology::get_ten
             // This assumes that mesh coordinates are stored in row-major order
 
             // Create tensor coordinate container based on rank of distribution shape
-            tt::stl::SmallVector<uint32_t> tensor_coord_values(distribution_shape_.dims());
+            ttsl::SmallVector<uint32_t> tensor_coord_values(distribution_shape_.dims());
 
             // Convert flattened index to tensor coordinate assuming row-major order
             // This is the inverse logic of get_device_coord

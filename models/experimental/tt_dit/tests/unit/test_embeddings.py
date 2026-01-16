@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 
 import pytest
 import torch
@@ -22,7 +23,7 @@ from ...layers.embeddings import (
     WanPatchEmbed,
     CombinedTimestepGuidanceTextProjEmbeddings,
 )
-from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
 
 
@@ -348,7 +349,7 @@ def test_combined_timestep_guidance_text_proj_embeddings(
         pooled_projection_dim=pooled_projection_dim,
         mesh_device=mesh_device,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch.manual_seed(0)
     timestep = torch.full([batch_size], fill_value=500)

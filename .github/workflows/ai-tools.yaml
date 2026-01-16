@@ -12,6 +12,8 @@ on:
 
 jobs:
   call-ai-assistant:
+    # Do not run on Forks, they won't have the req'd secrets.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
     permissions:
       contents: write
       pull-requests: write

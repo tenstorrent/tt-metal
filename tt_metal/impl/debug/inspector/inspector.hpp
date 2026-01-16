@@ -6,6 +6,7 @@
 
 #include <memory>
 #include "impl/program/program_impl.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"
 
 namespace tt::tt_metal {
@@ -56,6 +57,33 @@ public:
         std::size_t program_id) noexcept;
     static void mesh_workload_set_program_binary_status(
         const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
+
+    // static method for logging dispatch core info
+    static void set_dispatch_core_info(
+        const tt_cxy_pair& virtual_core,
+        const tt::tt_metal::DispatchWorkerType& type,
+        uint8_t cq_id,
+        ChipId device_id,
+        ChipId servicing_device_id);
+
+    // static method for logging dispatch_s core info
+    static void set_dispatch_s_core_info(
+        const tt_cxy_pair& virtual_core,
+        const tt::tt_metal::DispatchWorkerType& type,
+        uint8_t cq_id,
+        ChipId device_id,
+        ChipId servicing_device_id);
+
+    // static method for logging prefetcher core info
+    static void set_prefetcher_core_info(
+        const tt_cxy_pair& virtual_core,
+        const tt::tt_metal::DispatchWorkerType& type,
+        uint8_t cq_id,
+        ChipId device_id,
+        ChipId servicing_device_id);
+
+    // static method for clearing all core info to clear stale entries
+    static void clear_all_core_info();
 
     static inspector::RpcServer& get_rpc_server();
 

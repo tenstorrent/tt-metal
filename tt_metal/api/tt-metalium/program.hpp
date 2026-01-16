@@ -24,6 +24,8 @@ using ProgramId = std::uint64_t;
 class Program {
 public:
     Program();
+
+    // TODO (#34009): Change to free function and move impl to experimental
     explicit Program(const ProgramDescriptor& descriptor);
     ~Program() noexcept;
 
@@ -46,7 +48,7 @@ public:
     //////////////////////////////
 
     // Used in ops.
-    std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
+    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers() const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }

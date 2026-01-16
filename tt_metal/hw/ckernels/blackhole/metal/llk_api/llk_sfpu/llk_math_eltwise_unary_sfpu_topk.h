@@ -16,7 +16,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::topk_local_sort, APPROXIMATE>(sfpu::topk_init<APPROXIMATE>);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
 inline void llk_math_eltwise_unary_sfpu_topk_local_sort(
     uint dst_index,
     int idir,
@@ -26,7 +26,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_local_sort(
     int i_start_step,
     int vector_mode = (int)VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROXIMATE, is_fp32_dest_acc_en>,
+        ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROXIMATE, is_fp32_dest_acc_en, STABLE_SORT>,
         dst_index,
         vector_mode,
         idir,
@@ -36,18 +36,18 @@ inline void llk_math_eltwise_unary_sfpu_topk_local_sort(
         i_start_step);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool idir = false>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool idir = false, bool STABLE_SORT = false>
 inline void llk_math_eltwise_unary_sfpu_topk_merge(
     uint dst_index, int m_iter, int k, int vector_mode = (int)VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitonic_topk_merge<APPROXIMATE, is_fp32_dest_acc_en, idir>,
+        ckernel::sfpu::calculate_bitonic_topk_merge<APPROXIMATE, is_fp32_dest_acc_en, idir, STABLE_SORT>,
         dst_index,
         vector_mode,
         m_iter,
         k);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
 inline void llk_math_eltwise_unary_sfpu_topk_rebuild(
     uint dst_index,
     bool idir,
@@ -57,7 +57,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_rebuild(
     int skip_second,
     int vector_mode = (int)VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROXIMATE, is_fp32_dest_acc_en>,
+        ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROXIMATE, is_fp32_dest_acc_en, STABLE_SORT>,
         dst_index,
         vector_mode,
         idir,

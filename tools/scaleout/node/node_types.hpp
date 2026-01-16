@@ -17,6 +17,7 @@ enum class NodeType {
     WH_GALAXY_X_TORUS,
     WH_GALAXY_Y_TORUS,
     WH_GALAXY_XY_TORUS,
+    P150_LB,
     P150_QB_AE,
     P150_QB_AE_DEFAULT,
     P300_QB_GE,

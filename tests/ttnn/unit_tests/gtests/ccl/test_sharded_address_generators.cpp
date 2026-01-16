@@ -15,8 +15,7 @@ static constexpr std::array<noc_grid_index_t, 8> worker_to_routing_x_wormhole = 
 
 static constexpr std::array<noc_grid_index_t, 10> worker_to_routing_y_wormhole = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11};
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct UnharvestedWormholeWorkerToNocLookup
     : address_generators::WorkerToNocCoordLookup<UnharvestedWormholeWorkerToNocLookup> {
@@ -636,5 +635,4 @@ TEST(CclShardedTensorAddrGenBuilder, TestBuildBlockSharded) {
         is_shard_grid_transposed);
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

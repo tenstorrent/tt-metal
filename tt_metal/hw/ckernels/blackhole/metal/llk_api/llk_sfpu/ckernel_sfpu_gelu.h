@@ -72,7 +72,7 @@ void gelu_derivative_init() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu() {
-    if (APPROXIMATION_MODE) {
+    if constexpr (APPROXIMATION_MODE) {
         _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
     } else {
 #pragma GCC unroll 8

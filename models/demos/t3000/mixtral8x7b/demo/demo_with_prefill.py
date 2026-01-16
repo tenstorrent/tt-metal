@@ -443,17 +443,22 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
     # Save benchmark data for CI dashboard
     if is_ci_env:
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
+
+        data_parallel = 1
+        config_params = {
+            "data_parallel": data_parallel,
+            "tensor_parallel": mesh_device.get_num_devices() // data_parallel,
+        }
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"demo_with_prefill",
+            run_type="demo_with_prefill",
             ml_model_name="Mixtral8x7B",
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,
+            config_params=config_params,
             input_sequence_length=max(prefill_lens),
             output_sequence_length=1,
-            # config_params=,
-            # precision=,
         )
 
 
@@ -487,7 +492,8 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_mixtral8x7b_demo(t3k_mesh_device, input_prompts, instruct_weights, prefill_len, is_ci_env):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral8x7b_demo(mesh_device, input_prompts, instruct_weights, prefill_len, is_ci_env):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights with max prefill length of 32k to reduce CI pipeline load")
 
@@ -510,7 +516,7 @@ def test_mixtral8x7b_demo(t3k_mesh_device, input_prompts, instruct_weights, pref
     return run_mixtral_demo(
         user_input=input_prompts,
         batch_size=batch_size,
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         instruct_mode=instruct_weights,
         test_prefill_len=prefill_len,
         is_ci_env=is_ci_env,

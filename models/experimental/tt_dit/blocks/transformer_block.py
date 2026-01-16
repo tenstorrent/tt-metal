@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import ttnn
 
 from ..layers.feedforward import ParallelFeedForward
-from ..layers.linear import ColParallelLinear
+from ..layers.linear import ColParallelLinear, prepare_chunked_linear_output
 from ..layers.module import Module
 from ..layers.normalization import DistributedLayerNorm
 from ..utils.substate import rename_substate
@@ -40,6 +40,8 @@ class TransformerBlock(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
+        attention_k_chunk_size: int = 512,
+        attention_q_chunk_size: int = 128,
     ) -> None:
         super().__init__()
 
@@ -105,6 +107,8 @@ class TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            k_chunk_size=attention_k_chunk_size,
+            q_chunk_size=attention_q_chunk_size,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -161,13 +165,13 @@ class TransformerBlock(Module):
         rename_substate(state, "ff_context.net.0.proj", "ff_context.ff1")
         rename_substate(state, "ff_context.net.2", "ff_context.ff2")
 
-        _shuffle_linear_output(
+        prepare_chunked_linear_output(
             state,
             prefix="norm1_linear",
             device_count=self.parallel_config.tensor_parallel.factor,
             chunks=6,
         )
-        _shuffle_linear_output(
+        prepare_chunked_linear_output(
             state,
             prefix="norm1_context_linear",
             device_count=self.parallel_config.tensor_parallel.factor,
@@ -291,32 +295,7 @@ class TransformerBlock(Module):
 
         return spatial, prompt
 
-    @classmethod
-    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int) -> int:
-        return Attention.spatial_sequence_padding_length(length=length, sp_factor=sp_factor)
-
-    @staticmethod
-    def pad_spatial_sequence(x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
-        return Attention.pad_spatial_sequence(x, sp_factor=sp_factor)
-
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
     return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
-
-
-def _shuffle_linear_output(state: dict[str, torch.Tensor], *, prefix: str, device_count: int, chunks: int) -> None:
-    weight_key = f"{prefix}.weight"
-    bias_key = f"{prefix}.bias"
-
-    weight = state.get(weight_key)
-    bias = state.get(bias_key)
-
-    if weight is not None:
-        _, in_dim = weight.shape
-        weight = weight.reshape([chunks, device_count, -1, in_dim]).transpose(0, 1).reshape([-1, in_dim])
-        state[weight_key] = weight
-
-    if bias is not None:
-        bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
-        state[bias_key] = bias

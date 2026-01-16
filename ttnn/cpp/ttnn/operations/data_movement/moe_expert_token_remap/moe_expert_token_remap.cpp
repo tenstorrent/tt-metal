@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-
 #include "ttnn/run_operation.hpp"
 
 #include "moe_expert_token_remap.hpp"

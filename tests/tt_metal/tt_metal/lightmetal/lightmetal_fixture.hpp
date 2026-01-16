@@ -12,9 +12,9 @@
 // #include <tt-metalium/tt_metal.hpp>
 // #include <circular_buffer_constants.h>
 // #include <tt-metalium/tt_backend_api_types.hpp>
-// #include <tt-metalium/lightmetal_replay.hpp>
+// #include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
+// #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 // #include "command_queue_fixture.hpp"
-// #include <lightmetal_binary.hpp>
 
 // namespace tt::tt_metal {
 

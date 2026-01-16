@@ -20,21 +20,17 @@ All host-side code, including python code in ``tt_metal`` can be profiled using 
 Enabling Tracy
 --------------
 
-To use Tracy for profiling, you need to build Metalium with profiler support enabled. This is done by setting the ``ENABLE_TRACY=ON`` option when configuring CMake. Or with the ``--enable-profiler`` flag in the build script. Profiling features are only available in builds where this option is set.
-
-You can enable the profiler by running:
+Tracy profiling support is **enabled by default** when building Metalium. Simply run:
 
 ..  code-block:: bash
 
     # Via build script
-    ./build_metal.sh --enable-profiler
+    ./build_metal.sh
 
-    # Via CMake flags
+    # Or via CMake flags
     cmake . -DENABLE_TRACY=ON
     ninja
     ninja install
-
-Note that Tracy support is not included in prebuilt binaries or release builds by default. You must build from source with the profiler enabled to use these features.
 
 GUI
 ---

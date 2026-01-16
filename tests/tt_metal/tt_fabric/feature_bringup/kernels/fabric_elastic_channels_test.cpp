@@ -5,13 +5,12 @@
 #include <cstdint>
 #include <array>
 #include <tuple>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "kernels/fabric_elastic_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
-#include "tt_metal/hw/inc/compile_time_args.h"
-
+#include "api/compile_time_args.h"
 // Compile-time configuration - passed as compile_args from host
 constexpr size_t N_CHUNKS = get_compile_time_arg_val(0);
 constexpr size_t RX_N_PKTS = get_compile_time_arg_val(1);

@@ -4,7 +4,6 @@
 
 #include "ttnn/run_operation.hpp"
 #include "expand.hpp"
-#include <tt-metalium/constants.hpp>
 #include <functional>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"

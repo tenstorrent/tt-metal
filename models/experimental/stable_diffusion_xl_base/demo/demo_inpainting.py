@@ -4,7 +4,6 @@
 
 
 import pytest
-import ttnn
 import torch
 from diffusers import DiffusionPipeline
 from diffusers.utils import load_image
@@ -17,6 +16,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
+    determinate_min_batch_size,
+    prepare_device,
 )
 import os
 from models.common.utility_functions import profiler
@@ -49,8 +50,10 @@ def run_demo_inference(
     guidance_rescale=0.0,
     timesteps=None,
     sigmas=None,
+    input_images=None,
+    input_masks=None,
 ):
-    batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
+    batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
     start_from, _ = evaluation_range
 
@@ -111,12 +114,22 @@ def run_demo_inference(
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
 
-    img_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo.png"
-    mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
-
     height = width = 1024
-    image = [load_image(img_url).resize((height, width))] * batch_size
-    mask_image = [load_image(mask_url).resize((height, width))] * batch_size
+    if input_images is None:  # when running the demo directly
+        img_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo.png"
+        mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
+
+        image = [load_image(img_url).resize((height, width))] * batch_size
+        mask_image = [load_image(mask_url).resize((height, width))] * batch_size
+    else:  # when running the accuracy test, providing dataset images and masks
+        assert isinstance(input_images, list) and len(input_images) == len(
+            input_masks
+        ), "Input images and masks lists must be the same length"
+        image, mask_image = (
+            input_images + [input_images[-1]] * needed_padding,
+            input_masks + [input_masks[-1]] * needed_padding,
+        )
+        assert len(prompts) == len(image), "After padding, prompts and images lists must be the same length"
 
     init_image = [
         tt_sdxl.torch_pipeline.image_processor.preprocess(
@@ -171,7 +184,6 @@ def run_demo_inference(
     images = []
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts) // batch_size):
-        profiler.start("end_to_end_generation")
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
         )
@@ -192,6 +204,7 @@ def run_demo_inference(
             else negative_prompt_2
         )
 
+        profiler.start("end_to_end_generation")
         (
             all_prompt_embeds_torch,
             torch_add_text_embeds,
@@ -225,10 +238,14 @@ def run_demo_inference(
 
         imgs = tt_sdxl.generate_images()
 
+        profiler.end("end_to_end_generation")
+
         logger.info(
             f"Prepare input tensors for {batch_size} prompts completed in {profiler.times['prepare_input_tensors'][-1]:.2f} seconds"
         )
-        logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
+        logger.info(
+            f"Image gen for {batch_size} prompts completed in {profiler.times['end_to_end_generation'][-1]:.2f} seconds"
+        )
         logger.info(
             f"Denoising loop for {batch_size} prompts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
         )
@@ -236,8 +253,6 @@ def run_demo_inference(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
         logger.info(f"Output tensor read completed in {profiler.times['read_output_tensor'][-1]:.2f} seconds")
-
-        profiler.end("end_to_end_generation")
 
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
@@ -252,12 +267,6 @@ def run_demo_inference(
                 logger.info(f"Image saved to output/output{len(images) + start_from}_inpainting.png")
 
     return images
-
-
-def prepare_device(mesh_device, use_cfg_parallel):
-    if use_cfg_parallel:
-        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
-        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
 # Note: need to add denoising_start to the pipeline config
@@ -364,6 +373,8 @@ def test_demo(
     guidance_rescale,
     timesteps,
     sigmas,
+    input_images=None,
+    input_masks=None,
 ):
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
@@ -386,4 +397,6 @@ def test_demo(
         guidance_rescale,
         timesteps,
         sigmas,
+        input_images,
+        input_masks,
     )

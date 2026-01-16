@@ -8,12 +8,28 @@ on:
         required: false
         type: boolean
         default: false
+      model:
+        description: 'Select model to test'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - llama3.1-8b
+          - llama3.3-70b
+          - qwen3-32b
+          - flux.1-dev
+          - wan2.2-t2v-a14b
   workflow_call:
     inputs:
       regenerate-ttnn-cache:
         required: false
         type: boolean
         default: false
+      model:
+        required: false
+        type: string
+        default: 'all'
 
 jobs:
   build-artifact:
@@ -22,6 +38,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      tracy: true
       build-wheel: true
       version: 22.04
   blackhole-multi-card-demo-tests:
@@ -38,7 +55,7 @@ jobs:
             num_devices: 4
           - name: DeskBox Demo tests
             runner-label: BH-DeskBox
-            extra-tag: pipeline-perf
+            extra-tag: pipeline-functional
             num_devices: 2
           - name: LoudBox Demo tests
             runner-label: BH-LoudBox
@@ -48,6 +65,10 @@ jobs:
             runner-label: P300-viommu
             extra-tag: pipeline-yyz2-lfc
             num_devices: 2
+          - name: QuietBox Global Edition tests
+            runner-label: BH-QB-GE
+            extra-tag: pipeline-perf
+            num_devices: 4
     with:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -56,3 +77,4 @@ jobs:
       extra-tag: ${{ matrix.test-group.extra-tag }}
       num_devices: ${{ matrix.test-group.num_devices }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}
+      model: ${{ inputs.model || 'all' }}

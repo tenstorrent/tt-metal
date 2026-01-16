@@ -4,7 +4,6 @@
 
 #include <functional>
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 
 #include "ttnn/operations/core/core.hpp"
@@ -55,9 +54,7 @@ ttnn::Tensor repeat_upper_dims_rm(
     auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
 
     constexpr bool is_final_dim = false;
-    auto out_tensor = tt::tt_metal::operation::run(
-                          RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {})
-                          .at(0);
+    auto out_tensor = ttnn::prim::repeat(input_tensor, repetitions, is_final_dim, output_mem_config);
     auto expected_shape = input_shape;
     expected_shape[dim] *= repetitions;
 
@@ -80,9 +77,7 @@ ttnn::Tensor repeat_last_dim_rm(
     auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
 
     constexpr bool is_final_dim = true;
-    auto out_tensor = tt::tt_metal::operation::run(
-                          RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {})
-                          .at(0);
+    auto out_tensor = ttnn::prim::repeat(input_tensor, repetitions, is_final_dim, output_mem_config);
 
     auto expected_shape = input_shape;
     expected_shape[-1] *= repetitions;
@@ -144,7 +139,7 @@ ttnn::Tensor RepeatOperation::invoke(
             repetition_vector.cbegin(),
             repetition_vector.begin(),
             std::multiplies<uint32_t>());
-        return tensor.reshape(ttnn::Shape(repetition_vector));
+        return ttnn::reshape(tensor, ttnn::Shape(repetition_vector));
     }
 
     TT_FATAL(working_tensor.logical_shape().rank() > 0, "repeat does not support rank 0 tensors");

@@ -8,6 +8,8 @@ import ttnn
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
 
+pytestmark = pytest.mark.use_module_device
+
 
 def test_sub_fp32(device):
     x_torch = torch.tensor([[1]], dtype=torch.float32)
@@ -168,7 +170,10 @@ def test_hypot_multi_dtype(device, dtype):
     y_tt = ttnn.from_torch(y_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_hypot = ttnn.hypot(x_tt, y_tt)
 
-    assert_with_ulp(z_tt_hypot, z_torch, ulp_threshold=1)
+    if dtype == ttnn.float32:
+        assert_allclose(z_torch, z_tt_hypot, rtol=1e-05, atol=1e-05)
+    else:
+        assert_with_ulp(z_torch, z_tt_hypot, ulp_threshold=1)
 
 
 def test_add_fp32_activ(device):

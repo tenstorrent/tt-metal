@@ -7,10 +7,15 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_reduction)
 target_sources(
     ttnn_op_experimental_reduction
     PRIVATE
-        argmax/argmax.cpp
         fast_reduce_nc/device/fast_reduce_nc_device_operation.cpp
         fast_reduce_nc/device/fast_reduce_nc_program_factory.cpp
         fast_reduce_nc/fast_reduce_nc.cpp
+        integral_image/device/intimg_device_operation.cpp
+        integral_image/device/intimg_program_factory.cpp
+        integral_image/intimg.cpp
+        deepseek_grouped_gate/deepseek_grouped_gate.cpp
+        deepseek_grouped_gate/device/deepseek_grouped_gate_device_operation.cpp
+        deepseek_grouped_gate/device/deepseek_grouped_gate_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_reduction PRIVATE ${FixmeOpIncDirs})

@@ -9,6 +9,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "autograd/autocast_tensor.hpp"
+#include "modules/grouped_query_attention.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "serialization/serializable.hpp"
@@ -28,6 +29,7 @@ using namespace ttml::modules;
 
 void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<RunMode>(m);
+    ttml::nanobind::util::export_enum<InferenceMode>(m);
 
     nb::class_<ModuleBase>(m, "ModuleBase");
     nb::class_<LinearLayer, ModuleBase>(m, "LinearLayer");

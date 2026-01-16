@@ -8,10 +8,6 @@ FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ENV RUSTUP_HOME=/usr/local/rustup
-ENV CARGO_HOME=/usr/local/cargo
-ENV PATH="$CARGO_HOME/bin:$PATH"
-
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
@@ -48,8 +44,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
     libclang-17-dev \
+    libclang-20-dev \
+    libclang-rt-20-dev \
     clang-tidy-17 \
     clang-tidy-20 \
+    clang-20 \
     curl \
     dialog \
     file \
@@ -62,7 +61,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set up virtual environment
+# Install uv with version pinning (centralized in install-uv.sh)
+COPY dockerfile/install-uv.sh /tmp/install-uv.sh
+RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
+
+# Set up virtual environment using uv with centralized Python version
+# Ubuntu 24.04 has Python 3.12 by default, so use that version for compatibility
+
 ENV PYTHON_ENV_DIR=/opt/venv
 RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
 
@@ -74,11 +79,23 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
-RUN python3 -m pip install --no-cache-dir build numpy setuptools
+RUN uv pip install --no-cache-dir build numpy setuptools
 
 RUN git config --global --add safe.directory '*'
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
+
+# Install mold linker for faster linking
+ARG MOLD_VERSION=2.40.4
+ARG MOLD_SHA256=4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1
+RUN wget -O /tmp/mold.tar.gz https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz && \
+    echo "${MOLD_SHA256}  /tmp/mold.tar.gz" | sha256sum -c - && \
+    tar -xzf /tmp/mold.tar.gz -C /usr/local --strip-components=1 && \
+    rm /tmp/mold.tar.gz && \
+    mold --version
+
+# Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
+ENV PATH="/usr/local/bin:$PATH"
 
 #############################################################
 
@@ -98,10 +115,14 @@ COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-met
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
-RUN umask 000 && python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+# Configure PyTorch CPU index and install Python packages using uv
+# index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
+# that are not explicitly listed in the requirements.txt files
+RUN umask 000 && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
@@ -136,13 +157,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # IWYU could be useful to developers
-RUN mkdir -p /tmp/iwyu \
-    && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
-    && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
-    && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
-    && cmake --build /tmp/iwyu/build --parallel \
-    && cmake --install /tmp/iwyu/build \
-    && rm -rf /tmp/iwyu
+# Not currently building, and unclear whether this is used; can put it back in if needed
+# RUN mkdir -p /tmp/iwyu \
+#     && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
+#     && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
+#     && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+#     && cmake --build /tmp/iwyu/build --parallel \
+#     && cmake --install /tmp/iwyu/build \
+#     && rm -rf /tmp/iwyu
 
 # Remove gdb if we aren't on Ubuntu 24.04
 # 24.04 has gdb 15.1 by default, lets give that a chance before we decide we need to build something
@@ -172,7 +194,7 @@ FROM base AS release
 
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN python3 -m venv $PYTHON_ENV_DIR
+RUN uv venv $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -186,7 +208,7 @@ RUN mkdir -p /etc && \
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
-RUN pip3 install $WHEEL_FILENAME
+RUN uv pip install $WHEEL_FILENAME
 
 #############################################################
 
@@ -204,7 +226,8 @@ ARG GIT_REF=main
 RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
     https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
     && cd ${TT_METAL_HOME} \
-    && git checkout ${GIT_REF}"
+    && git checkout ${GIT_REF} \
+    && git submodule update --init --recursive"
 
 WORKDIR /tt-metal
 
@@ -212,7 +235,6 @@ WORKDIR /tt-metal
 RUN /bin/bash -c "./build_metal.sh \
     && ./create_venv.sh \
     && source $PYTHON_ENV_DIR/bin/activate \
-    && pip install -r models/tt_transformers/requirements.txt \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
 # Ensure the virtual environment is used for all Python-related commands

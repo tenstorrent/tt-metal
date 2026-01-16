@@ -152,6 +152,7 @@ matmul_shapes_bfloat16 = [
     (384, 384, 384, True, True, 4, 1, 1),
     (384, 384, 512, False, False, 2, 1, 1),
     (384, 512, 512, False, False, 2, 1, 1),
+    (416, 320, 320, False, False, 1, 1, 1),  # P150 square: 4160x4160x4160
     (512, 512, 512, False, False, 1, 2, 2),
     (1024, 1024, 1024, False, False, 2, 4, 4),
     (2048, 2048, 2048, False, False, 4, 8, 8),
@@ -169,6 +170,7 @@ matmul_shapes_bfloat8_b = [
     (256, 384, 384, True, True, 1, 1, 1),
     (384, 384, 384, True, True, 2, 1, 1),
     (384, 384, 512, True, True, 2, 1, 1),
+    (416, 320, 320, False, False, 1, 1, 1),
     (512, 512, 512, False, False, 1, 2, 2),
     (1024, 1024, 1024, False, False, 2, 4, 4),
     (2048, 2048, 2048, False, False, 4, 8, 8),
@@ -187,6 +189,7 @@ matmul_shapes_bfloat4_b = [
     (384, 384, 384, True, True, 1, 1, 1),
     (384, 384, 512, True, True, 1, 1, 1),
     (384, 512, 512, True, True, 2, 1, 1),
+    (416, 320, 320, False, False, 1, 1, 1),
     (512, 512, 512, True, True, 2, 1, 1),
     (1024, 1024, 1024, False, False, 2, 2, 2),
     (2048, 2048, 2048, False, False, 4, 4, 4),
@@ -609,9 +612,9 @@ def test_matmul_2d_host_perf_out_of_box(
         for dtype, use_trace in matmul_configs_oob:
             matmul_shapes = matmul_shapes_oob
             if dtype == ttnn.bfloat16:
-                math_fidelity = ttnn.MathFidelity.HiFi2
+                math_fidelity = ttnn.MathFidelity.HiFi4  # to match hand-tuned
             elif dtype == ttnn.bfloat8_b:
-                math_fidelity = ttnn.MathFidelity.LoFi
+                math_fidelity = ttnn.MathFidelity.HiFi2
             elif dtype == ttnn.bfloat4_b:
                 math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:

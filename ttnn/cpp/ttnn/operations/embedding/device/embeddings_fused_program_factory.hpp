@@ -1,0 +1,32 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "embedding_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
+
+namespace ttnn::operations::embedding::program {
+
+struct EmbeddingsFusedProgramFactory {
+    struct shared_variables_t {
+        tt::tt_metal::KernelHandle reader_kernel_id {};
+        tt::tt_metal::KernelHandle writer_kernel_id  {};
+        std::vector<tt::tt_metal::CoreCoord> cores;
+        tt::tt_metal::CBHandle cb_output  {};
+    };
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const embedding::operation_attributes_t& operation_attributes,
+        const embedding::tensor_args_t& tensor_args,
+        embedding::tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const embedding::operation_attributes_t& operation_attributes,
+        const embedding::tensor_args_t& tensor_args,
+        embedding::tensor_return_value_t& tensor_return_value);
+};
+}  // namespace ttnn::operations::embedding::program

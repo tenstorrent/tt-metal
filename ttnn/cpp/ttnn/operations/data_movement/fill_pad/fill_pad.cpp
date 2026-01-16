@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fill_pad.hpp"
-#include "device/fill_pad_op.hpp"
+#include "device/fill_pad_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -39,12 +39,10 @@ ttnn::Tensor FillPadOperation::invoke(
         ttnn::Shape new_shape = ttnn::Shape{std::array<uint32_t, 3>{third_dim, original_shape[-2], original_shape[-1]}};
         auto reshaped_tensor = ttnn::reshape(mutable_input_tensor, new_shape);
 
-        reshaped_tensor =
-            tt::tt_metal::operation::run(FillPad{fill_value, output_memory_config}, {reshaped_tensor}, {}, {}).at(0);
+        reshaped_tensor = ttnn::prim::fill_pad(reshaped_tensor, fill_value, output_memory_config);
         return ttnn::reshape(reshaped_tensor, original_shape);
     }
-    auto output_tensor =
-        tt::tt_metal::operation::run(FillPad{fill_value, output_memory_config}, {mutable_input_tensor}, {}, {}).at(0);
+    auto output_tensor = ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config);
     if (input_tensor.dtype() == DataType::BFLOAT8_B) {
         return ttnn::typecast(output_tensor, DataType::BFLOAT8_B);
     }

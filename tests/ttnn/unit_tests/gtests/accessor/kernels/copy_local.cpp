@@ -7,8 +7,10 @@ This kernel copies local shards from one to another tensor. Output is required t
 */
 
 #include <cstdint>
-#include "dataflow_api.h"
-#include "accessor/tensor_accessor.h"
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/tensor.h"
+#include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
     uint32_t page_size = get_compile_time_arg_val(0);

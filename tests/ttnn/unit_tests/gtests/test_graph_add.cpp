@@ -5,7 +5,7 @@
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
 #include <nlohmann/json.hpp>
-#include <stddef.h>
+#include <cstddef>
 #include <tt-logger/tt-logger.hpp>
 #include <cstdint>
 #include <optional>
@@ -35,10 +35,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace binary {
-namespace test {
+namespace ttnn::operations::binary::test {
 
 struct AddOpGraphTestParam {
     ttnn::Shape a_Shape;
@@ -93,14 +90,13 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 
         // per core buffer allocation size
         {
-            auto cb_peak_size_per_core = graph::extract_circular_buffers_peak_size_per_core(json_trace);
-            EXPECT_EQ(cb_peak_size_per_core, params.expected_cb_peak_per_core);
-
             auto compute_with_storage_grid_size = device_->compute_with_storage_grid_size();
             size_t interleaved_storage_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-            auto l1_peak_per_core =
-                graph::extract_l1_buffer_allocation_peak_size_per_core(json_trace, interleaved_storage_cores);
+            const auto& [cb_peak_size_per_core, l1_peak_per_core, peak_memory_usage_per_core] =
+                graph::extract_resource_usage_per_core(json_trace, interleaved_storage_cores);
+
+            EXPECT_EQ(cb_peak_size_per_core, params.expected_cb_peak_per_core);
             EXPECT_EQ(l1_peak_per_core, params.expected_l1_peak_per_core);
         }
 
@@ -149,11 +145,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-                .expected_calltrace =
-                    {"ttnn::add",
-                     "ttnn::prim::binary_ng",
-                     "BinaryNgDeviceOperation",
-                     "tt::tt_metal::create_device_tensor"},
+                .expected_calltrace = {"ttnn::add", "BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
                 .expected_peak_L1_memory_usage = 30720,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 3 * 4096,
@@ -167,11 +159,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-                .expected_calltrace =
-                    {"ttnn::add",
-                     "ttnn::prim::binary_ng",
-                     "BinaryNgDeviceOperation",
-                     "tt::tt_metal::create_device_tensor"},
+                .expected_calltrace = {"ttnn::add", "BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
                 .expected_peak_L1_memory_usage = 67584,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 3 * 4096,
@@ -193,11 +181,7 @@ INSTANTIATE_TEST_SUITE_P(
                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
                             {6 * 32, 32 * 32},
                             ShardOrientation::COL_MAJOR}},
-                .expected_calltrace =
-                    {"ttnn::add",
-                     "ttnn::prim::binary_ng",
-                     "BinaryNgDeviceOperation",
-                     "tt::tt_metal::create_device_tensor"},
+                .expected_calltrace = {"ttnn::add", "BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
                 .expected_peak_L1_memory_usage = 20054016,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 0,
@@ -241,7 +225,4 @@ INSTANTIATE_TEST_SUITE_P(
         return ss.str();
     });
 
-}  // namespace test
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::binary::test

@@ -4,7 +4,7 @@
 
 #include "hc_sum_reduce.hpp"
 
-#include "device/hc_sum_reduce_op.hpp"
+#include "device/hc_sum_reduce_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -15,11 +15,7 @@ ttnn::Tensor ExecuteHCSumReduce::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
     const std::optional<MathFidelity> math_fidelity) {
-    auto program = HCSumReduce{
-        memory_config.value_or(input.memory_config()),
-        dtype.value_or(input.dtype()),
-        math_fidelity.value_or(MathFidelity::HiFi4)};
-    return operation::run(program, {input}, {}, {}).at(0);
+    return ttnn::prim::hc_sum_reduce(input, memory_config, dtype, math_fidelity);
 }
 
 }  // namespace ttnn::operations::experimental::ssm

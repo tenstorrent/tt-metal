@@ -4,8 +4,8 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <string>
 #include <unordered_set>
@@ -13,13 +13,15 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/arch.hpp>
+#include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -81,11 +83,8 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
             for (int y = 0; y < logical_grid_size.y; y++) {
                 CoreCoord logical_core_coord(x, y);
                 CoreCoord physical_core_coord = soc_desc.get_physical_tensix_core_from_logical(logical_core_coord);
-                EXPECT_TRUE(
-                    harvested_rows.find(
-                        tensix_harvest_axis == HalTensixHarvestAxis::ROW
-                            ? physical_core_coord.y
-                            : physical_core_coord.x) == harvested_rows.end());
+                EXPECT_TRUE(!harvested_rows.contains(
+                    tensix_harvest_axis == HalTensixHarvestAxis::ROW ? physical_core_coord.y : physical_core_coord.x));
             }
         }
     }

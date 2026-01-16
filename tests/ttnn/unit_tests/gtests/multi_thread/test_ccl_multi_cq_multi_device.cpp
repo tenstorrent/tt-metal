@@ -23,10 +23,11 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -50,7 +51,7 @@ using tt::tt_metal::distributed::MeshShape;
 // Custom Fixture using 1D Fabric on a Multi-CQ MeshDevice
 class MultiCQFabricMeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
-    MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 2}) {
+    MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}, .num_cqs = 2}) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     }
     void TearDown() override {
@@ -60,7 +61,7 @@ protected:
 };
 
 // TODO(#30692): Re-enable after migrating to aggregated tensor + semaphore-free all-gather APIs.
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -86,20 +87,14 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0) {
         test_expected_num_devices,
         num_devices);
 
-    log_info(LogTest, "Creating Global Semaphore for Ccl Ops");
-    auto multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        devices,
-        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                             // initial value
-        tt::tt_metal::BufferType::L1,  // buffer type
-        10                             // attempts
-    );
-
     const int batch_size = 8;
     const int sequence_length = 1024;
     const int embedding_dim = 768;
 
+    uint32_t dim = 0;
     const ttnn::Shape input_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
+    ttnn::Shape output_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
+    output_shape[dim] *= devices.size();
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
 
@@ -107,10 +102,13 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0) {
     boost::asio::thread_pool pool(devices.size());
 
     TensorSpec tensor_spec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+    TensorSpec output_tensor_spec(
+        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
         std::vector<Tensor> device_tensors(devices.size());
+        std::vector<Tensor> output_tensors(devices.size());
 
         log_info(LogTest, "Enqueue Operations before AllGather");
         std::vector<std::future<void>> futures;
@@ -131,12 +129,18 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0) {
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {MeshCoordinate(0, 0)}};
                 Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
 
+                auto output_buffer =
+                    tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), output_tensor_spec);
+                auto output_storage = tt::tt_metal::DeviceStorage{output_buffer, {MeshCoordinate(0, 0)}};
+                Tensor output_tensor = Tensor(output_storage, output_tensor_spec, TensorTopology{});
+
                 // Enqueue write_buffer to the read/write command queue and record the event
                 ttnn::write_buffer(QueueId(op_cq_id), input_tensor, {host_data});
 
                 // Enqueue multiple operations to the operation command queue
                 // Set output_tensor into device_tensor for allreduce
                 device_tensors[dev_idx] = ttnn::test_utils::dispatch_ops_to_device(input_tensor, QueueId(op_cq_id));
+                output_tensors[dev_idx] = output_tensor;
 
                 promise->set_value();
             });
@@ -150,21 +154,23 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        // Enqueue the all_gather_command_processor_async operation on each device.
-        // It does not support command queue ID as a parameter and internally uses command queue 0.
-        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
-            multi_device_global_semaphore};
-        // TODO (#30692): Use the new all gather flow with aggregate and disaggregate once this issue is fixed.
-        // const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
-        //     device_tensors,
-        //     /* dim */ 0,
-        //     multi_dev_semaphore,
-        //     /* persistent_output_buffer */ std::nullopt,
-        //     /* num_links */ 1,
-        //     operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        //     ttnn::ccl::Topology::Linear,
-        //     /* cluster_axis */ std::nullopt,
-        //     SubDeviceId(0));
+        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+        // Quiesce parent mesh before all gather
+        mesh_device_->quiesce_devices();
+
+        auto all_gathered_tensor = ttnn::all_gather(
+            aggregated_tensor,
+            /* dim */ 0,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            aggregated_output_tensor);
+
+        // Quiesce parent mesh after all gather
+        mesh_device_->quiesce_devices();
+
+        auto gathered_tensors = output_tensors;
 
         log_info(LogTest, "Enqueue dummy ops");
         for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
@@ -193,22 +199,22 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0) {
         }
         futures.clear();
 
-        // log_info(LogTest, "read_buffer");
-        // // Read the values from each device and compare them with the results calculated on the host
-        // for (size_t i = 0; i < devices.size(); ++i) {
-        //     auto device = devices[i];
-        //     auto device_tensor = gathered_tensors[i];
-        //     boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {
-        //         auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
-        //         ttnn::read_buffer(QueueId(op_cq_id), device_tensor, {output_data});
+        log_info(LogTest, "read_buffer");
+        // Read the values from each device and compare them with the results calculated on the host
+        for (size_t i = 0; i < devices.size(); ++i) {
+            auto* device = devices[i];
+            auto device_tensor = gathered_tensors[i];
+            boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {
+                auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
+                ttnn::read_buffer(QueueId(op_cq_id), device_tensor, {output_data});
 
-        //         for (int j = 0; j < device_tensor.physical_volume(); j++) {
-        //             int base = j / num_elems;  // dev_idx
-        //             ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
-        //         }
-        //         log_info(LogTest, "Device{} Compare Success", device->id());
-        //     });
-        // }
+                for (int j = 0; j < device_tensor.physical_volume(); j++) {
+                    int base = j / num_elems;  // dev_idx
+                    ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
+                }
+                log_info(LogTest, "Device{} Compare Success", device->id());
+            });
+        }
     }
 
     pool.join();
@@ -221,7 +227,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0) {
     log_info(tt::LogTest, "Finished");
 }
 
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0CQ1) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -252,21 +258,14 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0CQ1) {
         test_expected_num_devices,
         num_devices);
 
-    log_info(LogTest, "Creating Global Semaphore for Ccl Ops");
-
-    auto multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        devices,
-        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                             // initial value
-        tt::tt_metal::BufferType::L1,  // buffer type
-        10                             // attempts
-    );
-
     const int batch_size = 8;
     const int sequence_length = 1024;
     const int embedding_dim = 768;
 
+    uint32_t dim = 0;
     const ttnn::Shape input_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
+    ttnn::Shape output_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
+    output_shape[dim] *= devices.size();
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
 
@@ -275,12 +274,14 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0CQ1) {
 
     boost::asio::thread_pool pool(devices.size());
 
+    TensorSpec tensor_spec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+    TensorSpec output_tensor_spec(
+        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
         std::vector<Tensor> device_tensors(devices.size());
-
-        TensorSpec tensor_spec(
-            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+        std::vector<Tensor> output_tensors(devices.size());
 
         log_info(LogTest, "Enqueue Operations before AllGather");
         std::vector<std::future<void>> futures;
@@ -302,12 +303,18 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0CQ1) {
                 // create_device_tensor)
                 Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
 
+                auto output_buffer =
+                    tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), output_tensor_spec);
+                auto output_storage = tt::tt_metal::DeviceStorage{output_buffer, {MeshCoordinate(0, 0)}};
+                Tensor output_tensor = Tensor(output_storage, output_tensor_spec, TensorTopology{});
+
                 // Enqueue write_buffer to the operation`s command queue and record the event
                 ttnn::write_buffer(op_cq_id, input_tensor, {host_data});
 
                 // Enqueue multiple operations to the operation command queue
                 // Set output_tensor into device_tensor for allgather
                 device_tensors[dev_idx] = ttnn::test_utils::dispatch_ops_to_device(input_tensor, op_cq_id);
+                output_tensors[dev_idx] = output_tensor;
 
                 auto& op_cq_2 = single_mesh->mesh_command_queue(op_cq_id.get());
                 auto operation_event = ttnn::record_event(op_cq_2);
@@ -327,21 +334,24 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0CQ1) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        // Enqueue the all_gather_command_processor_async operation on each device.
-        // It does not support command queue ID as a parameter and internally uses command queue 0.
-        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
-            multi_device_global_semaphore};
-        // TODO (#30692): Use the new all gather flow with aggregate and disaggregate once this issue is fixed.
-        // const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
-        //     device_tensors,
-        //     /* dim */ 0,
-        //     multi_dev_semaphore,
-        //     /* persistent_output_buffer */ std::nullopt,
-        //     /* num_links */ 1,
-        //     operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        //     ttnn::ccl::Topology::Linear,
-        //     /* cluster_axis */ std::nullopt,
-        //     SubDeviceId(0));
+        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+
+        // Quiesce parent mesh before all gather
+        mesh_device_->quiesce_devices();
+
+        auto all_gathered_tensor = ttnn::all_gather(
+            aggregated_tensor,
+            /* dim */ dim,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            aggregated_output_tensor);
+
+        // Quiesce parent mesh after all gather
+        mesh_device_->quiesce_devices();
+
+        auto gathered_tensors = output_tensors;
 
         log_info(LogTest, "Enqueue dummy ops");
         for (size_t dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
@@ -394,23 +404,22 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0CQ1) {
         }
         futures.clear();
 
-        // log_info(LogTest, "read_buffer");
-        // // Read the values from each device and compare them with the results calculated on the host
-        // for (size_t i = 0; i < devices.size(); ++i) {
-        //     auto device = devices[i];
-        //     auto device_tensor = gathered_tensors[i];
+        log_info(LogTest, "read_buffer");
+        // Read the values from each device and compare them with the results calculated on the host
+        for (size_t i = 0; i < devices.size(); ++i) {
+            auto* device = devices[i];
+            auto device_tensor = gathered_tensors[i];
+            boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {
+                auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
+                ttnn::read_buffer(op_cq_id, device_tensor, {output_data});
 
-        //     boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {
-        //         auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
-        //         ttnn::read_buffer(op_cq_id, device_tensor, {output_data});
-
-        //         for (int j = 0; j < device_tensor.physical_volume(); j++) {
-        //             int base = j / num_elems;  // dev_idx
-        //             ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
-        //         }
-        //         log_info(LogTest, "Device{} Compare Success", device->id());
-        //     });
-        // }
+                for (int j = 0; j < device_tensor.physical_volume(); j++) {
+                    int base = j / num_elems;  // dev_idx
+                    ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
+                }
+                log_info(LogTest, "Device{} Compare Success", device->id());
+            });
+        }
     }
 
     pool.join();
@@ -423,7 +432,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0CQ1) {
     log_info(tt::LogTest, "Finished");
 }
 
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksMultithreadCQ0) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -455,21 +464,14 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksMultithrea
         test_expected_num_devices,
         num_devices);
 
-    log_info(LogTest, "Creating Global Semaphore for Ccl Ops");
-
-    auto multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        devices,
-        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                             // initial value
-        tt::tt_metal::BufferType::L1,  // buffer type
-        10                             // attempts
-    );
-
     const int batch_size = 8;
     const int sequence_length = 1024;
     const int embedding_dim = 768;
 
+    uint32_t dim = 0;
     const ttnn::Shape input_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
+    ttnn::Shape output_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
+    output_shape[dim] *= devices.size();
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
 
@@ -478,12 +480,14 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksMultithrea
 
     boost::asio::thread_pool pool(devices.size());
 
+    TensorSpec tensor_spec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+    TensorSpec output_tensor_spec(
+        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
         std::vector<Tensor> device_tensors(devices.size());
-
-        TensorSpec tensor_spec(
-            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+        std::vector<Tensor> output_tensors(devices.size());
 
         log_info(LogTest, "Enqueue Operations before AllGather");
         std::vector<std::future<void>> futures;
@@ -505,6 +509,11 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksMultithrea
                 // create_device_tensor)
                 Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
 
+                auto output_buffer =
+                    tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), output_tensor_spec);
+                auto output_storage = tt::tt_metal::DeviceStorage{output_buffer, {MeshCoordinate(0, 0)}};
+                Tensor output_tensor = Tensor(output_storage, output_tensor_spec, TensorTopology{});
+
                 // Enqueue write_buffer to the operation`s command queue and record the event
                 ttnn::write_buffer(mem_cq_id, input_tensor, {host_data});
 
@@ -517,6 +526,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksMultithrea
                 // Enqueue multiple operations to the operation command queue
                 // Set output_tensor into device_tensor for allgather
                 device_tensors[dev_idx] = ttnn::test_utils::dispatch_ops_to_device(input_tensor, op_ccl_cq_id);
+                output_tensors[dev_idx] = output_tensor;
 
                 promise->set_value();
             });
@@ -530,21 +540,24 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksMultithrea
 
         log_info(LogTest, "Enqueue AllGather");
 
-        // Enqueue the all_gather_command_processor_async operation on each device.
-        // It does not support command queue ID as a parameter and internally uses command queue 0.
-        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
-            multi_device_global_semaphore};
-        // TODO (#30692): Use the new all gather flow with aggregate and disaggregate once this issue is fixed.
-        // const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
-        //     device_tensors,
-        //     /* dim */ 0,
-        //     multi_dev_semaphore,
-        //     /* persistent_output_buffer */ std::nullopt,
-        //     /* num_links */ 1,
-        //     operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        //     ttnn::ccl::Topology::Linear,
-        //     /* cluster_axis */ std::nullopt,
-        //     SubDeviceId(0));
+        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+
+        // Quiesce parent mesh before all gather
+        mesh_device_->quiesce_devices();
+
+        auto all_gathered_tensor = ttnn::all_gather(
+            aggregated_tensor,
+            /* dim */ dim,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            aggregated_output_tensor);
+
+        // Quiesce parent mesh after all gather
+        mesh_device_->quiesce_devices();
+
+        auto gathered_tensors = output_tensors;
 
         log_info(LogTest, "Enqueue dummy ops");
         for (size_t dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
@@ -596,21 +609,21 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksMultithrea
 
         log_info(LogTest, "read_buffer");
         // Read the values from each device and compare them with the results calculated on the host
-        // for (size_t i = 0; i < devices.size(); ++i) {
-        //     auto device = devices[i];
-        //     auto device_tensor = gathered_tensors[i];
+        for (size_t i = 0; i < devices.size(); ++i) {
+            auto* device = devices[i];
+            auto device_tensor = gathered_tensors[i];
 
-        //     boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {
-        //         auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
-        //         ttnn::read_buffer(mem_cq_id, device_tensor, {output_data});
+            boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {
+                auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
+                ttnn::read_buffer(mem_cq_id, device_tensor, {output_data});
 
-        //         for (int j = 0; j < device_tensor.physical_volume(); j++) {
-        //             int base = j / num_elems;  // dev_idx
-        //             ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
-        //         }
-        //         log_info(LogTest, "Device{} Compare Success", device->id());
-        //     });
-        // }
+                for (int j = 0; j < device_tensor.physical_volume(); j++) {
+                    int base = j / num_elems;  // dev_idx
+                    ASSERT_EQ(static_cast<float>(output_data[j]), (-1.0 * base * 32.0 + 128));
+                }
+                log_info(LogTest, "Device{} Compare Success", device->id());
+            });
+        }
     }
 
     pool.join();

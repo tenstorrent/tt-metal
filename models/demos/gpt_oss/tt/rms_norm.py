@@ -4,7 +4,7 @@
 from torch import nn
 
 import ttnn
-from models.demos.gpt_oss.config import MeshConfig
+from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 
@@ -14,7 +14,7 @@ class RMSNorm(nn.Module):
         torch_weight = state_dict["weight"]
 
         # Use MeshConfig for clean parallelization
-        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
+        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         self.is_distributed = False  # self.mesh_config.tp > 1
         self.tt_weight = ttnn.as_tensor(
             torch_weight.reshape((1, 1, -1, ttnn.TILE_SIZE)),

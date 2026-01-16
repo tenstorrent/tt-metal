@@ -12,8 +12,10 @@
 #include <string>
 #include <vector>
 
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "jit_build_options.hpp"
+#include <umd/device/types/arch.hpp>
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
@@ -59,6 +61,7 @@ public:
     const std::string& get_out_firmware_root_path() const {
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
+    uint64_t get_build_key() const { return build_key_; }
 
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};
@@ -78,6 +81,8 @@ private:
     std::string defines_;
     std::string includes_;
     std::string lflags_;
+
+    std::uint64_t build_key_{};
 };
 
 // All the state used for a build in an abstract base class
@@ -86,10 +91,10 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
 protected:
     const JitBuildEnv& env_;
 
-    int core_id_;
-    int is_fw_;
-    uint32_t dispatch_message_addr_;
+    bool is_fw_;
     bool process_defines_at_compile_{};
+    bool firmware_is_kernel_object_{};
+    uint32_t dispatch_message_addr_;
 
     std::string out_path_;
     std::string target_name_;
@@ -99,6 +104,7 @@ protected:
     std::string defines_;
     std::string includes_;
     std::string lflags_;
+    std::string linker_script_;
 
     vector_cache_aligned<std::string> srcs_;
     vector_cache_aligned<std::string> objs_;
@@ -113,16 +119,18 @@ protected:
     // Used when JitBuildSettings is not provided
     std::string default_linker_opt_level_;
 
-    void compile(const std::string& log_file, const std::string& out_path, const JitBuildSettings* settings) const;
+    bool need_compile(const std::string& out_dir, const std::string& obj) const;
+    size_t compile(const std::string& out_dir, const JitBuildSettings* settings) const;
     void compile_one(
-        const std::string& log_file,
-        const std::string& out_path,
+        const std::string& out_dir,
         const JitBuildSettings* settings,
         const std::string& src,
         const std::string& obj) const;
-    void link(const std::string& log_file, const std::string& out_path, const JitBuildSettings* settings) const;
-    void weaken(const std::string& log_file, const std::string& out_path) const;
-    void extract_zone_src_locations(const std::string& log_file) const;
+    bool need_link(const std::string& out_dir) const;
+    void link(const std::string& out_dir, const JitBuildSettings* settings) const;
+    void weaken(const std::string& out_dir) const;
+    std::string weakened_firmware_name() const;
+    void extract_zone_src_locations(const std::string& out_dir) const;
 
 public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
@@ -141,7 +149,7 @@ public:
 using JitBuildStateSubset = std::span<const JitBuildState>;
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
-void jit_build_subset(JitBuildStateSubset builds, const JitBuildSettings* settings);
+void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings);
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
 void sync_build_steps(std::vector<std::shared_future<void>>& events);

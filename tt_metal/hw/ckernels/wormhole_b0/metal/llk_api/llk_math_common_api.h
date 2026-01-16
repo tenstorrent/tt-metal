@@ -13,7 +13,7 @@
 #include "llk_math_common.h"
 #include "llk_operands.h"
 #include "llk_param_structs.h"
-#include "debug/waypoint.h"
+#include "api/debug/waypoint.h"
 
 // Need to revisit why we even need this
 #define EPS 1.19209e-07  // std::numeric_limits::epsilon() for FP32
@@ -21,13 +21,10 @@
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
-template <bool untilize_en = false, bool skip_inputs = false>
-inline void llk_math_hw_configure_disaggregated(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
-    if constexpr (skip_inputs == false) {
-        std::uint32_t srca_operand_id = get_operand_id(srca_operand);
-        std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
-        _llk_math_hw_configure_<untilize_en>(unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
-    }
+inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
+    std::uint32_t srca_operand_id = get_operand_id(srca_operand);
+    std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
+    _llk_math_hw_configure_(unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 
 inline void llk_math_wait_for_dest_available() {

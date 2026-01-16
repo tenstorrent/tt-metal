@@ -6,7 +6,8 @@
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
+#include "hostdev/fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::quasar::idle_eth;
 
 #include <cstdint>
@@ -27,6 +28,10 @@ namespace tt::tt_metal::quasar {
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace idle_eth_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
+}
+
+namespace idle_eth_fabric_telemetry {
+#include "hal/generated/fabric_telemetry_impl.hpp"
 }
 
 HalCoreInfoType create_idle_eth_mem_map() {
@@ -54,12 +59,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_IERISC_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SCRATCH;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_EXIT_NODE_TABLE)] = MEM_IERISC_EXIT_NODE_TABLE_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
-        MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_2D)] =
-        MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_BASE;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -78,12 +78,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_TABLE)] = MEM_ROUTING_TABLE_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_EXIT_NODE_TABLE)] = MEM_EXIT_NODE_TABLE_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
-        MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_2D)] =
-        MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_ROUTING_TABLE_SIZE;
 
     // No active fw on this core
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
@@ -119,6 +114,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     //     };
     //     processor_classes[processor_class_idx] = processor_types;
     // }
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names(0);
 
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     return {
@@ -128,9 +124,11 @@ HalCoreInfoType create_idle_eth_mem_map() {
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
+        std::move(processor_classes_names),
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/,
-        idle_eth_dev_msgs::create_factory()};
+        idle_eth_dev_msgs::create_factory(),
+        idle_eth_fabric_telemetry::create_factory()};
 }
 
 }  // namespace tt::tt_metal::quasar

@@ -33,9 +33,9 @@
 #include <tracy/Tracy.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt::tt_metal {
-namespace buffer_dispatch {
+namespace tt::tt_metal::buffer_dispatch {
 
 // ====== Utility Functions for Writes ======
 
@@ -174,9 +174,8 @@ public:
     uint32_t num_partial_pages_written_for_current_transaction_full_pages() const override {
         if (this->address - this->curr_full_pages_start_address == this->buffer.aligned_page_size()) {
             return this->num_partial_pages_in_single_full_page;
-        } else {
-            return (this->address - this->curr_full_pages_start_address) / this->size_of_partial_page;
         }
+        return (this->address - this->curr_full_pages_start_address) / this->size_of_partial_page;
     }
 
     void update_params_after_write_transaction() override {
@@ -404,7 +403,7 @@ PartialPageSpec calculate_partial_page_spec(const Buffer& buffer) {
 
 // Generate dispatch constants
 BufferDispatchConstants generate_buffer_dispatch_constants(
-    const SystemMemoryManager& sysmem_manager, CoreType dispatch_core_type, uint32_t cq_id) {
+    const SystemMemoryManager& sysmem_manager, CoreType /*dispatch_core_type*/, uint32_t cq_id) {
     BufferDispatchConstants buf_dispatch_constants;
 
     buf_dispatch_constants.issue_queue_cmd_limit = sysmem_manager.get_issue_queue_limit(cq_id);
@@ -585,7 +584,7 @@ void issue_buffer_dispatch_command_sequence(
     Buffer& buffer,
     T& dispatch_params,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    CoreType dispatch_core_type) {
+    CoreType /*dispatch_core_type*/) {
     uint32_t num_worker_counters = sub_device_ids.size();
     uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
     tt::tt_metal::DeviceCommandCalculator calculator;
@@ -663,7 +662,7 @@ void write_interleaved_buffer_to_device(
 
 void write_sharded_buffer_to_core(
     const void* src,
-    uint32_t core_id,
+    uint32_t /*core_id*/,
     const BufferCorePageMapping& core_page_mapping,
     Buffer& buffer,
     ShardedBufferWriteDispatchParams& dispatch_params,
@@ -810,7 +809,10 @@ BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
 // Issue dispatch commands for forwarding device buffer data to the Completion Queue
 template <typename T>
 void issue_read_buffer_dispatch_command_sequence(
-    Buffer& buffer, T& dispatch_params, tt::stl::Span<const SubDeviceId> sub_device_ids, CoreType dispatch_core_type) {
+    Buffer& buffer,
+    T& dispatch_params,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    CoreType /*dispatch_core_type*/) {
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
         return;
     }
@@ -874,7 +876,7 @@ void issue_read_buffer_dispatch_command_sequence(
 
 // Top level functions to copy device buffers into the completion queue
 void copy_sharded_buffer_from_core_to_completion_queue(
-    uint32_t core_id,
+    uint32_t /*core_id*/,
     const BufferCorePageMapping& core_page_mapping,
     Buffer& buffer,
     ShardedBufferReadDispatchParams& dispatch_params,
@@ -1148,12 +1150,11 @@ tt::stl::Span<const SubDeviceId> select_sub_device_ids(
     IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (sub_device_ids.empty()) {
         return device->get_sub_device_stall_group();
-    } else {
-        for (const auto& sub_device_id : sub_device_ids) {
-            TT_FATAL(*sub_device_id < device->num_sub_devices(), "Invalid sub-device id specified {}", *sub_device_id);
-        }
-        return sub_device_ids;
     }
+    for (const auto& sub_device_id : sub_device_ids) {
+        TT_FATAL(*sub_device_id < device->num_sub_devices(), "Invalid sub-device id specified {}", *sub_device_id);
+    }
+    return sub_device_ids;
 }
 
 template void issue_buffer_dispatch_command_sequence<InterleavedBufferWriteDispatchParams>(
@@ -1166,6 +1167,4 @@ template void issue_read_buffer_dispatch_command_sequence<BufferReadDispatchPara
 template void issue_read_buffer_dispatch_command_sequence<ShardedBufferReadDispatchParams>(
     Buffer&, ShardedBufferReadDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
 
-}  // namespace buffer_dispatch
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::buffer_dispatch

@@ -4,8 +4,8 @@
 
 #include "debug_tools.hpp"
 
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
@@ -23,12 +23,11 @@
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace internal {
 
@@ -55,15 +54,15 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     std::string type;
 
     while (std::getline(host_dispatch_dump_file, line)) {
-        if (line.find("*") != std::string::npos) {
+        if (line.find('*') != std::string::npos) {
             continue;
-        } else if (
-            line.find("BINARY SPAN") != std::string::npos or line.find("SEM") != std::string::npos or
+        }
+        if (line.find("BINARY SPAN") != std::string::npos or line.find("SEM") != std::string::npos or
             line.find("CB") != std::string::npos) {
             type = line;
         } else {
             std::vector<std::string> host_data = {line};
-            while (std::getline(host_dispatch_dump_file, line) and (line.find("*") == std::string::npos)) {
+            while (std::getline(host_dispatch_dump_file, line) and (line.find('*') == std::string::npos)) {
                 host_data.push_back(line);
             }
             host_map.push_back(make_pair(type, std::move(host_data)));

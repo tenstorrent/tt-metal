@@ -20,6 +20,7 @@ on:
           - N150
           - N300
           - P150
+          - P100
           - config-t3000
           - BH-LoudBox
           - topology-6u-wormhole_b0
@@ -80,8 +81,6 @@ jobs:
         PYTHONMALLOC: debug         # adds checks, helps catch memory issues
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
-        CARGO_HOME: /tmp/.cargo
-        TT_FROM_PRECOMPILED_DIR: /work
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
@@ -113,11 +112,15 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
-      - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
-        timeout-minutes: 10
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
 
       - name: 🔧 Setup GitHub CLI and jq
         if: ${{ inputs.download-artifacts == true }}

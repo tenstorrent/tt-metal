@@ -92,7 +92,11 @@ void py_module(nb::module_& m) {
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
-        py_distributed.def("all_reduce", &ttml::ops::distributed::all_reduce, nb::arg("tensor"));
+        py_distributed.def(
+            "all_reduce",
+            &ttml::ops::distributed::all_reduce,
+            nb::arg("tensor"),
+            nb::arg("noop_backward") = false);
         py_distributed.def(
             "reduce_scatter", &ttml::ops::distributed::reduce_scatter, nb::arg("tensor"), nb::arg("dim"));
         py_distributed.def("all_gather", &ttml::ops::distributed::all_gather, nb::arg("tensor"), nb::arg("dim"));
@@ -192,7 +196,7 @@ void py_module(nb::module_& m) {
 
     {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
-        py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"));
+        py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
         py_rope.def(
             "gen_freqs",
             &ttml::ops::gen_freqs,

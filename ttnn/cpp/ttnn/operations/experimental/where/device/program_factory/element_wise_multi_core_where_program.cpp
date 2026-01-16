@@ -13,8 +13,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-
 namespace ttnn::operations::experimental::ternary {
 
 ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProgram::create(
@@ -24,7 +22,6 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     using namespace ttnn::kernel::eltwise::where_args;
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::constants;
 
     TT_FATAL(
         args.condition_tensor.dtype() == args.true_value_tensor.dtype(),
@@ -138,7 +135,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
 
 void ElementWiseMultiCoreWhereProgram::override_runtime_arguments(
     cached_program_t& cached_program,
-    const where_ttt_args::operation_attributes_type& operation_attributes,
+    const where_ttt_args::operation_attributes_type& /*operation_attributes*/,
     const where_ttt_args::tensor_args_type& tensor_args,
     where_ttt_args::tensor_return_value_type& tensor_return_value) {
     const auto& sh_var = cached_program.shared_variables;

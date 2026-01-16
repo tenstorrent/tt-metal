@@ -4,7 +4,7 @@
 
 #include "noc_logging.hpp"
 
-#include <stdint.h>
+#include <cstdint>
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +18,8 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/soc_descriptor.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt::tt_metal;
 
@@ -30,9 +32,9 @@ namespace tt {
 constexpr auto logfile_path = "generated/noc_data/";
 void PrintNocData(noc_data_t noc_data, const std::string& file_name) {
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
-    std::string filename = rtoptions.get_root_dir() + logfile_path + file_name;
+    std::string filename = rtoptions.get_logs_dir() + logfile_path + file_name;
     std::ofstream outfile(filename);
 
     for (uint32_t idx = 0; idx < NOC_DATA_SIZE; idx++) {
@@ -72,7 +74,7 @@ void DumpDeviceNocData(ChipId device_id, noc_data_t& noc_data, noc_data_t& dispa
     // Now go through all cores on the device, and dump noc data for them.
     CoreDescriptorSet all_cores = GetAllCores(device_id);
     for (const umd::CoreDescriptor& logical_core : all_cores) {
-        if (dispatch_cores.count(logical_core)) {
+        if (dispatch_cores.contains(logical_core)) {
             DumpCoreNocData(device_id, logical_core, dispatch_noc_data);
         } else {
             DumpCoreNocData(device_id, logical_core, noc_data);

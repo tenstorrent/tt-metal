@@ -41,6 +41,7 @@ def run_reduce_scatter_impl(
     verify_output=True,
     use_new=False,
 ):
+    use_sub_devices = False
     torch.manual_seed(0)
 
     tile = (32, 32)
@@ -58,8 +59,9 @@ def run_reduce_scatter_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
+    if use_sub_devices:
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -159,9 +161,13 @@ def run_reduce_scatter_impl(
                 dim=dim,
                 num_links=num_links,
                 memory_config=mem_config_rs,
+                intermediate_memory_config=mem_config_intermediate,
                 topology=rs_topology,
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
             )
         else:
             logger.info(f"Using experimental reduce scatter")
@@ -242,15 +248,45 @@ def run_reduce_scatter_impl(
             assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    if use_sub_devices:
+        mesh_device.clear_loaded_sub_device_manager()
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters, use_barrier, use_persistent_buffers",
+    "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters, use_barrier, use_persistent_buffers, chunks_per_sync, num_workers_per_link, num_buffers_per_channel,",
     [
+        # Dim 0 tests
+        (
+            [16, 2, 128, 128],
+            0,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            True,
+            True,
+            None,
+            None,
+            None,
+        ),  # perf, barrier_with_persistent
+        (
+            [8, 2, 128, 128],
+            0,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            True,
+            False,
+            None,
+            None,
+            None,
+        ),  # check, barrier_without_persistent
         # Dim 1 tests
         (
             [2, 24, 256, 256],
@@ -262,6 +298,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # perf, barrier_with_persistent
         (
             [2, 16, 56, 56],
@@ -273,6 +312,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # check, barrier_without_persistent
         (
             [2, 8, 512, 512],
@@ -284,6 +326,9 @@ def run_reduce_scatter_impl(
             10,
             False,
             True,
+            None,
+            None,
+            None,
         ),  # perf, no_barrier_with_persistent
         # Dim 2 tests
         (
@@ -296,6 +341,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # check, barrier_with_persistent
         (
             [4, 1, 1024, 340],
@@ -307,6 +355,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # perf, barrier_without_persistent
         (
             [1, 1, 512, 512],
@@ -318,6 +369,9 @@ def run_reduce_scatter_impl(
             1,
             False,
             True,
+            None,
+            None,
+            None,
         ),  # check, no_barrier_with_persistent
         # Dim 3 tests
         (
@@ -330,6 +384,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # perf, barrier_with_persistent
         (
             [1, 1, 13, 512],
@@ -341,6 +398,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # check, barrier_without_persistent
         (
             [3, 1, 41, 512],
@@ -352,6 +412,9 @@ def run_reduce_scatter_impl(
             10,
             False,
             True,
+            None,
+            None,
+            None,
         ),  # perf, no_barrier_with_persistent
         (
             [8, 1, 512, 2560],
@@ -363,6 +426,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # check, barrier_with_persistent
         (
             [4, 1, 1024, 2560],
@@ -374,6 +440,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # perf, barrier_without_persistent
         (
             [1, 1, 1024, 2560],
@@ -385,6 +454,9 @@ def run_reduce_scatter_impl(
             1,
             False,
             True,
+            None,
+            None,
+            None,
         ),  # check, no_barrier_with_persistent
         (
             [1, 1, 352, 2560],
@@ -396,6 +468,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # perf, barrier_with_persistent
         (
             [2, 1, 2048, 2560],
@@ -407,7 +482,10 @@ def run_reduce_scatter_impl(
             1,
             True,
             False,
-        ),  # check, barrier_without_persistent
+            2,
+            2,
+            8,
+        ),  # check, barrier_without_persistent_with_hyperparams
         (
             [1, 1, 4096, 2560],
             3,
@@ -418,7 +496,10 @@ def run_reduce_scatter_impl(
             10,
             False,
             True,
-        ),  # perf, no_barrier_with_persistent
+            2,
+            2,
+            8,
+        ),  # perf, no_barrier_with_persistent_with_hyperparams
         # Composite-RS tests
         (
             [1, 1, 1, 8],
@@ -430,6 +511,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # check, barrier_with_persistent
         (
             [2, 32, 2048, 64],
@@ -441,6 +525,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # perf, barrier_without_persistent
         (
             [1, 1, 1, 16],
@@ -452,7 +539,10 @@ def run_reduce_scatter_impl(
             1,
             False,
             True,
-        ),  # check, no_barrier_with_persistent
+            2,
+            2,
+            8,
+        ),  # check, no_barrier_with_persistent_with_hyperparams
         (
             [1, 1, 29, 32],
             3,
@@ -463,9 +553,14 @@ def run_reduce_scatter_impl(
             10,
             True,
             True,
-        ),  # perf, barrier_with_persistent
+            2,
+            2,
+            8,
+        ),  # perf, barrier_with_persistent_with_hyperparams
     ],
     ids=[
+        "scatter_dim_0_test_one-perf-barrier_with_persistent",
+        "scatter_dim_0_test_two-check-barrier_without_persistent",
         "scatter_dim_1_test_one-perf-barrier_with_persistent",
         "scatter_dim_1_test_two-check-barrier_without_persistent",
         "scatter_dim_1_test_three-perf-no_barrier_with_persistent",
@@ -479,12 +574,12 @@ def run_reduce_scatter_impl(
         "batch_4-perf-barrier_without_persistent",
         "batch_1_sd35_spatial-check-no_barrier_with_persistent",
         "batch_1_sd35_prompt-perf-barrier_with_persistent",
-        "batch_2-check-barrier_without_persistent",
-        "batch_1-perf-no_barrier_with_persistent",
+        "batch_2-check-barrier_without_persistent_with_hyperparams",
+        "batch_1-perf-no_barrier_with_persistent_with_hyperparams",
         "composite_rs_test_one-check-barrier_with_persistent",
         "composite_rs_test_two-perf-barrier_without_persistent",
-        "composite_rs_test_three-check-no_barrier_with_persistent",
-        "composite_rs_test_four-perf-barrier_with_persistent",
+        "composite_rs_test_three-check-no_barrier_with_persistent_with_hyperparams",
+        "composite_rs_test_four-perf-barrier_with_persistent_with_hyperparams",
     ],
 )
 @pytest.mark.parametrize(
@@ -506,8 +601,8 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1531456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
@@ -524,6 +619,9 @@ def test_reduce_scatter_async(
     num_iters,
     use_barrier,
     use_persistent_buffers,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
     mem_config_input,
     mem_config_rs,
     ones_tensor,
@@ -545,6 +643,9 @@ def test_reduce_scatter_async(
         ones_tensor=ones_tensor,
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
         use_new=use_new,
     )
 
@@ -672,7 +773,7 @@ def test_reduce_scatter_async_training_shapes(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
-            True,
+            False,
             True,
             10,  # perf
         ),
@@ -689,7 +790,7 @@ def test_reduce_scatter_async_training_shapes(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
-            False,
+            True,
             False,
             1,  # check
         ),
@@ -724,7 +825,7 @@ def test_reduce_scatter_async_training_shapes(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            False,
+            True,
             False,
             1,  # check
         ),
@@ -841,7 +942,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
-            False,
+            True,
             True,
             10,  # perf
         ),
@@ -856,7 +957,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            True,
+            False,
             False,
             1,  # check
         ),
@@ -980,8 +1081,8 @@ def test_reduce_scatter_async_interleaved_to_sharded(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1271456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1271456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
@@ -1188,7 +1289,7 @@ def test_reduce_scatter_minimal_async_linear_sharded(
     )
 
 
-MESH_SHAPE = (2, 4)
+MESH_SHAPE = (1, 8)
 LAYOUT = ttnn.TILE_LAYOUT
 
 NUM_ITERS = 1
@@ -1246,19 +1347,19 @@ def _get_tensors(
     return tt_input, torch_reference
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape", [[128, 128], [8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]]
+    "input_shape", [[256, 256], [8, 8, 256, 256], [8, 256, 256], [8, 8, 8, 8, 256, 256], [8, 8, 8, 16, 16]]
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
 def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
     if dim >= len(input_shape):
-        pytest.skip("Invalid gather dim")
+        pytest.skip("Invalid scatter dim")
 
     tt_input, torch_reference = _get_tensors(
         input_shape,
@@ -1277,8 +1378,6 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
     )
     semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
 
-    print(f"{tt_input.shape=}")
-
     for i in range(NUM_ITERS):
         tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tt_input,
@@ -1295,9 +1394,9 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
-    ids=["fabric_linear", "fabric_2d_dynamic"],
+    ids=["fabric_linear", "fabric_2d"],
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])

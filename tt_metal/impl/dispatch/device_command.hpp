@@ -91,7 +91,7 @@ public:
     void add_dispatch_go_signal_mcast(
         uint32_t wait_count,
         uint32_t go_signal,
-        uint32_t wait_addr,
+        uint32_t wait_stream,
         uint8_t multicast_go_offset,
         uint8_t num_unicast_txns,
         uint8_t noc_data_start_index,

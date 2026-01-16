@@ -14,8 +14,6 @@ galaxy:
         start: [0, 0]
         end: [7, 8]
 
-      storage_cores:
-        []
 
       # First half for fabric mux, second half for dispatch
       fabric_mux_cores:
@@ -32,8 +30,6 @@ galaxy:
         start: [0, 0]
         end: [7, 8]
 
-      storage_cores:
-        []
 
       # Same allocation for 2 CQ configuration
       fabric_mux_cores:
@@ -51,8 +47,6 @@ galaxy:
         start: [0, 0]
         end: [6, 9]
 
-      storage_cores:
-        []
 
       fabric_mux_cores:
         [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4], [-1, 5]]
@@ -68,8 +62,6 @@ galaxy:
         start: [0, 0]
         end: [6, 9]
 
-      storage_cores:
-        []
 
       fabric_mux_cores:
         [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4], [-1, 5]]
@@ -91,8 +83,6 @@ nebula_x1:
         start: [0, 0]
         end: [7, 1]
 
-      storage_cores:
-        []
 
       fabric_mux_cores:
         [[0, -1], [1, -1], [2, -1]]
@@ -120,8 +110,6 @@ nebula_x1:
         start: [0, 0]
         end: [7, 1]
 
-      storage_cores:
-        []
 
       fabric_mux_cores:
         [[0, -1], [1, -1], [2, -1]]
@@ -150,8 +138,6 @@ nebula_x1:
         start: [0, 0]
         end: [7, 1]
 
-      storage_cores:
-        []
 
       fabric_mux_cores:
         [[-1, 0], [-1, 1], [-1, 2]]
@@ -179,8 +165,6 @@ nebula_x1:
         start: [0, 0]
         end: [7, 1]
 
-      storage_cores:
-        []
 
       fabric_mux_cores:
         [[-1, 0], [-1, 1], [-1, 2]]
@@ -206,8 +190,6 @@ nebula_x2:
         start: [0, 0]
         end: [7, 6]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       fabric_mux_cores:
         [[0, -1], [1, -1], [2, -1]]
@@ -223,8 +205,6 @@ nebula_x2:
         start: [0, 0]
         end: [7, 6]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       fabric_mux_cores:
         [[0, -1], [1, -1], [2, -1]]
@@ -241,8 +221,6 @@ nebula_x2:
         start: [0, 0]
         end: [6, 7]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       fabric_mux_cores:
         [[-1, 0], [-1, 1], [-1, 2]]
@@ -258,8 +236,6 @@ nebula_x2:
         start: [0, 0]
         end: [6, 7]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       fabric_mux_cores:
         [[-1, 0], [-1, 1], [-1, 2]]

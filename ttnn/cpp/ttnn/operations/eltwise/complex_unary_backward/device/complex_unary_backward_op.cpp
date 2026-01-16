@@ -7,7 +7,7 @@
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
-#include "ttnn/operations/eltwise/ternary/where/where.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/creation.hpp"
 
@@ -130,7 +130,7 @@ std::vector<ComplexTensor> _angle_bw(
 // complex conj
 // self: grad.conj()
 std::vector<ComplexTensor> _conj_bw(
-    const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    const ComplexTensor& grad, const ComplexTensor& /*input*/, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
     ComplexTensor grad_result = ttnn::conj(grad, output_mem_config);
     grad_tensor.emplace_back(grad_result);

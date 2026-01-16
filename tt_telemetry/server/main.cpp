@@ -12,6 +12,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <fstream>
 
 #include <boost/functional/hash.hpp>
 #include <cxxopts.hpp>
@@ -173,11 +174,14 @@ int main(int argc, char* argv[]) {
         "ws://server1:8081,ws://server2:8081). Enables aggregator mode, disabling the collection endpoint.",
         cxxopts::value<std::string>())(
         "metal-src-dir",
-        "Metal source directory (optional, defaults to TT_METAL_HOME env var)",
+        "Metal source directory (optional override, auto-detected by default)",
         cxxopts::value<std::string>())("h,help", "Print usage")(
         "disable-telemetry",
         "Disables collection of telemetry. Only permitted in aggregator mode, which by default also collects local "
         "telemetry.",
+        cxxopts::value<bool>()->default_value("false"))(
+        "mmio-only",
+        "Only collect telemetry from MMIO-capable chips (skip remote/non-MMIO chips)",
         cxxopts::value<bool>()->default_value("false"))(
         "disable-watchdog",
         "Disables the watchdog timer that monitors the telemetry thread",
@@ -185,7 +189,11 @@ int main(int argc, char* argv[]) {
         "watchdog-timeout",
         "Watchdog timeout in seconds (default: 10). Watchdog will terminate the process if the telemetry thread "
         "does not advance within this time.",
-        cxxopts::value<int>()->default_value("10"));
+        cxxopts::value<int>()->default_value("10"))(
+        "failure-exposure-duration",
+        "Duration in seconds to expose failure metrics before exiting when initialization fails (default: 30). "
+        "This allows Prometheus time to scrape the failure state before the process exits.",
+        cxxopts::value<int>()->default_value("30"));
 
     auto result = options.parse(argc, argv);
 
@@ -203,12 +211,23 @@ int main(int argc, char* argv[]) {
         metal_src_dir = result["metal-src-dir"].as<std::string>();
     }
     bool telemetry_enabled = !result["disable-telemetry"].as<bool>();
+    bool mmio_only = result["mmio-only"].as<bool>();
 
     // Watchdog configuration
     bool watchdog_disabled = result["disable-watchdog"].as<bool>();
     int watchdog_timeout = result["watchdog-timeout"].as<int>();
     if (watchdog_disabled) {
         watchdog_timeout = 0;  // 0 indicates disabled
+    }
+
+    // Failure exposure duration
+    int failure_exposure_duration = result["failure-exposure-duration"].as<int>();
+    if (failure_exposure_duration < 1 || failure_exposure_duration > 300) {
+        log_error(
+            tt::LogAlways,
+            "Invalid failure-exposure-duration: {}. Must be between 1 and 300 seconds",
+            failure_exposure_duration);
+        return 1;
     }
 
     // Are we in collector (collect telemetry and export on collection endpoint) or aggregator
@@ -256,7 +275,7 @@ int main(int argc, char* argv[]) {
     std::shared_ptr<TelemetrySubscriber> websocket_subscriber;
     if (!aggregator_mode) {
         log_info(tt::LogAlways, "Starting collection endpoint on port {}", collector_port);
-        std::tie(websocket_server, websocket_subscriber) = run_collection_endpoint(collector_port, metal_src_dir);
+        std::tie(websocket_server, websocket_subscriber) = run_collection_endpoint(collector_port);
         subscribers.push_back(websocket_subscriber);
     } else {
         std::promise<bool> promise;  // create promise that immediately resolves to true
@@ -276,7 +295,15 @@ int main(int argc, char* argv[]) {
         auto rtoptions = tt::llrt::RunTimeOptions();
         std::string fsd_filepath = result["fsd"].as<std::string>();
         tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd = load_fsd(result["fsd"].as<std::string>());
-        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints, rtoptions, fsd, watchdog_timeout);
+        run_telemetry_collector(
+            telemetry_enabled,
+            subscribers,
+            aggregate_endpoints,
+            rtoptions,
+            fsd,
+            watchdog_timeout,
+            failure_exposure_duration,
+            mmio_only);
     }
 
     // Run until finished

@@ -21,7 +21,7 @@ import subprocess
 import sys
 import shutil
 
-NOTEBOOKS_DIR = Path("ttnn/tutorials/2025_dx_rework")
+NOTEBOOKS_DIR = Path("ttnn/tutorials")
 OUTPUT_DIR = Path("ttnn/tutorials/basic_python")
 TEMPLATE_DIR = Path("scripts/nbconvert_template")
 TEMPLATE_NAME = "ttnn_examples_convert"

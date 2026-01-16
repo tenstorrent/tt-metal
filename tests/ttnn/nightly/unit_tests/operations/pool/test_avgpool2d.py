@@ -11,9 +11,11 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI4,
     COMPUTE_KERNEL_CONFIG_LOFI,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import HS
+
+SliceWidth = ttnn.Op2DDRAMSliceWidth
+SliceHeight = ttnn.Op2DDRAMSliceHeight
 
 
 # helper to correct torch output for asymmetric padding
@@ -101,10 +103,11 @@ def run_avg_pool2d(
     run_twice=False,
     in_dtype=ttnn.bfloat16,
     nightly_skips=True,
-    skips_enabled=True,
     out_dtype=ttnn.bfloat16,
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
     compute_kernel_config=None,
+    use_reshaped_tensor=True,
+    dram_slice_config=None,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -129,8 +132,7 @@ def run_avg_pool2d(
     if (out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b) and output_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout")
 
-    if skips_enabled:
-        # skips to avoid unimportant combinations
+    if nightly_skips:
         if divisor_override is not None:
             if count_include_pad or ceil_mode:
                 pytest.skip(
@@ -138,18 +140,14 @@ def run_avg_pool2d(
                 )
         if count_include_pad and padding == (0, 0):
             pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
-        if ceil_mode:
-            if stride == (1, 1):
-                pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
-
-    # skips to speed up nightly test
-    if nightly_skips:
         if in_dtype == ttnn.bfloat8_b:
             if stride == (2, 2) or padding == (1, 1):
                 pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
             if kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (9, 9) for BF8!")
         if ceil_mode:
+            if stride == (1, 1):
+                pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
             if kernel_size == (3, 3) or kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
 
@@ -178,14 +176,20 @@ def run_avg_pool2d(
     torch.manual_seed(1e3)
     torch_input = randomize_tensor(tensor_map, input_shape)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
+    ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
+    torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
     if in_dtype == ttnn.bfloat8_b:
-        ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
-        torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
+        assert use_reshaped_tensor == True
         ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     else:
-        ttnn_input = ttnn.from_torch(
-            torch_input_permuted, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-        )
+        if use_reshaped_tensor:
+            ttnn_input = ttnn.from_torch(
+                torch_input_reshaped, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+        else:
+            ttnn_input = ttnn.from_torch(
+                torch_input_permuted, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
 
     # run ttnn avg_pool2d
     ttnn_output = ttnn.avg_pool2d(
@@ -205,12 +209,8 @@ def run_avg_pool2d(
         dtype=out_dtype,
         output_layout=output_layout,
         compute_kernel_config=compute_kernel_config,
+        dram_slice_config=dram_slice_config,
     )
-
-    # TODO always use run_twice after resolution of https://github.com/tenstorrent/tt-metal/issues/26093
-    # skip run_twice for blackhole with wide Bfloat8 tensors as this currently causes PCC failures
-    if is_blackhole() and in_dtype == ttnn.bfloat8_b and in_c > 256:
-        run_twice = False
 
     if run_twice:
         ttnn.deallocate(ttnn_output, True)
@@ -231,6 +231,7 @@ def run_avg_pool2d(
             dtype=out_dtype,
             output_layout=output_layout,
             compute_kernel_config=compute_kernel_config,
+            dram_slice_config=dram_slice_config,
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -279,7 +280,6 @@ def run_avg_pool2d(
         )
 
     # test for equivalence
-    pcc_thresh = 0.985
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     # TTNN supports scalars only in Bfloat16 and from recently it uses
     # tie-to-even rounding for fp32->bf16 scalar conversion, which improves accuracy
@@ -296,11 +296,8 @@ def run_avg_pool2d(
     if compute_kernel_config is not None:
         if compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi:
             atol = 0.045  # LOFI has less precise accumulation, so relax atol further
-    if out_dtype == ttnn.bfloat4_b:
-        pcc_thresh = 0.98
     if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b:
         atol = 0.35
-    assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
     # Ensure both tensors have the same dtype for comparison
     if out_dtype != ttnn.bfloat16:
         ttnn_output = ttnn_output.to(torch.bfloat16)
@@ -413,6 +410,7 @@ def test_run_avg_pool2d(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("use_reshaped_tensor", [True, False])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
@@ -441,10 +439,26 @@ def test_run_avg_pool2d(
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 def test_avg_pool2d_output_formats_and_layouts(
-    device, tensor_map, input_shape, shard_startegy, kernel_size, out_dtype, output_layout, in_dtype
+    device,
+    tensor_map,
+    input_shape,
+    shard_startegy,
+    kernel_size,
+    use_reshaped_tensor,
+    out_dtype,
+    output_layout,
+    in_dtype,
 ):
     padding = (0, 0)
     stride = (1, 1)
+
+    if not use_reshaped_tensor:
+        if in_dtype == ttnn.bfloat8_b:
+            pytest.skip("BFLOAT8_B input data format is not supported without reshaped tensor")
+        if out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b:
+            pytest.skip("skip BFLOAT8_B/BFLOAT4_B output data format for non-reshaped tensor")
+        if output_layout == ttnn.TILE_LAYOUT:
+            pytest.skip("skip TILE_LAYOUT output layout for non-reshaped tensor")
 
     run_avg_pool2d(
         device,
@@ -506,4 +520,100 @@ def test_avg_pool2d_compute_kernel_config(
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         in_dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape, num_slices",  # NCHW
+    (
+        # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
+        # Wide reduction cases channels > 8 * 32
+        # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
+        ([2, 32, 1024, 1024], 8),
+        ([1, 320, 384, 384], 6),
+        ([1, 256, 81, 81], 2),
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size, padding",
+    (
+        # Wide and normal reductions go to normal kernels
+        # Large reductions go to large kernels
+        # Reductions which are large and wide at the same time
+        # go to large kernels
+        [(2, 2), (0, 0)],
+        [(2, 2), (1, 1)],
+        [(3, 3), (2, 2)],
+        [(4, 4), (0, 0)],
+        [(4, 4), (2, 2)],
+        [(5, 5), (2, 2)],
+    ),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((2, 2),),
+)
+@pytest.mark.parametrize(
+    "ceil_mode",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "divisor_override",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "count_include_pad",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "shard_scheme",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ],
+)
+@pytest.mark.parametrize(
+    "in_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "slice_type",
+    [SliceWidth, SliceHeight],
+)
+def test_avg_pool2d_dram(
+    device,
+    tensor_map,
+    input_shape,
+    num_slices,
+    kernel_size,
+    stride,
+    padding,
+    divisor_override,
+    ceil_mode,
+    count_include_pad,
+    shard_scheme,
+    in_dtype,
+    slice_type,
+):
+    if slice_type == SliceHeight and input_shape[3] >= 256:
+        pytest.skip("Skip height slice for inputs with large width")
+    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
+
+    run_avg_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=input_shape,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        ceil_mode=ceil_mode,
+        divisor_override=divisor_override,
+        count_include_pad=count_include_pad,
+        shard_scheme=shard_scheme,
+        in_dtype=in_dtype,
+        nightly_skips=False,
+        dram_slice_config=dram_slice_config,
+        run_twice=True,
     )

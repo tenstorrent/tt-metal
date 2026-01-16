@@ -1,0 +1,67 @@
+# This file defines the test matrix for the T3000 e2e tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   sku: Machine type to target (e.g. wh_llmbox).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   timeout: The maximum allowed runtime for this job in minutes.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: t3k_ccl_tests
+  cmd: pytest -n auto tests/nightly/t3000/ccl
+  sku: wh_llmbox
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+  timeout: 90
+
+- name: t3k_ccl_2d_tests
+  cmd: TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto pytest -n auto tests/nightly/t3000/2d_ccl
+  sku: wh_llmbox
+  owner_id: U013121KDH9 # Austin Ho
+  team: scaleout
+  timeout: 10
+
+- name: t3k_fabric_unit_tests
+  cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
+  sku: wh_llmbox
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: fabric
+  timeout: 30
+
+- name: t3k_addrgen_write_tests
+  cmd: build/test/tt_metal/tt_fabric/test_addrgen_write
+  sku: wh_llmbox
+  owner_id: U08LD7UCKDF # Tomer Levin
+  team: scaleout
+  timeout: 10
+
+- name: t3k_dispatch_unit_tests
+  cmd: build/test/tt_metal/unit_tests_dispatch --gtest_filter="Large*.NIGHTLY_DRAMReadback/*"
+  sku: wh_llmbox
+  owner_id: U07R05K4WGJ # John Bauman
+  team: fabric
+  timeout: 15
+
+- name: t3k_fabric_stability_tests
+  cmd: TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability.yaml
+  sku: wh_llmbox
+  owner_id: U08FXFFH7L0 # Abhishek Agarwal
+  team: fabric
+  timeout: 120
+
+- name: models_common_unit_tests
+  cmd: pytest --tb=short --ignore=models/common/tests/test_sampling.py models/common/tests && pytest --tb=short models/common/tests/test_sampling.py
+  sku: wh_llmbox
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  timeout: 5
+
+- name: models_tttv2_modules_unit_tests
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules
+  sku: wh_llmbox
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  timeout: 25

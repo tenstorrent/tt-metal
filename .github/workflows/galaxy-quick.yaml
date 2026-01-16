@@ -2,6 +2,16 @@ name: "(Galaxy) Quick"
 
 on:
   workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+        default: wormhole_b0
+  schedule:
+    - cron: "0 */4 * * *" # Runs BH every 4 hours
   push:
     branches: ["main"]
 
@@ -27,3 +37,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      blackhole: ${{ github.event.inputs.arch == 'blackhole' }}
+      scheduled: ${{ github.event_name == 'schedule' }}

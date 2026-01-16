@@ -6,11 +6,11 @@
 
 #include <cassert>
 #include <core/ttnn_all_includes.hpp>
-#include <iostream>
 #include <numeric>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
@@ -147,8 +147,10 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape
     using namespace ttml;
 
     // Generate random input data with range [-2, 2] to test SiLU behavior across saturation regions
-    xt::random::seed(42);
-    xt::xarray<float> input_data = xt::random::rand<float>(shape, -2.0F, 2.0F);
+    auto& rng = autograd::ctx().get_generator();
+    xt::xarray<float> input_data = xt::empty<float>(shape);
+    core::parallel_generate<float>(
+        input_data, []() { return std::uniform_real_distribution<float>(-2.0F, 2.0F); }, /* seed */ rng());
 
     CompareKernelVsReference(input_data);
 }
@@ -265,10 +267,14 @@ TEST_F(SiLUOpTest, SiLU_Precision_Comparison) {
     std::vector<float> kernel_rmse_values(num_runs);
     std::vector<float> composite_rmse_values(num_runs);
 
+    auto& rng = autograd::ctx().get_generator();
     for (int run = 0; run < num_runs; ++run) {
         // Generate test data with different seed for each run
-        xt::random::seed(42 + run);
-        xt::xarray<float> input_data = xt::random::rand<float>(shape, min_val, max_val);
+        xt::xarray<float> input_data = xt::empty<float>(shape);
+        core::parallel_generate<float>(
+            input_data,
+            [min_val, max_val]() { return std::uniform_real_distribution<float>(min_val, max_val); },
+            /* seed */ rng());
 
         // Create input tensors
         auto input_kernel = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));

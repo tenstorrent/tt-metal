@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     uint32_t index = 0;
@@ -23,7 +23,7 @@ void kernel_main() {
 
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
 #if !DST_SHARDED
-    constexpr auto dst_args = TensorAccessorArgs<0>();
+    constexpr auto dst_args = TensorAccessorArgs<0, 0>();
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
     const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
 #endif

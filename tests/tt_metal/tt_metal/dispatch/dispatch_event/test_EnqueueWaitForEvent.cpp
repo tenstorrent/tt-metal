@@ -4,7 +4,7 @@
 
 #include <chrono>
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -35,8 +35,8 @@ using std::vector;
 namespace local_test_functions {
 
 void FinishAllCqs(vector<std::reference_wrapper<distributed::MeshCommandQueue>>& cqs) {
-    for (uint i = 0; i < cqs.size(); i++) {
-        distributed::Finish(cqs[i]);
+    for (auto& cq : cqs) {
+        distributed::Finish(cq);
     }
 }
 }  // namespace local_test_functions

@@ -1,7 +1,7 @@
 # Whisper
 
 ## Platforms:
-    Wormhole (n150, n300), Blackhole (p100, p150)
+    Wormhole (n150, n300, T3K, Galaxy), Blackhole (p100, p150)
 
 ## Introduction
 
@@ -39,6 +39,14 @@ pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio
 
 ```sh
 pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio_classification_dataset
+```
+
+### Translation Demo
+
+- To run the translation demo with inputs from the `google/fleurs` dataset:
+
+```sh
+pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_translation_dataset
 ```
 
 ## Notes:

@@ -9,6 +9,7 @@ from loguru import logger
 import ttnn
 
 # Import from local reference files instead of HuggingFace
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -16,6 +17,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
     get_model_config,
+    get_test_weight_config,
     run_module_forward,
 )
 
@@ -46,21 +48,28 @@ def reference_model(hf_config):
     "mode,seq_len",
     [
         ("decode", 128),
-        ("prefill", 2048),
-    ],
+    ]
+    + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
 )
 def test_forward_pass(
     mode,
     seq_len,
+    set_deterministic_env,
     reference_model,
     hf_config,
-    tmp_path,
+    cache_path,
     mesh_device,
     ccl,
-    set_deterministic_env,
     topk_fallback,
 ):
     """Test forward pass against reference model."""
+
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
+    if mode == "prefill" and seq_len != 128:
+        pytest.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        )
+
     batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights
@@ -78,8 +87,9 @@ def test_forward_pass(
     with torch.no_grad():
         reference_output = reference_model(torch_input)
 
-    # Setup: Convert weights and get weight_config
-    weight_config = MoE.convert_weights(hf_config, (state_dict,), tmp_path, mesh_device)
+    weight_config = get_test_weight_config(
+        MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+    )
 
     # Generate appropriate config using utility function
     model_config = get_model_config(MoE, mode, hf_config, mesh_device, topk_fallback=topk_fallback)

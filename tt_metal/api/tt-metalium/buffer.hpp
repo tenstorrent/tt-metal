@@ -34,18 +34,15 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace stl {
-namespace json {
+namespace tt::stl::json {
 template <typename T>
 struct from_json_t;
-}  // namespace json
-}  // namespace stl
-}  // namespace tt
+}  // namespace tt::stl::json
 
 namespace tt::tt_metal {
 
 class Allocator;
+class AllocatorImpl;
 class IDevice;
 
 struct ShardSpec {
@@ -213,7 +210,7 @@ public:
     ~Buffer();
 
     IDevice* device() const { return device_; }
-    Allocator* allocator() const { return allocator_; }
+    Allocator* allocator() const;
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
 
@@ -304,7 +301,7 @@ private:
     const bool owns_data_;
 
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
-    Allocator* allocator_;
+    AllocatorImpl* allocator_;
 
     AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     bool hooked_allocation_ = false;

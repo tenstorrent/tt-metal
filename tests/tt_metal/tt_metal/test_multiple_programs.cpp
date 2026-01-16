@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
@@ -38,11 +38,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using std::vector;
 using namespace tt;
@@ -77,7 +75,7 @@ std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_one(
-    tt_metal::IDevice* device, const CoreCoord& core, uint32_t single_tile_size) {
+    tt_metal::IDevice* /*device*/, const CoreCoord& core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -130,7 +128,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_two(
-    tt_metal::IDevice* device, const CoreCoord& core, uint32_t single_tile_size) {
+    tt_metal::IDevice* /*device*/, const CoreCoord& core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -188,7 +186,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
 }
 
 void write_program_runtime_args_to_device(
-    tt_metal::IDevice* device,
+    tt_metal::IDevice* /*device*/,
     tt_metal::Program& program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
@@ -210,10 +208,10 @@ void write_program_runtime_args_to_device(
 // 2. Host read the results from eltwise binary
 // 3. Second program runs matmul, using results from step 2 as input activation
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {

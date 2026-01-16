@@ -8,7 +8,7 @@
 // IWYU pragma: always_keep
 
 #include "dev_mem_map.h"
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "eth_l1_address_map.h"
 
@@ -31,3 +31,5 @@ static_assert(
     (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + offsetof(mailboxes_t, go_message_index)) %
         TT_ARCH_MAX_NOC_WRITE_ALIGNMENT ==
     0);
+static_assert(MEM_AERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");
+static_assert(MEM_IERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");

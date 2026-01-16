@@ -16,6 +16,7 @@ def run_with_trace(
     num_links,
     output_mem_config,
     num_iter=20,
+    cluster_axis=None,
     subdevice_id=None,
 ):
     # Compile Run
@@ -23,6 +24,7 @@ def run_with_trace(
     tt_out_tensor = ttnn.all_broadcast(
         input_tensor_mesh,
         num_links=num_links,
+        cluster_axis=cluster_axis,
         memory_config=output_mem_config,
         topology=all_broadcast_topology,
         subdevice_id=subdevice_id,
@@ -36,6 +38,7 @@ def run_with_trace(
         tt_out_tensor = ttnn.all_broadcast(
             input_tensor_mesh,
             num_links=num_links,
+            cluster_axis=cluster_axis,
             memory_config=output_mem_config,
             topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
@@ -73,6 +76,7 @@ def run_all_broadcast_impl(
     cluster_axis=None,
     mesh_mapper_config=None,
 ):
+    use_sub_devices = False
     if mesh_mapper_config is None:
         mesh_mapper_config = ttnn.MeshMapperConfig(
             [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
@@ -91,8 +95,9 @@ def run_all_broadcast_impl(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
+    if use_sub_devices:
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     logger.info(f"Output shape: {output_shape}")
@@ -187,6 +192,7 @@ def run_all_broadcast_impl(
             input_tensor_mesh_list[0],
             num_links,
             output_mem_config,
+            cluster_axis=cluster_axis,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
@@ -197,6 +203,7 @@ def run_all_broadcast_impl(
                 input_tensor_mesh_list[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
+                cluster_axis=cluster_axis,
                 topology=all_broadcast_topology,
                 subdevice_id=worker_sub_device_id,
             )
@@ -227,7 +234,8 @@ def run_all_broadcast_impl(
         mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
     mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    if use_sub_devices:
+        mesh_device.clear_loaded_sub_device_manager()
     if not passed:
         assert eq, f"{i} FAILED: {output}"
 
@@ -266,8 +274,9 @@ def run_all_broadcast_impl(
 )
 @pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_broadcast(
-    t3k_mesh_device,
+    mesh_device,
     # pcie_mesh_device,
     num_devices,
     num_links,
@@ -279,7 +288,7 @@ def test_all_broadcast(
     function_level_defaults,
 ):
     run_all_broadcast_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         num_links,
@@ -311,8 +320,9 @@ def test_all_broadcast(
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 10000}], indirect=True
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_broadcast_trace(
-    t3k_mesh_device,
+    mesh_device,
     # pcie_mesh_device,
     num_devices,
     output_shape,
@@ -327,7 +337,7 @@ def test_all_broadcast_trace(
         pytest.skip("bfloat8_b not supported for row-major")
 
     run_all_broadcast_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         num_links,
@@ -422,8 +432,9 @@ def test_all_broadcast_trace(
 )
 @pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_broadcast_sharded(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     output_shape,
     num_links,
@@ -441,7 +452,7 @@ def test_all_broadcast_sharded(
         pytest.skip("bfloat8_b not supported for row-major")
 
     run_all_broadcast_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         num_links,
@@ -525,9 +536,9 @@ def test_all_broadcast_sharded_2x4(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
-    ids=["fabric_linear", "fabric_2d_dynamic"],
+    ids=["fabric_linear", "fabric_2d"],
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(

@@ -39,21 +39,21 @@ CircularBufferConfig from_flatbuffer(
 
     std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> data_formats = {};
     if (config_fb->data_formats()) {
-        for (auto entry : *config_fb->data_formats()) {
+        for (const auto* entry : *config_fb->data_formats()) {
             data_formats[entry->index()] = from_flatbuffer(entry->format());
         }
     }
 
     std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> page_sizes = {};
     if (config_fb->page_sizes()) {
-        for (auto entry : *config_fb->page_sizes()) {
+        for (const auto* entry : *config_fb->page_sizes()) {
             page_sizes[entry->index()] = entry->size();
         }
     }
 
     std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> tiles = {};
     if (config_fb->tiles()) {
-        for (auto entry : *config_fb->tiles()) {
+        for (const auto* entry : *config_fb->tiles()) {
             tiles[entry->index()] = from_flatbuffer(entry->tile());
         }
     }
@@ -121,7 +121,7 @@ std::optional<BufferDistributionSpec> from_flatbuffer(const flatbuffer::BufferDi
 
     std::vector<CoreCoord> cores;
     cores.reserve(fb_dist_spec->cores()->size());
-    for (auto entry : *fb_dist_spec->cores()) {
+    for (const auto* entry : *fb_dist_spec->cores()) {
         cores.push_back(CoreCoord(entry->x(), entry->y()));
     }
 

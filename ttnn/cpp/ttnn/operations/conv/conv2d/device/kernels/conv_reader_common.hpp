@@ -5,7 +5,7 @@
 #pragma once
 
 #include <tt-metalium/constants.hpp>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id>

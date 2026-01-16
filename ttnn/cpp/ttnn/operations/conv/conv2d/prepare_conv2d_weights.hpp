@@ -5,19 +5,16 @@
 #pragma once
 #include <optional>
 #include <string>
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include <ttnn/operations/conv/conv2d/conv2d_utils.hpp>
+#include <ttnn/tensor/types.hpp>
+#include <ttnn/types.hpp>
+#include <ttnn/tensor/tensor.hpp>
 
 namespace ttnn::operations::sliding_window {
 struct ParallelConfig;
 }
 
-namespace ttnn {
-
-namespace operations::conv {
-namespace conv2d {
+namespace ttnn::operations::conv::conv2d {
 
 // Device validation functions for conv2d tensors (after preparation/on device)
 bool is_valid_device_conv_weights(
@@ -67,6 +64,13 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
 
 // Converts convolution weights to grouped layout with padded zeros
 Tensor convert_conv_weight_tensor_to_grouped_layout(
+    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
+
+// Converts conv_transpose2d weights to grouped layout with padded zeros
+// Input shape: [in_channels, out_channels/groups, H, W]
+// Output shape: [in_channels, out_channels, H, W]
+// This is used BEFORE transform_weights_for_conv_transpose2d for grouped convolutions
+Tensor convert_conv_weight_tensor_to_grouped_layout_for_conv_transpose2d(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 // Converts convolution weights to depthwise layout with broadcasted weights
@@ -129,16 +133,15 @@ struct Conv2dWeightsBiasPrepConfig {
         const std::optional<sliding_window::ParallelConfig>& output_parallel_config_,
         uint32_t groups_,
         uint32_t act_block_h_ntiles_,
+        uint32_t input_height_,
         uint32_t input_width_,
         bool interleaved_mm_conv,
+        uint32_t out_channels_,
         bool has_bias_ = false,
-        bool parameters_on_device_ = true,
         bool enable_kernel_stride_folding_ = false,
         bool full_inner_dim_ = false,
         bool enable_activation_reuse_ = false,
-        std::array<uint32_t, 2> kernel_size_ = {1, 1},
-        std::array<uint32_t, 2> stride_ = {1, 1},
-        std::array<uint32_t, 4> padding_n4_ = {0, 0, 0, 0}) :
+        std::array<uint32_t, 2> stride_ = {1, 1}) :
         input_channels_alignment(input_channels_alignment_),
         weights_bias_dtype(weights_bias_dtype_),
         weight_block_h_ntiles(weight_block_h_ntiles_),
@@ -147,16 +150,15 @@ struct Conv2dWeightsBiasPrepConfig {
         output_parallel_config(output_parallel_config_),
         groups(groups_),
         act_block_h_ntiles(act_block_h_ntiles_),
+        input_height(input_height_),
         input_width(input_width_),
         has_bias(has_bias_),
-        parameters_on_device(parameters_on_device_),
         enable_kernel_stride_folding(enable_kernel_stride_folding_),
         full_inner_dim(full_inner_dim_),
         enable_activation_reuse(enable_activation_reuse_),
-        kernel_size(kernel_size_),
         stride(stride_),
-        padding_n4(padding_n4_),
-        interleaved_mm_conv(interleaved_mm_conv) {}
+        interleaved_mm_conv(interleaved_mm_conv),
+        out_channels(out_channels_) {}
 
     // Common parameters
     const uint32_t input_channels_alignment;
@@ -169,20 +171,20 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::optional<sliding_window::ParallelConfig> output_parallel_config;
     const uint32_t groups;
     const uint32_t act_block_h_ntiles;
+    const uint32_t input_height;
     const uint32_t input_width;
     const bool has_bias;
-    const bool parameters_on_device;
 
     const bool enable_kernel_stride_folding;
     const bool full_inner_dim;
     const bool enable_activation_reuse;
 
-    // Kernel stride folding parameters
-    const std::array<uint32_t, 2> kernel_size;
+    // Kernel stride folding parameter
     const std::array<uint32_t, 2> stride;
-    const std::array<uint32_t, 4> padding_n4;
     // This conv will go through auto shard codepath for matmul based convs
     const bool interleaved_mm_conv;
+    // Output channels (mandatory)
+    const uint32_t out_channels;
 
     static constexpr auto attribute_names = std::make_tuple(
         "input_channels_alignment",
@@ -193,15 +195,15 @@ struct Conv2dWeightsBiasPrepConfig {
         "output_parallel_config",
         "groups",
         "act_block_h_ntiles",
+        "input_height",
         "input_width",
         "has_bias",
-        "parameters_on_device",
         "enable_kernel_stride_folding",
         "full_inner_dim",
-        "kernel_size",
+        "enable_activation_reuse",
         "stride",
-        "padding_n4",
-        "interleaved_mm_conv");
+        "interleaved_mm_conv",
+        "out_channels");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->input_channels_alignment),
@@ -212,15 +214,15 @@ struct Conv2dWeightsBiasPrepConfig {
             std::cref(this->output_parallel_config),
             std::cref(this->groups),
             std::cref(this->act_block_h_ntiles),
+            std::cref(this->input_height),
             std::cref(this->input_width),
             std::cref(this->has_bias),
-            std::cref(this->parameters_on_device),
             std::cref(this->enable_kernel_stride_folding),
             std::cref(this->full_inner_dim),
-            std::cref(this->kernel_size),
+            std::cref(this->enable_activation_reuse),
             std::cref(this->stride),
-            std::cref(this->padding_n4),
-            std::cref(this->interleaved_mm_conv));
+            std::cref(this->interleaved_mm_conv),
+            std::cref(this->out_channels));
     }
 };
 
@@ -236,6 +238,4 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     const Conv2dWeightsBiasPrepConfig& params,
     DataType weight_dtype,
     MeshDevice* device);
-}  // namespace conv2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv2d

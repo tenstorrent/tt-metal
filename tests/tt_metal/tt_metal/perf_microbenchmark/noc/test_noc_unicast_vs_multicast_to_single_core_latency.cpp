@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -19,6 +19,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 
@@ -62,7 +64,7 @@ void measure_latency(const std::string& kernel_name) {
     tt_metal::CloseDevice(device);
 }
 
-int main(int argc, char** argv) {
+int main() {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
         TT_THROW("Test not supported w/ fast dispatch, exiting");
     }

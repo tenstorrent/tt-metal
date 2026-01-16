@@ -9,9 +9,9 @@
 //  - does not verify correct transactions, just runs til termination
 
 #include <fmt/base.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -34,6 +34,7 @@
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 

@@ -184,7 +184,7 @@ Buffer* MeshBuffer::get_reference_buffer() const {
 }
 
 Buffer* MeshBuffer::get_backing_buffer() const {
-    if (auto owned_state = std::get_if<OwnedBufferState>(&state_)) {
+    if (const auto* owned_state = std::get_if<OwnedBufferState>(&state_)) {
         return owned_state->backing_buffer.get();
     }
     return nullptr;
@@ -239,7 +239,7 @@ AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address) {
     // TODO #20966: Remove single device support and branches + dynamic_cast
-    auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
+    auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
         if (address.has_value()) {
             return AnyBuffer{CreateBuffer(config, *address)};
@@ -259,7 +259,7 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address) {
     // TODO #20966: Remove single device support and branches + dynamic_cast
-    auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
+    auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
         if (address.has_value()) {
             return AnyBuffer{CreateBuffer(config, *address)};
@@ -281,7 +281,7 @@ Buffer* AnyBuffer::get_buffer() const { return buffer_; }
 bool AnyBuffer::is_mesh_buffer() const { return get_mesh_buffer() != nullptr; }
 
 std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
-    if (auto mesh_buffer_ptr = std::get_if<std::shared_ptr<MeshBuffer>>(&holder_)) {
+    if (const auto* mesh_buffer_ptr = std::get_if<std::shared_ptr<MeshBuffer>>(&holder_)) {
         auto mesh_buffer = *mesh_buffer_ptr;
         if (mesh_buffer->is_allocated()) {
             return mesh_buffer;

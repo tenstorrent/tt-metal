@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
 from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
@@ -32,7 +33,8 @@ def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_devic
         MLPClass=MLP,
         hf_config=hf_config,
         state_dict=reference_model.state_dict(),
-        tmp_path=tmp_path,
+        tmp_path=tmp_path
+        / "mesh_8x8",  # TODO: dummy mesh shape required until convert_weights no longer relies on this for parsing the absolutem filepaths
         mesh_device=mesh_device,
         reference_w1=reference_state_dict["gate_proj.weight"],
     )
@@ -49,7 +51,8 @@ def test_convert_weights_for_dequantized_mlps(MLPClass, module_path, hf_config, 
         MLPClass=MLPClass,
         hf_config=hf_config,
         state_dict=state_dict,
-        tmp_path=tmp_path,
+        tmp_path=tmp_path
+        / "mesh_8x8",  # TODO: dummy mesh shape required until convert_weights no longer relies on this for parsing the absolutem filepaths
         mesh_device=mesh_device,
         reference_w1=dequantize(
             state_dict["gate_proj.weight"],
@@ -79,6 +82,9 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     # assert Path(weight_config["w1"]["input_tensor_b"]).exists()
     # assert Path(weight_config["w2"]["input_tensor_b"]).exists()
     # assert Path(weight_config["w3"]["input_tensor_b"]).exists()
+
+    # Make the path absolute - this is required since load_weight expects an absolute path
+    weight_config["w1"]["input_tensor_b"].path = tmp_path / weight_config["w1"]["input_tensor_b"].path
 
     # Load and verify a weight
     w1_ttnn = load_weight(weight_config["w1"]["input_tensor_b"], device=mesh_device)
@@ -118,9 +124,8 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     "mode,seq_len",
     [
         ("decode", 32),
-        ("prefill", 512),
-        ("prefill", 2048),  # Test chunking
-    ],
+    ]
+    + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
 )
 def test_forward_pass(
     MLPClass,
@@ -137,6 +142,12 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
+    if mode == "prefill" and seq_len != 128:
+        pytest.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        )
+
     num_module_layers, _ = mesh_device.shape
 
     # Get the reference IO
@@ -152,10 +163,6 @@ def test_forward_pass(
         torch_input, reference_output = load_reference_io_tensors_for_module(
             mode, module_path, seq_len, num_module_layers
         )
-
-        # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
 
     # Generate module configs and state
     weight_config = get_test_weight_config(

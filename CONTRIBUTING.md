@@ -91,7 +91,7 @@ TT_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 
 ### Adding new TTNN examples
 
-TTNN tutorials in this documentation are written as Jupyter notebooks (`.ipynb`) and located in the `ttnn/tutorials/2025_dx_rework` directory. For each notebook, a corresponding Python script is automatically generated and maintained in the `ttnn/tutorials/basic_python` directory. To ensure consistency between notebooks and their exported Python versions, a Git pre-commit hook is provided.
+TTNN tutorials in this documentation are written as Jupyter notebooks (`.ipynb`) and located in the `ttnn/tutorials` directory. For each notebook, a corresponding Python script is automatically generated and maintained in the `ttnn/tutorials/basic_python` directory. To ensure consistency between notebooks and their exported Python versions, a Git pre-commit hook is provided.
 
 This hook performs the following actions:
 
@@ -329,7 +329,7 @@ Breakpoint 1, tt::tt_metal::Device::Device (this=0x3c, device_id=21845, num_hw_c
   - Once the design has been "proven", disable watcher for performance testing.
 - To print within a kernel, use the [Debug Print API](docs/source/tt-metalium/tools/kernel_print.rst):
   - Define the environment variable to specify which cores to print from, `export TT_METAL_DPRINT_CORES=(0,0)-(4,4)` to print from a 5x5 grid of cores.
-  - In the kernel, `#include "debug/dprint.h"`, and to print a variable `x`, `DPRINT << x << ENDL();`
+  - In the kernel, `#include "api/debug/dprint.h"`, and to print a variable `x`, `DPRINT << x << ENDL();`
   - For more information on kernel printing, see the [Kernel Debug Print documentation](docs/source/tt-metalium/tools/kernel_print.rst).
 
 ### Debugging device hangs
@@ -812,11 +812,6 @@ After that, the UI will usually delete your branch.
   review and start running pipelines. This is because we don't want to clog
   our pipelines with unnecessary runs that developers may know will fail
   anyways.
-
-### A recommended development flow for model writers
-
-Please refer to documentation for [adding a model](./models/docs/MODEL_ADD.md) and
-for [graduating](./models/docs/MODEL_GRADUATION.md) it.
 
 ### New feature and design specifications
 

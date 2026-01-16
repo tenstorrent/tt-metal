@@ -276,7 +276,9 @@ constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK = 0x01;
 struct CQDispatchWritePackedLargeSubCmd {
     uint32_t noc_xy_addr;
     uint32_t addr;
-    uint16_t length;  // multiples of L1 cache line alignment
+    uint16_t length_minus1;  // multiples of L1 cache line alignment
+                             // Always store length - 1 as +1 is unconditionally added in cq_dispatch.cpp
+                             // This avoids the need to handle the special case where 65536 bytes overflows to 0
     uint8_t num_mcast_dests;
     uint8_t flags;
 } __attribute__((packed));

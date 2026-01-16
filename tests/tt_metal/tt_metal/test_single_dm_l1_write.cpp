@@ -84,8 +84,7 @@ int main() {
     if (outputs[0] == value) {
         std::cout << "Test passed!" << std::endl;
         return 0;
-    } else {
-        std::cout << "Test failed! Got the value " << std::hex << outputs[0] << " instead of " << value << std::endl;
-        return 1;
     }
+    std::cout << "Test failed! Got the value " << std::hex << outputs[0] << " instead of " << value << std::endl;
+    return 1;
 }

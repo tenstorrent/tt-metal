@@ -46,10 +46,9 @@ export TT_DIT_CACHE_DIR=/your/cache/path
 pytest models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "2x4sp0tp1"
 
 # Generate a video with the pipeline test. Use the dit_2x4sp0tp1_vae_1x8sp0tp1 option on 8-chip systems and 4x8sp1tp0 on 32-chip systems.
-TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "dit_2x4sp0tp1_vae_1x8sp0tp1"
+pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "dit_2x4sp0tp1_vae_1x8sp0tp1"
 ```
 
 ## Limitations
 
-We currently need to set `TT_MM_THROTTLE_PERF=5` when running inference in order to avoid a certain set of hangs.
 As of now, running on systems smaller than a 2x4 Wormhole mesh is not well supported. The model is large and requires 8-chips worth of memory to run.

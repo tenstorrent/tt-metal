@@ -24,7 +24,6 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const Tensor& target = tensor_args.target_tensor;
     const std::optional<Tensor>& weight = tensor_args.weight_tensor;
     const Tensor& output = tensor_return_value;
-    const std::string reduction = operation_attributes.reduction;
     const uint32_t ignore_index = operation_attributes.ignore_index;
     const uint32_t channel_size = operation_attributes.channel_size;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -96,7 +95,14 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             });
     }
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(weight_has_value)};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
@@ -114,12 +120,12 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     if (fp32_dest_acc_en) {
         reader_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto reader_kernel_file = use_large_algorithm
-                                        ? "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
-                                          "kernels/reader_moreh_nll_loss_step1_large.cpp"
-                                        : "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
-                                          "kernels/reader_moreh_nll_loss_step1.cpp";
-    const auto writer_kernel_file =
+    const auto* const reader_kernel_file =
+        use_large_algorithm ? "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
+                              "kernels/reader_moreh_nll_loss_step1_large.cpp"
+                            : "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
+                              "kernels/reader_moreh_nll_loss_step1.cpp";
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
         "writer_moreh_nll_loss_step1.cpp";
 

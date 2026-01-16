@@ -35,8 +35,8 @@ public:
         DataType dtype,
         const PageConfig& page_config,
         const MemoryConfig& memory_config,
-        const ttnn::Shape& logical_shape,
-        const ttnn::Shape& padded_shape);
+        const tt::tt_metal::Shape& logical_shape,
+        const tt::tt_metal::Shape& padded_shape);
 
     Layout get_layout() const { return page_config_.get_layout(); }
     Tile get_tile() const { return page_config_.get_tile(); }
@@ -45,31 +45,31 @@ public:
     const MemoryConfig& get_memory_config() const { return memory_config_; }
     const Alignment& get_alignment() const { return alignment_; }
 
-    Strides compute_strides(const ttnn::Shape& shape) const;
+    Strides compute_strides(const tt::tt_metal::Shape& shape) const;
 
-    BufferShardingArgs compute_buffer_sharding_args(const ttnn::Shape& shape) const;
+    BufferShardingArgs compute_buffer_sharding_args(const tt::tt_metal::Shape& shape) const;
 
-    size_t compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const;
-    size_t compute_page_size_bytes(const ttnn::Shape& shape) const;
+    size_t compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const;
+    size_t compute_page_size_bytes(const tt::tt_metal::Shape& shape) const;
 
-    size_t compute_consumed_memory_bytes_per_bank(const ttnn::Shape& shape, const IDevice& device) const;
+    size_t compute_consumed_memory_bytes_per_bank(const tt::tt_metal::Shape& shape, const IDevice& device) const;
     size_t compute_consumed_memory_bytes_per_bank(
-        const ttnn::Shape& shape, size_t page_alignment, size_t num_banks) const;
+        const tt::tt_metal::Shape& shape, size_t page_alignment, size_t num_banks) const;
 
     // This method is deprecated and should be replaced with get_strides() / get_physical_size()
     // It computes padded shape on the fly from shape and alignment
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use get_physical_size() or get_strides() instead.")]]
-    ttnn::Shape compute_padded_shape(const ttnn::Shape& shape) const;
+    tt::tt_metal::Shape compute_padded_shape(const tt::tt_metal::Shape& shape) const;
 
     // Flattens input shape into height and width
     // - Height is accumulated over all dims except last
     // - Width is equal to the last dim
-    Shape2D compute_logical_2d_shape(const ttnn::Shape& shape) const;
+    Shape2D compute_logical_2d_shape(const tt::tt_metal::Shape& shape) const;
 
     // Returns number of elements laid out in physically memory across H:W dimensions
     //  W is row width aligned to page width and shard width, depends on data type
     //  H is all dimensions except W multiplied and aligned to tile and shard height
-    Shape2D compute_physical_shape(const ttnn::Shape& shape) const;
+    Shape2D compute_physical_shape(const tt::tt_metal::Shape& shape) const;
 
     // Returns logical shard shape from shard spec shape
     Shape2D get_logical_shard_shape() const;

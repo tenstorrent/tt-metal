@@ -34,14 +34,12 @@
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "ringbuffer_cache.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class Program;
 class SystemMemoryManager;
 enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -61,12 +59,6 @@ public:
     void record_begin(uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
     void record_end() override;
 
-    void reset_worker_state(
-        bool reset_launch_msg_state,
-        uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
-        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) override;
-
     void set_go_signal_noc_data_and_dispatch_sems(
         uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) override;
 
@@ -75,53 +67,18 @@ public:
 
     SystemMemoryManager& sysmem_manager() override;
 
-    void terminate() override;
-
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
 
-    void enqueue_program(Program& program, bool blocking) override;
-    void enqueue_read_buffer(
-        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-        void* dst,
-        const BufferRegion& region,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-
-    void enqueue_record_event(
-        const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-    void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) override;
-
-    void enqueue_write_buffer(
-        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-        HostDataType src,
-        const BufferRegion& region,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-
-    void enqueue_read_from_core(
-        const CoreCoord& virtual_core,
-        void* dst,
-        DeviceAddr address,
-        uint32_t size_bytes,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
-    void enqueue_write_to_core(
-        const CoreCoord& virtual_core,
-        const void* src,
-        DeviceAddr address,
-        uint32_t size_bytes,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
-    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
-
     IDevice* device() override;
+
+    // needed interface items
+    void terminate() override;
+    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
 
 private:
     uint32_t id_;
-    uint32_t size_B_;
+    uint32_t size_B_{0};
     uint32_t completion_queue_reader_core_ = 0;
     std::optional<uint32_t> tid_;
     std::shared_ptr<TraceDescriptor> trace_ctx_;
@@ -164,7 +121,6 @@ private:
 
     CoreCoord virtual_enqueue_program_dispatch_core_;
     CoreCoord completion_queue_writer_core_;
-    NOC noc_index_;
 
     const uint32_t prefetcher_dram_aligned_block_size_;
     const uint64_t prefetcher_cache_sizeB_;
@@ -195,6 +151,8 @@ private:
     void reset_prefetcher_cache_manager();
 
     int get_prefetcher_cache_sizeB() const;
+
+    void enqueue_record_event(const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
 };
 
 }  // namespace tt::tt_metal

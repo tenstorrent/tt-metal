@@ -51,7 +51,13 @@
   blackhole:
     riscv_0:
       bandwidth: 39
-
+"One to All Multicast Linked Loopback Directed Ideal 2.0":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 24.7
+  blackhole:
+    riscv_0:
+      bandwidth: 41
 "One from All Directed Ideal":
   wormhole_b0:
     riscv_1:
@@ -101,6 +107,14 @@
       bandwidth: 61
 
 "DRAM Sharded Read Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 30
+  blackhole:
+    riscv_0:
+      bandwidth: 60
+
+"DRAM Sharded Read Transaction ID Directed Ideal":
   wormhole_b0:
     riscv_0:
       bandwidth: 30
@@ -303,3 +317,11 @@
   wormhole_b0:
     riscv_1:
       bandwidth: 10.5
+
+"PCIe Read Bandwidth":
+  blackhole:
+    riscv_0:
+      bandwidth: 42.5
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 20.1

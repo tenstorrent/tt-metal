@@ -1,0 +1,134 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+
+allocation_policies:
+    receiver:
+      max_configs_per_core: 2
+
+Tests:
+  # ======================================================================================
+  # Single Sender to Multiple Receivers
+  # ======================================================================================
+  - name: "FiveGalaxySingleSenderMultiReceiver"
+    fabric_setup:
+      topology: Mesh
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd.textproto"
+
+    top_level_iterations: 3
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      size: [32, 64, 128]
+      num_packets: [100]
+
+    defaults:
+      ftype: unicast
+
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [7, 3]]
+          - destination:
+              device: [2, [4, 2]]
+          - destination:
+              device: [3, [3, 1]]
+          - destination:
+              device: [4, [6, 3]]
+
+  # ======================================================================================
+  # Multiple Senders to Single Receiver
+  # ======================================================================================
+  - name: "FiveGalaxyMultiSenderSingleReceiver"
+    fabric_setup:
+      topology: Mesh
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd.textproto"
+
+    top_level_iterations: 3
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 64
+      num_packets: 100
+
+    senders:
+      - device: [1, [0, 0]]
+        patterns:
+          - destination:
+              device: [0, [3, 1]]
+      - device: [2, [1, 1]]
+        patterns:
+          - destination:
+              device: [0, [3, 1]]
+      - device: [3, [2, 2]]
+        patterns:
+          - destination:
+              device: [0, [3, 1]]
+      - device: [4, [3, 3]]
+        patterns:
+          - destination:
+              device: [0, [3, 1]]
+
+  # ======================================================================================
+  # Hub-and-Spoke Pattern: Tests centralized routing through a hub mesh
+  # ======================================================================================
+  - name: "FiveGalaxyHubAndSpoke"
+    fabric_setup:
+      topology: Mesh
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd.textproto"
+
+    top_level_iterations: 3
+
+    parametrization_params:
+      size: [128, 512, 1024, 2048, 4096]
+      num_packets: [250]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+
+    senders:
+      # Upstream meshes (0,1,2) → Hub (3)
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [3, [0, 0]]
+      - device: [1, [3, 1]]
+        patterns:
+          - destination:
+              device: [3, [3, 1]]
+      - device: [2, [7, 3]]
+        patterns:
+          - destination:
+              device: [3, [7, 3]]
+
+      # Hub (3) → Downstream (4)
+      - device: [3, [0, 0]]
+        patterns:
+          - destination:
+              device: [4, [0, 0]]
+      - device: [3, [4, 2]]
+        patterns:
+          - destination:
+              device: [4, [4, 2]]
+
+  # ======================================================================================
+  # All-to-All Pattern (Sequential): Fabric stress test, takes 21400 iterations to complete
+  # when ported to CI pipelines, should be marked as a stress test with appropriate timeout and resource allocation
+  # ======================================================================================
+  - name: "FiveGalaxySequentialAllToAll"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd.textproto"
+
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [128]
+      num_packets: [250]
+
+    patterns:
+      - type: sequential_all_to_all

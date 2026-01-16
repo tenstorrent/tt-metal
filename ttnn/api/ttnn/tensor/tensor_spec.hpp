@@ -11,7 +11,7 @@ namespace tt::tt_metal {
 
 class TensorSpec final {
 public:
-    TensorSpec(ttnn::Shape logical_shape, TensorLayout tensor_layout);
+    TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_layout);
     TensorSpec(TensorSpec&&) noexcept = default;
     TensorSpec& operator=(TensorSpec&&) = default;
     TensorSpec(const TensorSpec&) = default;
@@ -19,13 +19,13 @@ public:
     bool operator==(const TensorSpec&) const = default;
     bool operator!=(const TensorSpec&) const = default;
 
-    const ttnn::Shape& logical_shape() const { return logical_shape_; }
+    const tt::tt_metal::Shape& logical_shape() const { return logical_shape_; }
     const TensorLayout& tensor_layout() const { return tensor_layout_; }
     DataType data_type() const { return tensor_layout_.get_data_type(); }
     Layout layout() const { return tensor_layout_.get_layout(); }
     PageConfig page_config() const { return tensor_layout_.get_page_config(); }
     const MemoryConfig& memory_config() const { return tensor_layout_.get_memory_config(); }
-    const ttnn::Shape& padded_shape() const { return cached_padded_shape_; }
+    const tt::tt_metal::Shape& padded_shape() const { return cached_padded_shape_; }
     const Shape2D& logical_2d_shape() const { return cached_logical_2d_shape_; }
     const Shape2D& physical_shape() const { return cached_physical_shape_; }
 
@@ -105,10 +105,10 @@ private:
     MemoryConfig populate_nd_shard_spec_from_legacy() const;
     std::optional<MemoryConfig> populate_legacy_shard_spec_from_nd() const;
 
-    ttnn::Shape logical_shape_;
+    tt::tt_metal::Shape logical_shape_;
     TensorLayout tensor_layout_;
 
-    ttnn::Shape cached_padded_shape_;
+    tt::tt_metal::Shape cached_padded_shape_;
     Shape2D cached_logical_2d_shape_;
     Shape2D cached_physical_shape_;
 };
