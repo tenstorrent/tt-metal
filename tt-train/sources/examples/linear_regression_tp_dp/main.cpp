@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <CLI/CLI.hpp>
 #include <fmt/format.h>
 
+#include <CLI/CLI.hpp>
 #include <core/ttnn_all_includes.hpp>
+#include <string>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "datasets/dataloader.hpp"
@@ -18,8 +20,6 @@
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
-#include "core/distributed/distributed.hpp"
-
 
 using ttml::autograd::TensorPtr;
 
@@ -30,18 +30,27 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample>&& samples)>,
     BatchType>;
 
+namespace {
+bool parse_mesh_shape(const std::string& mesh_shape_str, uint32_t& rows, uint32_t& cols) {
+    const auto delimiter_pos = mesh_shape_str.find('x');
+    if (delimiter_pos == std::string::npos || delimiter_pos == 0 || delimiter_pos + 1 >= mesh_shape_str.size()) {
+        return false;
+    }
+
+    try {
+        rows = static_cast<uint32_t>(std::stoul(mesh_shape_str.substr(0, delimiter_pos)));
+        cols = static_cast<uint32_t>(std::stoul(mesh_shape_str.substr(delimiter_pos + 1)));
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    return rows > 0 && cols > 0;
+}
+}  // namespace
+
 int main(int argc, char** argv) {
     CLI::App app{"Linear Regression TP+DP Example"};
     argv = app.ensure_utf8(argv);
-
-    // - 8 DP groups (data parallelism) along mesh dimension 0
-    // - 4 TP devices per group (tensor parallelism) along mesh dimension
-    // you need a right mgd config file for this (default mesh shape is 1x32, look at enable_fabric function for the mgd
-    // config file)
-    const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(8, 4);  // 8 DP groups × 4 TP devices
-    const uint32_t num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
-    const uint32_t dp_size = logical_mesh_shape[0];
-    const uint32_t tp_size = logical_mesh_shape[1];
 
     // Training hyperparameters
     const size_t training_samples_count = 100000;
@@ -53,11 +62,29 @@ int main(int argc, char** argv) {
     // Default to column parallelism, use row if --row flag is passed
     bool use_row_parallel = false;
     uint32_t batch_size = 8192;
+    std::string mesh_shape_str = "8x4";
 
     app.add_flag("--row", use_row_parallel, "Use RowParallelLinear (shards input features), default is ColumnParallelLinear");
     app.add_option("-b,--batch_size", batch_size, "Batch size")->default_val(batch_size);
+    app.add_option("--mesh_shape", mesh_shape_str, "Logical mesh shape RxC (e.g. 8x4)")->default_val(mesh_shape_str);
 
     CLI11_PARSE(app, argc, argv);
+
+    uint32_t mesh_rows = 0;
+    uint32_t mesh_cols = 0;
+    if (!parse_mesh_shape(mesh_shape_str, mesh_rows, mesh_cols)) {
+        fmt::print(stderr, "Error: invalid --mesh_shape '{}', expected RxC like 8x4\n", mesh_shape_str);
+        return 1;
+    }
+
+    // - DP groups (data parallelism) along mesh dimension 0
+    // - TP devices per group (tensor parallelism) along mesh dimension 1
+    // you need a right mgd config file for this (default mesh shape is 1x32, look at enable_fabric function for the mgd
+    // config file)
+    const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_rows, mesh_cols);
+    const uint32_t num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
+    const uint32_t dp_size = logical_mesh_shape[0];
+    const uint32_t tp_size = logical_mesh_shape[1];
 
     // Validate that batch_size is divisible by dp_size
     if (batch_size == 0) {
@@ -171,7 +198,6 @@ int main(int argc, char** argv) {
         /* loss is caclulated for each tp partition, so its averaged over 1/tp_size times less samples making gradient tp_size times greater*/
         learning_rate /= tp_size;
     }
-    // std::cout << "Learning rate: " << learning_rate << std::endl;
 
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);

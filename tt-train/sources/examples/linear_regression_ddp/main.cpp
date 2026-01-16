@@ -4,9 +4,10 @@
 
 #include <fmt/format.h>
 
-#include <cstdlib>
-
+#include <CLI/CLI.hpp>
 #include <core/ttnn_all_includes.hpp>
+#include <cstdlib>
+#include <string>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -29,15 +30,48 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample>&& samples)>,
     BatchType>;
 
+namespace {
+bool parse_mesh_shape(const std::string& mesh_shape_str, uint32_t& rows, uint32_t& cols) {
+    const auto delimiter_pos = mesh_shape_str.find('x');
+    if (delimiter_pos == std::string::npos || delimiter_pos == 0 || delimiter_pos + 1 >= mesh_shape_str.size()) {
+        return false;
+    }
+
+    try {
+        rows = static_cast<uint32_t>(std::stoul(mesh_shape_str.substr(0, delimiter_pos)));
+        cols = static_cast<uint32_t>(std::stoul(mesh_shape_str.substr(delimiter_pos + 1)));
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    return rows > 0 && cols > 0;
+}
+}  // namespace
+
 int main(int argc, char** argv) {
-    // Parse batch_size from command line, default to 4
+    CLI::App app{"Linear Regression DDP Example"};
+    argv = app.ensure_utf8(argv);
+
     uint32_t batch_size = 128;
     const size_t training_samples_count = 1000;
     const size_t num_features = 32;
     const size_t num_targets = 32;
     const float noise = 0.0F;
     const bool bias = true;
-    const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(32, 1);
+
+    std::string mesh_shape_str = "32x1";
+    app.add_option("--mesh_shape", mesh_shape_str, "Logical mesh shape RxC (e.g. 32x1)")->default_val(mesh_shape_str);
+
+    CLI11_PARSE(app, argc, argv);
+
+    uint32_t mesh_rows = 0;
+    uint32_t mesh_cols = 0;
+    if (!parse_mesh_shape(mesh_shape_str, mesh_rows, mesh_cols)) {
+        fmt::print(stderr, "Error: invalid --mesh_shape '{}', expected RxC like 32x1\n", mesh_shape_str);
+        return 1;
+    }
+
+    const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_rows, mesh_cols);
     const auto num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
 
     // Enable fabric BEFORE opening the device - fabric config must be set before device initialization
