@@ -232,6 +232,7 @@ void kernel_main() {
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
             // each block has a height of mm_block_ht (tiles of matmul block)
             // this is what has to be sent in one step in a single chunk
+            // FIX: looks like this should be inside the ring loop
             for (uint32_t strided_chunk_idx = 0; strided_chunk_idx < chunk_counts_per_slice; strided_chunk_idx++) {
                 if constexpr (fuse_op) {
                     matmul_sender.wait_for_matmul_chunk(strided_chunk_idx);

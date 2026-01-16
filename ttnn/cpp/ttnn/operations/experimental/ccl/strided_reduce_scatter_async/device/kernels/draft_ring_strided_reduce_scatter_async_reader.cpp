@@ -105,6 +105,7 @@ void kernel_main() {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
 
+    /*
     uint32_t sem_target = 0;
     uint32_t padded_M_tiles = round_up(input_tensor_Ht, mm_cores_y);
     uint32_t M_tiles_per_core = padded_M_tiles / mm_cores_y;
@@ -112,6 +113,8 @@ void kernel_main() {
     unit32_t M_tiles_per_block = mm_block_ht;
     uint32_t stride_size = M_tiles_per_core;
     uint32_t batch_size = input_tensor_B;
+    */
+    uint32_t M_blocks_per_core = 1;
 
     // TODO: direction --> should the backward direction handle the second half of the chunk?
     // or every other half of the block?
@@ -124,10 +127,10 @@ void kernel_main() {
     // the following will need to be defined
     // assume constant
     // chunk_counts_per_slice (device_block_counts elsewhere) is the number of chunks per slice
-    const uint32_t chunk_counts_per_slice;
+    const uint32_t chunk_counts_per_slice = 1;
     // device_chunk_width should be equal to, or be a multiple of,
     // the width (in tiles) in a matmul block (mm_block_wt)
-    const uint32_t chunk_width;
+    const uint32_t chunk_width = 8;
 
     for (uint32_t b = 0; b < batch_size; b++) {
         if constexpr (fuse_op) {
@@ -144,25 +147,26 @@ void kernel_main() {
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
             // each block has a height of mm_block_ht (tiles of matmul block)
             // this is what has to be sent in one step
-            for (uint32_t strided_chunk_idx = 0; strided_chunk_idx < chunk_counts_per_slice; strided_chunk_idx++) {
-                if constexpr (fuse_op) {
-                    // this has to be sent to all devices in the direction
-                    // note that the order of sending these must be consistent with the order of matmul
-                    // this may be nontrivial, in the worst case, can wait for full blocks above
-                    matmul_receiver.wait_for_matmul_chunk(strided_chunk_idx);
+
+            for (uint32_t i = 0; i < ring_size; ++i) {
+                const bool do_reduce = i != 0;
+                uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
+
+                uint32_t actual_slice_idx;
+                if (direction) {
+                    actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+                } else {
+                    actual_slice_idx =
+                        slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
                 }
-                for (uint32_t i = 0; i < ring_size; ++i) {
-                    const bool do_reduce = i != 0;
-                    uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
-                    uint32_t actual_slice_idx;
-                    if (direction) {
-                        actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
-                    } else {
-                        actual_slice_idx =
-                            slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+                for (uint32_t strided_chunk_idx = 0; strided_chunk_idx < chunk_counts_per_slice; strided_chunk_idx++) {
+                    if constexpr (fuse_op) {
+                        // this has to be sent to all devices in the direction
+                        // note that the order of sending these must be consistent with the order of matmul
+                        // this may be nontrivial, in the worst case, can wait for full blocks above
+                        matmul_receiver.wait_for_matmul_chunk(strided_chunk_idx);
                     }
-
                     // start tile is the tile at the start of the chunk in the current batch
                     uint32_t input_chunk_start_tile =
                         get_input_chunk_start_tile(actual_slice_idx, strided_chunk_idx, batch_offset);
