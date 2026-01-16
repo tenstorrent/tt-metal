@@ -394,9 +394,7 @@ public:
     float get_nan() const { return nan_; }
     float get_inf() const { return inf_; }
 
-    uint32_t get_arch_num_circular_buffers() const {
-        return (arch_ == tt::ARCH::WORMHOLE_B0) ? WORMHOLE_CIRCULAR_BUFFERS : MAX_CIRCULAR_BUFFERS;
-    }
+    uint32_t get_arch_num_circular_buffers() const { return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : 64; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const
