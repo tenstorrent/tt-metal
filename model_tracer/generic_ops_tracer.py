@@ -173,6 +173,33 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                     # Fix placeholder {...} to null
                     fixed_json_str = re.sub(r":\{\.\.\.}", r":null", fixed_json_str)
 
+                    # Fix placeholder {ptr} to null
+                    fixed_json_str = fixed_json_str.replace("{ptr}", "null")
+
+                    # Fix {NxM grid, K devices} -> "NxM grid, K devices"
+                    fixed_json_str = re.sub(r"\{(\d+x\d+ grid, \d+ devices)\}", r'"\1"', fixed_json_str)
+
+                    # Fix C++ template types in values: BasicUnaryWithParam<...>{...} -> {"class": "BasicUnaryWithParam", "data": {...}}
+                    # or just remove the type name if it's prefixing an object
+                    fixed_json_str = re.sub(r"BasicUnaryWithParam<[^>]+>(\{)", r"\1", fixed_json_str)
+
+                    # Fix double quotes: ""string"" -> "string"
+                    fixed_json_str = fixed_json_str.replace('""', '"')
+
+                    # Fix missing brace in shard_spec grid: "end":{...}, {"start":... -> "end":{...}}, {"start":...
+                    fixed_json_str = re.sub(r'("end":{"x":\d+,"y":\d+}), ({"start")', r"\1}, \2", fixed_json_str)
+                    # Fix missing brace at end of grid array: "end":{...}] -> "end":{...}}]
+                    fixed_json_str = re.sub(r'("end":{"x":\d+,"y":\d+})]0?', r"\1}]", fixed_json_str)
+
+                    # Last resort: if it starts with {"argN": "{" ... then it's missing escaping
+                    # We can use a more generic version of the STEP 1 logic here
+                    match_outer = re.match(r'^(\s*\{\s*"arg\d+"\s*:\s*")(.+)("\s*\}\s*)$', fixed_json_str)
+                    if match_outer:
+                        prefix, inner, suffix = match_outer.groups()
+                        if inner.strip().startswith("{") or inner.strip().startswith("["):
+                            fixed_inner = re.sub(r'(?<!\\)"', r"\"", inner)
+                            fixed_json_str = f"{prefix}{fixed_inner}{suffix}"
+
                     # Parse and return the fixed data
                     parsed_data = json_module.loads(fixed_json_str)
                     # Recursively fix any nested UnparsedElements
