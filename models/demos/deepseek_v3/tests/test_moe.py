@@ -65,9 +65,9 @@ def test_forward_pass(
     """Test forward pass against reference model."""
 
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
+    if mode == "prefill" and num_tokens != 128:
         pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+            f"Skipping prefilling with seq_len={num_tokens} since this would cause us to exceed our available CI workload time"
         )
 
     batch_size = 1
