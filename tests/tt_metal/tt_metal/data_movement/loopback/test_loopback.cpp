@@ -9,6 +9,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -42,7 +43,7 @@ struct LoopbackConfig {
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const LoopbackConfig& test_config) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // Program
     Program program = CreateProgram();
 
@@ -145,7 +146,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
 /* ========== Test case for loopback data movement; ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
     auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->get_device(0)->arch();
+    auto arch_ = mesh_device->impl().get_device(0)->arch();
 
     // Parameters
     uint32_t max_transactions = 256;

@@ -9,6 +9,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -52,7 +53,7 @@ struct AllFromAllConfig {
 /// @return Status of the test execution (e.g., success or failure).
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFromAllConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     /* ================ SETUP ================ */
 
     // Program
@@ -252,8 +253,9 @@ void packet_sizes_test(
     /* Running the Test */
 
     uint32_t max_transactions_per_subordinate = 256;
-    uint32_t max_reservable_pages_per_transaction =
-        mesh_device->get_device(0)->arch() == ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
+    uint32_t max_reservable_pages_per_transaction = mesh_device->impl().get_device(0)->arch() == ARCH::BLACKHOLE
+                                                        ? 1024
+                                                        : 2048;  // Max total transaction size == 64 KB
 
     for (uint32_t num_of_transactions_per_subordinate = 1;
          num_of_transactions_per_subordinate <= max_transactions_per_subordinate;
@@ -291,7 +293,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_case_id) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -394,7 +396,7 @@ TO-DO:
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     uint32_t test_case_id = 310;
 
     /* Parameters */
@@ -413,7 +415,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 311;
 
@@ -517,7 +519,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllCustom) {
     uint32_t test_case_id = 318;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     // Parameters
     CoreCoord mst_start_coord = {0, 0};

@@ -8,7 +8,7 @@
 #include "impl/debug/inspector/rpc_server_generated.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
-#include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "program.hpp"
 #include <memory>
@@ -205,7 +205,7 @@ void Inspector::program_set_binary_status(
 }
 
 void Inspector::mesh_device_created(
-    const distributed::MeshDevice* mesh_device, std::optional<int> parent_mesh_id) noexcept {
+    const distributed::MeshDeviceImpl* mesh_device, std::optional<int> parent_mesh_id) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -226,7 +226,7 @@ void Inspector::mesh_device_created(
     }
 }
 
-void Inspector::mesh_device_destroyed(const distributed::MeshDevice* mesh_device) noexcept {
+void Inspector::mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_device) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -245,7 +245,7 @@ void Inspector::mesh_device_destroyed(const distributed::MeshDevice* mesh_device
     }
 }
 
-void Inspector::mesh_device_initialized(const distributed::MeshDevice* mesh_device) noexcept {
+void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_device) noexcept {
     if (!is_enabled()) {
         return;
     }

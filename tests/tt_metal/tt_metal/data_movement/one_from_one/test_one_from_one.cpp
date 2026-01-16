@@ -9,6 +9,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -37,7 +38,7 @@ struct OneFromOneConfig {
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFromOneConfig& test_config) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // Program
     Program program = CreateProgram();
 
@@ -178,7 +179,7 @@ void packet_sizes_test(
     CoreCoord subordinate_core_coord,
     bool use_2_0_api = false,
     NOC noc_id = NOC::RISCV_1_default) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
