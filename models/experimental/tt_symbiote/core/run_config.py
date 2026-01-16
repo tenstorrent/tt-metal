@@ -254,10 +254,25 @@ def to_ttnn_wrap(e):
     return e
 
 
+def to_ttnn_wrap_keep_torch(e):
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    if isinstance(e, TorchTTNNTensor):
+        e.to_ttnn
+        return e
+    return e
+
+
 def set_device_wrap(device):
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
     def _set_device_wrap(e):
         if isinstance(e, ttnn.Tensor) and device is not None and e.device() != device:
             e = ttnn.to_device(e, device)
+        elif isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and e.ttnn_tensor.device() != device:
+            e.ttnn_tensor = ttnn.to_device(e.ttnn_tensor, device)
+        if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+            assert e.ttnn_tensor.device() is not None
         return e
 
     return _set_device_wrap
