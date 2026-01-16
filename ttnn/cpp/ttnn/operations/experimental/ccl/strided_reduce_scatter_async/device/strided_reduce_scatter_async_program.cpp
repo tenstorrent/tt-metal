@@ -1011,7 +1011,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
                               "device/kernels/dim_zero_ring_strided_reduce_scatter_async_reader.cpp"
                             : "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
-                              "device/kernels/ring_strided_reduce_scatter_async_reader.cpp";
+                              "device/kernels/minimal_ring_strided_reduce_scatter_async_reader.cpp";
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -1072,7 +1072,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
                               "device/kernels/dim_zero_ring_strided_reduce_scatter_async_writer.cpp"
                             : "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
-                              "device/kernels/ring_strided_reduce_scatter_async_writer.cpp";
+                              "device/kernels/minimal_ring_strided_reduce_scatter_async_writer.cpp";
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -1098,7 +1098,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
                               "device/kernels/dim_zero_ring_reduction.cpp"
                             : "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
-                              "device/kernels/ring_reduction.cpp";
+                              "device/kernels/minimal_ring_reduction.cpp";
 
     auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
         program, sender_reduce_kernel_path, sender_worker_core_range_set, sender_reduce_kernel_config);
