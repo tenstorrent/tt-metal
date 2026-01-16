@@ -4,8 +4,8 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 
 /**
  * Simplified DRAM streaming matmul compute kernel.
@@ -14,6 +14,9 @@
  *
  * in0 is fully available in L1 (replicated, tensor-backed CB).
  * in1 is streamed from DRAM, one Kx1 column stick at a time.
+ *
+ * Uses custom_mm_block which handles K-dimension reduction via MOP replay
+ * for maximum throughput (eliminates software loop overhead).
  *
  * Loop structure:
  *   for each output tile in N:
@@ -30,13 +33,10 @@ void MAIN {
     constexpr uint32_t num_tiles_k = get_compile_time_arg_val(3);
     constexpr uint32_t per_core_N = get_compile_time_arg_val(4);
 
-    // For single tile output at a time, simple matmul accumulation
-    constexpr uint32_t out_subblock_h = 1;
-    constexpr uint32_t out_subblock_w = 1;
-    constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
+    constexpr uint32_t transpose = false;
 
-    // Initialize matmul
-    mm_block_init(cb_id_in0, cb_id_in1, cb_id_out, false, out_subblock_w, out_subblock_h, in0_block_w);
+    // Initialize custom matmul with K-dimension optimization
+    custom_mm_block_init(cb_id_in0, cb_id_in1, cb_id_out, transpose, num_tiles_k);
 
     // Wait for all in0 tiles (replicated, tensor-backed - always available)
     cb_wait_front(cb_id_in0, num_tiles_k);
@@ -49,16 +49,10 @@ void MAIN {
         // Reserve output
         cb_reserve_back(cb_id_out, 1);
 
-        // Accumulate across K dimension
+        // Accumulate across K dimension using custom_mm_block
+        // Single call handles all K tiles internally via MOP replay
         tile_regs_acquire();
-
-        for (uint32_t k = 0; k < num_tiles_k; k++) {
-            // in0 tile: k (from replicated input)
-            // in1 tile: k (from current Kx1 stick)
-            // dst: 0 (single output tile, accumulating)
-            matmul_tiles(cb_id_in0, cb_id_in1, k, k, 0);
-        }
-
+        custom_mm_block(cb_id_in0, cb_id_in1, 0, 0, 0, transpose, num_tiles_k);
         tile_regs_commit();
 
         // Pop in1 Kx1 stick
