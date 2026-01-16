@@ -124,12 +124,14 @@ HalCoreInfoType create_active_eth_mem_map() {
     //     processor_classes[processor_class_idx] = processor_types;
     // }
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names(0);
+    std::vector<uint8_t> processor_classes_num_fw_binaries(0);
 
     static_assert(sizeof(mailboxes_t) <= MEM_AERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
