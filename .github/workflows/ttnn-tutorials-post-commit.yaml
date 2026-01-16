@@ -111,13 +111,13 @@ jobs:
         timeout-minutes: 10
         run: |
           cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
-          python3 -m pip install -r tutorials-dev.txt
+          uv pip install -r tutorials-dev.txt
 
       - name: 🛠️ Install testing utils
         timeout-minutes: 10
         run: |
           cd scripts/basic_dev_image
-          python3 -m pip install -r minimum-testing-kit.txt
+          uv pip install -r minimum-testing-kit.txt
 
       - name: 🛠️ Install tt-triage dependencies
         timeout-minutes: 10
@@ -126,7 +126,7 @@ jobs:
           apt-get install -y curl
           source /opt/venv/bin/activate
           ./scripts/install_debugger.sh
-          pip install -r ./tools/triage/requirements.txt
+          uv pip install -r ./tools/triage/requirements.txt
 
       - name: 🧪 Run tests
         timeout-minutes: ${{ inputs.timeout }}

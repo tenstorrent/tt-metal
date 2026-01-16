@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "impl/program/program_impl.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 
 namespace tt::tt_metal {
     class Inspector;

@@ -2,209 +2,121 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <chrono>
-#include <cerrno>
-#include <fmt/base.h>
 #include <cstdint>
-#include <cstdlib>
+#include <vector>
+
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
-#include <cstring>
-#include <exception>
-#include <map>
-#include <memory>
-#include <utility>
-#include <variant>
-#include <vector>
-
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
-//////////////////////////////////////////////////////////////////////////////////////////
-// TODO: explain what test does
-//////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
-int main() {
-    bool pass = true;
+TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileBfp8b) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    Program program = CreateProgram();
 
-    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    CoreCoord core = {0, 0};
 
-    try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Bfp8_b);
+    TT_FATAL(single_tile_size == (256 * 4) + (16 * 4), "Error");
+    uint32_t num_tiles = 1;
+    uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+    InterleavedBufferConfig dram_config{
+        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
 
-        CoreCoord core = {0, 0};
+    auto src0_dram_buffer = CreateBuffer(dram_config);
+    auto src1_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = CreateBuffer(dram_config);
 
-        uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Bfp8_b);
-        TT_FATAL(single_tile_size == (256 * 4) + (16 * 4), "Error");
-        uint32_t num_tiles = 1;
-        uint32_t dram_buffer_size = single_tile_size * num_tiles;  // num_tiles of BFP8_B
+    uint32_t src0_cb_index = 0;
+    uint32_t num_input_tiles = 1;
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Bfp8_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_src0_config);
 
-        tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
+    uint32_t src1_cb_index = 1;
+    CircularBufferConfig cb_src1_config =
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Bfp8_b}})
+            .set_page_size(src1_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_src1_config);
 
-        auto src0_dram_buffer = CreateBuffer(dram_config);
-        auto src1_dram_buffer = CreateBuffer(dram_config);
-        auto dst_dram_buffer = CreateBuffer(dram_config);
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
+    uint32_t num_output_tiles = 1;
+    CircularBufferConfig cb_output_config =
+        CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Bfp8_b}})
+            .set_page_size(ouput_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_output_config);
 
-        uint32_t src0_cb_index = 0;
-        uint32_t num_input_tiles = 1;
-        tt_metal::CircularBufferConfig cb_src0_config =
-            tt_metal::CircularBufferConfig(
-                num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Bfp8_b}})
-                .set_page_size(src0_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    auto mm_reader_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_blocked.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        uint32_t src1_cb_index = 1;
-        tt_metal::CircularBufferConfig cb_src1_config =
-            tt_metal::CircularBufferConfig(
-                num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Bfp8_b}})
-                .set_page_size(src1_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    auto unary_writer_kernel = CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-        uint32_t ouput_cb_index = tt::CBIndex::c_16;
-        uint32_t num_output_tiles = 1;
-        tt_metal::CircularBufferConfig cb_output_config =
-            tt_metal::CircularBufferConfig(
-                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Bfp8_b}})
-                .set_page_size(ouput_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    vector<uint32_t> compute_kernel_args = {1, 1, 1, 1, 1, 1, 1};
 
-        auto mm_reader_kernel = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_blocked.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp",
+        core,
+        ComputeConfig{.compile_args = compute_kernel_args});
 
-        auto unary_writer_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    // Execute
+    std::vector<uint32_t> activations = test_utils::create_random_vector_of_bfp8(
+        dram_buffer_size,
+        /*is_exp_a=*/false,
+        100,
+        std::chrono::system_clock::now().time_since_epoch().count());
+    detail::WriteToBuffer(src0_dram_buffer, activations);
 
-        vector<uint32_t> compute_kernel_args = {
-            1,  // block_tile_dim
-            1,  // dst_tile_rows
-            1,  // dst_tile_cols
-            1,  // block_cnt
-            1,  // in0_block_tile_cnt
-            1,  // in1_block_tile_cnt
-            1   // out_block_tile_cnt
-        };
-
-        tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp",
-            core,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> activations = test_utils::create_random_vector_of_bfp8(
-            dram_buffer_size,
-            /*is_exp_a=*/false,
-            100,
-            std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations);
-
-        int num_float_in_tile = 32 * 32;
-        std::vector<float> vec(num_float_in_tile, (float)0);
-        for (int i = 0; i < 32; i++) {
-            vec.at((i * 32) + i) = (float)1;
-        }
-        std::vector<uint32_t> weights =
-            pack_as_bfp8_tiles(tt::stl::make_const_span(vec), /*row_major_input=*/true, /*is_exp_a=*/false);
-
-        tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            mm_reader_kernel,
-            core,
-            {src0_dram_buffer->address(),
-            0,
-            src1_dram_buffer->address(),
-            0,
-            1,
-            1,
-            1,
-            1 * single_tile_size,
-            1 * single_tile_size});
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel,
-            core,
-            {dst_dram_buffer->address(),
-            0,
-            num_tiles});
-
-        tt_metal::detail::LaunchProgram(device, program);
-
-        std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Validation & Teardown
-        ////////////////////////////////////////////////////////////////////////////
-
-        pass &= tt_metal::CloseDevice(device);
-
-        pass &= (activations == result_vec);  // src1 is identity
-
-    } catch (const std::exception& e) {
-        pass = false;
-        // Capture the exception error message
-        log_error(LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
+    int num_float_in_tile = 32 * 32;
+    std::vector<float> vec(num_float_in_tile, (float)0);
+    for (int i = 0; i < 32; i++) {
+        vec.at((i * 32) + i) = (float)1;
     }
+    std::vector<uint32_t> weights =
+        pack_as_bfp8_tiles(tt::stl::make_const_span(vec), /*row_major_input=*/true, /*is_exp_a=*/false);
 
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
+    detail::WriteToBuffer(src1_dram_buffer, weights);
 
-    TT_FATAL(pass, "Error");
+    SetRuntimeArgs(
+        program,
+        mm_reader_kernel,
+        core,
+        {src0_dram_buffer->address(),
+         0,
+         src1_dram_buffer->address(),
+         0,
+         1,
+         1,
+         1,
+         1 * single_tile_size,
+         1 * single_tile_size});
 
-    return 0;
+    SetRuntimeArgs(program, unary_writer_kernel, core, {dst_dram_buffer->address(), 0, num_tiles});
+
+    detail::LaunchProgram(dev, program);
+
+    std::vector<uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+
+    // Validation - matmul with identity should return same result
+    EXPECT_EQ(activations, result_vec);
 }

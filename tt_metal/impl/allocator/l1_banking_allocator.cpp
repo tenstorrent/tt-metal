@@ -27,6 +27,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
@@ -178,7 +179,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
     const auto& hal = MetalContext::instance().hal();
     const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device_id);
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned

@@ -54,7 +54,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeRe
     // Get PCIe core coordinates
     const metal_SocDescriptor& soc_d = MetalContext::instance().get_cluster().get_soc_desc(device_id);
     vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
-    TT_ASSERT(!pcie_cores.empty(), "No PCIe cores found");
+    TT_FATAL(!pcie_cores.empty(), "No PCIe cores found");
 
     // Physical Core Coordinates
     uint32_t packed_subordinate_core_coordinates = pcie_cores[0].x << 16 | (pcie_cores[0].y & 0xFFFF);

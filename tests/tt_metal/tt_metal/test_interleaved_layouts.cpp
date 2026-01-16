@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <chrono>
 #include <cerrno>
 #include <fmt/base.h>
@@ -40,17 +42,16 @@
 #include "common/tt_backend_api_types.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
-bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::ARCH& /*arch*/) {
+namespace {
+
+bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(tt_metal::IDevice* device) {
     /*
         This test just writes sticks in a interleaved fashion to DRAM and then reads back to ensure
         they were written correctly
@@ -58,19 +59,13 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
     bool pass = true;
 
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-
         int num_sticks = 256;
         int num_elements_in_stick = 1024;
         int stick_size = num_elements_in_stick * 2;
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
+        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size / sizeof(bfloat16), false);
 
         tt_metal::InterleavedBufferConfig sticks_config{
             .device = device,
@@ -86,7 +81,6 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         tt_metal::detail::ReadFromBuffer(sticks_buffer, dst_vec);
 
         pass &= (src_vec == dst_vec);
-        pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
@@ -98,19 +92,10 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
     return pass;
 }
 
-bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt::ARCH& /*arch*/) {
+bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(tt_metal::IDevice* device) {
     bool pass = true;
 
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
@@ -197,7 +182,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
+        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size / sizeof(bfloat16), false);
 
         tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
@@ -236,7 +221,6 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         }
 
         DeallocateBuffer(*dst_dram_buffer);
-        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception& e) {
         pass = false;
@@ -249,39 +233,12 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
     return pass;
 }
 
-bool interleaved_stick_reader_interleaved_tilized_writer_datacopy_test() {
-    bool pass = true;
+// Placeholder tests removed - were not implemented
 
-    /*
-        Placeholder to not forget to write this test
-    */
-
-    return pass;
-}
-
-bool interleaved_tilized_reader_single_bank_stick_writer_datacopy_test() {
-    bool pass = true;
-
-    /*
-        Placeholder to not forget to write this test
-    */
-
-    return pass;
-}
-
-bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt::ARCH& /*arch*/) {
+bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(tt_metal::IDevice* device) {
     bool pass = true;
 
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
@@ -367,7 +324,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
+        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size / sizeof(bfloat16), false);
 
         tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
@@ -401,8 +358,6 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_output_tiles);
         }
 
-        pass &= tt_metal::CloseDevice(device);
-
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
@@ -415,7 +370,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 }
 
 template <bool src_is_in_l1, bool dst_is_in_l1>
-bool test_interleaved_l1_datacopy(const tt::ARCH& /*arch*/) {
+bool test_interleaved_l1_datacopy(tt_metal::IDevice* device) {
     uint num_pages = 256;
     uint num_bytes_per_page = 2048;
     uint buffer_size = num_pages * num_bytes_per_page;
@@ -424,9 +379,6 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& /*arch*/) {
     uint num_dram_banks = 8;
 
     bool pass = true;
-
-    int device_id = 0;
-    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
@@ -527,45 +479,37 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& /*arch*/) {
 
     pass = (host_buffer == readback_buffer);
 
-    pass &= tt_metal::CloseDevice(device);
-
     TT_FATAL(pass, "Test failed - buffer comparison did not match");
 
     return pass;
 }
 
-int main(int argc, char** argv) {
-    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+}  // namespace
 
-    bool pass = true;
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Initial Runtime Args Parse
-    ////////////////////////////////////////////////////////////////////////////
-    std::vector<std::string> input_args(argv, argv + argc);
-    std::string arch_name;
-    try {
-        std::tie(arch_name, input_args) =
-            test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-    } catch (const std::exception& e) {
-        TT_THROW("Command line arguments found exception", e.what());
-    }
-    const tt::ARCH arch = tt::get_arch_from_string(arch_name);
+TEST_F(MeshDeviceSingleCardFixture, WriteInterleavedSticksAndReadBack) {
+    ASSERT_TRUE(test_write_interleaved_sticks_and_then_read_interleaved_sticks(devices_[0]->get_devices()[0]));
+}
 
-    // DRAM row/tile interleaved layout tests
-    pass &= test_write_interleaved_sticks_and_then_read_interleaved_sticks(arch);
-    pass &= interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(arch);
-    pass &= interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(arch);
+TEST_F(MeshDeviceSingleCardFixture, InterleavedStickReaderSingleBankTilizedWriter) {
+    ASSERT_TRUE(interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(devices_[0]->get_devices()[0]));
+}
 
-    // L1 tile-interleaved tests
-    pass &= test_interleaved_l1_datacopy<true, true>(arch);
-    pass &= test_interleaved_l1_datacopy<false, true>(arch);
-    pass &= test_interleaved_l1_datacopy<true, false>(arch);
-    pass &= test_interleaved_l1_datacopy<false, false>(arch);
+TEST_F(MeshDeviceSingleCardFixture, InterleavedTilizedReaderInterleavedStickWriter) {
+    ASSERT_TRUE(interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(devices_[0]->get_devices()[0]));
+}
 
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
+TEST_F(MeshDeviceSingleCardFixture, InterleavedL1DatacopyL1ToL1) {
+    ASSERT_TRUE((test_interleaved_l1_datacopy<true, true>(devices_[0]->get_devices()[0])));
+}
+
+TEST_F(MeshDeviceSingleCardFixture, InterleavedL1DatacopyDramToL1) {
+    ASSERT_TRUE((test_interleaved_l1_datacopy<false, true>(devices_[0]->get_devices()[0])));
+}
+
+TEST_F(MeshDeviceSingleCardFixture, InterleavedL1DatacopyL1ToDram) {
+    ASSERT_TRUE((test_interleaved_l1_datacopy<true, false>(devices_[0]->get_devices()[0])));
+}
+
+TEST_F(MeshDeviceSingleCardFixture, InterleavedL1DatacopyDramToDram) {
+    ASSERT_TRUE((test_interleaved_l1_datacopy<false, false>(devices_[0]->get_devices()[0])));
 }

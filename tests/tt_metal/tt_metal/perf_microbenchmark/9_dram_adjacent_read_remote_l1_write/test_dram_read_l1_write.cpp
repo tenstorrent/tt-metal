@@ -97,14 +97,14 @@ void get_max_page_size_and_num_pages(
     uint32_t& num_pages,
     uint32_t& num_pages_w_per_receiver) {
     uint64_t half_row_bytes = static_cast<uint64_t>(num_tiles_w / 2) * tile_size;
-    TT_ASSERT(num_tiles_w % 2 == 0, "num_tiles_w {} must be divisible by 2", num_tiles_w);
+    TT_FATAL(num_tiles_w % 2 == 0, "num_tiles_w {} must be divisible by 2", num_tiles_w);
 
     page_size = (8192 / tile_size) * tile_size;
     // Each receiver core receives half the data, so each receiver cores's block size is half of the total block size
     while (half_row_bytes % page_size != 0 && page_size > tile_size) {
         page_size -= tile_size;
     }
-    TT_ASSERT(page_size % tile_size == 0, "page_size must be a multiple of tile_size!");
+    TT_FATAL(page_size % tile_size == 0, "page_size must be a multiple of tile_size!");
     num_pages = num_tiles_w * num_tiles_h * tile_size / page_size;
     num_pages_w_per_receiver = half_row_bytes / page_size;
 }
@@ -470,7 +470,7 @@ int main(int argc, char** argv) {
         test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_ASSERT(false);
+            TT_FATAL(false, "Command line arguments found exception: {}", e.what());
         }
 
         if (use_device_profiler) {

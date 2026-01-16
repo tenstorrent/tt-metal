@@ -27,13 +27,13 @@ struct DefaultMeshWorkloadFactory {
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensor);
+        Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensor);
+        Tensor& output_tensor);
 
 private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -42,7 +42,7 @@ private:
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensor);
+        Tensor& output_tensor);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::all_gather_async

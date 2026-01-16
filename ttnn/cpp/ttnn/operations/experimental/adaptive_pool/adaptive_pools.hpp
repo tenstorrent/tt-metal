@@ -7,7 +7,7 @@
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 

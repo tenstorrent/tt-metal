@@ -180,11 +180,15 @@ run_t3000_stable_diffusion_35_large_tests() {
 }
 
 run_t3000_flux1_tests() {
-  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k 2x4sp0tp1"
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k wh_2x4sp0tp1"
 }
 
 run_t3000_motif_tests() {
   run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_performance_motif.py"
+}
+
+run_t3000_qwenimage_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k 2x4"
 }
 
 run_t3000_model_perf_tests() {
