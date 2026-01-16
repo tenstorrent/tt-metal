@@ -50,9 +50,26 @@ def merge_perf_files(fname, perf_fname, expected_cols):
 def process_perf_results(fname, expected_cols):
     with open(fname) as file:
         merge_res = csv.reader(file, skipinitialspace=True)
-        logger.info(next(merge_res)[0].strip())
-        logger.info(next(merge_res)[0].strip())
-        cols = next(merge_res)
+        try:
+            first_row = next(merge_res)
+        except StopIteration as e:
+            raise AssertionError(f"Perf CSV {fname} is empty") from e
+        first_value = first_row[0].strip() if first_row else ""
+
+        if first_value.startswith("branch:"):
+            logger.info(first_value)
+            hash_row = next(merge_res, None)
+            hash_value = hash_row[0].strip() if hash_row else ""
+            logger.info(hash_value)
+            cols_row = next(merge_res, None)
+        else:
+            logger.info(first_value)
+            cols_row = next(merge_res, None)
+            cols_value = cols_row[0].strip() if cols_row else ""
+            logger.info(cols_value)
+
+        assert cols_row is not None, f"Perf CSV {fname} is missing columns"
+        cols = cols_row
         cols = [c.strip() for c in cols]
         assert len(expected_cols) == len(cols), "Mismatch between expected and actual columns in perf CSV"
         for expected_c, c in zip(expected_cols, cols):
