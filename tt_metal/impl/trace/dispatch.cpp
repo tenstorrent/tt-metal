@@ -227,9 +227,14 @@ std::size_t compute_interleaved_trace_buf_page_size(uint32_t buf_size, const uin
     // Min size is bounded by NOC transfer efficiency
     // Max size is bounded by Prefetcher CmdDatQ size
     constexpr uint32_t kExecBufPageMin = 1024;
-    constexpr uint32_t kExecBufPageMax = 4096;
+    constexpr uint32_t kExecBufPageMax = 8192;
+    // If the trace buffer uses at least 2 pages per bank (for a specific page size), require using that page size or
+    // larger to improve prefetcher read performance. This limits wasted space to at most 33% or the page size * the
+    // number of banks, whichever is smaller.
+    constexpr uint32_t kMinPagesPerBankForceUse = 2;
+
     // The algorithm below currently minimizes the amount of wasted space due to
-    // padding. TODO: Tune for performance.
+    // padding
     std::vector<uint32_t> candidates;
     candidates.reserve(__builtin_clz(kExecBufPageMin) - __builtin_clz(kExecBufPageMax) + 1);
     for (uint32_t size = 1; size <= kExecBufPageMax; size <<= 1) {
@@ -245,7 +250,7 @@ std::size_t compute_interleaved_trace_buf_page_size(uint32_t buf_size, const uin
         uint32_t fully_banked = num_banks * size;
         uint32_t padded_size = (buf_size + fully_banked - 1) / fully_banked * fully_banked;
         uint32_t waste = padded_size - buf_size;
-        if (waste <= min_waste) {
+        if (waste <= min_waste || (buf_size / (num_banks * size) >= kMinPagesPerBankForceUse)) {
             min_waste = waste;
             pick = size;
         }

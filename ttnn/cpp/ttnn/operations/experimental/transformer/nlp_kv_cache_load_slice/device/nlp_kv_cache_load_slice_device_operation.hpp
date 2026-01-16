@@ -14,8 +14,8 @@
 namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice {
 
 struct NlpKVCacheLoadSliceDeviceOperation {
-    using operation_attributes_t = nlp_kv_cache_load_slice::operation_attributes_t;
-    using tensor_args_t = nlp_kv_cache_load_slice::tensor_args_t;
+    using operation_attributes_t = NlpKvCacheLoadSliceParams;
+    using tensor_args_t = NlpKvCacheLoadSliceInputs;
     using spec_return_value_t = nlp_kv_cache_load_slice::spec_return_value_t;
     using tensor_return_value_t = nlp_kv_cache_load_slice::tensor_return_value_t;
     using program_factory_t = std::variant<program::NlpKVCacheLoadSliceProgramFactory>;

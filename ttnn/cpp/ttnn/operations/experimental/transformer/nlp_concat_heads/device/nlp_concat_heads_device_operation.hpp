@@ -20,8 +20,8 @@
 namespace ttnn::operations::experimental::nlp_concat_heads {
 
 struct NLPConcatHeadsDeviceOperation {
-    using operation_attributes_t = nlp_concat_heads::operation_attributes_t;
-    using tensor_args_t = nlp_concat_heads::tensor_args_t;
+    using operation_attributes_t = NlpConcatHeadsParams;
+    using tensor_args_t = NlpConcatHeadsInputs;
     using spec_return_value_t = nlp_concat_heads::spec_return_value_t;
     using tensor_return_value_t = nlp_concat_heads::tensor_return_value_t;
     using program_factory_t = std::variant<program::NLPConcatHeadsProgramFactory>;

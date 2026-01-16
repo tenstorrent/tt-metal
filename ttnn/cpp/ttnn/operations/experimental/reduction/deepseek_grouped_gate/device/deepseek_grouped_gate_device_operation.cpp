@@ -108,7 +108,7 @@ deepseek_grouped_gate(
 namespace ttnn::operations::experimental::reduction {
 
 DeepseekGroupedGateDeviceOperation::program_factory_t DeepseekGroupedGateDeviceOperation::select_program_factory(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 

@@ -32,7 +32,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/bfloat16.hpp
     api/tt-metalium/bfloat4.hpp
     api/tt-metalium/bfloat8.hpp
-    api/tt-metalium/blockfloat_common.hpp
     api/tt-metalium/buffer.hpp
     api/tt-metalium/buffer_distribution_spec.hpp
     api/tt-metalium/buffer_page_mapping.hpp
@@ -84,7 +83,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
     api/tt-metalium/mesh_trace_id.hpp
     api/tt-metalium/mesh_workload.hpp
-    api/tt-metalium/metal_soc_descriptor.h
     api/tt-metalium/profiler_optional_metadata.hpp
     api/tt-metalium/profiler_types.hpp
     api/tt-metalium/program.hpp

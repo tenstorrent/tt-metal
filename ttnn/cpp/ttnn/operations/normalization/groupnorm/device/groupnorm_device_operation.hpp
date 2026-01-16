@@ -17,10 +17,10 @@
 namespace ttnn::operations::normalization::group_norm {
 
 struct GroupNormDeviceOperation {
-    using operation_attributes_t = group_norm::operation_attributes_t;
-    using tensor_args_t = group_norm::tensor_args_t;
-    using spec_return_value_t = group_norm::spec_return_value_t;
-    using tensor_return_value_t = group_norm::tensor_return_value_t;
+    using operation_attributes_t = GroupNormParams;
+    using tensor_args_t = GroupNormInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<GroupNormShardedProgramFactory, GroupNormNoMcastProgramFactory, GroupNormMcastProgramFactory>;
 

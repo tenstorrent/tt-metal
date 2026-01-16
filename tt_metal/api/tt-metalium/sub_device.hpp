@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -13,29 +14,31 @@
 
 namespace tt::tt_metal {
 
+// Forward declaration
+class SubDeviceImpl;
+
+// TODO(river): Revisit this class and either remove it or bring sub-device APIs over
+
 class SubDevice {
 public:
-    SubDevice(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores);
-    SubDevice(tt::stl::Span<const CoreRangeSet> cores);
-    SubDevice(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores);
+    explicit SubDevice(tt::stl::Span<const CoreRangeSet> cores);
+    // Internal constructor (internal use only)
+    SubDevice(SubDeviceImpl&& impl);
 
-    SubDevice(const SubDevice& sub_device) = default;
-    SubDevice& operator=(const SubDevice& sub_device) = default;
+    // Special member functions
+    SubDevice(const SubDevice& other);
+    SubDevice& operator=(const SubDevice& other);
+    SubDevice(SubDevice&& other) noexcept;
+    SubDevice& operator=(SubDevice&& other) noexcept;
+    ~SubDevice();
 
-    SubDevice(SubDevice&& sub_device) noexcept = default;
-    SubDevice& operator=(SubDevice&& sub_device) noexcept = default;
-
-    bool has_core_type(HalProgrammableCoreType core_type) const;
-    uint32_t num_cores(HalProgrammableCoreType core_type) const;
-    const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores() const;
     const CoreRangeSet& cores(HalProgrammableCoreType core_type) const;
 
-private:
-    void validate() const;
+    SubDeviceImpl* impl();
+    const SubDeviceImpl* impl() const;
 
-    // These are logical coords from the original device grid
-    // There is no remapping of logical coords
-    std::array<CoreRangeSet, NumHalProgrammableCoreTypes> cores_;
+private:
+    std::unique_ptr<SubDeviceImpl> pimpl_;
 };
 
 }  // namespace tt::tt_metal

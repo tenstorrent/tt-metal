@@ -237,13 +237,13 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
 }
 
 PagedFusedUpdateCacheDeviceOperation::spec_return_value_t PagedFusedUpdateCacheDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation
     return {tensor_args.cache_tensor1.tensor_spec(), tensor_args.cache_tensor2.tensor_spec()};
 }
 
 PagedFusedUpdateCacheDeviceOperation::tensor_return_value_t PagedFusedUpdateCacheDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // In-place operation, return the cache tensors
     return std::make_tuple(tensor_args.cache_tensor1, tensor_args.cache_tensor2);
 }

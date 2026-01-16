@@ -14,7 +14,7 @@ using namespace tt::constants;
 namespace ttnn::operations::normalization {
 
 LayerNormPreAllGatherDeviceOperation::program_factory_t LayerNormPreAllGatherDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     // Check if 2D core grid is requested
     if (args.use_2d_core_grid.has_value() && args.use_2d_core_grid.value()) {
         return program::LayerNormPreAllGather2DProgramFactory{};

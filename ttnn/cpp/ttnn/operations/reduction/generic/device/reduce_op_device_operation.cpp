@@ -24,7 +24,7 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
 }
 
 void ReduceDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,

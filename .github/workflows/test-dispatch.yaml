@@ -118,11 +118,11 @@ jobs:
           ls -la
           WHEEL_FILENAME=$(ls -1 *.whl)
           echo "📦 Installing $WHEEL_FILENAME"
-          pip3 install "$WHEEL_FILENAME"
+          uv pip install "$WHEEL_FILENAME"
         shell: bash
       - name: Run regression in loop
         run: |
-          pip3 install pytest-repeat
+          uv pip install pytest-repeat
           ${{ inputs.command }}
         shell: bash
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

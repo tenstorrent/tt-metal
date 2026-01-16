@@ -8,7 +8,9 @@ Usage:
     check_eth_status.py
 
 Description:
-    Check status on the ethernet cores
+    This script checks the link is up and there are no retrain counts on active ethernet cores.
+    An ethernet core is considered active if the port status is up.
+    A link being down or high retrain counts may indicate the eth connection is unstable.
 
 Owner:
     nhuang-tt

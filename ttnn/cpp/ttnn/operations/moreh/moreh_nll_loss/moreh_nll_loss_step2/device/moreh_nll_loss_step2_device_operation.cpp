@@ -10,12 +10,12 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::moreh::moreh_nll_loss_step2 {
 
 MorehNllLossStep2DeviceOperation::program_factory_t MorehNllLossStep2DeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return Factory{};
 }
 
 void MorehNllLossStep2DeviceOperation::validate_inputs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& target_tensor = tensor_args.target_tensor;
     const std::optional<Tensor>& weight_tensor = tensor_args.weight_tensor;

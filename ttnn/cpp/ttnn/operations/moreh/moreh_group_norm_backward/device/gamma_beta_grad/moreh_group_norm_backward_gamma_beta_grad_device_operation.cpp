@@ -58,7 +58,7 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
 
 MorehGroupNormBackwardGammaBetaGradOperation::program_factory_t
 MorehGroupNormBackwardGammaBetaGradOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return MorehGroupNormBackwardGammaBetaGradFactory();
 }
 

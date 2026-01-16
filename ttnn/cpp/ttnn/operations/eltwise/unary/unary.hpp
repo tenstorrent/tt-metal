@@ -335,7 +335,7 @@ struct Rdiv {
     static Tensor invoke(
         const Tensor& input_tensor,
         float value,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<std::string>& rounding_mode = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };

@@ -1,12 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig
 from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 import ttnn
@@ -16,14 +13,9 @@ from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.model_config import ModelArgs
 
+from .utils import load_hf_mixtral_config
+
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_moe.py
-
-
-def load_hf_mixtral_config():
-    hf_model = os.getenv("HF_MODEL")
-    assert hf_model is not None, "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct"
-    config = AutoConfig.from_pretrained(hf_model, local_files_only=os.getenv("CI") == "true")
-    return config
 
 
 def convert2ref(state_dict):

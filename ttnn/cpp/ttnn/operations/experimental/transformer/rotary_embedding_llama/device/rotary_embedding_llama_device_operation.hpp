@@ -14,8 +14,8 @@
 namespace ttnn::operations::experimental::transformer::rotary_embedding_llama {
 
 struct RotaryEmbeddingLlamaDeviceOperation {
-    using operation_attributes_t = rotary_embedding_llama::operation_attributes_t;
-    using tensor_args_t = rotary_embedding_llama::tensor_args_t;
+    using operation_attributes_t = RotaryEmbeddingLlamaParams;
+    using tensor_args_t = RotaryEmbeddingLlamaInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = tt::tt_metal::Tensor;
     using program_factory_t = std::variant<

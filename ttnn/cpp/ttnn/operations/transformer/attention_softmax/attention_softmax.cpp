@@ -16,7 +16,7 @@ ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
     ttnn::Tensor& input_tensor,
     const std::optional<int>& head_size_arg,
     const std::optional<const ttnn::Tensor>& attention_mask,
-    const ttnn::operations::normalization::SoftmaxProgramConfig& program_config,
+    const ttnn::operations::normalization::SoftmaxProgramConfig& /*program_config*/,
     const std::optional<bool> causal_mask,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     const float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;

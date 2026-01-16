@@ -21,7 +21,7 @@ namespace ttnn::operations::normalization::softmax::program {
 // General-purpose softmax with arbitrary dimension support
 void SoftmaxProgramFactoryGeneral::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attributes,
+    const operation_attributes_t& /*attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto& program = cached_program.program;
@@ -1632,7 +1632,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
 void SoftmaxShardedProgramFactoryAttentionOptimized::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attributes,
+    const operation_attributes_t& /*attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto* in0_buffer = tensor_args.input_tensor.buffer();

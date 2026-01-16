@@ -75,8 +75,8 @@ on:
           - gemma3
           - wan22
           - mochi
-      t3000-model-perf:
-        description: "Model perf tests: Select 'all', specific model or 'disabled'"
+      t3000-perf:
+        description: "Perf tests: Select 'all', specific model or 'disabled'"
         type: choice
         default: disabled
         options:
@@ -92,8 +92,8 @@ on:
           - flux1-dev
           - motif
           - gemma-3-27b-it
-      t3000-frequent:
-        description: "Frequent tests: Select 'all', specific model or 'disabled'"
+      t3000-integration:
+        description: "Integration tests: Select 'all', specific model or 'disabled'"
         type: choice
         default: disabled
         options:
@@ -119,7 +119,7 @@ on:
           - mistral
           - wan2.2
           - mochi
-      t3000-nightly:
+      t3000-e2e:
         required: false
         type: boolean
         default: false
@@ -137,9 +137,9 @@ jobs:
     outputs:
       run-unit: ${{ steps.logic.outputs.run-unit }}
       run-demo: ${{ steps.logic.outputs.run-demo }}
-      run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
-      run-frequent: ${{ steps.logic.outputs.run-frequent }}
-      run-nightly: ${{ steps.logic.outputs.run-nightly }}
+      run-perf: ${{ steps.logic.outputs.run-perf }}
+      run-integration: ${{ steps.logic.outputs.run-integration }}
+      run-e2e: ${{ steps.logic.outputs.run-e2e }}
       run-profiler: ${{ steps.logic.outputs.run-profiler }}
     steps:
       - name: Determine test execution
@@ -149,25 +149,25 @@ jobs:
             "manual")
               echo "run-unit=${{ inputs.t3000-unit != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-demo=${{ inputs.t3000-demo != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-model-perf=${{ inputs.t3000-model-perf != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-frequent=${{ inputs.t3000-frequent != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-nightly=${{ inputs.t3000-nightly }}" >> $GITHUB_OUTPUT
+              echo "run-perf=${{ inputs.t3000-perf != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-integration=${{ inputs.t3000-integration != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-e2e=${{ inputs.t3000-e2e }}" >> $GITHUB_OUTPUT
               echo "run-profiler=${{ inputs.t3000-profiler }}" >> $GITHUB_OUTPUT
               ;;
             "models-mandatory")
               echo "run-unit=true" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
-              echo "run-frequent=false" >> $GITHUB_OUTPUT
-              echo "run-nightly=false" >> $GITHUB_OUTPUT
+              echo "run-perf=false" >> $GITHUB_OUTPUT
+              echo "run-integration=false" >> $GITHUB_OUTPUT
+              echo "run-e2e=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
               ;;
             "models-extended")
               echo "run-unit=true" >> $GITHUB_OUTPUT
               echo "run-demo=true" >> $GITHUB_OUTPUT
-              echo "run-model-perf=true" >> $GITHUB_OUTPUT
-              echo "run-frequent=false" >> $GITHUB_OUTPUT
-              echo "run-nightly=false" >> $GITHUB_OUTPUT
+              echo "run-perf=true" >> $GITHUB_OUTPUT
+              echo "run-integration=false" >> $GITHUB_OUTPUT
+              echo "run-e2e=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
               ;;
           esac
@@ -181,7 +181,7 @@ jobs:
       version: 22.04
       build-type: ${{ inputs.build-type }}
       build-wheel: true
-      tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
+      tracy: ${{ needs.determine-tests.outputs.run-perf == 'true' }}
   t3000-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -204,33 +204,33 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-demo || 'all' }}
-  t3000-model-perf-tests:
-    if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
+  t3000-perf-tests:
+    if: ${{ needs.determine-tests.outputs.run-perf == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    uses: ./.github/workflows/t3000-perf-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-model-perf || 'all' }}
-  t3000-frequent-tests:
-    if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-perf || 'all' }}
+  t3000-integration-tests:
+    if: ${{ needs.determine-tests.outputs.run-integration == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
+    uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-frequent || 'all' }}
-  t3000-nightly-tests:
-    if: ${{ needs.determine-tests.outputs.run-nightly == 'true' }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-integration || 'all' }}
+  t3000-e2e-tests:
+    if: ${{ needs.determine-tests.outputs.run-e2e == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+    uses: ./.github/workflows/t3000-e2e-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

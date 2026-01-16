@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
 
@@ -23,7 +23,8 @@ struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    ttnn::RingAttentionAllGatherAsync all_gather_struct;
+    experimental::ccl::ring_attention_all_gather_async::operation_attributes_t all_gather_operation_attributes;
+    experimental::ccl::ring_attention_all_gather_async::tensor_args_t all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
 
     // We need a constructor, because all_gather_struct is not default initializable.
@@ -35,7 +36,8 @@ struct operation_attributes_t {
         tt::tt_metal::MemoryConfig output_memory_config,
         std::optional<SDPAProgramConfig> program_config,
         DeviceComputeKernelConfig compute_kernel_config,
-        ttnn::RingAttentionAllGatherAsync all_gather_struct,
+        experimental::ccl::ring_attention_all_gather_async::operation_attributes_t all_gather_operation_attributes,
+        experimental::ccl::ring_attention_all_gather_async::tensor_args_t all_gather_tensor_args,
         CoreCoord ccl_core_grid_offset) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
@@ -44,7 +46,8 @@ struct operation_attributes_t {
         output_memory_config(std::move(output_memory_config)),
         program_config(std::move(program_config)),
         compute_kernel_config(compute_kernel_config),
-        all_gather_struct(std::move(all_gather_struct)),
+        all_gather_operation_attributes(std::move(all_gather_operation_attributes)),
+        all_gather_tensor_args(std::move(all_gather_tensor_args)),
         ccl_core_grid_offset(ccl_core_grid_offset) {}
 
     auto attributes() const {

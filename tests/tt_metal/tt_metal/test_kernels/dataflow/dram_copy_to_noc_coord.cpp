@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/endpoints.h"
 #if defined(COMPILE_FOR_ERISC)
 #include "internal/ethernet/tunneling.h"
 #endif

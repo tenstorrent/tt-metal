@@ -17,12 +17,12 @@ thread_local std::unordered_map<std::size_t, std::uint32_t>
 
 // TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
 HaloDeviceOperation::program_factory_t HaloDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return data_movement::program::UntilizeWithHaloProgramFactory{};
 }
 
 void HaloDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
     // validate input data tensor

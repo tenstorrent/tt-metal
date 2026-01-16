@@ -8,12 +8,12 @@
 namespace ttnn::operations::moreh::moreh_nll_loss_backward {
 
 MorehNllLossBackwardDeviceOperation::program_factory_t MorehNllLossBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return Factory{};
 }
 
 void MorehNllLossBackwardDeviceOperation::validate_inputs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const auto& target_tensor = tensor_args.target_tensor;
     const auto& output_grad_tensor = tensor_args.output_grad_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
@@ -87,7 +87,7 @@ void MorehNllLossBackwardDeviceOperation::validate_on_program_cache_hit(
 }
 
 MorehNllLossBackwardDeviceOperation::spec_return_value_t MorehNllLossBackwardDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad_tensor.has_value()) {
         return {tensor_args.input_grad_tensor->tensor_spec()};
     }

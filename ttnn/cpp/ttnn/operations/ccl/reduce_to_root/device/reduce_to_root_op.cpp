@@ -78,7 +78,7 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
 };
 
 ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;

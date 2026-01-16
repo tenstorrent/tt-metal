@@ -43,9 +43,16 @@ The following models have been traced and their configurations are available in 
 | deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | Distilled reasoning model | `HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | Qwen/Qwen2.5-Coder-32B | Large code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 
+**WH Galaxy (32 cards):**
+
+| Model | Purpose | Pytest command used for tracing |
+|-------|---------|---------------------------------|
+| **DeepSeek V3** | 671B parameter MoE model | `python model_tracer/generic_ops_tracer.py models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --output-path deepseek_tt_out_batch_4.json --max-new-tokens 128 --model-path $DEEPSEEK_V3_HF_MODEL --cache-dir $DEEPSEEK_V3_CACHE --num-prompts 128` |
+
+
 These traced configurations provide real-world operation patterns from production models, ensuring sweep tests validate against actual usage scenarios.
 
-*Last updated: January 2, 2026*
+*Last updated: January 9, 2026*
 
 ---
 

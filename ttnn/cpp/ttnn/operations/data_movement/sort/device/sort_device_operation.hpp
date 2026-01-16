@@ -15,8 +15,8 @@
 namespace ttnn::operations::data_movement::sort {
 
 struct SortDeviceOperation {
-    using operation_attributes_t = sort::operation_attributes_t;
-    using tensor_args_t = sort::tensor_args_t;
+    using operation_attributes_t = SortParams;
+    using tensor_args_t = SortInputs;
     using spec_return_value_t = sort::spec_return_value_t;
     using tensor_return_value_t = sort::tensor_return_value_t;
     using program_factory_t = std::variant<

@@ -3,17 +3,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "tools/profiler/event_metadata.hpp"
-#include "tools/profiler/noc_event_profiler.hpp"
-
-using EMD = KernelProfilerNocEventMetadata;
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/endpoints.h"
 
 void kernel_main() {
-#if defined(PROFILE_NOC_EVENTS)
     riscv_wait(START_DELAY);
-    // Make this really large so it exceeds the max profiler sizes to test mid run dumps
+
+    experimental::Noc noc;
+    experimental::CoreLocalMem<uint32_t> local_buffer(L1_BUFFER_ADDR);
+    experimental::UnicastEndpoint unicast_endpoint;
+
+    constexpr uint32_t num_bytes = 64;
     for (uint32_t i = 0; i < 10000; ++i) {
-        noc_event_profiler::recordNocEvent(EMD::NocEventType::READ, my_x[0], my_y[0], 1000, 0, 0, i);
+        noc.async_read(
+            unicast_endpoint,
+            local_buffer,
+            num_bytes,
+            {
+                .noc_x = OTHER_CORE_X,
+                .noc_y = OTHER_CORE_Y,
+                .addr = i,
+            },
+            {});
+        noc.async_read_barrier();
+        noc.async_write(
+            local_buffer,
+            unicast_endpoint,
+            num_bytes,
+            {},
+            {
+                .noc_x = OTHER_CORE_X,
+                .noc_y = OTHER_CORE_Y,
+                .addr = i,
+            });
+        noc.async_write_barrier();
     }
-#endif
 }

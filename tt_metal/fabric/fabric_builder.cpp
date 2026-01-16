@@ -153,6 +153,12 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
         add_direction_pairs(RoutingDirection::N, RoutingDirection::W);
         add_direction_pairs(RoutingDirection::S, RoutingDirection::E);
         add_direction_pairs(RoutingDirection::S, RoutingDirection::W);
+
+        // Z router connections - connect Z routers to all 4 mesh directions
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::N);
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::S);
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::E);
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::W);
     } else if (wrap_around_mesh_ && num_intra_chip_neighbors == 2) {
         // 1D Routing wrap the corner chips, fold the internal connections
         auto it = chip_neighbors_.begin();

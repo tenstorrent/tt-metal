@@ -21,6 +21,7 @@
 #include "sub_device_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
@@ -203,7 +204,7 @@ void SubDeviceManager::validate_sub_devices() const {
             worker_cores,
             device_worker_cores);
 
-        if (sub_device.has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
+        if (sub_device.impl()->has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
             const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
             uint32_t num_eth_cores = 0;
             const auto& device_eth_cores =
@@ -227,7 +228,7 @@ void SubDeviceManager::validate_sub_devices() const {
         for (uint32_t j = i + 1; j < sub_devices_.size(); ++j) {
             for (uint32_t k = 0; k < NumHalProgrammableCoreTypes; ++k) {
                 TT_FATAL(
-                    !(sub_devices_[i].cores()[k].intersects(sub_devices_[j].cores()[k])),
+                    !(sub_devices_[i].impl()->cores()[k].intersects(sub_devices_[j].impl()->cores()[k])),
                     "SubDevices specified for SubDeviceManager intersect");
             }
         }
@@ -245,7 +246,7 @@ void SubDeviceManager::populate_sub_device_ids() {
 void SubDeviceManager::populate_num_cores() {
     for (const auto& sub_device : sub_devices_) {
         for (uint32_t i = 0; i < NumHalProgrammableCoreTypes; ++i) {
-            num_cores_[i] += sub_device.num_cores(static_cast<HalProgrammableCoreType>(i));
+            num_cores_[i] += sub_device.impl()->num_cores(static_cast<HalProgrammableCoreType>(i));
         }
     }
 }
@@ -323,7 +324,7 @@ void SubDeviceManager::populate_noc_data() {
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& eth_cores = sub_devices_[i].cores(HalProgrammableCoreType::ACTIVE_ETH);
 
-        has_noc_mcast_txns_[i] = sub_devices_[i].has_core_type(HalProgrammableCoreType::TENSIX);
+        has_noc_mcast_txns_[i] = sub_devices_[i].impl()->has_core_type(HalProgrammableCoreType::TENSIX);
 
         noc_unicast_data_start_index_[i] = idx;
 

@@ -27,13 +27,13 @@ struct AllToAllAsyncGenericProgram {
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        Tensor& tensor_return_value);
 
     static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
+        Tensor& tensor_return_value,
         const tt::tt_metal::GlobalSemaphore& init_barrier_semaphore,
         const tt::tt_metal::GlobalSemaphore& final_barrier_semaphore);
 
@@ -41,7 +41,7 @@ struct AllToAllAsyncGenericProgram {
         cached_mesh_workload_t& cached_workload,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::all_to_all_async_generic

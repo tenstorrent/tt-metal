@@ -12,7 +12,8 @@
 #include <nanobind/stl/variant.h>
 
 #include <tt-metalium/core_coord.hpp>
-#include "device/matmul_op.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -98,50 +99,49 @@ void py_module(nb::module_& mod) {
         The "2D" matmul program config is used for block sharded tensors, and general interleaved tensors.
     )doc");
 
-    matmul_multi_core_reuse_multicast_program_config
-        .def(
-            "__init__",
-            [](MatmulMultiCoreReuseMultiCastProgramConfig* t,
-               CoreCoord compute_with_storage_grid_size,
-               std::size_t in0_block_w,
-               std::size_t out_subblock_h,
-               std::size_t out_subblock_w,
-               std::optional<std::size_t> out_block_h,
-               std::optional<std::size_t> out_block_w,
-               std::size_t per_core_M,
-               std::size_t per_core_N,
-               bool transpose_mcast,
-               std::optional<UnaryWithParam> fused_activation,
-               bool fuse_batch) {
-                // Set out_block_h and out_block_w to defaults if they are not provided
-                std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
-                std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
+    matmul_multi_core_reuse_multicast_program_config.def(
+        "__init__",
+        [](MatmulMultiCoreReuseMultiCastProgramConfig* t,
+           CoreCoord compute_with_storage_grid_size,
+           std::size_t in0_block_w,
+           std::size_t out_subblock_h,
+           std::size_t out_subblock_w,
+           std::optional<std::size_t> out_block_h,
+           std::optional<std::size_t> out_block_w,
+           std::size_t per_core_M,
+           std::size_t per_core_N,
+           bool transpose_mcast,
+           std::optional<UnaryWithParam> fused_activation,
+           bool fuse_batch) {
+            // Set out_block_h and out_block_w to defaults if they are not provided
+            std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
+            std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
-                new (t) MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size,
-                    in0_block_w,
-                    out_subblock_h,
-                    out_subblock_w,
-                    actual_out_block_h,
-                    actual_out_block_w,
-                    per_core_M,
-                    per_core_N,
-                    transpose_mcast,
-                    std::move(fused_activation),
-                    fuse_batch);
-            },
-            nb::kw_only(),
-            nb::arg("compute_with_storage_grid_size"),
-            nb::arg("in0_block_w").noconvert(),
-            nb::arg("out_subblock_h").noconvert(),
-            nb::arg("out_subblock_w").noconvert(),
-            nb::arg("out_block_h") = nb::none(),
-            nb::arg("out_block_w") = nb::none(),
-            nb::arg("per_core_M").noconvert(),
-            nb::arg("per_core_N").noconvert(),
-            nb::arg("transpose_mcast").noconvert(),
-            nb::arg("fused_activation") = nb::none(),
-            nb::arg("fuse_batch").noconvert() = true);
+            new (t) MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size,
+                in0_block_w,
+                out_subblock_h,
+                out_subblock_w,
+                actual_out_block_h,
+                actual_out_block_w,
+                per_core_M,
+                per_core_N,
+                transpose_mcast,
+                std::move(fused_activation),
+                fuse_batch);
+        },
+        nb::kw_only(),
+        nb::arg("compute_with_storage_grid_size"),
+        nb::arg("in0_block_w").noconvert(),
+        nb::arg("out_subblock_h").noconvert(),
+        nb::arg("out_subblock_w").noconvert(),
+        nb::arg("out_block_h") = nb::none(),
+        nb::arg("out_block_w") = nb::none(),
+        nb::arg("per_core_M").noconvert(),
+        nb::arg("per_core_N").noconvert(),
+        nb::arg("transpose_mcast").noconvert(),
+        nb::arg("fused_activation") = nb::none(),
+        nb::arg("fuse_batch").noconvert() = true);
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "compute_with_storage_grid_size",

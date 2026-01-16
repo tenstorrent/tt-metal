@@ -1913,8 +1913,8 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
     "param",
     {-1.5, 1.7, 0.0},
 )
-@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
-def test_unary_rdiv_inf_nan_check(param, round_mode, device):
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
     dtype = torch.bfloat16
     if dtype == torch.bfloat16 and param == 0.0:
         pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
@@ -1928,9 +1928,9 @@ def test_unary_rdiv_inf_nan_check(param, round_mode, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    output_tensor = ttnn.rdiv(input_tensor, param, round_mode=round_mode)
+    output_tensor = ttnn.rdiv(input_tensor, param, rounding_mode=rounding_mode)
     golden_function = ttnn.get_golden_function(ttnn.rdiv)
-    golden_tensor = golden_function(in_data, param, round_mode=round_mode)
+    golden_tensor = golden_function(in_data, param, rounding_mode=rounding_mode)
 
     assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
 
@@ -1953,18 +1953,18 @@ def test_unary_rdiv_inf_nan_check(param, round_mode, device):
         (torch.float32, ttnn.float32),
     ],
 )
-@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
-def test_unary_rdiv_ttnn(input_shapes, torch_dtype, ttnn_dtype, param, round_mode, device):
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+def test_unary_rdiv_ttnn(input_shapes, torch_dtype, ttnn_dtype, param, rounding_mode, device):
     torch.manual_seed(0)
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.rdiv(input_tensor, param, round_mode=round_mode)
+    output_tensor = ttnn.rdiv(input_tensor, param, rounding_mode=rounding_mode)
     golden_function = ttnn.get_golden_function(ttnn.rdiv)
-    golden_tensor = golden_function(in_data, param, round_mode=round_mode)
+    golden_tensor = golden_function(in_data, param, rounding_mode=rounding_mode)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if (round_mode != None) and (torch_dtype == torch.bfloat16):
+    if (rounding_mode != None) and (torch_dtype == torch.bfloat16):
         assert_with_pcc(golden_tensor, output_tensor, pcc=0.999)
     else:
         assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=3, allow_nonfinite=True)

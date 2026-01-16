@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::sliding_window::halo {
 
-struct operation_attributes_t {
+struct HaloParams {
     SlidingWindowConfig config{};
     ParallelConfig parallel_config{};
     uint32_t pad_val = 0;
@@ -22,7 +22,7 @@ struct operation_attributes_t {
     bool config_tensors_in_dram = false;
 };
 
-struct tensor_args_t {
+struct HaloInputs {
     Tensor input_tensor;
 };
 

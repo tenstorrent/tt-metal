@@ -17,8 +17,8 @@ namespace layernorm = ttnn::operations::normalization;
 struct RMSAllGatherDeviceOperation {
     using operation_attributes_t = fused::normalization::operation_attributes_t;
     using tensor_args_t = fused::normalization::tensor_args_t;
-    using spec_return_value_t = fused::normalization::spec_return_value_t;
-    using tensor_return_value_t = fused::normalization::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::RMSAllGatherMeshWorkloadFactory>;
     using shared_variables_t = program::RMSAllGatherMeshWorkloadFactory::shared_variables_t;
 

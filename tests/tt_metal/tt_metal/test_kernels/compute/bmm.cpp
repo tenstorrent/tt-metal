@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
+#include "experimental/circular_buffer.h"
 
 using std::uint32_t;
 
@@ -22,6 +23,10 @@ void MAIN {
     uint32_t Kt = get_compile_time_arg_val(2);
     uint32_t Nt = get_compile_time_arg_val(3);
 
+    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
+    experimental::CircularBuffer cb1(tt::CBIndex::c_1);
+    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
     // the simplest possible version of outer product blocked matmul
@@ -32,18 +37,18 @@ void MAIN {
             {
                 acquire_dst();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
-                    cb_wait_front(tt::CBIndex::c_0, onetile);
-                    cb_wait_front(tt::CBIndex::c_1, onetile);
+                    cb0.wait_front(onetile);
+                    cb1.wait_front(onetile);
 
                     matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
 
-                    cb_pop_front(tt::CBIndex::c_0, onetile);
-                    cb_pop_front(tt::CBIndex::c_1, onetile);
+                    cb0.pop_front(onetile);
+                    cb1.pop_front(onetile);
                 }
 
-                cb_reserve_back(tt::CBIndex::c_16, onetile);
+                cb16.reserve_back(onetile);
                 pack_tile(0, tt::CBIndex::c_16);
-                cb_push_back(tt::CBIndex::c_16, onetile);
+                cb16.push_back(onetile);
 
                 release_dst();
             }

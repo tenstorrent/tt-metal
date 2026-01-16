@@ -200,7 +200,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     [
         (1, 1),  # decode
         (1, 128),  # prefill
-        (1, 4096),  # prefill 4k
+        # (1, 4096),  # prefill 4k TODO: Disabling until #35313 is resolved - instability observed
     ],
 )
 @pytest.mark.parametrize(

@@ -179,7 +179,7 @@ template <typename OutputTensors = Tensors>
 auto create_override_runtime_arguments_callback(
     KernelHandle reader_kernel_id, KernelHandle writer_kernel_id, uint32_t num_cores, uint32_t core_h) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
-               const void* operation,
+               const void* /*operation*/,
                Program& program,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
@@ -221,7 +221,7 @@ auto create_override_runtime_arguments_callback(
     uint32_t core_h,
     const CallbackArgMap& arg_map) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, arg_map, num_cores, core_h](
-               const void* operation,
+               const void* /*operation*/,
                Program& program,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,

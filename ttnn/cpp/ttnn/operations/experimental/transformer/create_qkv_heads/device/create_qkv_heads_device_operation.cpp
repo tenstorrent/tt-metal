@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::create_qkv_heads {
 
 CreateQKVHeadsDeviceOperation::program_factory_t CreateQKVHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return ttnn::operations::experimental::create_qkv_heads::program::CreateQKVHeadsProgramFactory{};
 }
 

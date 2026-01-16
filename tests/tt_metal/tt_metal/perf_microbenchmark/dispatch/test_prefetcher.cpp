@@ -833,7 +833,7 @@ public:
         const std::vector<uint32_t>& lengths,
         Common::DeviceData& device_data,
         uint32_t ringbuffer_read_page_size_log2,
-        uint32_t n_sub_cmds) {
+        uint32_t /*n_sub_cmds*/) {
         bool reset = false;
         uint32_t page_size_bytes = 1 << ringbuffer_read_page_size_log2;
         uint32_t count = 0;
@@ -1512,7 +1512,7 @@ public:
         uint32_t base_addr_offset,
         uint32_t page_size_bytes,
         uint32_t num_pages,
-        uint32_t length_adjust) {
+        uint32_t /*length_adjust*/) {
         const auto worker = worker_range.start_coord;
         const CoreCoord first_worker = device_->virtual_core_from_logical_core(worker, CoreType::WORKER);
         uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_worker);

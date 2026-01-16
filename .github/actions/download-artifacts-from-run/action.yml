@@ -107,7 +107,7 @@ runs:
         fi
 
         # Find wheel artifact
-        WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "eager-dist|ttnn" | head -1 || true)
+        WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "ttnn-dist|ttnn" | head -1 || true)
 
         # Find packages artifact (optional)
         PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)

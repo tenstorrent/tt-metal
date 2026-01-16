@@ -180,6 +180,8 @@ def run_conv2d_short_sweep(
     input_specs,
     device,
     config_tensors_in_dram=False,
+    output_dtype=None,  # ttnn dtype object (e.g., ttnn.bfloat8_b)
+    compute_config=None,  # ttnn compute config object
 ) -> list:
     # for tt-forge suite, extra arguments are tensor configs
     is_forge_suite = False
@@ -262,7 +264,9 @@ def run_conv2d_short_sweep(
     # Set config_tensors_in_dram if requested (helps avoid L1 OOM for memory-intensive configs)
     if config_tensors_in_dram:
         conv_config.config_tensors_in_dram = True
-    conv_output_dtype = ttnn.bfloat16
+
+    # Use provided dtype or default to bfloat16
+    conv_output_dtype = output_dtype if output_dtype is not None else ttnn.bfloat16
 
     if is_forge_suite:
         input_layout = ttnn.Layout(input_layout)
@@ -307,6 +311,7 @@ def run_conv2d_short_sweep(
         return_output_dim=True,
         return_weights_and_bias=True,
         dtype=conv_output_dtype,
+        compute_config=compute_config,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)

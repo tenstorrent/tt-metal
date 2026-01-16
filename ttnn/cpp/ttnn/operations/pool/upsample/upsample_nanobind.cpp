@@ -23,21 +23,45 @@ void bind_upsample(nb::module_& mod) {
         Upsamples a given multi-channel 2D (spatial) data.
         The input data is assumed to be of the form [N, H, W, C].
 
-        The algorithms available for upsampling are 'nearest' for now.
+        Supports both integer and floating-point scale factors with automatic routing
+        to optimized implementations:
+        - Integer scales: Optimized path with reader/writer replication (fastest)
+        - Float scales: General path with coordinate mapping (supports fractional scales)
+
+        The algorithms available for upsampling are 'nearest' and 'bilinear'.
+        Note: 'bilinear' mode requires integer scale factors.
 
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            scale_factor (int or tt::tt_metal::Array2D): multiplier for spatial size.
+            scale_factor (int, float, [int, int], or [float, float]): multiplier for spatial size.
+                - int: uniform integer scale for both H and W
+                - float: uniform float scale for both H and W
+                - [int, int]: separate integer scales for [H, W]
+                - [float, float]: separate float scales for [H, W]
 
 
         Keyword args:
+            mode (str, optional): upsampling mode - 'nearest' or 'bilinear'. Defaults to 'nearest'.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to `None`.
 
 
         Returns:
             ttnn.Tensor: the output tensor.
 
+
+        Examples:
+            >>> # Integer scale (optimized path)
+            >>> output = ttnn.upsample(input, 2)
+            >>> output = ttnn.upsample(input, [2, 3])
+
+            >>> # Float scale (general path)
+            >>> output = ttnn.upsample(input, 1.5)
+            >>> output = ttnn.upsample(input, [1.5, 2.5])
+
+            >>> # Bilinear mode (integer scales only)
+            >>> output = ttnn.upsample(input, 2, mode="bilinear")
 
         )doc";
 

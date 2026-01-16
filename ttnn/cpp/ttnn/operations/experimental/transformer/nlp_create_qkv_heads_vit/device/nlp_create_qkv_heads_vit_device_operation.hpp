@@ -16,8 +16,8 @@
 namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit {
 
 struct NlpCreateHeadsVitDeviceOperation {
-    using operation_attributes_t = nlp_create_qkv_heads_vit::operation_attributes_t;
-    using tensor_args_t = nlp_create_qkv_heads_vit::tensor_args_t;
+    using operation_attributes_t = NlpCreateQkvHeadsVitParams;
+    using tensor_args_t = NlpCreateQkvHeadsVitInputs;
     using spec_return_value_t = nlp_create_qkv_heads_vit::spec_return_value_t;
     using tensor_return_value_t = nlp_create_qkv_heads_vit::tensor_return_value_t;
     using program_factory_t = std::variant<program::NlpCreateQkvHeadsVitProgramFactory>;

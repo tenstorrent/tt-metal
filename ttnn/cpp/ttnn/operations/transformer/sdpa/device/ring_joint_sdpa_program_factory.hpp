@@ -11,6 +11,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 
 namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program {
 
@@ -20,7 +21,8 @@ struct RingJointSDPASharedVariables {
     tt::tt_metal::KernelHandle reader_kernels_id{};
     tt::tt_metal::KernelHandle writer_kernels_id{};
     tt::tt_metal::KernelHandle compute_kernels_id{};
-    std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>> all_gather_callback;
+    operations::experimental::ccl::ring_attention_all_gather_async::
+        RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::shared_variables_t all_gather_shared_variables;
 };
 
 struct RingJointSDPAProgramFactory {

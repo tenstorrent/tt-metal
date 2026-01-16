@@ -19,10 +19,21 @@ enum class EthProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, COUNT = 2 };
 
 enum class DramProcessorTypes : uint8_t { DM0 = 0, COUNT = 1 };
 
+union subordinate_map_t {
+    volatile uint32_t all;
+    struct {
+        volatile uint8_t dm1;  // ncrisc must come first, see ncrisc-halt.S
+        volatile uint8_t trisc0;
+        volatile uint8_t trisc1;
+        volatile uint8_t trisc2;
+    };
+};
+
 constexpr uint8_t MaxProcessorsPerCoreType = 5;
 constexpr uint8_t MaxDMProcessorsPerCoreType = 2;
 constexpr uint8_t noc_size_x = 17;
 constexpr uint8_t noc_size_y = 12;
 constexpr uint8_t tensix_harvest_axis = 0x2;
+constexpr uint8_t subordinate_map_size = sizeof(subordinate_map_t);
 #define LOG_BASE_2_OF_DRAM_ALIGNMENT 6
 #define LOG_BASE_2_OF_L1_ALIGNMENT 4

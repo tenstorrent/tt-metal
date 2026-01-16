@@ -457,9 +457,9 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y) {
 bool validation_bfp8_b(
     const tt::deprecated::Tensor<float>& in0_tensor,
     const tt::deprecated::Tensor<float>& in1_tensor,
-    const tt::DataFormat& data_format,
-    uint32_t num_blocks,
-    uint32_t cb_num_blocks,
+    const tt::DataFormat& /*data_format*/,
+    uint32_t /*num_blocks*/,
+    uint32_t /*cb_num_blocks*/,
     uint32_t mt,
     uint32_t kt,
     uint32_t nt,
@@ -509,9 +509,9 @@ bool validation_bfp8_b(
 bool validation_fp16(
     const tt::deprecated::Tensor<bfloat16>& in0_tensor,
     const tt::deprecated::Tensor<bfloat16>& in1_tensor,
-    const tt::DataFormat& data_format,
-    uint32_t num_blocks,
-    uint32_t cb_num_blocks,
+    const tt::DataFormat& /*data_format*/,
+    uint32_t /*num_blocks*/,
+    uint32_t /*cb_num_blocks*/,
     uint32_t mt,
     uint32_t kt,
     uint32_t nt,
@@ -659,7 +659,7 @@ int main(int argc, char** argv) {
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_ASSERT(false);
+            TT_FATAL(false, "Command line arguments found exception");
         }
 
         log_info(tt::LogTest, "num_layers: {} ", num_layers);

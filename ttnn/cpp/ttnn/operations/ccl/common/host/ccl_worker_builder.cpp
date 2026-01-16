@@ -786,7 +786,7 @@ void generate_ccl_cb_to_tensor_slice_sequence_commands(
 
 tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     Program& program,
-    std::vector<uint32_t> const& cb_indices,  // TODO: move to RT arg
+    std::vector<uint32_t> const&  /*cb_indices*/,  // TODO: move to RT arg
     std::vector<Tensor const*> const& tensors,
     CoreRangeSet const& worker_core_range,
     tt::tt_metal::DataMovementConfig datamovement_kernel_config,
@@ -912,7 +912,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                     [&ss](CclCommandAddrCircularBufferId const& a) {
                         ss << fmt::format("(circular_buffer_id:{})", a.circular_buffer_id);
                     },
-                    [&ss](CclCommandAddrNone const& a) { ss << "none"; }},
+                    [&ss](CclCommandAddrNone const&  /*a*/) { ss << "none"; }},
                 args);
         };
         auto get_cmd_args_str = [](std::stringstream& ss, CclCommandArgs const& args) {
@@ -960,8 +960,8 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
         auto get_core_desc_args_str = [](std::stringstream& ss, CclCommandCoreDescriptorArgs const& args) {
             std::visit(
                 tt::stl::overloaded{
-                    [&ss](CclCommandCoreDescriptorTypeAddrgen const& a) { ss << fmt::format("(addrgen)"); },
-                    [&ss](CclCommandCoreDescriptorTypeLocal const& a) { ss << fmt::format("(local_core)"); },
+                    [&ss](CclCommandCoreDescriptorTypeAddrgen const&  /*a*/) { ss << fmt::format("(addrgen)"); },
+                    [&ss](CclCommandCoreDescriptorTypeLocal const&  /*a*/) { ss << fmt::format("(local_core)"); },
                     [&ss](CclCommandCoreDescriptorTypeNocXY const& a) { ss << fmt::format("(x:{}, y:{})", a.x, a.y); },
                     [&ss](CclCommandCoreDescriptorTypeMcast const& a) {
                         ss << fmt::format(
@@ -971,7 +971,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                             a.noc0_end_x,
                             a.noc0_end_y);
                     },
-                    [&ss](CclCommandCoreDescriptorTypeNone const& a) { ss << fmt::format("(None)"); },
+                    [&ss](CclCommandCoreDescriptorTypeNone const&  /*a*/) { ss << fmt::format("(None)"); },
                 },
                 args);
         };
@@ -991,7 +991,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                             a.num_targets_forward_direction,
                             a.num_targets_backward_direction);
                     },
-                    [&ss](LocalOnlyCommandDestArgs const& a) { ss << fmt::format("(None)"); },
+                    [&ss](LocalOnlyCommandDestArgs const&  /*a*/) { ss << fmt::format("(None)"); },
                 },
                 args);
         };

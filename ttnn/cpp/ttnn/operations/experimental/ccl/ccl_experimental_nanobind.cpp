@@ -31,7 +31,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 void py_module(nb::module_& mod) {
-    ccl::bind_fused_rms_1_1_32_8192(mod);
+    ccl::bind_fused_rms_minimal(mod);
     ccl::bind_all_gather_matmul_async(mod);
     ccl::bind_strided_all_gather_minimal_matmul_async(mod);
     ccl::bind_llama_all_gather_matmul_async(mod);

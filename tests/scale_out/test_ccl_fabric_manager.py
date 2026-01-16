@@ -8,6 +8,7 @@ Tests for CCL operations with fabric_manager enabled mode.
 """
 
 import ttnn
+import pytest
 
 from tests.nightly.t3000.ccl.test_all_to_all_combine import run_all_to_all_combine_test
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import run_all_to_all_dispatch_test

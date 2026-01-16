@@ -1259,6 +1259,81 @@ def test_sdpa_sliding_window(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_ch
     )
 
 
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
+@pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
+def test_sdpa_sliding_window_program_cache_key_includes_window(device, dtype, q_chunk_size, k_chunk_size):
+    """
+    Regression test: SDPA program cache must distinguish different sliding_window_size values.
+
+    This matters because sliding_window_size is embedded in SDPA kernel compile-time args; reusing a cached
+    program compiled for a different window size can silently produce incorrect outputs.
+    """
+    b, nh, nkv, s, d = 1, 8, 1, 1024, 128
+    window_a, window_b = 64, 128
+    assert window_a != window_b
+
+    # Keep program_config identical so the only change is sliding_window_size.
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    # Reference for each window
+    K_rep = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    V_rep = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    mask_a = create_sliding_window_mask_prefill(b, nh, s, window_a, True)
+    mask_b = create_sliding_window_mask_prefill(b, nh, s, window_b, True)
+    gt_a = torch.nn.functional.scaled_dot_product_attention(Q, K_rep, V_rep, attn_mask=mask_a, is_causal=False)
+    gt_b = torch.nn.functional.scaled_dot_product_attention(Q, K_rep, V_rep, attn_mask=mask_b, is_causal=False)
+
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+
+    # Run A then B back-to-back to exercise program caching in one process/device.
+    out_a = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=True,
+        sliding_window_size=window_a,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    out_b = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=True,
+        sliding_window_size=window_b,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    out_a = ttnn.to_torch(out_a)[:, :, :s, :]
+    out_b = ttnn.to_torch(out_b)[:, :, :s, :]
+
+    # Tolerances aligned with other SDPA sliding window tests.
+    out_pass_a, _ = comp_pcc(gt_a, out_a, 0.994)
+    out_pass_b, _ = comp_pcc(gt_b, out_b, 0.994)
+    assert out_pass_a
+    assert out_pass_b
+
+
 def reference_sdpa_with_attention_sinks(Q, K, V, S, is_causal=True, sliding_window=0):
     """
     Reference implementation of scaled dot product attention with attention sinks.

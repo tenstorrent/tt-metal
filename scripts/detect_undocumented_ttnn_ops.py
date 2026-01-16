@@ -21,7 +21,7 @@ SKIPPED_OPS = [
     "ttnn.allocate_tensor_on_host",  # Missing docs for OP causing docs build crash, need to create documentation and add to docs page, GH issue: #34681
     "ttnn.composite_example",  # Example operation.
     "ttnn.composite_example_multiple_return",  # Example operation.
-    "ttnn.fused_rms_1_1_32_8192",  # Internal operation only.
+    "ttnn.fused_rms_minimal",  # Internal operation only.
     "ttnn.matmul_batched_weights",  # Internal operation only.
     "ttnn.moreh_abs_pow",  # Moreh operation.
     "ttnn.moreh_adam",  # Moreh operation.

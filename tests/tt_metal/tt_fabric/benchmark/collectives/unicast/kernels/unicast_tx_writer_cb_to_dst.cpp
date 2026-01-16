@@ -76,7 +76,6 @@ void kernel_main() {
         uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
 
         // Build the NOC header for this page
-        (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
         header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
 
         // TEMP (2D API): payload then header. Will be a single call after uplift

@@ -22,7 +22,7 @@ namespace ttnn::operations::data_movement::pad {
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> PadDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
     std::vector<Tensor>& output_tensors) {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
@@ -69,14 +69,9 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
         return program::PadRmReaderWriterProgramFactory{};
     }
     if (input_tensor.layout() == Layout::TILE) {
-        if (operation_attributes.use_multicore && input_tensor.dtype() == DataType::BFLOAT16 &&
-            !(input_tensor.memory_config().buffer_type() == BufferType::L1)) {
+        if (operation_attributes.use_multicore) {
             return program::PadTileMulticoreProgramFactory{};
         }
-        log_warning(
-            tt::LogType::LogOp,
-            "Only bfloat16 and non-L1 tiled tensors are currently supported for multicore tiled pad. Falling back to 1 "
-            "core. #29295");
         return program::PadTileCoreProgramFactory{};
     }
     TT_THROW("Unsupported layout for pad");

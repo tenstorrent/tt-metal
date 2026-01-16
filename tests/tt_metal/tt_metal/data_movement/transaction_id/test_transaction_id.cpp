@@ -168,15 +168,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
         device, test_config.master_core_coord, l1_base_address, bytes_per_transaction, packed_output_sub1);
 
     // Compare output with golden vector
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output_master, packed_golden_master, [&](const bfloat16& a, const bfloat16& b) {
-            return is_close(a, b);
-        });
-    pcc &= is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output_sub1, packed_golden_sub1, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal = (packed_output_master == packed_golden_master);
+    is_equal &= (packed_output_sub1 == packed_golden_sub1);
 
-    if (!pcc) {
-        log_error(LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(LogTest, "Equality Check failed");
         log_info(LogTest, "Golden master vector");
         print_vector<uint32_t>(packed_golden_master);
         log_info(LogTest, "Output master vector");
@@ -187,7 +183,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
         print_vector<uint32_t>(packed_output_sub1);
     }
 
-    return pcc;
+    return is_equal;
 }
 }  // namespace unit_tests::dm::transaction_id
 

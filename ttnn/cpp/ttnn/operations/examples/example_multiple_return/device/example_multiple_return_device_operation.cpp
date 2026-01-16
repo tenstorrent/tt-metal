@@ -8,7 +8,7 @@
 namespace ttnn::operations::examples {
 
 ExampleMultipleReturnDeviceOperation::program_factory_t ExampleMultipleReturnDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return SingleCore{};
 }
 
@@ -18,7 +18,7 @@ void ExampleMultipleReturnDeviceOperation::validate_on_program_cache_miss(
 }
 
 void ExampleMultipleReturnDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(
         attributes.return_output1 || attributes.return_output2,
         "At least one output must be returned. return_output1 = {}, return_output2 = {} ",

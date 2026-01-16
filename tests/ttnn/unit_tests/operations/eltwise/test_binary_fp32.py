@@ -408,12 +408,12 @@ def test_binary_xlogy_ttnn(input_shapes, device, use_legacy):
 
 
 @pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)])
-def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, round_mode, device, torch_dtype, ttnn_dtype):
-    if torch_dtype == torch.bfloat16 and round_mode is None and fast_and_approximate_mode is True:
+def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, device, torch_dtype, ttnn_dtype):
+    if torch_dtype == torch.bfloat16 and rounding_mode is None and fast_and_approximate_mode is True:
         pytest.skip(
-            "Skipping test case due to division by zero not being handled properly in bfloat16 with round_mode=None and fast_and_approximate_mode=True"
+            "Skipping test case due to division by zero not being handled properly in bfloat16 with rounding_mode=None and fast_and_approximate_mode=True"
         )
     in_data1 = torch.tensor([0.0, 1.0, -1.0, 0.0, 0.0, 7.0, 9.75], dtype=torch_dtype)
     in_data2 = torch.tensor([0.0, 0.0, 0.0, 1.0, -1.0, 2.5, -14.25], dtype=torch_dtype)
@@ -425,10 +425,10 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, round_mode, device
     )
 
     output_tensor = ttnn.div(
-        input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, round_mode=round_mode
+        input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, rounding_mode=rounding_mode
     )
     golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, in_data2, round_mode)
+    golden_tensor = golden_function(in_data1, in_data2, rounding_mode)
     output_tensor = ttnn.to_torch(output_tensor)
 
     if ttnn_dtype == ttnn.bfloat16:

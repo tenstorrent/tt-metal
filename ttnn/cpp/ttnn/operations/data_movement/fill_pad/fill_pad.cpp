@@ -4,7 +4,7 @@
 
 #include "fill_pad.hpp"
 #include "device/fill_pad_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <utility>

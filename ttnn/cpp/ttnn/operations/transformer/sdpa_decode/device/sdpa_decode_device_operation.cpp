@@ -335,7 +335,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
+TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.q;
     Layout output_layout = Layout::TILE;
@@ -352,7 +352,7 @@ spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
         output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }
 
-tensor_return_value_t SdpaDecodeDeviceOperation::create_output_tensors(
+Tensor SdpaDecodeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }

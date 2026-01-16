@@ -141,7 +141,7 @@ std::vector<uint32_t> get_cycles_for_transaction_size(
     bool is_dram,
     bool is_local,
     uint32_t num_transactions,
-    uint32_t num_cores,
+    uint32_t /*num_cores*/,
     int index,
     bool is_read,
     const std::map<uint32_t, std::array<float, 2>>& l1_local_bw,
@@ -464,7 +464,7 @@ int common_tm_bw_model(
 }
 
 uint32_t get_estimated_size_of_cbs(
-    const Tensor& input_tensor_a,
+    const Tensor& /*input_tensor_a*/,
     const uint32_t input_single_tile_size,
     const uint32_t output_single_tile_size,
     const uint32_t num_tiles_per_row) {
@@ -556,7 +556,8 @@ uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) 
     return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
 }
 
-ttnn::Shape compute_padded_shape(ttnn::Shape logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
+ttnn::Shape compute_padded_shape(
+    ttnn::Shape logical_shape, const uint32_t /*tile_height*/, const uint32_t /*tile_width*/) {
     // Special case: if input tensor is 1D row-major, after tiling output tensor will have
     // 1D logical shape but 2D padded shape
     if (logical_shape.rank() == 1) {

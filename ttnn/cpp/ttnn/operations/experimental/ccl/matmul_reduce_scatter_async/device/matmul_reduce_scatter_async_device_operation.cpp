@@ -14,8 +14,8 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"  // import is_input_batched
 
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp"
 
@@ -23,7 +23,7 @@ namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async {
 
 MatmulReduceScatterAsyncDeviceOperation::program_factory_t
 MatmulReduceScatterAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::MatmulReduceScatterAsyncProgramFactory{};
 }
 
@@ -35,7 +35,11 @@ void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_hit(
 void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Matmul validate
-    args.matmul_struct.validate({tensor_args.input, tensor_args.weight}, {tensor_args.bias}, {});
+    ttnn::operations::matmul::MatmulDeviceOperation::validate_on_program_cache_miss(
+        args.matmul_struct,
+        {.input_tensors = {tensor_args.input, tensor_args.weight},
+         .optional_input_tensors = {tensor_args.bias},
+         .optional_output_tensors = {}});
 
     // Matmul Reduce Scatter validate
     TT_FATAL(
@@ -62,7 +66,8 @@ spec_return_value_t MatmulReduceScatterAsyncDeviceOperation::compute_output_spec
     std::vector<Tensor> input_tensors = {tensor_args.input, tensor_args.weight};
 
     // Matmul shape
-    ttnn::TensorSpec matmul_output_specs = args.matmul_struct.compute_output_specs(input_tensors, {})[0];
+    ttnn::TensorSpec matmul_output_specs = ttnn::operations::matmul::MatmulDeviceOperation::compute_output_specs(
+        args.matmul_struct, {.input_tensors = input_tensors})[0];
 
     // Reduce Scatter shape - use the device operation's compute_output_specs
     using ReduceScatterOp = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
@@ -79,26 +84,30 @@ spec_return_value_t MatmulReduceScatterAsyncDeviceOperation::compute_output_spec
 tensor_return_value_t MatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Matmul output tensor
-    ttnn::Tensor matmul_output_tensor =
-        args.matmul_struct.create_output_tensors({tensor_args.input, tensor_args.weight})[0];
+    ttnn::Tensor matmul_output_tensor = ttnn::operations::matmul::MatmulDeviceOperation::create_output_tensors(
+        args.matmul_struct, {.input_tensors = {tensor_args.input, tensor_args.weight}})[0];
 
     return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
 }
 
 tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = tensor_args.input.padded_shape();
-    auto input_memory_layout = tensor_args.input.layout();
-    auto input_dtype = tensor_args.input.dtype();
-    auto input_memory_config = tensor_args.input.memory_config();
+    log_trace(tt::LogOp, "MatmulReduceScatterAsyncDeviceOperation::compute_program_hash is called");
+
+    const ttnn::Tensor& input_tensor = tensor_args.input;
+    const ttnn::Tensor& weight_tensor = tensor_args.weight;
+    const std::optional<ttnn::Tensor>& bias_tensor = tensor_args.bias;
+    const ttnn::Tensor& persistent_intermediate_tensor = tensor_args.persistent_intermediate;
+    const ttnn::Tensor& persistent_output_tensor = tensor_args.persistent_output;
+
+    auto program_factory = select_program_factory(args, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<MatmulReduceScatterAsyncDeviceOperation>(
         args.reduce_scatter_params.dim,
         args.reduce_scatter_params.num_links,
         args.reduce_scatter_params.ring_size,
         args.reduce_scatter_params.output_mem_config,
-        args.reduce_scatter_params.optional_intermediate_mem_config.value(),
+        args.reduce_scatter_params.optional_intermediate_mem_config,
         args.reduce_scatter_params.topology,
         args.reduce_scatter_params.sub_device_id.has_value(),
         args.reduce_scatter_params.sub_device_id.has_value()
@@ -111,11 +120,14 @@ tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_h
         args.reduce_scatter_params.chunks_per_sync,
         args.reduce_scatter_params.num_workers_per_link,
         args.reduce_scatter_params.num_buffers_per_channel,
+        args.matmul_struct,
         args.reduce_scatter_core_grid_offset,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        input_tensor,
+        weight_tensor,
+        bias_tensor,
+        persistent_intermediate_tensor,
+        persistent_output_tensor,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async
@@ -158,11 +170,11 @@ ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::MatmulReduceSc
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
-    operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
+    auto matmul_struct = operations::matmul::create_matmul_attributes(
         input_tensor,
         weight_tensor,
         /*parameters=*/
-        operations::matmul::Matmul{
+        ttnn::operations::matmul::operation_attributes_t{
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config_mm.value_or(input_tensor.memory_config()),
@@ -175,7 +187,8 @@ ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::MatmulReduceSc
             transpose_a,
             transpose_b,
             /*output_tile=*/std::nullopt,
-            /*global_cb=*/std::nullopt});
+            /*global_cb=*/std::nullopt},
+        {});
 
     // Not using persistent buffers not currently supported by the RSMM API
     bool using_persistent_buffers = true;

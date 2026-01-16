@@ -223,7 +223,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
-tensor_return_value_t SliceDeviceOperation::create_output_tensors(
+Tensor SliceDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -261,7 +261,7 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>
 SliceDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, const Tensor& output) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args, const Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = output;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, true);

@@ -69,6 +69,7 @@
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -115,7 +116,7 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    tt::CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    tt::CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
@@ -1754,11 +1755,13 @@ detail::ProgramCompileGroup::~ProgramCompileGroup() { program_device_map_.clear(
 
 void detail::ProgramCompileGroup::add_program(
     tt::tt_metal::IDevice* device, std::unique_ptr<tt::tt_metal::Program> program) {
+    std::lock_guard lock(mutex_);
     TT_FATAL(!program_device_map_.contains(device), "Program already exists in the compile group.");
     program_device_map_[device] = std::move(program);
 }
 
 void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
+    std::lock_guard lock(mutex_);
     std::vector<std::shared_future<void>> events;
     for (auto& [device, program] : program_device_map_) {
         auto* pgm = program.get();
@@ -1769,21 +1772,27 @@ void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
 }
 
 void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
+    std::lock_guard lock(mutex_);
     for (auto& [device, program] : program_device_map_) {
         detail::WriteRuntimeArgsToDevice(device, *program, force_slow_dispatch);
     }
 }
 
 std::unique_ptr<Program> detail::ProgramCompileGroup::remove_program(tt::tt_metal::IDevice* device) {
+    std::lock_guard lock(mutex_);
     TT_FATAL(program_device_map_.contains(device), "Program not found in the compile group.");
     std::unique_ptr<Program> program = std::move(program_device_map_[device]);
     program_device_map_.erase(device);
     return program;
 }
 
-void detail::ProgramCompileGroup::clear() { program_device_map_.clear(); }
+void detail::ProgramCompileGroup::clear() {
+    std::lock_guard lock(mutex_);
+    program_device_map_.clear();
+}
 
 bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
+    std::lock_guard lock(mutex_);
     return program_device_map_.contains(device);
 }
 

@@ -57,8 +57,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     auto output_buffer = CreateBuffer(interleaved_buffer_config);
     uint32_t output_buffer_address = output_buffer->address();
 
-    assert(input_buffer_address != output_buffer_address);
-    assert(test_config.read_kernel || test_config.write_kernel);  // At least one kernel must run
+    TT_FATAL(input_buffer_address != output_buffer_address, "Input and output buffer addresses must be different");
+    TT_FATAL(test_config.read_kernel || test_config.write_kernel, "At least one kernel must run");
 
     // Input
     // vector<uint32_t> packed_input = create_arange_vector_of_bfloat16(total_size_bytes, false);
@@ -105,11 +105,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     // log_info(tt::LogTest, "l1 addr: {}, bytes: {}, input buffer addr: {}, output buffer addr: {}", l1_addr,
     // total_size_bytes, input_buffer_address, output_buffer_address);
     if (!test_config.is_dram) {
-        assert(
-            (l1_addr + total_size_bytes < input_buffer_address) || (input_buffer_address + total_size_bytes < l1_addr));
-        assert(
+        TT_FATAL(
+            (l1_addr + total_size_bytes < input_buffer_address) || (input_buffer_address + total_size_bytes < l1_addr),
+            "L1 buffer overlaps with input buffer");
+        TT_FATAL(
             (l1_addr + total_size_bytes < output_buffer_address) ||
-            (output_buffer_address + total_size_bytes < l1_addr));
+                (output_buffer_address + total_size_bytes < l1_addr),
+            "L1 buffer overlaps with output buffer");
     }
 
     // Kernels
@@ -181,18 +183,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     }
 
     // Results comparison
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal = (packed_output == packed_golden);
 
-    if (!pcc) {
-        log_error(tt::LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(tt::LogTest, "Equality Check failed");
         log_info(tt::LogTest, "Golden vector");
         print_vector(unpack_vector<bfloat16, uint32_t>(packed_golden));
         log_info(tt::LogTest, "Output vector");
         print_vector(unpack_vector<bfloat16, uint32_t>(packed_output));
     }
 
-    return pcc;
+    return is_equal;
 }
 }  // namespace unit_tests::dm::interleaved_page
 

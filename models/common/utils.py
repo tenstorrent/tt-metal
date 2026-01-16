@@ -178,7 +178,7 @@ class LogProbsCalculator:
 
         # Get chip_id for each user based on global_idx values in global_idx_tensor
         chip_ids_tensor = ttnn.div(
-            global_idx_tilized_tensor, size_per_device, round_mode="floor", memory_config=ttnn.DRAM_MEMORY_CONFIG
+            global_idx_tilized_tensor, size_per_device, rounding_mode="floor", memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
         # Get local index for each user based on global_idx values in global_idx_tensor

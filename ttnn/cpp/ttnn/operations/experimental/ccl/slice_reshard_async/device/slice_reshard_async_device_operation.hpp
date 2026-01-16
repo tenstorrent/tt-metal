@@ -26,8 +26,8 @@ namespace ttnn::operations::experimental::ccl::slice_reshard_async {
 struct SliceReshardAsyncDeviceOperation {
     using operation_attributes_t = slice_reshard_async::operation_attributes_t;
     using tensor_args_t = slice_reshard_async::tensor_args_t;
-    using spec_return_value_t = slice_reshard_async::spec_return_value_t;
-    using tensor_return_value_t = slice_reshard_async::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::SliceReshardAsyncProgramFactory>;
     using shared_variables_t = program::SliceReshardAsyncProgramFactory::shared_variables_t;
 

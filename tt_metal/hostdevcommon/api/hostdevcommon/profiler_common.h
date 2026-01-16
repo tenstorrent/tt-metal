@@ -62,7 +62,24 @@ enum ControlBuffer {
     DRAM_PROFILER_ADDRESS_T2_0,
 };
 
-enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT };
+enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, TS_DATA_16B };
+
+// Number of expected uint64_t data values for each PacketType
+template <PacketTypes packet_type>
+struct TimestampedDataSize {
+    // No checks
+    static constexpr std::uint32_t size = 0;
+};
+
+template <>
+struct TimestampedDataSize<TS_DATA> {
+    static constexpr std::uint32_t size = 1;
+};
+
+template <>
+struct TimestampedDataSize<TS_DATA_16B> {
+    static constexpr std::uint32_t size = 2;
+};
 
 // TODO: use data types in profile_msg_t rather than addresses/sizes
 constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;

@@ -43,7 +43,7 @@ void CloneOperation::validate_inputs(
 }
 
 CloneOperation::program_factory_t CloneOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 
@@ -78,7 +78,7 @@ CloneOperation::tensor_return_value_t CloneOperation::create_output_tensors(
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<CloneOperation::tensor_return_value_t>
 CloneOperation::create_op_performance_model(
-    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+    const operation_attributes_t& /*op_attr*/, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input_tensor = inputs.input;
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(

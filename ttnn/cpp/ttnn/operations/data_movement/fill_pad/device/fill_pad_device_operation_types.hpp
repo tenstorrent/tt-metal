@@ -8,17 +8,13 @@
 
 namespace ttnn::operations::data_movement::fill_pad {
 
-struct operation_attributes_t {
+struct FillPadParams {
     float fill_value;
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct FillPadInputs {
     Tensor input;
 };
-
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
 
 }  // namespace ttnn::operations::data_movement::fill_pad

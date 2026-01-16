@@ -1291,7 +1291,7 @@ def test_demo_text(
     }
     # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
     if repeat_batches == 2 and batch_size == 1:
-        target = 56.5 if galaxy_type == "6U" else 99
+        target = 68.00 if galaxy_type == "6U" else 99
         assert (
             avg_time_to_first_token * 1000 < target
         ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."

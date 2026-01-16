@@ -17,8 +17,8 @@
 namespace ttnn::operations::data_movement::reshard {
 
 struct ReshardDeviceOperation {
-    using operation_attributes_t = reshard::operation_attributes_t;
-    using tensor_args_t = reshard::tensor_args_t;
+    using operation_attributes_t = ReshardParams;
+    using tensor_args_t = ReshardInputs;
     using spec_return_value_t = reshard::spec_return_value_t;
     using tensor_return_value_t = reshard::tensor_return_value_t;
     using program_factory_t = std::variant<

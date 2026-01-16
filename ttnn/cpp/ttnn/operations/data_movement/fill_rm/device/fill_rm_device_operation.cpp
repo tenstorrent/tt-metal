@@ -10,7 +10,7 @@
 namespace ttnn::operations::data_movement::fill_rm {
 
 FillRMDeviceOperation::program_factory_t FillRMDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return program::FillRMProgramFactory{};
 }
 
@@ -50,7 +50,7 @@ void FillRMDeviceOperation::validate_on_program_cache_miss(
         "FillRM does not currently support sharding");
 }
 
-spec_return_value_t FillRMDeviceOperation::compute_output_specs(
+TensorSpec FillRMDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
 
@@ -59,7 +59,7 @@ spec_return_value_t FillRMDeviceOperation::compute_output_specs(
     return TensorSpec(shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
 }
 
-tensor_return_value_t FillRMDeviceOperation::create_output_tensors(
+Tensor FillRMDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args.input;
     return create_device_tensor(compute_output_specs(args, tensor_args), input_tensor.device());
@@ -67,7 +67,7 @@ tensor_return_value_t FillRMDeviceOperation::create_output_tensors(
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<FillRMDeviceOperation::tensor_return_value_t>
 FillRMDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value) {
     using namespace tt::tt_metal;

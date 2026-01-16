@@ -21,12 +21,12 @@ using namespace tt::tt_metal;
 using namespace tt::tt_metal::distributed;
 
 ApplyDeviceDelayDeviceOperation::program_factory_t ApplyDeviceDelayDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ApplyDeviceDelayMeshWorkload{};
 }
 
 void ApplyDeviceDelayDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     const auto& mesh_device = *operation_attributes.mesh_device;
     TT_FATAL(operation_attributes.mesh_device != nullptr, "mesh_device is nullptr");
     const auto& view = mesh_device.get_view();
@@ -47,17 +47,17 @@ void ApplyDeviceDelayDeviceOperation::validate_on_program_cache_miss(
 }
 
 void ApplyDeviceDelayDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // No additional validation needed on cache hit
 }
 
 ApplyDeviceDelayDeviceOperation::spec_return_value_t ApplyDeviceDelayDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return std::vector<ttnn::TensorSpec>{};
 }
 
 ApplyDeviceDelayDeviceOperation::tensor_return_value_t ApplyDeviceDelayDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return std::vector<ttnn::Tensor>{};
 }
 
@@ -84,8 +84,8 @@ ttnn::device_operation::CachedProgram<ApplyDeviceDelayDeviceOperation::ApplyDevi
 ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
     log_info(tt::LogAlways, "Creating delay program at mesh coordinate: {}", mesh_coordinate);
     tt::tt_metal::Program program{};
     auto subdevice_cores = corerange_to_cores(operation_attributes.worker_core_range_set);
@@ -99,10 +99,10 @@ ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::create_at(
 }
 
 void ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    cached_mesh_workload_t& /*cached_workload*/,
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
     // No runtime arguments to override for this operation since delay cycles are compile-time
 }
 

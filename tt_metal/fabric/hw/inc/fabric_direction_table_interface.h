@@ -38,6 +38,7 @@ inline std::uint8_t direction_table_t<ArraySize>::decompress_value(std::uint8_t 
         case compressed_routing_values::COMPRESSED_WEST: return eth_chan_directions::WEST;
         case compressed_routing_values::COMPRESSED_NORTH: return eth_chan_directions::NORTH;
         case compressed_routing_values::COMPRESSED_SOUTH: return eth_chan_directions::SOUTH;
+        case compressed_routing_values::COMPRESSED_Z: return eth_chan_directions::Z;
         case compressed_routing_values::COMPRESSED_INVALID_DIRECTION: return eth_chan_magic_values::INVALID_DIRECTION;
         case compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY:
             return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;

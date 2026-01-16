@@ -15,7 +15,7 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 #include <optional>
 #include <vector>

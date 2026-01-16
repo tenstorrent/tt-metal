@@ -8,7 +8,7 @@
 namespace ttnn::operations::examples {
 
 ExampleDeviceOperation::program_factory_t ExampleDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     bool some_condition_based_on_operation_attributes_and_or_tensor_args = true;
     if (some_condition_based_on_operation_attributes_and_or_tensor_args) {
         return SingleCore{};
@@ -17,10 +17,10 @@ ExampleDeviceOperation::program_factory_t ExampleDeviceOperation::select_program
 }
 
 void ExampleDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 void ExampleDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 ExampleDeviceOperation::spec_return_value_t ExampleDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {

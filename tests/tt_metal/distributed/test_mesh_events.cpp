@@ -279,7 +279,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     auto buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
     // Initialize containers to store input and output data
     std::vector<std::vector<uint32_t>> input_shard_data = {};
-    std::vector<std::vector<MeshCommandQueue::ShardDataTransfer>> read_shards = {};
+    std::vector<std::vector<distributed::ShardDataTransfer>> read_shards = {};
     std::vector<std::vector<uint32_t>> output_shard_data = {};
 
     for (int i = 0; i < NUM_ITERS; i++) {
@@ -291,10 +291,8 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
         read_shards.push_back({});
         for (const auto& device_coord : devices_0) {
             output_shard_data.push_back(std::vector<uint32_t>(input_shard_data.back().size()));
-            read_shards.back().push_back(MeshCommandQueue::ShardDataTransfer{
-                .shard_coord = device_coord,
-                .host_data = output_shard_data.back().data(),
-            });
+            read_shards.back().push_back(
+                distributed::ShardDataTransfer{device_coord}.host_data(output_shard_data.back().data()));
         }
     }
 

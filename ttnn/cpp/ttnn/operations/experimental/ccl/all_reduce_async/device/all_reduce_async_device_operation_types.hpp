@@ -77,8 +77,4 @@ struct tensor_args_t {
     Tensor buffer_tensor;
 };
 
-using spec_return_value_t = TensorSpec;
-
-using tensor_return_value_t = Tensor;
-
 }  // namespace ttnn::operations::experimental::ccl::all_reduce_async

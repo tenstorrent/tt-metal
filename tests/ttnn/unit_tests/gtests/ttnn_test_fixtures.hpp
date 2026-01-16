@@ -66,6 +66,45 @@ protected:
         TTNNFixtureBase(trace_region_size, l1_small_size) {}
 };
 
+// CRTP-based fixture that shares the device across all tests in a parameterized test suite.
+// Each derived class gets its own static device instance, providing isolation between suites
+// while avoiding repeated device init/teardown within a suite.
+//
+// Usage:
+//   class MyTests : public TTNNFixtureWithSuiteDevice<MyTests>,
+//                   public ::testing::WithParamInterface<MyParams> {};
+//
+template <typename Derived>
+class TTNNFixtureWithSuiteDevice : public TTNNFixtureBase {
+    friend Derived;
+
+    TTNNFixtureWithSuiteDevice() = default;
+
+protected:
+    static tt::tt_metal::distributed::MeshDevice* device_;
+    static std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
+
+public:
+    static void SetUpTestSuite() {
+        device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
+        device_ = device_holder_.get();
+    }
+
+    static void TearDownTestSuite() {
+        if (device_holder_) {
+            device_holder_->close();
+            device_holder_.reset();
+            device_ = nullptr;
+        }
+    }
+};
+
+template <typename Derived>
+tt::tt_metal::distributed::MeshDevice* TTNNFixtureWithSuiteDevice<Derived>::device_ = nullptr;
+
+template <typename Derived>
+std::shared_ptr<tt::tt_metal::distributed::MeshDevice> TTNNFixtureWithSuiteDevice<Derived>::device_holder_ = nullptr;
+
 class MultiCommandQueueSingleDeviceFixture : public TTNNFixtureBase {
 protected:
     tt::tt_metal::distributed::MeshDevice* device_ = nullptr;

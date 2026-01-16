@@ -39,12 +39,14 @@ struct ConditionalField {
 template <typename T>
 struct ConditionalField<false, T> {
     // Constructor that ignores a single argument
+    // NOLINTNEXTLINE(misc-unused-parameters)
     template <typename T_, std::enable_if_t<!std::is_same_v<std::decay_t<T_>, ConditionalField>, int> = 0>
-    ConditionalField(T_&& val) {}  // Ignore value if passed to constructor
+    ConditionalField(T_&& /*val*/) {}  // Ignore value if passed to constructor
 
     // Variadic constructor that ignores all arguments
+    // NOLINTNEXTLINE(misc-unused-parameters)
     template <typename... Args, std::enable_if_t<sizeof...(Args) != 1, int> = 0>
-    ConditionalField(Args&&... args) {}  // Ignore all arguments if passed to constructor
+    ConditionalField(Args&&... /*args*/) {}  // Ignore all arguments if passed to constructor
 
     ConditionalField() = default;
 };

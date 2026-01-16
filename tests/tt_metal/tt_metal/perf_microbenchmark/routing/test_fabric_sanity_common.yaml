@@ -359,33 +359,147 @@ Tests:
             destination:
               device: [0, 1]
 
-  - name: "FabricMuxSimpleUnicastWriteMesh"
-    skip: [GALAXY, BLACKHOLE_GALAXY]
+  - name: "CustomMaxPacketSizeLinear3K"
+    enable_flow_control: true
     fabric_setup:
-      topology: Mesh
-      fabric_tensix_config: Mux
+      topology: Linear
+      max_packet_size: 3264
 
-    senders:
-      - device: [0, 1]
-        patterns:
-          - ftype: unicast
-            ntype: unicast_write
-            size: 1024
-            num_packets: 100
-            destination:
-              device: [0, 0]
-
-  - name: "FabricMuxAllToAllUnicastMesh"
-    skip: [GALAXY, BLACKHOLE_GALAXY]
-    fabric_setup:
-      topology: Mesh
-      fabric_tensix_config: Mux
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 3264]
 
     defaults:
-      ftype: unicast
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "CustomMaxPacketSizeLinear5K"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+      max_packet_size: 5440
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [2048, 4096, 5440]
+
+    defaults:
+      ftype: mcast
       ntype: unicast_write
-      size: 1024
-      num_packets: 100
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "CustomMaxPacketSizeLinear7K"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+      max_packet_size: 7616
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [2048, 4096, 7616]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "CustomMaxPacketSizeMesh7K"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 7616
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [2048, 4096, 7616]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "CustomMaxPacketSizeLinear8K"
+    skip: [wormhole_b0]
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+      max_packet_size: 8704
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [7616, 8704]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "CustomMaxPacketSizeMesh8K"
+    skip: [wormhole_b0]
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 8704
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [7616, 8704]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "CustomMaxPacketSizeLinear15K"
+    skip: [wormhole_b0]
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+      max_packet_size: 15232
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [7616, 8704, 15232]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
+
+  - name: "CustomMaxPacketSizeMesh15K"
+    skip: [wormhole_b0]
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 15232
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [7616, 8704, 15232]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
 
     patterns:
       - type: all_to_all

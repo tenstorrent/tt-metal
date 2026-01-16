@@ -27,7 +27,8 @@
           "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--warnings-as-errors=*"},
           "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
           "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
-          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"}
+          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
+          "BUILD_TT_TRAIN": {"value": "OFF"}
         }
       },
       {
@@ -111,7 +112,7 @@
       {
         "name": "clang-tidy",
         "configurePreset": "clang-tidy",
-        "configuration": "RelWithDebInfo",
+        "configuration": "Debug",
         "targets": ["all", "all_verify_interface_header_sets"],
         "nativeToolOptions": ["-k0"]
       },

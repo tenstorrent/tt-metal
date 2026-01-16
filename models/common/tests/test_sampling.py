@@ -17,18 +17,18 @@ from models.common.utils import LogProbsCalculator
     ],
 )
 @pytest.mark.parametrize(
-    "device_params",
+    "ttnn_mesh_device",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+        {"mesh_shape": (1, 8), "fabric_config": ttnn.FabricConfig.FABRIC_1D},
     ],
-    indirect=["device_params"],
-    ids=["fabric_linear"],
+    indirect=True,
+    ids=["t3k_fabric_1d"],
 )
-def test_log_probs_calculation(shape, mesh_device):
+def test_log_probs_calculation(shape, ttnn_mesh_device):
     seed = 1234
     torch.manual_seed(seed)
 
-    log_probs_calculator = LogProbsCalculator(mesh_device)
+    log_probs_calculator = LogProbsCalculator(ttnn_mesh_device)
 
     torch_tensor = torch.randn(shape)
     # shuffle the tensor in last 2 dimensions
@@ -42,25 +42,25 @@ def test_log_probs_calculation(shape, mesh_device):
     # Push inputs to device
     logits_tensor = ttnn.from_torch(
         torch_tensor,
-        device=mesh_device,
+        device=ttnn_mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=-1),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     ttnn_indices_tensor = ttnn.from_torch(
         indices_tensor,
-        device=mesh_device,
+        device=ttnn_mesh_device,
         dtype=ttnn.int32,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     log_probs_calculator.set_log_probs_mode(True)
     tt_log_probs = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
-    log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_mesh_device, dim=3))
     log_probs_tt_host = log_probs_tt_host[:, :, :1, :32]
 
     # Calculate log-probs for each user on each chip using torch

@@ -57,7 +57,7 @@ uint32_t get_runtime_arg_addr(
 
     switch (processor_class) {
         case tt::tt_metal::HalProcessorClassType::DM:
-            TT_ASSERT(0 <= processor_id && processor_id < 2);
+            TT_FATAL(0 <= processor_id && processor_id < 2, "processor_id {} must be 0 or 1 for DM", processor_id);
             result_base = l1_unreserved_base + processor_id * runtime_args_space;
             break;
         case tt::tt_metal::HalProcessorClassType::COMPUTE:
@@ -71,7 +71,7 @@ uint32_t get_runtime_arg_addr(
 };
 
 distributed::MeshWorkload initialize_program_data_movement(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreRangeSet& core_range_set) {
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/, const CoreRangeSet& core_range_set) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);

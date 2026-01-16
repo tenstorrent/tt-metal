@@ -109,8 +109,8 @@ class OutputTensor:
 
 @dataclasses.dataclass
 class TensorComparisonRecord:
-    tensor_id: int | None
-    golden_tensor_id: int | None
+    tensor_id: int
+    golden_tensor_id: int
     matches: bool
     desired_pcc: bool
     actual_pcc: float

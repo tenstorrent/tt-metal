@@ -15,10 +15,9 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
 
-#include "ttnn/run_operation.hpp"
-
 // Include the new device operation types to get ReduceScatterProgramArtifacts
 #include "reduce_scatter_minimal_async_op_device_operation_types.hpp"
+#include "ttnn/operation.hpp"
 
 #include <optional>
 #include <utility>
@@ -32,90 +31,6 @@ using ccl::EriscDatamoverBuilder;
 using ReduceScatterProgramArtifacts =
     operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts;
 
-struct ReduceScatterMinimalAsync {
-    uint32_t dim;
-    uint32_t num_links;
-    uint32_t ring_size;
-    const MemoryConfig output_mem_config;
-    const std::optional<MemoryConfig> optional_intermediate_mem_config;
-    const ccl::Topology topology;
-    const std::vector<GlobalSemaphore> semaphore;
-    const std::optional<GlobalSemaphore>& barrier_semaphore;
-    bool using_persistent_buffers;
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    std::optional<uint32_t> cluster_axis;
-    std::optional<uint32_t> chunks_per_sync;
-    std::optional<uint32_t> num_workers_per_link;
-    std::optional<uint32_t> num_buffers_per_channel;
-
-    ReduceScatterMinimalAsync(
-        uint32_t dim,
-        uint32_t num_links,
-        uint32_t ring_size,
-        MemoryConfig output_mem_config,
-        const std::optional<MemoryConfig>& intermediate_mem_config,
-        ccl::Topology topology,
-        std::vector<GlobalSemaphore> semaphore,
-        const std::optional<GlobalSemaphore>& barrier_semaphore,
-        bool using_persistent_buffers,
-        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        std::optional<uint32_t> cluster_axis,
-        std::optional<uint32_t> chunks_per_sync,
-        std::optional<uint32_t> num_workers_per_link,
-        std::optional<uint32_t> num_buffers_per_channel) :
-        dim(dim),
-        num_links(num_links),
-        ring_size(ring_size),
-        output_mem_config(std::move(output_mem_config)),
-        optional_intermediate_mem_config(intermediate_mem_config),
-        topology(topology),
-        semaphore(std::move(semaphore)),
-        barrier_semaphore(barrier_semaphore),
-        using_persistent_buffers(using_persistent_buffers),
-        sub_device_id(sub_device_id),
-        cluster_axis(cluster_axis),
-        chunks_per_sync(chunks_per_sync),
-        num_workers_per_link(num_workers_per_link),
-        num_buffers_per_channel(num_buffers_per_channel) {}
-
-    // Add attributes method for reflection
-    auto attributes() const {
-        using tt::stl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-
-        attrs.emplace_back("dim", dim);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("optional_intermediate_mem_config", optional_intermediate_mem_config);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore", semaphore);
-        attrs.emplace_back("barrier_semaphore", barrier_semaphore);
-        attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("chunks_per_sync", chunks_per_sync);
-        attrs.emplace_back("num_worker_per_link", num_workers_per_link);
-        attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
-        return attrs;
-    }
-
-    void validate_with_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
-        const ttnn::MeshCoordinate& coord,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    std::vector<Tensor> create_output_tensors(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
-    tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
-};
-
 void reduce_scatter_common_validates(
     const ttnn::Tensor& input_tensor,
     ttnn::ccl::Topology topology,
@@ -124,95 +39,6 @@ void reduce_scatter_common_validates(
     uint32_t ring_size,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor);
-
-tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
-    const Tensor& input_tensor,
-    const Tensor& intermediate_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel);
-
-tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helper(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const Tensor& intermediate_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
-
-tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_helper(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const Tensor& intermediate_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
-
-tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_helper(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const Tensor& intermediate_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
@@ -291,25 +117,5 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset);
-
-namespace operations::experimental::ccl {
-
-Tensor reduce_scatter_minimal_async(
-    const Tensor& input_tensor,
-    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
-    uint32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
-    uint32_t num_links = 1,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<MemoryConfig>& intermeidate_memory_config = std::nullopt,
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt,
-    std::optional<uint32_t> chunks_per_sync = std::nullopt,
-    std::optional<uint32_t> num_workers_per_link = std::nullopt,
-    std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
-
-}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

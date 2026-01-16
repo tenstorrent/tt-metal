@@ -9,6 +9,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/reconfig_data_format.h"
+#include "experimental/circular_buffer.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -21,13 +22,19 @@ void MAIN {
     constexpr auto cb_out0 = tt::CBIndex::c_16;  // Fp32
     constexpr auto cb_out1 = tt::CBIndex::c_17;  // Bfp8_b
 
+    experimental::CircularBuffer cbin0(tt::CBIndex::c_0);
+    experimental::CircularBuffer cbin1(tt::CBIndex::c_1);
+    experimental::CircularBuffer cbin2(tt::CBIndex::c_2);
+    experimental::CircularBuffer cbout0(tt::CBIndex::c_16);
+    experimental::CircularBuffer cbout1(tt::CBIndex::c_17);
+
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     binary_tiles_init<false, ELWADD>(cb_in0, cb_in1);
     for (uint32_t block = 0; block < num_tiles; ++block) {
-        cb_wait_front(cb_in0, ublock_size_tiles);
-        cb_wait_front(cb_in1, ublock_size_tiles);
-        cb_reserve_back(cb_out0, ublock_size_tiles);
-        cb_reserve_back(cb_out1, ublock_size_tiles);
+        cbin0.wait_front(ublock_size_tiles);
+        cbin1.wait_front(ublock_size_tiles);
+        cbout0.reserve_back(ublock_size_tiles);
+        cbout1.reserve_back(ublock_size_tiles);
 
         acquire_dst();
 
@@ -40,7 +47,7 @@ void MAIN {
         // This call will test copy_tile_to_dst_init_short as well
         copy_tile_to_dst_init_short_with_dt(cb_in0, cb_in2);
 
-        cb_wait_front(cb_in2, ublock_size_tiles);
+        cbin2.wait_front(ublock_size_tiles);
 #if (BLOCK_COPY == 1)
         for (uint32_t u_cnt = 0; u_cnt < ublock_size_tiles; u_cnt++) {
             copy_tile(cb_in2, 0, 0);
@@ -48,7 +55,7 @@ void MAIN {
 #elif (BLOCK_COPY == 0)
         copy_block_matmul_partials(cb_in2, 0, 0, ublock_size_tiles);
 #endif
-        cb_pop_front(cb_in2, ublock_size_tiles);
+        cbin2.pop_front(ublock_size_tiles);
 
         // -------------------- Addition with acc -----------------------------
 
@@ -102,10 +109,10 @@ void MAIN {
         pack_tile_block(0, cb_out1, ublock_size_tiles);
         release_dst();
 
-        cb_pop_front(cb_in0, ublock_size_tiles);
-        cb_pop_front(cb_in1, ublock_size_tiles);
-        cb_push_back(cb_out0, ublock_size_tiles);
-        cb_push_back(cb_out1, ublock_size_tiles);
+        cbin0.pop_front(ublock_size_tiles);
+        cbin1.pop_front(ublock_size_tiles);
+        cbout0.push_back(ublock_size_tiles);
+        cbout1.push_back(ublock_size_tiles);
     }
 }
 }  // namespace NAMESPACE

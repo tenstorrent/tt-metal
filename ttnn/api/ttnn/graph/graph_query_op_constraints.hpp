@@ -40,24 +40,30 @@ private:
 // constraints query function. An overload resolution failure means the return type for the op in that query is not yet
 // supported and a new overload should be added
 
-// most ops just return a tensor
-inline Tensor extract_output_tensor(const Tensor& result) { return result; }
-
-// multi-output ops like sort
-inline Tensor extract_output_tensor(const std::vector<Tensor>& result) { return result[0]; }
-
-// conv2d output
-template <typename... Args1, typename... Args2>
-Tensor extract_output_tensor(const std::variant<
-                             ttnn::Tensor,
-                             std::tuple<ttnn::Tensor, Args1...>,
-                             std::tuple<ttnn::Tensor, Args2...>,
-                             std::tuple<ttnn::Tensor, Args1..., Args2...>>& result) {
-    return std::visit<Tensor>(
-        tt::stl::overloaded{
-            [](const ttnn::Tensor& arg) { return arg; }, [](const auto& arg) { return std::get<0>(arg); }},
-        result);
+// Generic function to extract all tensors from most return types using reflection. The return type could be:
+// - A single Tensor (Most ops)
+// - std::vector<Tensor> or std::tuple<Tensor, Tensor, ...> (multi-output ops, e.g., sort,
+// split_query_key_value_and_split_heads)
+template <typename T>
+inline std::vector<Tensor> extract_output_tensors(const T& result) {
+    std::vector<Tensor> tensors;
+    tt::stl::reflection::visit_object_of_type<Tensor>([&tensors](auto&& tensor) { tensors.push_back(tensor); }, result);
+    return tensors;
 }
+
+// Specialized overload for conv2d output (std::variant with different tuple combinations)
+template <typename... Ts>
+inline std::vector<Tensor> extract_output_tensors(const std::variant<Ts...>& result) {
+    std::vector<Tensor> tensors;
+    std::visit(
+        [&tensors](auto&& value) {
+            tt::stl::reflection::visit_object_of_type<Tensor>(
+                [&tensors](auto&& tensor) { tensors.push_back(tensor); }, value);
+        },
+        result);
+    return tensors;
+}
+
 }  // namespace detail
 
 struct ResourceUsage {
@@ -70,7 +76,7 @@ struct ResourceUsage {
 struct ConstraintQueryResponse {
     ExecutionStatus status = ExecutionStatus::Error;
     ResourceUsage resource_usage;
-    std::optional<TensorSpec> output_tensor_spec;
+    std::optional<std::vector<TensorSpec>> output_tensor_specs;
     std::optional<std::string> error_message;
 };
 
@@ -93,7 +99,7 @@ template <typename Op, typename... Args>
 auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, Args&&... args) {
     detail::LogLevelGuard log_guard(spdlog::level::level_enum::off);
     nlohmann::json op_trace;
-    Tensor output;
+    std::vector<Tensor> outputs;
     // outer graph capture is to avoid dispatching/allocating dummy input tensors
     {
         auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
@@ -119,7 +125,7 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
         // inner graph capture is to capture the actual op graph trace
         try {
             auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
-            output = detail::extract_output_tensor(std::apply(op, transformed_args));
+            outputs = detail::extract_output_tensors(std::apply(op, transformed_args));
         }  // end of inner graph capture
         catch (const std::exception& e) {
             log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
@@ -129,7 +135,7 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
                  .l1_buffers_peak_per_core = 0,
                  .peak_memory_usage_per_core = 0,
                  .l1_output_buffer_per_core = 0},
-                /* output_tensor_spec= */ std::nullopt,
+                /* output_tensor_specs= */ std::nullopt,
                 e.what()};
         }
         op_trace = capture_outer.end_graph_capture();
@@ -140,14 +146,24 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
     const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
         extract_resource_usage_per_core(op_trace, interleaved_storage_cores);
 
-    size_t l1_output_buffer_per_core = output.buffer()->is_dram() ? 0
-                                                                  : extract_l1_output_buffer_allocation_size_per_core(
-                                                                        output, interleaved_storage_cores);
+    size_t l1_output_buffer_per_core = 0;
+    for (const auto& output : outputs) {
+        if (!output.buffer()->is_dram()) {
+            l1_output_buffer_per_core +=
+                extract_l1_output_buffer_allocation_size_per_core(output, interleaved_storage_cores);
+        }
+    }
+
+    std::vector<TensorSpec> output_specs;
+    output_specs.reserve(outputs.size());
+    std::transform(outputs.begin(), outputs.end(), std::back_inserter(output_specs), [](const Tensor& t) {
+        return t.tensor_spec();
+    });
 
     return ConstraintQueryResponse{
         ExecutionStatus::Success,
         {cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core, l1_output_buffer_per_core},
-        output.tensor_spec()};
+        std::make_optional(std::move(output_specs))};
 }
 
 }  // namespace ttnn::graph

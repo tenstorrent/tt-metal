@@ -14,13 +14,13 @@ L1 memory is allocated on three Tensix cores: one master core and two subordinat
 1. **Data Setup**: Random data is written to both the master core and sub1 core L1 memory
 2. **Write Phase**: The master core issues NOC write transactions with unique transaction IDs to transfer data to the sub0 core
 3. **Read-After-Write**: The master core waits for write transactions to complete using transaction ID barriers (`noc_async_write_flushed_with_trid`), then immediately reads data from the sub1 core. Note that the transaction ID barriers prevent write-after-read (WAR) hazards where the data we are writing from the master core is not corrupted by our reads from the sub1 core.
-4. **Validation**: Data integrity is verified through PCC (Pearson Correlation Coefficient) checks. Initial data in sub1 and master cores are compared with resulting data in master and sub0 cores, respectively.
+4. **Validation**: Data integrity is verified through a simple equality check. Initial data in sub1 and master cores are compared with resulting data in master and sub0 cores, respectively.
 
 ### Write-After-Read:
 1. **Data Setup**: Random data is written to both the master core and sub1 core L1 memory
 2. **Read Phase**: The master core issues NOC read transactions with unique transaction IDs to transfer data from the sub1 core
 3. **Write-After-Read**: The master core waits for read transactions to complete using transaction ID barriers (`noc_async_read_barrier_with_trid`), then immediately writes that same data to the sub0 core.
-4. **Validation**: Data integrity is verified through PCC (Pearson Correlation Coefficient) checks. Initial data in sub1 and master cores are compared with resulting data in master and sub0 cores, respectively.
+4. **Validation**: Data integrity is verified through a simple equality check. Initial data in sub1 and master cores are compared with resulting data in master and sub0 cores, respectively.
 
 This pattern tests the benefits of using transaction IDs on performance, ensuring that the NOC is kept busy at the highest rate possible.
 

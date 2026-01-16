@@ -49,3 +49,8 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
         num_faces, dst_format);
 }
+
+template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
+inline void llk_math_eltwise_unary_datacopy_uninit() {
+    _llk_math_eltwise_unary_datacopy_uninit_<src_b_bcast_type, unpack_to_dest>();
+}

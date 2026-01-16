@@ -19,14 +19,14 @@ struct EmbeddingsFusedProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const embedding::operation_attributes_t& operation_attributes,
-        const embedding::tensor_args_t& tensor_args,
+        const embedding::EmbeddingParams& operation_attributes,
+        const embedding::EmbeddingInputs& tensor_args,
         embedding::tensor_return_value_t& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const embedding::operation_attributes_t& operation_attributes,
-        const embedding::tensor_args_t& tensor_args,
+        const embedding::EmbeddingParams& operation_attributes,
+        const embedding::EmbeddingInputs& tensor_args,
         embedding::tensor_return_value_t& tensor_return_value);
 };
 }  // namespace ttnn::operations::embedding::program

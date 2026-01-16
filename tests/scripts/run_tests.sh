@@ -141,13 +141,13 @@ unit_t3000_device() {
     ./tests/scripts/t3000/run_t3000_unit_tests.sh
 }
 
-# Run t3000 frequent tests
+# Run t3000 integration tests
 frequent_t3000_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    ./tests/scripts/t3000/run_t3000_frequent_tests.sh
+    ./tests/scripts/t3000/run_t3000_integration_tests.sh
 }
 
 # Run t3000 demo tests
@@ -165,7 +165,7 @@ model_perf_t3000_device() {
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    ./tests/scripts/t3000/run_t3000_model_perf_tests.sh --pipeline-type "$pipeline_type"
+    ./tests/scripts/t3000/run_t3000_perf_tests.sh --pipeline-type "$pipeline_type"
 }
 ##########################T3000##########################
 

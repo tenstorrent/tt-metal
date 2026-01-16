@@ -56,7 +56,7 @@ void bind_padded_slice(nb::module_& mod) {
                const std::optional<ttnn::SmallVector<int>>& step,
                const MemoryConfig& memory_config,
                const std::optional<Tensor>& optional_output_tensor,
-               const std::optional<float>& pad_value) {
+               const std::optional<float>& /*pad_value*/) {
                 const auto step_value = step.value_or(ttnn::SmallVector<int>(padded_slice_end.size(), 1));
                 return self(
                     input_tensor,

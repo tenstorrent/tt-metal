@@ -260,7 +260,7 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
 
 void LayerNormPreAllGatherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormPreAllGatherOperationAttributes& operation_attributes,
+    const LayerNormPreAllGatherOperationAttributes& /*operation_attributes*/,
     const LayerNormPreAllGatherTensorArgs& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
@@ -507,7 +507,7 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
 
 void LayerNormPreAllGather2DProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormPreAllGatherOperationAttributes& operation_attributes,
+    const LayerNormPreAllGatherOperationAttributes& /*operation_attributes*/,
     const LayerNormPreAllGatherTensorArgs& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;

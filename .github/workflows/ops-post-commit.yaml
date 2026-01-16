@@ -143,8 +143,24 @@ jobs:
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TRACY_NO_INVARIANT_CHECK: 1
         run: |
           ${{ matrix.test-group.cmd }}
+
+          # Device perf branch
+          export DEVICE_PERF_REPORT_FILENAME="Ops_Perf.csv"
+          python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT
+          echo "Showing ops perf report... will fail if not found"
+          cat $DEVICE_PERF_REPORT_FILENAME
+
+      - name: Merge and check test reports
+        timeout-minutes: 5
+        env:
+          TRACY_NO_INVARIANT_CHECK: 1
+        run: |
+          export DEVICE_PERF_REPORT_FILENAME=Ops_Perf.csv
+          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

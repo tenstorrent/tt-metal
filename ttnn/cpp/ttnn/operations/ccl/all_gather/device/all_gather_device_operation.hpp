@@ -15,7 +15,7 @@
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -49,7 +49,7 @@ struct AllGatherDeviceOperation {
         struct shared_variables_t {
             std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores;
             tt::tt_metal::GlobalSemaphore barrier_semaphore;
-            ttnn::operations::ccl::AllGatherProgramArtifacts program_artifacts;
+            AllGatherProgramArtifacts program_artifacts;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

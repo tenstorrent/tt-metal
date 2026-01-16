@@ -79,68 +79,6 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
     return TensorMemoryLayout::INTERLEAVED;
 }
 
-const std::optional<ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
-    return tensor_spec.memory_config().shard_spec();
-}
-
-inline auto is_uneven(const TensorSpec& t) {
-    if (not t.memory_config().is_sharded()) {
-        return false;
-    }
-
-    const auto& shape = t.padded_shape();
-    const auto& shard = get_shard_spec(t)->shape;
-    const auto rank = shape.rank();
-
-    // Compute product of all dimensions except the last
-    uint64_t volume_except_last = 1;
-    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
-        volume_except_last *= shape[i];
-    }
-
-    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
-}
-
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
-    // scalar value treated as interleaved
-    if (!b.has_value()) {
-        return false;
-    }
-
-    // does not work for width and block sharding, pcc error,
-    // maybe support later to improve performance
-    // if (!b.has_value() && a.memory_config().is_sharded()) {
-    //     return !is_uneven(a);
-    // }
-
-    if (!c.memory_config().is_sharded()) {
-        return false;
-    }
-
-    // a and b identical shape, no broadcast on any dimension
-    if (b.has_value() && (a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
-        if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
-            return false;
-        }
-        if (a.memory_config().buffer_type() == BufferType::DRAM ||
-            b->memory_config().buffer_type() == BufferType::DRAM ||
-            c.memory_config().buffer_type() == BufferType::DRAM) {
-            return false;
-        }
-        if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
-            return true;
-        }
-        if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 std::optional<AllShardSpecs> get_shard_specs(
     const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
     bool a_sharded = a.memory_config().is_sharded();
@@ -151,7 +89,7 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(a, b, c)) {
+    if (!is_native_L1_sharding(a, b, c.memory_config())) {
         // treat as interleaved
         return std::nullopt;
     }

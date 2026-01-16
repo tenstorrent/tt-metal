@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <chrono>
 #include <cerrno>
 #include <fmt/base.h>
@@ -35,13 +37,11 @@
 #include "test_gold_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
+#include "impl/data_format/bfloat16_utils.hpp"
 
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
 inline std::vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_vec, std::vector<uint32_t> shape) {
     std::vector<uint32_t> dst_vec;
@@ -95,10 +95,8 @@ inline std::vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_ve
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
-    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
-
+TEST_F(MeshDeviceSingleCardFixture, UntilizeEltwiseBinary) {
+    IDevice* dev = devices_[0]->get_devices()[0];
     bool pass = true;
     bool multibank = true;
 
@@ -109,15 +107,6 @@ int main(int argc, char** argv) {
     log_info(LogTest, "====================================================================");
     log_info(LogTest, "======= Running eltwise_binary test for op={}", op_id_to_op_name[eltwise_op]);
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
@@ -137,10 +126,7 @@ int main(int argc, char** argv) {
         }
 
         tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
-            .size = dram_buffer_size,
-            .page_size = page_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
+            .device = dev, .size = dram_buffer_size, .page_size = page_size, .buffer_type = tt_metal::BufferType::DRAM};
 
         auto src0_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
@@ -238,7 +224,7 @@ int main(int argc, char** argv) {
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
 
-        tt_metal::detail::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(dev, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -256,8 +242,6 @@ int main(int argc, char** argv) {
 
         pass &= (golden == result_vec);
 
-        pass &= tt_metal::CloseDevice(device);
-
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
@@ -266,13 +250,5 @@ int main(int argc, char** argv) {
         log_error(LogTest, "System error message: {}", std::strerror(errno));
     }
 
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass, "Error");
-
-    return 0;
+    ASSERT_TRUE(pass);
 }

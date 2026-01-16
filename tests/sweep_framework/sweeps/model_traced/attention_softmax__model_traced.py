@@ -46,14 +46,21 @@ def run(
     """
     torch.manual_seed(0)
 
-    # Parse input_shape - single tensor input
-    if isinstance(input_shape, (tuple, list)):
+    # Parse input_shape - can be tuple/list or dict (from binary operation extraction)
+    if isinstance(input_shape, dict):
+        # Binary operation format: {"input_a": shape_a, "input_b": shape_b}
+        shape_a = tuple(input_shape.get("input_a", input_shape.get("self", [1, 32, 32])))
+        shape_b = tuple(input_shape.get("input_b", input_shape.get("other", shape_a)))
+    elif isinstance(input_shape, (tuple, list)):
         shape_a = tuple(input_shape)
+        shape_b = shape_a  # Mask has same shape as input
     else:
         shape_a = input_shape
+        shape_b = shape_a
 
     # Get head_size from scalar if provided (as traced configs do)
-    head_size = scalar if scalar is not None else None
+    # Ensure it's an int, not float
+    head_size = int(scalar) if scalar is not None else None
 
     # Generate input tensor
     torch_input_tensor = gen_func_with_cast_tt(
@@ -66,7 +73,7 @@ def run(
     torch_mask_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32),
         input_b_dtype if input_b_dtype else input_a_dtype,
-    )(shape_a)
+    )(shape_b)
     # Convert to binary mask: values > 0 become 1, else 0
     torch_mask_tensor = (torch_mask_tensor > 0).to(torch.float32)
 

@@ -8,11 +8,11 @@
 
 namespace ttnn::operations::data_movement::reshard {
 
-struct operation_attributes_t {
+struct ReshardParams {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct ReshardInputs {
     Tensor input;
     std::optional<Tensor> preallocated_output;
 };

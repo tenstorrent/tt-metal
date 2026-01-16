@@ -5,10 +5,8 @@
 #include <cstdint>
 
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "compute_kernel_api/eltwise_unary/addcmul.h"
 
 namespace NAMESPACE {
 
@@ -23,7 +21,6 @@ ALWI void process_tile(
     uint32_t scalar_arg) {
     using namespace ckernel;
 
-    const bool scalar_is_not_1 = scalar_arg != 1u;
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
 #if BCAST_A
     cb_wait_front(cb_in0, num_tiles_per_cycle);  // input_a is broadcast
@@ -37,6 +34,9 @@ ALWI void process_tile(
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // Wait for non-broadcast CBs inside loop
+#if !BCAST_A
+        cb_wait_front(cb_in0, num_tiles_per_cycle);
+#endif
 #if !BCAST_B
         cb_wait_front(cb_in1, num_tiles_per_cycle);
 #endif
@@ -44,49 +44,26 @@ ALWI void process_tile(
         cb_wait_front(cb_in2, num_tiles_per_cycle);
 #endif
 
+        cb_reserve_back(cb_out, num_tiles_per_cycle);
+
         tile_regs_acquire();
 
-        // Step 1: Load B and C, compute B * C -> DST[1]
-        copy_tile_to_dst_init_short(cb_in1);
-        copy_tile(cb_in1, 0, 0);  // input_b -> DST[0]
+        // Load all three inputs into DST registers
+        copy_tile_init(cb_in0);
+        copy_tile(cb_in0, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_tile_to_dst_init_short(cb_in2);
-        copy_tile(cb_in2, 0, 1);  // input_c -> DST[1]
+        copy_tile_init(cb_in1);
+        copy_tile(cb_in1, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 1);  // DST[0] * DST[1] -> DST[1]
+        copy_tile_init(cb_in2);
+        copy_tile(cb_in2, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
-        // Done with cb_in1 and cb_in2, pop them early for pipeline efficiency
-#if !BCAST_B
-        cb_pop_front(cb_in1, num_tiles_per_cycle);
-#endif
-#if !BCAST_C
-        cb_pop_front(cb_in2, num_tiles_per_cycle);
-#endif
-
-        // Step 2: (input_b * input_c) * value -> DST[1]
-        if (scalar_is_not_1) {
-            binop_with_scalar_tile_init();
-            mul_unary_tile(1, scalar_arg);  // DST[1] * scalar -> DST[1]
-        }
-
-        // Now wait for input_a
-#if !BCAST_A
-        cb_wait_front(cb_in0, num_tiles_per_cycle);
-#endif
-
-        // Step 3: Load A and add with result
-        copy_tile_to_dst_init_short(cb_in0);
-        copy_tile(cb_in0, 0, 0);  // input_a -> DST[0]
-
-        add_binary_tile_init();
-        add_binary_tile(0, 1, 0);  // DST[0] + DST[1] -> DST[0]
+        // Use direct addcmul kernel: computes input_a + scalar_arg * input_b * input_c -> DST[0]
+        TERNARY_SFPU_OP_INIT();
+        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);
 
         tile_regs_commit();
         tile_regs_wait();
-
-        // Reserve output buffer
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
 
         // Pack the result from DST[0] to output
         pack_tile(0, cb_out);
@@ -98,6 +75,12 @@ ALWI void process_tile(
         // Pop non-broadcast CBs inside loop
 #if !BCAST_A
         cb_pop_front(cb_in0, num_tiles_per_cycle);
+#endif
+#if !BCAST_B
+        cb_pop_front(cb_in1, num_tiles_per_cycle);
+#endif
+#if !BCAST_C
+        cb_pop_front(cb_in2, num_tiles_per_cycle);
 #endif
     }
 

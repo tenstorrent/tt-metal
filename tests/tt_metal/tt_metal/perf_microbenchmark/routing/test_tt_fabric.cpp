@@ -184,6 +184,15 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        // Validate device frequencies for performance tests. Validation runs only once
+        // since device frequencies are cached in TestFixture for its lifetime.
+        if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
+            if (!fixture->validate_device_frequencies_for_performance_tests()) {
+                test_context.close_devices();
+                return 1;  // Hard exit - cannot run performance benchmarks with invalid frequencies
+            }
+        }
+
         // Check topology-based skip conditions after devices are opened
         if (builder.should_skip_test_on_topology(test_config)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to topology skip policy", test_config.name);

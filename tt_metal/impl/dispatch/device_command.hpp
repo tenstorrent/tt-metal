@@ -88,6 +88,16 @@ public:
         const void* data = nullptr,
         uint32_t write_offset_index = 0);
 
+    // Like add_dispatch_write_linear, but emits CQ_DISPATCH_CMD_WRITE_LINEAR_H (dispatch_h variant).
+    template <bool flush_prefetch = true, bool inline_data = false>
+    void add_dispatch_write_linear_h(
+        uint8_t num_mcast_dests,
+        uint32_t noc_xy_addr,
+        DeviceAddr addr,
+        DeviceAddr data_sizeB,
+        const void* data = nullptr,
+        uint32_t write_offset_index = 0);
+
     void add_dispatch_go_signal_mcast(
         uint32_t wait_count,
         uint32_t go_signal,

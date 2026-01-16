@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::full {
 void FullOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(
         operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Full operation error: Not currently supporting sharding");
@@ -33,7 +33,7 @@ void FullOperation::validate_inputs(
 }
 
 FullOperation::program_factory_t FullOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 

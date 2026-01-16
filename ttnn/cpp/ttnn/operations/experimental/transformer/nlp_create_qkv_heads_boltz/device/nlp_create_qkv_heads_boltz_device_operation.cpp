@@ -149,7 +149,7 @@ void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
 }
 
 void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 NlpCreateHeadsBoltzDeviceOperation::spec_return_value_t NlpCreateHeadsBoltzDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -235,7 +235,7 @@ NlpCreateHeadsBoltzDeviceOperation::tensor_return_value_t NlpCreateHeadsBoltzDev
 }
 
 NlpCreateHeadsBoltzDeviceOperation::program_factory_t NlpCreateHeadsBoltzDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor_q;
     if (input_tensor.is_sharded()) {
         return Sharded{};

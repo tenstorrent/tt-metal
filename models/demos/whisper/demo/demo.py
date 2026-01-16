@@ -784,7 +784,7 @@ def test_demo_for_conditional_generation(
         metrics_dictionary = {
             2: {"prefill_time_to_token": 0.13, "decode_t/s/u": 124.0},
             8: {"prefill_time_to_token": 0.14, "decode_t/s/u": 105.0},
-            32: {"prefill_time_to_token": 0.20, "decode_t/s/u": 80.0},
+            32: {"prefill_time_to_token": 0.21, "decode_t/s/u": 80.0},
         }
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1

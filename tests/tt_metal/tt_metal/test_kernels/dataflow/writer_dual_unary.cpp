@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
 #include "api/debug/dprint.h"
 
 inline void write_tiles(uint32_t num_tiles, uint32_t dst_addr, uint32_t bank_id, uint32_t cb_id_out) {

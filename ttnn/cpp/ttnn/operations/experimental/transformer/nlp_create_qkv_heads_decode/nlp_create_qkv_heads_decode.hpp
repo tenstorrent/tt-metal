@@ -5,7 +5,7 @@
 #pragma once
 
 #include "device/nlp_create_qkv_heads_decode_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn {
 namespace operations::experimental::transformer {
