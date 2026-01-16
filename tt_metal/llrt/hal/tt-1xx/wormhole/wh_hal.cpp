@@ -336,6 +336,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ =
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
     this->operand_start_stream_ = OPERAND_START_STREAM;
+    this->has_stream_registers_ = true;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;

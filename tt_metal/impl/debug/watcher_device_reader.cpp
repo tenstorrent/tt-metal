@@ -1042,8 +1042,7 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
 void WatcherDeviceReader::Core::DumpSyncRegs() const {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
-    // Stream registers not supported on Quasar
-    if (hal.get_arch() == tt::ARCH::QUASAR) {
+    if (!hal.has_stream_registers()) {
         return;
     }
 
