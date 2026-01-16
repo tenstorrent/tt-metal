@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::reduction::generic {
 
-struct operation_attributes_t {
+struct GenericParams {
     tt::tt_metal::ReduceOpMath math_op{};
     tt::tt_metal::ReduceOpDim dim{};
     float scaler{1.0f};
@@ -22,11 +22,8 @@ struct operation_attributes_t {
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 };
 
-struct tensor_args_t {
+struct GenericInputs {
     Tensor input_tensor;
 };
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
 
 }  // namespace ttnn::operations::reduction::generic

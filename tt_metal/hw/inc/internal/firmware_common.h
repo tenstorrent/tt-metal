@@ -17,7 +17,11 @@
 #include "api/debug/dprint.h"
 #include "risc_common.h"
 #if !defined(COMPILE_FOR_TRISC)
+#if defined(KERNEL_BUILD)
 #include "api/dataflow/dataflow_api.h"
+#else
+#include "internal/dataflow/dataflow_api_common.h"
+#endif
 #endif
 
 constexpr size_t round_up_to_mult_of_4(size_t value) { return ((value + 3) / 4) * 4; }

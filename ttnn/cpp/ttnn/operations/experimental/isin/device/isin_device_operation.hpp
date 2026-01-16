@@ -10,8 +10,8 @@
 namespace ttnn::operations::experimental::isin {
 
 struct IsInDeviceOperation {
-    using operation_attributes_t = ttnn::operations::experimental::isin::operation_attributes_t;
-    using tensor_args_t = ttnn::operations::experimental::isin::tensor_args_t;
+    using operation_attributes_t = IsinParams;
+    using tensor_args_t = IsinInputs;
     using spec_return_value_t = ttnn::operations::experimental::isin::spec_return_value_t;
     using tensor_return_value_t = ttnn::operations::experimental::isin::tensor_return_value_t;
     using program_factory_t = std::variant<IsInProgramFactory>;

@@ -116,8 +116,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }  // namespace
 
 ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
-    const reshape_on_device::operation_attributes_t& /*operation_attributes*/,
-    const reshape_on_device::tensor_args_t& tensor_args,
+    const reshape_on_device::ReshapeOnDeviceParams& /*operation_attributes*/,
+    const reshape_on_device::ReshapeOnDeviceInputs& tensor_args,
     reshape_on_device::tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(
@@ -220,8 +220,8 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
 
 void ReshapeRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshape_on_device::operation_attributes_t& /*operation_attributes*/,
-    const reshape_on_device::tensor_args_t& tensor_args,
+    const reshape_on_device::ReshapeOnDeviceParams& /*operation_attributes*/,
+    const reshape_on_device::ReshapeOnDeviceInputs& tensor_args,
     reshape_on_device::tensor_return_value_t& output_tensor) {
     const auto& src_tensor = tensor_args.input_tensor;
     auto& dst_tensor = output_tensor;

@@ -159,13 +159,13 @@ void UpdateKVCacheOperation::validate_on_program_cache_hit(
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-spec_return_value_t UpdateKVCacheOperation::compute_output_specs(
+TensorSpec UpdateKVCacheOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache.tensor_spec();
 }
 
-tensor_return_value_t UpdateKVCacheOperation::create_output_tensors(
+Tensor UpdateKVCacheOperation::create_output_tensors(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache;

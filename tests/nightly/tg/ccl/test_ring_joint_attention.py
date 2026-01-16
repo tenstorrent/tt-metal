@@ -85,7 +85,7 @@ def test_ring_joint_sdpa_dit_wh_glx(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"worker_l1_size": 1344544, "trace_region_size": 237584, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
             ttnn.Topology.Linear,
         ),
     ],

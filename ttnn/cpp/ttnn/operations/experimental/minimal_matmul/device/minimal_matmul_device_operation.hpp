@@ -18,8 +18,8 @@ namespace ttnn::operations::experimental::minimal_matmul {
 struct MinimalMatmulDeviceOperation {
     using operation_attributes_t = ttnn::operations::experimental::minimal_matmul::operation_attributes_t;
     using tensor_args_t = ttnn::operations::experimental::minimal_matmul::tensor_args_t;
-    using spec_return_value_t = ttnn::operations::experimental::minimal_matmul::spec_return_value_t;
-    using tensor_return_value_t = ttnn::operations::experimental::minimal_matmul::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<program::MinimalMatmulProgramFactory>;
 
