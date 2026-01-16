@@ -155,14 +155,6 @@ def test_create_sharded_norm_program_config():
 # ============================================================================
 
 
-# Get HF model name from environment variable or use default
-HF_MODEL_NAME = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-
-
-# ============================================================================
-# Model name mappings for CSV-based test cases
-# ============================================================================
-
 # HuggingFace model paths
 LLAMA_1B = "meta-llama/Llama-3.2-1B-Instruct"
 LLAMA_3B = "meta-llama/Llama-3.2-3B-Instruct"
@@ -675,23 +667,8 @@ def test_rmsnorm_1d_vs_reference(
     )
 
 
-# ============================================================================
-# Legacy Integration Tests (kept for backwards compatibility)
-# ============================================================================
-
-# todo)) add real test cases
-# - [x] rmsnorm_1d_testcases.csv --> must have
-# - [x] rmsnorm_2d_testcases.csv --> must have (name say 2d but it is all 1d cases due to data parallelism)
-
-# - [ ] dist_rmsnorm_1d_testcases.csv --> collected from distribute_norm.py --> de-dupe and then use
-# - [ ]dist_rmsnorm_2d_testcases.csv --> collected from distribute_norm.py --> de-dupe and then use (name say 2d but it is all 1d cases due to data parallelism)
-# distribute_norm.py is "interesting" because it contains potentially redundant code -- the last ttnn.all_gather_async call is potentially redundant because rmsnorm.py already performs a all_gather?
-# Needs to confirm --> some test cases in dist_rmsnorm_1d_testcases.csv would be calling that last all_gather_async call
-# ----> confirmed --> do need that all_gather_async call in distribute_norm.py to distribute rmsnorm results to all devices!!!
-# regardless, all of these test cases should work with rmsnorm_1d.py
-
-# - rmsnorm_1d_testcases_by_dist_norm.csv --> should be just duplicates of some of the test cases in rmsnorm_1d_testcases.csv
-# - rmsnorm_2d_testcases_by_dist_norm.csv --> should be just duplicates of some of the test cases in rmsnorm_2d_testcases.csv
+# Get HF model name from environment variable or use default
+HF_MODEL_NAME = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
 
 
 @pytest.mark.parametrize(
