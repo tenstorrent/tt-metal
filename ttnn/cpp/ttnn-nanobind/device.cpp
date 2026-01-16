@@ -31,6 +31,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 // #include "ttnn/operations/experimental/auto_format/auto_format.hpp" // TODO_NANOBIND
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
@@ -142,6 +143,17 @@ void py_device_module_types(nb::module_& m_device) {
             "largest_contiguous_bytes_free_per_bank",
             &tt::tt_metal::detail::MemoryView::largest_contiguous_bytes_free_per_bank)
         .def_ro("block_table", &tt::tt_metal::detail::MemoryView::block_table);
+    // Expose Statistics struct for detailed allocator statistics
+    nb::class_<tt::tt_metal::Statistics>(
+        m_device, "Statistics", "Allocator statistics for a memory type (DRAM, L1, etc.)")
+        .def_ro("total_allocatable_size_bytes", &tt::tt_metal::Statistics::total_allocatable_size_bytes)
+        .def_ro("total_allocated_bytes", &tt::tt_metal::Statistics::total_allocated_bytes)
+        .def_ro("total_free_bytes", &tt::tt_metal::Statistics::total_free_bytes)
+        .def_ro("largest_free_block_bytes", &tt::tt_metal::Statistics::largest_free_block_bytes)
+        .def_ro(
+            "largest_free_block_addrs",
+            &tt::tt_metal::Statistics::largest_free_block_addrs,
+            "Addresses (relative to bank) that can hold the largest free block");
 }
 
 void device_module(nb::module_& m_device) {
@@ -422,6 +434,32 @@ void device_module(nb::module_& m_device) {
         nb::arg("device").noconvert(),
         nb::arg("buffer_type").noconvert(),
         get_memory_view_doc.data());
+
+    constexpr std::string_view get_statistics_doc = R"doc(
+            Get allocator statistics for a buffer type (DRAM, L1, L1_SMALL, TRACE).
+            Returns Statistics struct containing allocation information including
+            largest_free_block_addrs which provides the address(es) of the largest free block.
+            +------------------+----------------------------------+-----------------------+-------------+----------+
+            | Argument         | Description                      | Data type             | Valid range | Required |
+            +==================+==================================+=======================+=============+==========+
+            | device           | Device to get statistics for     | ttnn.Device           |             | Yes      |
+            | buffer_type      | Type of buffer for statistics    | ttnn.BufferType       |             | Yes      |
+            +------------------+----------------------------------+-----------------------+-------------+----------+
+        )doc";
+    m_device.def(
+        "GetStatistics",
+        [](IDevice* device, const BufferType& buffer_type) { return device->allocator()->get_statistics(buffer_type); },
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
+        get_statistics_doc.data());
+    m_device.def(
+        "GetStatistics",
+        [](MeshDevice* device, const BufferType& buffer_type) {
+            return device->allocator()->get_statistics(buffer_type);
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
+        get_statistics_doc.data());
 
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
