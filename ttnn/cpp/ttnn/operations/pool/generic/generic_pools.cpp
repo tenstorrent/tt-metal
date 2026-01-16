@@ -7,6 +7,7 @@
 #include "tt-metalium/constants.hpp"
 #include "ttnn/operations/pool/generic/device/pool_op.hpp"
 #include <cmath>
+#include <optional>
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -41,7 +42,8 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
-    bool return_indices) {
+    bool return_indices,
+    bool config_tensor_in_dram) {
     bool is_out_tiled = output_layout == ttnn::TILE_LAYOUT;
     bool is_in_tiled = input_layout == ttnn::TILE_LAYOUT;
     sliding_window::ParallelConfig parallel_config;
@@ -85,7 +87,8 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
             divisor_override,
             return_indices,
             output_layout,
-            output_dtype);
+            output_dtype,
+            config_tensor_in_dram);
         TT_FATAL(
             sw_parallel_config.has_value(),
             "autosharding could not determine valid shard scheme, please check tensor dimensions");
@@ -137,7 +140,8 @@ static std::vector<Tensor> pool2d_L1(
     bool return_indices = false,
     const DataType dtype = DataType::BFLOAT16,
     const Layout output_layout = Layout::ROW_MAJOR,
-    std::optional<std::array<uint32_t, 2>> ceil_pad = std::nullopt) {
+    std::optional<std::array<uint32_t, 2>> ceil_pad = std::nullopt,
+    bool config_tensor_in_dram = false) {
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     bool is_out_tiled = output_layout == Layout::TILE;
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
@@ -205,7 +209,8 @@ static std::vector<Tensor> pool2d_L1(
                 pool_type,
                 count_include_pad,
                 divisor_override,
-                return_indices);
+                return_indices,
+                config_tensor_in_dram);
         parallel_config = calc_parallel_config;
         bool is_tensor_already_flattened = (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1);
         Tensor input_tensor_flattened = input_tensor;
@@ -294,7 +299,8 @@ static std::vector<Tensor> pool2d_L1(
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         input_tensor_sharded.memory_config(),
-        is_out_tiled);
+        is_out_tiled,
+        config_tensor_in_dram);
 
     if (deallocate_input || is_input_tensor_in_dram) {
         input_tensor_sharded.deallocate(/*force*/ true);
@@ -321,7 +327,8 @@ static std::vector<Tensor> pool2d_L1(
         count_include_pad,
         divisor_override,
         return_indices,
-        pre_allocate_size);
+        pre_allocate_size,
+        config_tensor_in_dram);
 
     // format and return the result
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
@@ -362,6 +369,7 @@ class Pool2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     Layout input_layout;
     Layout output_layout;
     std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+    bool config_tensor_in_dram;
     MeshDevice* device;
 
 public:
@@ -383,6 +391,7 @@ public:
         Layout input_layout,
         Layout output_layout,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+        bool config_tensor_in_dram,
         MeshDevice* device) :
         batch_size(batch_size),
         input_shape(input_shape),
@@ -400,6 +409,7 @@ public:
         input_layout(input_layout),
         output_layout(output_layout),
         compute_kernel_config(compute_kernel_config),
+        config_tensor_in_dram(config_tensor_in_dram),
         device(device) {
         shard_layout = applied_shard_scheme.value_or(TensorMemoryLayout::HEIGHT_SHARDED);
         sliding_window_config = sliding_window::SlidingWindowConfig{
@@ -520,7 +530,8 @@ public:
             pool_type,
             count_include_pad,
             divisor_override,
-            return_indices));
+            return_indices,
+            config_tensor_in_dram));
 
         return sliced_input_tensor_memory_config;
     }
@@ -563,7 +574,8 @@ public:
             return_indices,
             dtype,
             output_layout,
-            this_ceil_pad);
+            this_ceil_pad,
+            config_tensor_in_dram);
     }
 
     std::string name() const override { return "Pool2D"; }
@@ -591,7 +603,8 @@ static std::vector<Tensor> pool2d_DRAM(
     bool reallocate_halo_output = true,
     bool return_indices = false,
     const DataType dtype = DataType::BFLOAT16,
-    const Layout output_layout = Layout::ROW_MAJOR) {
+    const Layout output_layout = Layout::ROW_MAJOR,
+    bool config_tensor_in_dram = false) {
     if (!dram_slice_config_.has_value() ||
         dram_slice_config_->slice_type == op_slicing::Op2DSliceConfig::SliceType::L1_FULL ||
         dram_slice_config_->num_slices == 1) {
@@ -616,7 +629,9 @@ static std::vector<Tensor> pool2d_DRAM(
             reallocate_halo_output,
             return_indices,
             dtype,
-            output_layout);
+            output_layout,
+            std::nullopt,
+            config_tensor_in_dram);
     }
     TT_FATAL(!return_indices, "DRAM pooling with return_indices=True is not supported yet.");
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
@@ -699,6 +714,7 @@ static std::vector<Tensor> pool2d_DRAM(
         input_tensor_on_device.layout(),
         output_layout,
         compute_kernel_config,
+        config_tensor_in_dram,
         input_tensor_on_device.device());
     ttnn::operations::op_slicing::run_sliced_op(
         input_tensor_on_device, output_tensors, &pool_slice_attr, dram_slice_config);
@@ -753,7 +769,8 @@ static std::vector<Tensor> pool2d(
     bool reallocate_halo_output = true,
     bool return_indices = false,
     const DataType dtype = DataType::BFLOAT16,
-    const Layout output_layout = Layout::ROW_MAJOR) {
+    const Layout output_layout = Layout::ROW_MAJOR,
+    bool config_tensor_in_dram = false) {
     if (determine_pool2d_execution_path(input_tensor, dram_slice_config) == Pool2dExecutionPath::L1) {
         return pool2d_L1(
             input_tensor,
@@ -776,7 +793,9 @@ static std::vector<Tensor> pool2d(
             reallocate_halo_output,
             return_indices,
             dtype,
-            output_layout);
+            output_layout,
+            std::nullopt,
+            config_tensor_in_dram);
     }
     return pool2d_DRAM(
         input_tensor,
@@ -800,7 +819,8 @@ static std::vector<Tensor> pool2d(
         reallocate_halo_output,
         return_indices,
         dtype,
-        output_layout);
+        output_layout,
+        config_tensor_in_dram);
 }
 
 std::vector<Tensor> MaxPool2DOp::invoke(
@@ -821,7 +841,8 @@ std::vector<Tensor> MaxPool2DOp::invoke(
     bool reallocate_halo_output,
     bool return_indices,
     const DataType dtype,
-    const Layout output_layout) {
+    const Layout output_layout,
+    bool config_tensor_in_dram) {
     return pool2d(
         input_tensor,
         Pool2DType::MAX_POOL2D,
@@ -844,7 +865,8 @@ std::vector<Tensor> MaxPool2DOp::invoke(
         reallocate_halo_output,
         return_indices,
         dtype,
-        output_layout);
+        output_layout,
+        config_tensor_in_dram);
 }
 
 Tensor AvgPool2DOp::invoke(
@@ -866,7 +888,8 @@ Tensor AvgPool2DOp::invoke(
     bool deallocate_input,
     bool reallocate_halo_output,
     const DataType dtype,
-    const Layout output_layout) {
+    const Layout output_layout,
+    bool config_tensor_in_dram) {
     auto result = pool2d(
         input_tensor,
         Pool2DType::AVG_POOL2D,
@@ -889,7 +912,8 @@ Tensor AvgPool2DOp::invoke(
         reallocate_halo_output,
         false,  // return_indices
         dtype,
-        output_layout);
+        output_layout,
+        config_tensor_in_dram);
 
     // Average pool always returns just the tensor, never indices
     return result.at(0);

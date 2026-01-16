@@ -872,16 +872,16 @@ TEST_F(TopologySolverTest, SearchHeuristicRelaxedModeChannelPreference) {
     // Select candidates - should select either node 2 or node 3
     auto result = SearchHeuristic::select_and_generate_candidates(
         graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
-    
+
     // Should select one of the unassigned nodes (2 or 3)
     EXPECT_TRUE(result.target_idx == 1u || result.target_idx == 2u);
     EXPECT_GT(result.candidates.size(), 0u);
     EXPECT_EQ(result.candidates[0], 1u);  // global node 11 (index 1) should be the candidate
-    
+
     // Now verify the channel preference by checking connection counts
     // Node 2 requires 2 channels to node 1, node 3 requires 1 channel to node 1
     // Global node 11 has 3 channels to node 10 (which is mapped from node 1)
-    
+
     // Check connection count from candidate (11, index 1) to mapped node (10, index 0)
     auto it = graph_data.global_conn_count[1].find(0);
     EXPECT_NE(it, graph_data.global_conn_count[1].end());

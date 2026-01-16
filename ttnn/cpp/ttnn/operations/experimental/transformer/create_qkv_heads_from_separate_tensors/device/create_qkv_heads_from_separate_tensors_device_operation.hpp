@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "create_qkv_heads_from_separate_tensors_device_operation_types.hpp"

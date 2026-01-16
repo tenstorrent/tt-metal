@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "expand.hpp"
 #include <functional>
 #include <ttnn/operations/functions.hpp>

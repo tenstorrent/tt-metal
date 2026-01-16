@@ -2,180 +2,92 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <chrono>
-#include <cerrno>
-#include <fmt/base.h>
 #include <cstdint>
-#include <cstdlib>
-#include <sys/types.h>
+#include <vector>
+
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
-#include <cstring>
-#include <exception>
-#include <map>
-#include <memory>
-#include <utility>
-#include <variant>
-#include <vector>
-
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
-//////////////////////////////////////////////////////////////////////////////////////////
-// TODO: explain what test does
-//////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
-int main() {
-    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+TEST_F(MeshDeviceSingleCardFixture, DatacopyBfp8b) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    Program program = CreateProgram();
 
-    bool pass = true;
+    CoreCoord core = {0, 0};
 
-    try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Bfp8_b);
+    TT_FATAL(single_tile_size == (256 * 4) + (16 * 4), "Error");
+    uint32_t num_tiles = 2048;
+    uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+    InterleavedBufferConfig dram_config{
+        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    auto src_dram_buffer = CreateBuffer(dram_config);
+    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
+    auto dst_dram_buffer = CreateBuffer(dram_config);
+    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        CoreCoord core = {0, 0};
+    uint32_t src0_cb_index = 0;
+    uint32_t num_input_tiles = 1;
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Bfp8_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_src0_config);
 
-        uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Bfp8_b);
-        TT_FATAL(single_tile_size == (256 * 4) + (16 * 4), "Error");
-        uint32_t num_tiles = 2048;
-        uint32_t dram_buffer_size = single_tile_size * num_tiles;  // num_tiles of BFP8_B
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
+    uint32_t num_output_tiles = 1;
+    CircularBufferConfig cb_output_config =
+        CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Bfp8_b}})
+            .set_page_size(ouput_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_output_config);
 
-        tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        auto src_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-        auto dst_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+    auto unary_reader_kernel = CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        uint32_t src0_cb_index = 0;
-        uint32_t num_input_tiles = 1;
-        tt_metal::CircularBufferConfig cb_src0_config =
-            tt_metal::CircularBufferConfig(
-                num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Bfp8_b}})
-                .set_page_size(src0_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    auto unary_writer_kernel = CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-        uint32_t ouput_cb_index = tt::CBIndex::c_16;
-        uint32_t num_output_tiles = 1;
-        tt_metal::CircularBufferConfig cb_output_config =
-            tt_metal::CircularBufferConfig(
-                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Bfp8_b}})
-                .set_page_size(ouput_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    vector<uint32_t> compute_kernel_args = {uint(num_tiles)};
 
-        auto unary_reader_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/reader_unary.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
+        core,
+        ComputeConfig{.compile_args = compute_kernel_args});
 
-        auto unary_writer_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    // Execute
+    std::vector<uint32_t> src_vec = test_utils::create_random_vector_of_bfp8(
+        dram_buffer_size,
+        /*is_exp_a=*/false,
+        100,
+        std::chrono::system_clock::now().time_since_epoch().count());
+    detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-        vector<uint32_t> compute_kernel_args = {
-            uint(num_tiles)  // per_core_tile_cnt
-        };
+    SetRuntimeArgs(program, unary_reader_kernel, core, {dram_buffer_src_addr, 0, num_tiles});
+    SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0, num_tiles});
 
-        tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
-            core,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
+    detail::LaunchProgram(dev, program);
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
+    std::vector<uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src_vec = test_utils::create_random_vector_of_bfp8(
-            dram_buffer_size,
-            /*is_exp_a=*/false,
-            100,
-            std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_reader_kernel,
-            core,
-            {dram_buffer_src_addr,
-            0,
-            num_tiles});
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel,
-            core,
-            {dram_buffer_dst_addr,
-            0,
-            num_tiles});
-
-        tt_metal::detail::LaunchProgram(device, program);
-
-        std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
-        // ////////////////////////////////////////////////////////////////////////////
-        // //                      Validation & Teardown
-        // ////////////////////////////////////////////////////////////////////////////
-
-        pass &= (src_vec == result_vec);
-
-        pass &= tt_metal::CloseDevice(device);
-
-    } catch (const std::exception& e) {
-        pass = false;
-        // Capture the exception error message
-        log_error(LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
-    }
-
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass, "Error");
-
-    return 0;
+    // Validation
+    EXPECT_EQ(src_vec, result_vec);
 }

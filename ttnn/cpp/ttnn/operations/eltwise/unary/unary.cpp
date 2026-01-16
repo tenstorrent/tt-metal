@@ -6,7 +6,7 @@
 
 #include "common/unary_op_types.hpp"
 #include "device/unary_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"

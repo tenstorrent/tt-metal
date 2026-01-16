@@ -288,6 +288,7 @@ class Flux1Pipeline:
         bh_config = {
             (1, 2): {"sp": (1, 0), "tp": (2, 1), "encoder_tp": (2, 1), "vae_tp": (2, 1), "num_links": 2},
             (2, 2): {"sp": (2, 0), "tp": (2, 1), "encoder_tp": (2, 1), "vae_tp": (2, 1), "num_links": 2},
+            (2, 4): {"sp": (2, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 2},
         }
 
         default_config = bh_config if is_blackhole() else wh_config

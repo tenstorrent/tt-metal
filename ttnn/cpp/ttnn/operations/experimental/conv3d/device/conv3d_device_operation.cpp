@@ -163,7 +163,7 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         total_cores);
 }
 
-spec_return_value_t Conv3dDeviceOperation::compute_output_specs(
+TensorSpec Conv3dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     const auto& input_tensor_a_shape = input_tensor_a.logical_shape();
@@ -184,7 +184,7 @@ spec_return_value_t Conv3dDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
 }
 
-tensor_return_value_t Conv3dDeviceOperation::create_output_tensors(
+Tensor Conv3dDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
