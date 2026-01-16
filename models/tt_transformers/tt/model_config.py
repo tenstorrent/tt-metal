@@ -1299,7 +1299,7 @@ class ModelArgs:
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(self.attn_input_grid)
             self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = self.create_sharded_norm_config(self.mlp_core_grid)
-            self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = self.create_sharded_norm_config(self.mlp_core_grid)
+            self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = self.create_sharded_norm_config(self.lm_head_core_grid)
 
             self.model_config["ATTN_NORM_CONFIG"] = {
                 "sharded_program_config": self.create_sharded_norm_config(self.attn_input_grid),
@@ -1313,7 +1313,7 @@ class ModelArgs:
             }
 
             self.model_config["LM_HEAD_NORM_CONFIG"] = {
-                "sharded_program_config": self.create_sharded_norm_config(self.mlp_core_grid),
+                "sharded_program_config": self.create_sharded_norm_config(self.lm_head_core_grid),
                 "sharded_output_config": self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 "output_mem_config": None,
             }
@@ -1342,7 +1342,7 @@ class ModelArgs:
                 32,
                 self.dim,
                 4096,
-                lm_head_core_range_set.num_cores(),
+                16,
                 prefetch=False,
                 num_global_cb_receivers=1,
                 untilize_out=True,
@@ -1699,17 +1699,17 @@ class ModelArgs:
 
         # ====== Norm configs ======
         self.model_config["ATTN_NORM_CONFIG"] = {
-            "sharded_program_config": self.create_sharded_norm_config(self.attn_input_grid),
+            "sharded_program_config": self.create_sharded_norm_config(self.attn_input_grid, prefetch=True),
             "sharded_output_config": self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"],
             "output_mem_config": self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_RING_MEMCFG"],
         }
         self.model_config["FF_NORM_CONFIG"] = {
-            "sharded_program_config": self.create_sharded_norm_config(self.attn_input_grid),
+            "sharded_program_config": self.create_sharded_norm_config(self.attn_input_grid, prefetch=True),
             "sharded_output_config": self.model_config["PREFETCHER_SHARDED_MLP_INPUT_MEMCFG"],
             "output_mem_config": self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_RING_MEMCFG"],
         }
         self.model_config["LM_HEAD_NORM_CONFIG"] = {
-            "sharded_program_config": self.create_sharded_norm_config(self.attn_input_grid),
+            "sharded_program_config": self.create_sharded_norm_config(self.attn_input_grid, prefetch=True),
             "sharded_output_config": self.model_config["PREFETCHER_SHARDED_FINAL_NORM_INPUT_MEMCFG"],
             "output_mem_config": self.model_config["PREFETCHER_SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
         }
@@ -2681,7 +2681,7 @@ class ModelArgs:
             overwrite_subblock_h=overwrite_subblock_h,
         )
 
-    def create_sharded_norm_config(self, grid):
+    def create_sharded_norm_config(self, grid, prefetch=False):
         """Helper function to create LayerNormShardedMultiCoreProgramConfig for RMS NORM.
 
         Args:
@@ -2695,8 +2695,7 @@ class ModelArgs:
                 break
             subblock_w -= 1
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
-            # compute_with_storage_grid_size=[grid.x, grid.y],
-            compute_with_storage_grid_size=[4, 8],
+            compute_with_storage_grid_size=[grid.x, grid.y] if not prefetch else [4, 8],
             subblock_w=subblock_w,
             block_h=self.tile_padded_batch_rows // self.tile_size,
             block_w=block_w,

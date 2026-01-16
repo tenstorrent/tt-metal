@@ -2343,7 +2343,7 @@ process_gather_in0_program_and_create_override_variables(
         shared_cbs,
         false,
         CoreCoord{0, 0},
-        all_cores_vec,
+        worker_cores_vec,
         0,
         ttnn::operations::matmul::Matmul1DType::GATHER_IN0};
 }

@@ -189,12 +189,16 @@ class LMHead(LightweightModule):
                 self.model_config["LM_HEAD_RING_PROGCFG"] for _ in range(len(split_sizes_decode))
             ]
 
-    def forward(self, x: ttnn.Tensor):
+    def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
         use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == "decode"
 
         if use_prefetcher:
-            program_configs = self.program_configs_decode
+            # Fetch the program config at forward time (not cached at init) because
+            # build_prefetcher_configs() may update it after LMHead is created
+            program_configs = [
+                self.model_config["LM_HEAD_RING_PROGCFG"] for _ in range(len(self.output_weights_decode))
+            ]
             output_weights = self.output_weights_decode
         else:
             program_configs = self.program_configs_prefill
@@ -206,7 +210,7 @@ class LMHead(LightweightModule):
             else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
 
-        for weight, pc in zip(output_weights, program_configs):
+        for i, (weight, pc) in enumerate(zip(output_weights, program_configs)):
             if use_prefetcher:
                 memory_config = self.model_config["PREFETCHER_SHARDED_LM_HEAD_INPUT_RING_MEMCFG"]
                 x = ttnn.to_memory_config(x, memory_config)
@@ -240,6 +244,7 @@ class LMHead(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG if not use_prefetcher else ttnn.DRAM_MEMORY_CONFIG,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if use_prefetcher else None,
         )
+
         for output_slice in outputs:
             ttnn.deallocate(output_slice)
 

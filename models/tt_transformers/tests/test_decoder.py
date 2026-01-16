@@ -92,10 +92,6 @@ def test_decoder_inference(
 
     state_dict = model_args.load_state_dict()
 
-    # Save state_dict so test_model.py can use the exact same weights
-    torch.save(state_dict, "/tmp/decoder_state_dict.pt")
-    logger.info("Saved state_dict to /tmp/decoder_state_dict.pt")
-
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", 0)
     partial_state_dict = {

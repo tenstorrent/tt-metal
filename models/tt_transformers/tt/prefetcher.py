@@ -1,4 +1,5 @@
 import math
+import os
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Union
 
@@ -8,6 +9,8 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+
+DEBUG_PREFETCHER = os.environ.get("DEBUG_PREFETCHER", "0") == "1"
 
 
 @dataclass
@@ -301,25 +304,40 @@ class Prefetcher(LightweightModule):
                 self.prefetcher_sub_device.init_sub_device_manager()
 
         self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
-        logger.info("=" * 50)
-        logger.info("[Prefetcher Initialization]")
-        logger.info(f"  Mode: {mode}")
-        logger.info(f"  Sender cores: {self.sender_cores(active=True)}")
-        logger.info(f"  Receiver cores: {self.receiver_cores(sender_active=None, receiver_active=True)}")
-        logger.info(f"  Number of receiver cores: {self.num_receiver_cores}")
-        logger.info(f"  Number of tensors to prefetch: {self.num_tensors}")
-        logger.info(f"  Number of layers: {self.num_layers}")
-        logger.info("=" * 50)
+        if DEBUG_PREFETCHER:
+            logger.info("=" * 50)
+            logger.info("[Prefetcher Initialization]")
+            logger.info(f"  Mode: {mode}")
+            logger.info(f"  Sender cores: {self.sender_cores(active=True)}")
+            logger.info(f"  Receiver cores: {self.receiver_cores(sender_active=None, receiver_active=True)}")
+            logger.info(f"  Number of receiver cores: {self.num_receiver_cores}")
+            logger.info(f"  Number of tensors to prefetch: {self.num_tensors}")
+            logger.info(f"  Number of layers: {self.num_layers}")
+            logger.info("=" * 50)
 
     def create_address_tensor(self):
         """
         Creates a ttnn tensor which holds the addresses of the tensors to be prefetched
         The addresses are replicated on each sender core
         """
-        assert (
-            len(self.prefetched_tensor_addr) == self.num_tensors * self.num_layers
-        ), "No tensor addresses have been inserted"
+        assert len(self.prefetched_tensor_addr) == self.num_tensors * self.num_layers, f"Number of tensor addresses have been inserted does not match the number of tensors to prefetch (num_tensors * num_layers), got {len(self.prefetched_tensor_addr)} != {self.num_tensors * self.num_layers}"
 
+        if DEBUG_PREFETCHER:
+            # Debug: Log addresses for first few layers to verify uniqueness
+            logger.info(f"[Prefetcher Debug] Total addresses: {len(self.prefetched_tensor_addr)}")
+            logger.info(f"[Prefetcher Debug] num_tensors={self.num_tensors}, num_layers={self.num_layers}")
+            for layer_idx in [0, 1, 2, 31]:  # Check first few layers and last
+                start = layer_idx * self.num_tensors
+                end = start + self.num_tensors
+                if end <= len(self.prefetched_tensor_addr):
+                    addrs = self.prefetched_tensor_addr[start:end]
+                    logger.info(f"[Prefetcher Debug] Layer {layer_idx} addresses (indices {start}-{end-1}): {addrs}")
+            
+            # Verify all addresses are unique (no aliasing between layers)
+            addr_set = set(self.prefetched_tensor_addr)
+            if len(addr_set) != len(self.prefetched_tensor_addr):
+                logger.warning(f"[Prefetcher Debug] WARNING: Found duplicate addresses! Unique: {len(addr_set)}, Total: {len(self.prefetched_tensor_addr)}")
+        
         tensor_addrs = torch.tensor(self.prefetched_tensor_addr)
         tensor_addrs = tensor_addrs.repeat(self.mesh_device.dram_grid_size().x, 1)
         tensor_addrs_mem_config = ttnn.MemoryConfig(
@@ -362,7 +380,7 @@ class Prefetcher(LightweightModule):
         self.prefetched_tensors.append(tensor)
         self.prefetched_tensor_addr.append(tensor.buffer_address())
         logger.info(
-            f"Inserted tensor of shape {tensor.shape} into prefetcher, total number of tensors in prefetcher queue: {len(self.prefetched_tensor_addr)}"
+            f"[DRAM Prefetcher] Inserted tensor of shape {tensor.shape} into prefetcher, total number of tensors in prefetcher queue: {len(self.prefetched_tensor_addr)}"
         )
 
     def prefetch(self):
@@ -384,6 +402,7 @@ class Prefetcher(LightweightModule):
         # Create global cb buffer if it was not yet created.
         if self.global_cb is None:
             self.global_cb_size = self.max_tensor_block_size
+            logger.info(f"[DRAM Prefetcher] Creating global CB with size: {self.global_cb_size}")
             self.global_cb = ttnn.create_global_circular_buffer(
                 self.mesh_device,
                 self.sender_receiver_mapping,
@@ -394,6 +413,28 @@ class Prefetcher(LightweightModule):
         if self.prefetched_tt_addr_tensor is None:
             self.prefetched_tt_addr_tensor = self.create_address_tensor()
 
+        if DEBUG_PREFETCHER:
+            # Debug: Log what we're passing to dram_prefetcher
+            logger.info(f"[Prefetcher Debug] Running dram_prefetcher with {len(self.prefetched_tensors[:self.num_tensors])} tensor templates, num_layers={self.num_layers}")
+            logger.info(f"[Prefetcher Debug] Total prefetched tensors: {len(self.prefetched_tensors)}")
+            logger.info(f"[Prefetcher Debug] Expected consumptions: {self.num_tensors * self.num_layers}")
+            
+            # Debug: Compare template tensors (layer 0) with layer 1 tensors to detect mismatches
+            templates = self.prefetched_tensors[:self.num_tensors]
+            logger.info(f"[Prefetcher Debug] Template tensor info (layer 0):")
+            for i, t in enumerate(templates):
+                logger.info(f"  Template {i}: shape={t.shape}, dtype={t.dtype}, addr={t.buffer_address()}")
+            
+            # Compare with layer 1 tensors if available
+            if len(self.prefetched_tensors) >= 2 * self.num_tensors:
+                layer1_tensors = self.prefetched_tensors[self.num_tensors:2*self.num_tensors]
+                logger.info(f"[Prefetcher Debug] Layer 1 tensor info:")
+                for i, t in enumerate(layer1_tensors):
+                    logger.info(f"  Layer1 {i}: shape={t.shape}, dtype={t.dtype}, addr={t.buffer_address()}")
+                    # Check for dtype mismatch with templates
+                    if templates[i].dtype != t.dtype:
+                        logger.warning(f"  WARNING: dtype mismatch! Template={templates[i].dtype}, Layer1={t.dtype}")
+        
         # Run prefetcher op (prefetcher op will start asynchronously prefetching weights until prefetcher.stop() is called)
         self.garbage = ttnn.dram_prefetcher(
             self.prefetched_tensors[: self.num_tensors] + [self.prefetched_tt_addr_tensor],

@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+import os
+import torch
+from loguru import logger
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -220,8 +224,24 @@ class TransformerBlock(LightweightModule):
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
-        # if mode == "decode" and self.layer_num == 31:
-        #     breakpoint()
+        # Debug for all layers to compare - store intermediates for PCC comparison
+        debug_layer = os.environ.get("DEBUG_LAYERS", "0") == "1" and mode == "decode"
+        
+        if debug_layer:
+            # Clear/initialize debug storage for this layer at each forward
+            self.debug_intermediates = {}
+        
+        def store_debug_tensor(name, tensor):
+            """Store tensor for later PCC comparison with PyTorch reference"""
+            if not debug_layer:
+                return None
+            ttnn.synchronize_device(self.mesh_device)
+            t = ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]).float()
+            self.debug_intermediates[name] = t.clone()
+            return t
+
+        if debug_layer:
+            store_debug_tensor("input", x)
 
         # Choose the correct rotation matrices based on the mode
         rot_mats = (
@@ -230,9 +250,10 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode, norm_config=self.model_config["ATTN_NORM_CONFIG"])
+        
+        if debug_layer:
+            store_debug_tensor("after_attention_norm", attn_in)
 
-        # if mode == "decode" and self.layer_num == 31:
-        #     breakpoint()
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -246,8 +267,8 @@ class TransformerBlock(LightweightModule):
             kv_cache=kv_cache,
         )
 
-        # if mode == "decode" and self.layer_num == 31:
-        #     breakpoint()
+        if debug_layer:
+            store_debug_tensor("after_attention", attn_out)
 
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
@@ -260,8 +281,9 @@ class TransformerBlock(LightweightModule):
             hidden_states = attn_out
 
         hidden_states = self.ff_norm(hidden_states, mode, norm_config=self.model_config["FF_NORM_CONFIG"])
-        # if mode == "decode" and self.layer_num == 31:
-        #     breakpoint()
+        
+        if debug_layer:
+            store_debug_tensor("after_ff_norm", hidden_states)
 
         if self.pre_ff_norm is not None:
             # The output of the ff_norm is replicated across the device
@@ -293,9 +315,10 @@ class TransformerBlock(LightweightModule):
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
 
-        # if mode == "decode" and self.layer_num == 31:
-        #     breakpoint()
         hidden_states = self.feed_forward.forward(hidden_states, mode)
+
+        if debug_layer:
+            store_debug_tensor("after_mlp", hidden_states)
 
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
@@ -319,9 +342,6 @@ class TransformerBlock(LightweightModule):
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
 
-        # if mode == "decode" and self.layer_num == 31:
-        #     breakpoint()
-
         out = ttnn.add(
             residual,
             hidden_states,
@@ -330,5 +350,8 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
+
+        if debug_layer:
+            store_debug_tensor("output", out)
 
         return out  # fractured across devices

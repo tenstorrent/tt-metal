@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 
 import ttnn
@@ -9,6 +10,8 @@ from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+
+DEBUG_PREFETCHER = os.environ.get("DEBUG_PREFETCHER", "0") == "1"
 
 
 class MLP(LightweightModule):
@@ -52,19 +55,32 @@ class MLP(LightweightModule):
         w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
-        as_sharded_tensor = lambda name, type, dims: ttnn.as_tensor(
-            pad_hidden_dim(
-                torch_weight(name[:2]), dims[0] if args.is_galaxy else dims[-1]
-            ),  # Grab only the wX part of the name
-            dtype=type,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=(
-                ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config
-            ),
-            cache_file_name=cache_name(name),
-        )
+        # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
+        # This is required for the dram_prefetcher to correctly interpret all weights
+        def as_sharded_tensor(name, type, dims):
+            # First get the raw weight and transpose it
+            raw_weight = torch_weight(name[:2])  # This is 2D: [H, W]
+            # Pad if needed
+            padded_weight = pad_hidden_dim(raw_weight, dims[0] if args.is_galaxy else dims[-1])
+            # Make 4D: [1, 1, H, W] - CRITICAL for prefetcher to work correctly
+            torch_tensor = padded_weight.unsqueeze(0).unsqueeze(0)
+            
+            result = ttnn.as_tensor(
+                torch_tensor,
+                dtype=type,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=(
+                    ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config
+                ),
+                cache_file_name=cache_name(name),
+            )
+            
+            # Debug: Print shape info when DEBUG_PREFETCHER is enabled
+            if DEBUG_PREFETCHER and layer_num == 0:
+                print(f"[MLP DEBUG] Layer {layer_num} {name}: torch={torch_tensor.shape}, ttnn={result.shape}")
+            return result
 
         # Sharded weights
         w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
@@ -72,19 +88,22 @@ class MLP(LightweightModule):
 
         layer_num = max(layer_num, 0)  # cross_block uses the configutation of the first decoder
 
-        ff1_3_dtype = ttnn.bfloat4_b
+        ff1_3_dtype = ttnn.bfloat8_b
+        
         # self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
         #     decoder_id=layer_num, tensor=TensorGroup.FF1_FF3
         # )
-        ff2_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.FF2
-        )
+        ff2_dtype = ttnn.bfloat8_b
+        # = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+        #     decoder_id=layer_num, tensor=TensorGroup.FF2
+        # )
 
         self.w1 = as_sharded_tensor(
             "w1_sharded", ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        
 
         # Default activation is SILU
         self.activation_type = (

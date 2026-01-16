@@ -107,12 +107,14 @@ class Attention(LightweightModule):
         self.activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )
-        self.wqkv_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.WQKV
-        )
-        self.wo_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.WO
-        )
+        self.wqkv_dtype = ttnn.bfloat8_b
+        # self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+        #     decoder_id=layer_num, tensor=TensorGroup.WQKV
+        # )
+        self.wo_dtype = ttnn.bfloat8_b
+        # self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+        #     decoder_id=layer_num, tensor=TensorGroup.WO
+        # )
         self.kv_cache_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
         )
@@ -242,7 +244,7 @@ class Attention(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
-            cache_file_name=cache_name("wqkv_sharded_2d"),
+            # cache_file_name=cache_name("wqkv_sharded_2d"),
         )
 
         def norm_reshard(x, norm, mode):
@@ -354,7 +356,15 @@ class Attention(LightweightModule):
 
             def register_weights():
                 self.prefetcher.insert_tensor(self.wqkv)
-                self.prefetcher.insert_tensor(self.wo_sharded_ring)
+                # Only insert wo_sharded_ring if it will be consumed from global_cb
+                # wo_sharded_ring is ONLY consumed from global_cb when:
+                # 1. use_fused_all_gather_matmul=True (enters the if block)
+                # 2. AND ccl_topology is Linear (NOT Ring) - enters the else at line 636
+                # In all other cases (Ring topology uses fused op, or not fused uses self.wo directly),
+                # wo_sharded_ring is NOT consumed from global_cb
+                use_wo_from_global_cb = self.use_fused_all_gather_matmul and self.ccl_topology != ttnn.Topology.Ring
+                if use_wo_from_global_cb:
+                    self.prefetcher.insert_tensor(self.wo_sharded_ring)
 
             self.prefetcher.register_callback(register_weights)
 

@@ -103,7 +103,6 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
         layout=ttnn.TILE_LAYOUT,
     )
 
-    logger.info("Run LM_Head")
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(
         tt_output,
@@ -114,7 +113,6 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
     tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.vocab_size]
 
     pcc_required = 0.99
-    breakpoint()
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
