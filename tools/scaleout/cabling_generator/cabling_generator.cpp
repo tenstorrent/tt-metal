@@ -82,7 +82,7 @@ deployment::proto::DeploymentDescriptor load_deployment_descriptor(const std::st
 }
 
 // Build endpoint map for node template inter-board connections (validates conflicts per port type)
-static std::map<Node::BoardEndpoint, Node::BoardEndpoint> build_endpoint_map_for_port_type(
+std::map<Node::BoardEndpoint, Node::BoardEndpoint> build_endpoint_map_for_port_type(
     const std::vector<Node::BoardConnection>& connections,
     const std::string& node_template_name,
     PortType port_type,
@@ -144,7 +144,7 @@ void validate_node_structure(
             get_source_description(new_source_file)));
     }
     for (const auto& [tray_id, this_board] : this_template.boards) {
-        if (!other_template.boards.count(tray_id)) {
+        if (!other_template.boards.contains(tray_id)) {
             throw std::runtime_error(fmt::format(
                 "Node template '{}' missing board at tray_id {} from {}",
                 node_desc_name,
@@ -210,7 +210,7 @@ void validate_inter_board_connections(
 }
 
 // Helper: Merge inter_board_connections with deduplication
-static void merge_inter_board_connections(Node& target_template, const Node& source_template) {
+void merge_inter_board_connections(Node& target_template, const Node& source_template) {
     for (const auto& [port_type, source_conns] : source_template.inter_board_connections) {
         auto& target_conns = target_template.inter_board_connections[port_type];
 
@@ -264,7 +264,7 @@ bool are_torus_compatible_for_merge(const std::string& desc_name_a, const std::s
 }
 
 // Helper to find a torus-compatible template descriptor name (returns empty optional if not found)
-static std::optional<std::string> find_torus_compatible_template(
+std::optional<std::string> find_torus_compatible_template(
     const std::unordered_map<std::string, Node>& templates_to_search, const std::string& missing_node_desc_name) {
     // Look for torus-compatible template (same architecture and both torus)
     for (const auto& [desc_name, template_node] : templates_to_search) {
@@ -307,7 +307,7 @@ bool try_merge_torus_compatible_template(
     return true;
 }
 
-static void validate_and_merge_node_templates(
+void validate_and_merge_node_templates(
     std::unordered_map<std::string, Node>& this_node_desc_name_to_node,
     const std::unordered_map<std::string, Node>& other_node_desc_name_to_node,
     const std::string& existing_source_file,
@@ -337,7 +337,7 @@ static void validate_and_merge_node_templates(
 
     // Backward pass: check for templates in 'this' that don't exist in 'other'
     for (const auto& [node_desc_name, this_template] : this_node_desc_name_to_node) {
-        if (!other_node_desc_name_to_node.count(node_desc_name)) {
+        if (!other_node_desc_name_to_node.contains(node_desc_name)) {
             // Check if this is a torus type that can be merged with another torus variant
             bool found_compatible =
                 find_torus_compatible_template(other_node_desc_name_to_node, node_desc_name).has_value();
@@ -560,9 +560,8 @@ HostId resolve_path_from_proto(
 
         if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
             return resolve_path_from_proto(path, child_mapping.sub_instance(), cluster_descriptor, index + 1);
-        } else {
-            throw std::runtime_error("Subgraph " + subgraph_name + " is not a graph instance");
         }
+        throw std::runtime_error("Subgraph " + subgraph_name + " is not a graph instance");
     }
 }
 
@@ -867,7 +866,7 @@ static std::optional<std::string> find_template_key_for_node(
             // Check board architectures and types match
             bool all_match = true;
             for (const auto& [tray_id, board] : node.boards) {
-                if (!template_node.boards.count(tray_id) ||
+                if (!template_node.boards.contains(tray_id) ||
                     template_node.boards.at(tray_id).get_arch() != board.get_arch() ||
                     template_node.boards.at(tray_id).get_board_type() != board.get_board_type()) {
                     all_match = false;
@@ -980,7 +979,7 @@ static void merge_resolved_graph_instances(
 
                 // Now compare the sets
                 for (const auto& [port_type, target_set] : target_sets) {
-                    if (!source_sets.count(port_type)) {
+                    if (!source_sets.contains(port_type)) {
                         throw std::runtime_error(fmt::format(
                             "Node '{}' has port type {} in {} but not in {} - inconsistent inter_board_connections "
                             "usage",
@@ -1026,7 +1025,7 @@ static void merge_resolved_graph_instances(
 
     // Merge subgraphs recursively
     for (const auto& [name, source_subgraph] : source.subgraphs) {
-        if (target.subgraphs.count(name)) {
+        if (target.subgraphs.contains(name)) {
             // Subgraph exists - merge recursively
             merge_resolved_graph_instances(
                 *target.subgraphs[name], *source_subgraph, existing_source_file, new_source_file, node_templates);
@@ -1056,7 +1055,7 @@ static void merge_resolved_graph_instances(
         }
     }
     for (const auto& [name, _] : target.subgraphs) {
-        if (!source.subgraphs.count(name)) {
+        if (!source.subgraphs.contains(name)) {
             throw std::runtime_error(fmt::format(
                 "Cannot merge graph_template '{}': subgraph '{}' exists in {} but not in {}. "
                 "Graph templates must have identical children across all descriptor files.",
@@ -1239,7 +1238,7 @@ static bool compare_nodes(const Node& lhs, const Node& rhs, bool check_host_id =
         return false;
     }
     for (const auto& [tray_id, board] : lhs.boards) {
-        if (!rhs.boards.count(tray_id)) {
+        if (!rhs.boards.contains(tray_id)) {
             return false;
         }
         const auto& other_board = rhs.boards.at(tray_id);
@@ -1278,7 +1277,7 @@ static bool compare_resolved_graph_instances(const ResolvedGraphInstance& lhs, c
         return false;
     }
     for (const auto& [name, node] : lhs.nodes) {
-        if (!rhs.nodes.count(name)) {
+        if (!rhs.nodes.contains(name)) {
             return false;
         }
         const auto& other_node = rhs.nodes.at(name);
@@ -1348,7 +1347,7 @@ bool CablingGenerator::operator==(const CablingGenerator& other) const {
 
     // Compare each unique template using helper
     for (const auto& [key, template_node] : this_unique) {
-        if (!other_unique.count(key)) {
+        if (!other_unique.contains(key)) {
             return false;
         }
         const auto* other_template = other_unique.at(key);
@@ -1599,7 +1598,7 @@ void CablingGenerator::generate_connections_from_resolved_graph(const std::uniqu
             auto [host_b_id, tray_b_id, port_b_id] = conn_b;
 
             // Look up nodes using HostId
-            if (!host_id_to_node_.count(host_a_id)) {
+            if (!host_id_to_node_.contains(host_a_id)) {
                 throw std::runtime_error(fmt::format(
                     "Host ID {} referenced in connection but not found in cluster - invalid descriptor",
                     host_a_id.get()));
