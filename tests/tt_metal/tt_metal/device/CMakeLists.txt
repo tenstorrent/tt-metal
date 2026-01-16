@@ -11,6 +11,7 @@ target_sources(
         test_device.cpp
         test_simulator_device.cpp
         test_galaxy_cluster_api.cpp
+        test_mock_device_api.cpp
 )
 target_include_directories(
     unit_tests_device_smoke
