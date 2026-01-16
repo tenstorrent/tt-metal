@@ -8,14 +8,6 @@ from tests.ttnn.utils_for_testing import assert_with_ulp
 import ttnn
 
 
-# Test parameters from GitHub issue #33745
-# Kernel size: (2, 2), Padding: (0, 0), Stride: (2, 2)
-# Input height: 12, Input width: 8, Output channels: 96
-# K values tested: 256, 512, 1024, 2048, 4096, 8192, 12288, 16384, 32368, 40560
-# Since K = input_channels * kernel_height * kernel_width = input_channels * 2 * 2 = input_channels * 4
-# Input channels: 64, 128, 256, 512, 1024, 2048, 3072, 4096, 8092, 10140
-
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "input_dtype,ulp_threshold",
