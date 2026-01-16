@@ -818,6 +818,11 @@ void issue_read_buffer_dispatch_command_sequence(
         return;
     }
 
+    // Mock devices don't have real hardware to read from, skip actual dispatch
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();

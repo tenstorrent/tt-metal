@@ -34,6 +34,7 @@
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/llrt.hpp"
 #include <experimental/fabric/control_plane.hpp>
+#include <experimental/mock_device.hpp>
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
@@ -152,13 +153,6 @@ void MetalContext::initialize(
     bool minimal) {
     ZoneScoped;
 
-    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
-        TT_THROW(
-            "Mock cluster cannot be initialized because there is no device. "
-            "Mock clusters are only supported for testing control plane initialization without a device."
-            "Please unset the TT_METAL_MOCK_CLUSTER_DESC_PATH environment variable.");
-    }
-
     // Workaround for galaxy, need to always re-init
     if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster()) {
         force_reinit_ = true;
@@ -247,42 +241,47 @@ void MetalContext::initialize(
         // Launch async tasks for each device
         for (ChipId device_id : all_devices) {
             futures.emplace_back(detail::async([this, device_id, fw_compile_hash]() {
-                // Clear L1/DRAM if requested
-                if (rtoptions_.get_clear_l1()) {
-                    clear_l1_state(device_id);
-                }
-                if (rtoptions_.get_clear_dram()) {
-                    clear_dram_state(device_id);
+                // Clear L1/DRAM if requested - skip for mock devices
+                if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+                    if (rtoptions_.get_clear_l1()) {
+                        clear_l1_state(device_id);
+                    }
+                    if (rtoptions_.get_clear_dram()) {
+                        clear_dram_state(device_id);
+                    }
                 }
                 [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
                 log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
                 generate_device_bank_to_noc_tables(device_id);
                 generate_worker_logical_to_virtual_map(device_id);
 
-                // Create build env for this device, and build FW if it's not built already
-                BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-                // fw_build_key is a combination of build_key and fw_compile_hash
-                // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
-                // if it's not already in firmware_built_keys_
-                // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
-                // Uses full 64-bit fw_compile_hash for proper change detection
-                uint64_t fw_build_key =
-                    BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
+                // Skip firmware building for mock devices
+                if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+                    // Create build env for this device, and build FW if it's not built already
+                    BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
+                    // fw_build_key is a combination of build_key and fw_compile_hash
+                    // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
+                    // if it's not already in firmware_built_keys_
+                    // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
+                    // Uses full 64-bit fw_compile_hash for proper change detection
+                    uint64_t fw_build_key =
+                        BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
 
-                {
-                    std::lock_guard<std::mutex> lock(firmware_built_keys_mutex_);
-                    if (!firmware_built_keys_.contains(fw_build_key)) {
-                        BuildEnvManager::get_instance().build_firmware(device_id);
-                        firmware_built_keys_.insert(fw_build_key);
+                    {
+                        std::lock_guard<std::mutex> lock(firmware_built_keys_mutex_);
+                        if (!firmware_built_keys_.contains(fw_build_key)) {
+                            BuildEnvManager::get_instance().build_firmware(device_id);
+                            firmware_built_keys_.insert(fw_build_key);
+                        }
                     }
-                }
 
-                // Clear the entire launch message ring buffer on ethernet cores before application firmware is
-                // activated. This is required since ethernet cores context switch between application and routing
-                // firmware. If ERISC application firmware is activated before the launch messages are cleared, it can
-                // enter an undefined state by reading a corrupted launch message. Routing firmware will never run in
-                // this case, causing UMD issued transactions to hang.
-                clear_launch_messages_on_eth_cores(device_id);
+                    // Clear the entire launch message ring buffer on ethernet cores before application firmware is
+                    // activated. This is required since ethernet cores context switch between application and routing
+                    // firmware. If ERISC application firmware is activated before the launch messages are cleared, it
+                    // can enter an undefined state by reading a corrupted launch message. Routing firmware will never
+                    // run in this case, causing UMD issued transactions to hang.
+                    clear_launch_messages_on_eth_cores(device_id);
+                }
             }));
         }
 
@@ -300,7 +299,8 @@ void MetalContext::initialize(
     }
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
-    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
+        cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
         cluster_->set_internal_routing_info_for_ethernet_cores(true);
     }
 
@@ -315,15 +315,18 @@ void MetalContext::initialize(
     {
         ZoneScopedN("Resets and FW Launch");
 
-        // Launch async tasks for each device
         for (ChipId device_id : all_devices) {
-            ClearNocData(device_id);
+            // Skip hardware operations for mock devices
+            if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+                ClearNocData(device_id);
 
-            reset_cores(device_id);
+                reset_cores(device_id);
 
-            initialize_and_launch_firmware(device_id);
+                initialize_and_launch_firmware(device_id);
+            }
         }
     }
+
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
     watcher_server_->attach_devices();
@@ -362,7 +365,9 @@ void MetalContext::teardown() {
     }
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
-    cluster_->set_internal_routing_info_for_ethernet_cores(false);
+    if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+        cluster_->set_internal_routing_info_for_ethernet_cores(false);
+    }
 
     if (data_collector_) {
         data_collector_->DumpData();
@@ -370,17 +375,23 @@ void MetalContext::teardown() {
     }
 
     if (dprint_server_) {
-        dprint_server_->detach_devices();
+        if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+            dprint_server_->detach_devices();
+        }
         dprint_server_.reset();
         rtoptions_.set_disable_dma_ops(false);
     }
 
-    watcher_server_->detach_devices();
+    if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+        watcher_server_->detach_devices();
+    }
     watcher_server_.reset();
-    for (ChipId device_id : all_devices) {
-        assert_cores(device_id);
+    if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+        for (ChipId device_id : all_devices) {
+            assert_cores(device_id);
 
-        cluster_->l1_barrier(device_id);
+            cluster_->l1_barrier(device_id);
+        }
     }
 
     if (profiler_state_manager_) {
@@ -403,6 +414,11 @@ void MetalContext::teardown() {
     inspector_data_.reset();
 
     control_plane_.reset();
+
+    // Clear mock mode configuration if it was enabled
+    if (experimental::is_mock_mode_registered()) {
+        experimental::disable_mock_mode();
+    }
 }
 
 MetalContext& MetalContext::instance() {
@@ -420,6 +436,12 @@ void MetalContext::teardown_base_objects() {
 }
 
 MetalContext::MetalContext() {
+    // Check if mock mode was configured via API (before env vars take effect)
+    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
+        rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
+    }
+
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
@@ -628,6 +650,7 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
+        // Initialize control plane (creates stub for mock devices)
         this->initialize_control_plane_impl();
     }
     return *control_plane_;
@@ -670,6 +693,7 @@ void MetalContext::teardown_fabric_config() {
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
+    // Stub control plane for mock devices will make this a no-op
     this->get_control_plane().clear_fabric_context();
 }
 
@@ -758,6 +782,10 @@ void MetalContext::initialize_fabric_config() {
 
 void MetalContext::initialize_fabric_tensix_datamover_config() {
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
+        return;
+    }
+
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -1018,7 +1046,8 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
 
     dram_bank_to_noc_xy_[device_id].clear();
     dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
-    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool noc_translation_enabled = cluster_->get_target_device_type() != tt::TargetDevice::Mock &&
+                                   cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
         noc_translation_enabled && (hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
