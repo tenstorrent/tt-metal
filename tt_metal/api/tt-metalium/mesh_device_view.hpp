@@ -20,9 +20,8 @@
 
 namespace tt::tt_metal::distributed {
 
-// Forward declarations
+// Forward declaration of MeshDevice
 class MeshDevice;
-class MeshDeviceViewImpl;
 
 /**
  * @brief The MeshDeviceView class provides a view of a specific sub-region within the MeshDevice.
@@ -68,17 +67,14 @@ public:
 
     // Returns `IDevice*` instance for `coord`.
     // In multi-host context, throws if `coord` is querying a remote device.
-    [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]] [[nodiscard]] IDevice*
-    get_device(const MeshCoordinate& coord) const;
+    [[nodiscard]] IDevice* get_device(const MeshCoordinate& coord) const;
 
     // Returns `tt::tt_fabric::FabricNodeId` for `coord`.
     // In multi-host context, fabric node IDs are always available, even for remote devices.
     [[nodiscard]] tt::tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
-    std::vector<MaybeRemote<IDevice*>>::const_iterator begin() const;
-    std::vector<MaybeRemote<IDevice*>>::const_iterator end() const;
+    auto begin() const { return devices_.values().begin(); }
+    auto end() const { return devices_.values().end(); }
 
     // Throws if no device corresponds to `device_id`.
     [[nodiscard]] MeshCoordinate find_device(ChipId device_id) const;
@@ -115,31 +111,22 @@ public:
 
     // Returns true if the view is fully local, i.e. all devices in the view are local.
     // Throws if the coordinate is out of bounds of this view.
-    [[deprecated(
-        "Deprecated, is_local should be avoided as it is likely to cause issues in distributed contexts. This will be "
-        "removed after 28-02-2026.")]]
     bool is_local(const MeshCoordinate& coord) const;
 
     // Returns the coordinate range of all local devices in this view.
     // The range is a bounding box that encompasses all local coordinates.
     MeshCoordinateRange get_local_mesh_coord_range() const;
 
-    // Destructor
-    ~MeshDeviceView();
-
-    // Copy constructor and assignment
-    MeshDeviceView(const MeshDeviceView&);
-    MeshDeviceView& operator=(const MeshDeviceView&);
-
-    // Move constructor and assignment
-    MeshDeviceView(MeshDeviceView&&) noexcept;
-    MeshDeviceView& operator=(MeshDeviceView&&) noexcept;
-
-    const MeshDeviceViewImpl& impl() const { return *pimpl_; }
-    MeshDeviceViewImpl& impl() { return *pimpl_; }
-
 private:
-    std::unique_ptr<MeshDeviceViewImpl> pimpl_;
+    DistributedMeshContainer<IDevice*> devices_;
+    MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids_;
+    tt::tt_fabric::MeshId mesh_id_;
+
+    std::unordered_map<ChipId, MeshCoordinate> device_coordinates_;
+
+    // Set if the view is 2D to enable row/col APIs, otherwise nullopt.
+    // TODO: #17477 - Remove this?
+    std::optional<Shape2D> shape_2d_;
 };
 
 }  // namespace tt::tt_metal::distributed

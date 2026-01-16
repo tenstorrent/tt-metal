@@ -9,7 +9,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
-#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -44,7 +43,7 @@ struct OneFromAllConfig {
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFromAllConfig& test_config) {
-    IDevice* device = mesh_device->impl().get_device(0);
+    IDevice* device = mesh_device->get_device(0);
     // Program
     Program program = CreateProgram();
 
@@ -211,9 +210,8 @@ void packet_sizes_test(
 
     // Parameters
     uint32_t max_transactions = 256;
-    uint32_t max_transaction_size_pages = mesh_device->impl().get_device(0)->arch() == tt::ARCH::BLACKHOLE
-                                              ? 1024
-                                              : 2048;  // Max total transaction size == 64 KB
+    uint32_t max_transaction_size_pages =
+        mesh_device->get_device(0)->arch() == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
@@ -333,7 +331,7 @@ void custom_test(
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     uint32_t test_id = 15;
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
+    auto* device = mesh_device->get_device(0);
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -347,7 +345,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
     uint32_t test_id = 30;
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
+    auto* device = mesh_device->get_device(0);
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -363,7 +361,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllVirtualChannels) {
     // Test ID (Arbitrary)
     uint32_t test_id = 156;
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
@@ -379,7 +377,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllCustom) {
 
     uint32_t test_id = 157;
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
