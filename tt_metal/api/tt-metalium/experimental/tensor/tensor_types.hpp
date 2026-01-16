@@ -14,7 +14,13 @@
 #include <optional>
 #include <variant>
 #include <vector>
+#include <iostream>
+
 #include <tt-metalium/experimental/tensor/spec/shape/shape.hpp>  // For Shape
+#include <tt-metalium/experimental/tensor/spec/memory_config/sharding_types.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt_stl/concepts.hpp>
 
 namespace tt::tt_metal {
 
@@ -74,8 +80,6 @@ using Array5D = std::array<uint32_t, 5>;
 using Array6D = std::array<uint32_t, 6>;
 using Array7D = std::array<uint32_t, 7>;
 using Array8D = std::array<uint32_t, 8>;
-
-#include <tt-metalium/experimental/tensor/spec/memory_config/sharding_types.hpp>
 
 using PadValue = std::variant<uint32_t, float>;
 
