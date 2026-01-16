@@ -23,8 +23,8 @@ from typing import Any, Callable, Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.modules.tensor_utils import pad_dim_to_size
 from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
+from models.common.tensor_utils import pad_dim_to_size
 from models.common.utility_functions import is_blackhole
 
 # =============================================================================
