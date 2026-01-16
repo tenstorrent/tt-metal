@@ -564,7 +564,6 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     } else {
         // loop and scan the block list to find if the shrink cut into any allocated block
         size_t block_to_shrink = -1;
-        // DeviceAddr shrunk_address = shrink_size_ + shrink_size;
         DeviceAddr shrunk_address = max_size_bytes_ - (shrink_size_ + shrink_size);
 
         // TODO: There must be a way to force the beginning of all blocks be at index 0
@@ -574,14 +573,13 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
             if (!meta_block_is_allocated_[idx]) {
                 continue;
             }
-            if (block_address_[idx] <= shrunk_address && block_address_[idx] + block_size_[idx] >= shrunk_address) {
-                if (block_is_allocated_[idx]) {
-                    TT_FATAL(
-                        block_address_[idx] >= shrunk_address,
-                        "Shrink size {} cuts into allocated block at address {}",
-                        shrunk_address,
-                        block_address_[idx]);
-                }
+            if (block_address_[idx] <= shrunk_address && shrunk_address <= block_address_[idx] + block_size_[idx]) {
+                TT_FATAL(
+                    block_is_allocated_[idx] == false,
+                    "shrunk_address {} cuts into allocated block at address [{}, {}]",
+                    shrunk_address,
+                    block_address_[idx],
+                    block_address_[idx] + block_size_[idx]);
                 block_to_shrink = idx;
                 break;
             }

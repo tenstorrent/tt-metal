@@ -95,6 +95,11 @@ void AllocatorImpl::init_one_bank_per_channel() {
 
 void AllocatorImpl::expand_trace_region_size(
     const size_t previous_trace_region_size, const size_t new_trace_region_size) {
+    TT_FATAL(
+        new_trace_region_size > previous_trace_region_size,
+        "expand_trace_region_size expects new_trace_region_size={} > previous_trace_region_size={}",
+        new_trace_region_size,
+        previous_trace_region_size);
     {
         auto bottom_up = false;
         auto dram_shrink_size_per_bank =
@@ -112,7 +117,7 @@ void AllocatorImpl::expand_trace_region_size(
             config_->dram_bank_size - config_->dram_unreserved_base - trace_region_size_per_bank;
         DeviceAddr trace_bank_size = dram_bank_size + trace_region_size_per_bank;
 
-        // bottom up shirnk
+        // bottom up shrink
         auto trace_shrink_size = trace_bank_size - new_trace_region_size / config_->num_dram_channels;
         auto bottom_up = true;
         trace_buffer_manager_->shrink_size(trace_shrink_size, bottom_up);

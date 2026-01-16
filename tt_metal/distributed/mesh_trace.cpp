@@ -160,7 +160,7 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
     const auto new_trace_buffer_size = mesh_cq.device()->get_trace_buffers_size();
 
-    // check trace_regin_size if it's not zero
+    // check trace_region_size if it's not zero
     auto trace_region_size = mesh_cq.device()->allocator_impl()->get_config().trace_region_size;
     if (trace_region_size != 0) {
         TT_FATAL(
@@ -169,7 +169,7 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
             new_trace_buffer_size,
             mesh_cq.device()->id(),
             trace_region_size);
-    } else {
+    } else if (new_trace_buffer_size > current_trace_buffers_size) {
         mesh_cq.device()->allocator_impl()->expand_trace_region_size(current_trace_buffers_size, new_trace_buffer_size);
     }
 
