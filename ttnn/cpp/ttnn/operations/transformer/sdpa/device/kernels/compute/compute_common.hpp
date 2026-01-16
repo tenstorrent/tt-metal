@@ -310,11 +310,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     cb_wait_front(in1_cb, rows);
     cb_reserve_back(reduce_cb, rows);
 
-    if constexpr (write_result_inplace) {
-        cb_pop_front(in0_cb, rows * cols);
-        cb_reserve_back(in0_cb, rows * cols);
-    }
-
 #ifdef SUB_EXP_GRANULARITY
     uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
     uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
@@ -323,22 +318,28 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     uint32_t granularity = cols;
 #endif
 
-    uint32_t in0_index = 0;
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
+                sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
                 exp_tile<true, true>(j, vector_mode);
-                in0_index++;
             }
             tile_regs_commit();
+
+            if constexpr (write_result_inplace) {
+                cb_pop_front(in0_cb, dst_tiles);
+                cb_reserve_back(in0_cb, dst_tiles);
+            }
+
             tile_regs_wait();
 
             if constexpr (write_result_inplace) {
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_cb);
                 }
+                // Granular write output to enable following matmul unpack to start early.
+                cb_push_back(in0_cb, dst_tiles);
             }
 
             if constexpr (do_reduce) {
@@ -360,10 +361,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             if constexpr (do_reduce) {
                 PACK((llk_pack_reconfig_l1_acc(0)));
             }
-        }
-        if constexpr (write_result_inplace) {
-            // Granular write output to enable following matmul unpack to start early.
-            cb_push_back(in0_cb, cols);
         }
     }
     if constexpr (do_reduce) {
