@@ -239,6 +239,30 @@ def get_memory_view(device, buffer_type):
     return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
 
 
+def get_statistics(device, buffer_type):
+    """
+    Get allocator statistics for a buffer type (DRAM, L1, L1_SMALL, TRACE).
+    Returns Statistics struct containing allocation information including
+    largest_free_block_addrs which provides the address(es) of the largest free block.
+
+    Args:
+        device: The device to get statistics for
+        buffer_type: Type of buffer (e.g., ttnn.BufferType.L1, ttnn.BufferType.DRAM)
+
+    Returns:
+        Statistics object with fields:
+            - total_allocatable_size_bytes
+            - total_allocated_bytes
+            - total_free_bytes
+            - largest_free_block_bytes
+            - largest_free_block_addrs (list of addresses)
+    """
+    return ttnn._ttnn.device.GetStatistics(device, buffer_type)
+
+
+# Expose Statistics class
+Statistics = ttnn._ttnn.device.Statistics
+
 pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
 SubDevice = ttnn._ttnn.device.SubDevice
