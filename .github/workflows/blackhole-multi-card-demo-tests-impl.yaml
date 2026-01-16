@@ -371,7 +371,7 @@ jobs:
               "model": "wan2.2-t2v-a14b",
               "arch": "blackhole",
               "runner-label": "BH-QB-GE",
-              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"1x4sp0tp1 and resolution_480p\"",
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"2x2sp0tp1 and resolution_480p\"",
               "owner_id": "U08TED0JM9D",
               "owner_name": "Samuel Adesoye"
             },
