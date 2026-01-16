@@ -682,7 +682,7 @@ auto get_datatype_tile_size(DataType dtype) {
 bool can_exec_ops_on_device(DataType type) {
     switch (type) {
         case DataType::BFLOAT16:
-            // We support bfloat16 but the change breaks unit tests, will enable in the follow-up PR
+            // https://github.com/tenstorrent/tt-metal/issues/31406 (NaN values are not preserved and replaced with inf)
         case DataType::FLOAT32:
             // https://github.com/tenstorrent/tt-metal/issues/23405 (layout precision loss)
             // https://github.com/tenstorrent/tt-metal/issues/30147 (typecast rounding error)
@@ -756,7 +756,8 @@ Tensor create_tt_tensor_from_host_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
 
-        if (layout == Layout::ROW_MAJOR && pydata_type_borrowable && src_dtype == dst_dtype) {
+        if (layout == Layout::ROW_MAJOR && pydata_type_borrowable && src_dtype == dst_dtype &&
+            !memory_config.is_sharded()) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
@@ -897,7 +898,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     };
 
     if (device) {
-        output = output.to_device(device.value(), std::nullopt, cq_id);
+        output = output.to_device(device.value(), memory_config, cq_id);
         if (output.dtype() != dst_dtype) {
             // Need to perform final data conversion on device, typecast requires TILE layout.
             set_layout(Layout::TILE);
