@@ -77,6 +77,16 @@ else
     echo "  - Skipping subagent_breakdown.md (file not found)"
 fi
 
+# Sync skills
+echo "Syncing skills..."
+if [ -d "$REPO_ROOT/.claude/skills" ]; then
+    mkdir -p "$SCRIPT_DIR/skills"
+    cp -r "$REPO_ROOT/.claude/skills/"* "$SCRIPT_DIR/skills/"
+    echo "  - Synced skills"
+else
+    echo "  - Skipping skills (directory not found)"
+fi
+
 # Sync CLAUDE.md (with confirmation)
 echo ""
 if [ -f "$REPO_ROOT/CLAUDE.md" ]; then
