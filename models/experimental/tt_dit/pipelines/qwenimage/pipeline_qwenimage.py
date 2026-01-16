@@ -232,6 +232,9 @@ class QwenImagePipeline:
 
         self._traces = None
 
+        logger.info("warming up for tracing...")
+        self.run_single_prompt(prompt="", num_inference_steps=1, seed=0, traced=False)
+
     def _load_transformers(self, idx) -> None:
         """Load transformer weights to device. Called lazily for device encoder path."""
         if self.transformers[idx].is_loaded():
