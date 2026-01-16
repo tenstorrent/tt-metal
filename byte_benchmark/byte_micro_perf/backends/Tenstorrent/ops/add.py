@@ -125,7 +125,6 @@ class TenstorrentAddOp(BasicOp):
 
         a, b = tensor_mapping["a"], tensor_mapping["b"]
         c = ttnn.add(a, b)
-        ttnn.synchronize_device(self.device)
         return c
 
     def core_run(self, tensor_mapping):

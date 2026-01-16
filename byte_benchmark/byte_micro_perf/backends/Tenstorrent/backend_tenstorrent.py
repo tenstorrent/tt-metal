@@ -11,6 +11,7 @@ from datetime import timedelta
 import torch
 import torch.distributed as dist
 
+
 FILE_DIR = pathlib.Path(__file__).parent.absolute()
 BACKEND_DIR = FILE_DIR.parent
 MICRO_PERF_DIR = BACKEND_DIR.parent
@@ -20,6 +21,8 @@ sys.path.insert(0, str(MICRO_PERF_DIR))
 from core.backend import Backend
 from backends.Tenstorrent.provider_tenstorrent import TENSTORRENT_PROVIDER
 from core.utils import suppress_stdout_stderr
+
+import ttnn
 
 
 class TimeoutError(Exception):
@@ -42,7 +45,7 @@ class BackendTenstorrent(Backend):
         skip_ttnn = os.environ.get("TT_SKIP_TTNN_INIT", "0") == "1"
 
         # Try to import ttnn for Tenstorrent hardware support
-        self.ttnn_available = False
+        self.ttnn_available = True
         self.ttnn_device = None
 
         print("Skip")
@@ -284,7 +287,7 @@ class BackendTenstorrent(Backend):
         # Since this requires special build configuration, we skip to timer-based measurement
         # See: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html
         pass
-
+        print("TTNN available:", self.ttnn_available)
         # Event-based timing (similar to GPU's torch.cuda.Event)
         if self.ttnn_available:
             try:

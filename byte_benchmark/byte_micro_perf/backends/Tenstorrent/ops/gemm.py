@@ -144,10 +144,6 @@ class TenstorrentGemmOp(BasicOp):
 
         # Perform matmul on device
         c = ttnn.matmul(a, b)
-
-        # Synchronize to ensure operation completes before timing ends
-        ttnn.synchronize_device(self.device)
-
         return c
 
     def core_run(self, tensor_mapping):
