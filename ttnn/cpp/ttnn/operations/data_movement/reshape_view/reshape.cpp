@@ -52,7 +52,24 @@ ttnn::Tensor perform_reshape_on_2D_RM(
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-        return ttnn::interleaved_to_sharded(temp_tensor2, memory_config, std::nullopt);
+
+        // Recompute the shard spec for the output tensor shape
+        auto output_mem_config = memory_config;
+        if (memory_config.shard_spec().has_value()) {
+            const auto& input_shard_spec = memory_config.shard_spec().value();
+            const auto& output_shape = temp_tensor2.tensor_spec();
+
+            // Upate specs for output tensor
+            if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+                auto core_range = input_shard_spec.grid.bounding_box();
+                auto orientation = input_shard_spec.orientation;
+
+                auto updated_spec = output_shape.block_sharded(core_range, orientation);
+                output_mem_config = updated_spec.memory_config();
+            }
+        }
+
+        return ttnn::interleaved_to_sharded(temp_tensor2, output_mem_config, std::nullopt);
     }
     return temp_tensor2;
 }
@@ -222,7 +239,24 @@ ttnn::Tensor reshape_tiled(
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-        output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, memory_config, std::nullopt);
+
+        // Recompute the shard spec for the output tensor shape
+        auto output_mem_config = memory_config;
+        if (memory_config.shard_spec().has_value()) {
+            const auto& input_shard_spec = memory_config.shard_spec().value();
+            const auto& output_shape = output_tensor_3d.tensor_spec();
+
+            // Upate specs for output tensor
+            if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+                auto core_range = input_shard_spec.grid.bounding_box();
+                auto orientation = input_shard_spec.orientation;
+
+                auto updated_spec = output_shape.block_sharded(core_range, orientation);
+                output_mem_config = updated_spec.memory_config();
+            }
+        }
+
+        output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
     }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {

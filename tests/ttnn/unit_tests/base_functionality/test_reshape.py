@@ -68,6 +68,30 @@ def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_sha
     assert torch.allclose(b, ttnn.to_torch(tt_b))
 
 
+@pytest.mark.parametrize("shape", [[1, 1, 1024, 1], [1, 1024, 1]])
+def test_reshape_shard(device, shape):
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    shard_shape = shape
+    shard_shape[-1] = 32
+    block_sharded_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=ttnn.CoreGrid(x=1, y=8),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        use_height_and_width_as_shard_shape=False,
+    )
+    print("TEST")
+    input_ttnn = ttnn.from_torch(
+        input_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=block_sharded_config,
+    )
+    print(f"IT {input_ttnn}\nITMC {input_ttnn.memory_config()} BSC {block_sharded_config}")
+    output_tensor = ttnn.reshape(input_ttnn, [1, 1024])
+    print(f"OT {output_tensor}\nOTMC {output_tensor.memory_config()}")
+
+
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [4])
 @pytest.mark.parametrize("h", [64])
