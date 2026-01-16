@@ -9,6 +9,17 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
+/**
+ * The APIs in this file are for initial support of Quasar, our next-generation architecture.
+ * Quasar has significant architectural differences from Wormhole and Blackhole. Some key differences are:
+ * - There are 8 data movement cores per cluster
+ * - There are 4 compute cores per cluster with each compute core having 4 TRISC processors
+ * - Each cluster contains 4 MB of L1 SRAM which is shared by all the cores in the cluster
+ * - Users will target clusters instead of the cores within the clusters; our internal implementation will choose which
+ *   cores on each cluster are used
+ * These APIs are very experimental and will evolve accordingly over time.
+ */
+
 namespace tt::tt_metal {
 class Program;
 
@@ -16,6 +27,7 @@ namespace experimental {
 static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
 
 struct QuasarDataMovementConfig {
+    // Number of data movement cores per cluster to use
     uint32_t num_processors_per_cluster = QUASAR_NUM_DM_CORES_PER_CLUSTER;
 
     std::vector<uint32_t> compile_args;
@@ -34,6 +46,16 @@ struct QuasarDataMovementConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
 };
 
+/**
+ * @brief Create a data movement kernel and add it to the program.
+ *
+ * @param program The program to which this kernel will be added to
+ * @param file_name Path to kernel source file
+ * @param core_spec Either a single logical cluster, a range of logical clusters or a set of logical cluster ranges that
+ * indicate which clusters the kernel is placed on
+ * @param config Config for data movement kernel
+ * @return Kernel ID
+ */
 KernelHandle CreateKernel(
     Program& program,
     const std::string& file_name,
