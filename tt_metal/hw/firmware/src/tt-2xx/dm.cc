@@ -11,6 +11,7 @@
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tile_counters.h"
 
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
@@ -31,6 +32,7 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+tile_counter_u volatile * const tile_counters = (tile_counter_u volatile * const) TILE_COUNTERS_BASE;
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -107,6 +109,9 @@ extern "C" uint32_t _start1() {
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+
+    // Reset tile counters
+    tile_counters_reset();
 
     // risc_init();
     device_setup();
