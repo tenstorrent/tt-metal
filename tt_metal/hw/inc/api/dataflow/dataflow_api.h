@@ -1858,7 +1858,7 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
 
 FORCE_INLINE
 void noc_async_posted_atomic_barrier(uint8_t noc_idx = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::ATOMIC_BARRIER, false);
+    RECORD_NOC_EVENT(NocEventType::ATOMIC_BARRIER);
 
     WAYPOINT("NPABW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
