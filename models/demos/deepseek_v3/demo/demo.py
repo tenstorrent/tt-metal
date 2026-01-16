@@ -76,6 +76,11 @@ def create_parser() -> argparse.ArgumentParser:
         choices=["mlp", "moe"],
         help="When using --random-weights, request a single layer (mlp supported)",
     )
+    p.add_argument(
+        "--override-num-layers",
+        type=int,
+        help="Override the number of layers in the model. Defaults to None.",
+    )
     # Teacher-forcing / accuracy verification options
     p.add_argument("--token-accuracy", action="store_true", help="Enable teacher-forced decode and report accuracy")
     p.add_argument(
@@ -111,6 +116,21 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Number of times to repeat the generation process.",
+    p.add_argument(
+        "--signpost",
+        action="store_true",
+        help="Enable signpost for tracing.",
+    )
+    p.add_argument(
+        "--prefill-max-tokens",
+        type=int,
+        help="Maximum number of tokens to prefill.",
+    )
+    p.add_argument(
+        "--profile",
+        choices=["all", "decode", "prefill"],
+        help="Profile for decode or prefill. Default is all: profiler is enabled for all operations.",
+        default="all",
     )
     return p
 
@@ -217,14 +237,17 @@ def run_demo(
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,
+    override_num_layers: int | None = None,
     token_accuracy: bool = False,
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = False,
-    override_num_layers: int | None = None,
     repeat_batches: int = 1,
+    signpost: bool = False,
+    prefill_max_tokens: int = None,
+    profile: str = "both",
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -310,6 +333,9 @@ def run_demo(
                 ),
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
+                signpost=signpost,
+                prefill_max_tokens=prefill_max_tokens,
+                profile=profile,
             )
         # Build the prompt list
         pre_tokenized_prompts = None
@@ -396,12 +422,16 @@ def main() -> None:
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
+        override_num_layers=args.override_num_layers,
         token_accuracy=bool(args.token_accuracy),
         reference_file=args.reference_file,
         tf_prompt_len=args.tf_prompt_len,
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
         enable_trace=args.enable_trace,
+        signpost=args.signpost,
+        prefill_max_tokens=args.prefill_max_tokens,
+        profile=args.profile,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
