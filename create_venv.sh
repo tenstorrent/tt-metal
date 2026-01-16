@@ -122,10 +122,10 @@ validate_python_version() {
     major=$((10#$major))
     minor=$((10#$minor))
 
-    # Require Python 3.8+
+    # Require Python 3.10+
     if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 8 ]]; }; then
-        echo "Error: Python version must be 3.8 or higher (got: $version)" >&2
-        echo "Supported versions: 3.8, 3.9, 3.10, 3.11, 3.12, etc." >&2
+        echo "Error: Python version must be 3.10 or higher (got: $version)" >&2
+        echo "Supported versions: 3.10, 3.11, etc." >&2
         exit 1
     fi
 }
