@@ -19,12 +19,39 @@ def load_shakespeare_text():
     return text
 
 
+PAD_TOKEN = "<PAD>"
+BEGIN_TOKEN = "<BEG>"
+END_TOKEN = "<END>"
+
+
 class CharTokenizer:
-    def __init__(self, text: str):
-        # Sorted stable alphabet for reproducibility
+    def __init__(
+        self,
+        text: str,
+        add_padding_token: bool = True,
+        add_begin_end_tokens: bool = True,
+    ):
+        # Sorted stable alphabet for reproducibility (matching C++ std::set order)
         chars = sorted(list(set(text)))
-        self.stoi = {ch: i for i, ch in enumerate(chars)}
-        self.itos = chars
+
+        self.stoi = {}
+        self.itos = []
+
+        if add_padding_token:
+            self.stoi[PAD_TOKEN] = 0
+            self.itos.append(PAD_TOKEN)
+
+        for ch in chars:
+            if ch in self.stoi:
+                continue
+            self.stoi[ch] = len(self.itos)
+            self.itos.append(ch)
+
+        if add_begin_end_tokens:
+            self.stoi[BEGIN_TOKEN] = len(self.itos)
+            self.itos.append(BEGIN_TOKEN)
+            self.stoi[END_TOKEN] = len(self.itos)
+            self.itos.append(END_TOKEN)
 
     @property
     def vocab_size(self):

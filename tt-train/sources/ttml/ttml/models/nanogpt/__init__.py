@@ -8,23 +8,67 @@ This package provides a Python implementation of NanoGPT (a small GPT model)
 using ttml's C++ operations for computation.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict
 
 import numpy as np
 import ml_dtypes
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, ModuleList, Parameter, RunMode
+from ttml.modules import AbstractModuleBase, Parameter, ModuleList, RunMode, LinearLayer
 
 from .embedding import Embedding
 from .gpt_block import GPTBlock
 
 
+def initialize_weights_gpt2(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
+    """Initialize weights matching C++ initialize_weights_gpt2.
+
+    This function re-initializes all model parameters to match the C++ gpt2 model:
+    - All "weight" parameters: normal(mean=0, stddev=0.02)
+    - All "bias" parameters: constant 0
+    - "gamma" and "beta" (LayerNorm) are NOT touched (they keep their initial values)
+
+    This is called after model construction to ensure weights match the C++ initialization.
+
+    Args:
+        parameters: Dictionary of parameter name to tensor
+    """
+    for name, tensor in parameters.items():
+        # Get current shape from tensor
+        shape = tensor.shape()
+
+        if "weight" in name:
+            # Re-initialize weights with normal(0, 0.02)
+            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(
+                ml_dtypes.bfloat16
+            )
+            new_tensor = ttml.autograd.Tensor.from_numpy(
+                weight_np, layout=ttnn.Layout.TILE
+            )
+            tensor.assign(new_tensor)
+        elif "bias" in name:
+            # Re-initialize biases with 0
+            bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
+            new_tensor = ttml.autograd.Tensor.from_numpy(
+                bias_np, layout=ttnn.Layout.TILE
+            )
+            tensor.assign(new_tensor)
+
+
 @dataclass
 class NanoGPTConfig:
-    """Configuration for NanoGPT model."""
+    """Configuration for NanoGPT model.
+
+    Note: The following C++ features are not yet implemented in Python:
+    - TODO: runner_type (Default/MemoryEfficient) - for memory efficient block execution
+    - TODO: weight_tying (Enabled/Disabled) - ties tok_emb and fc weights
+    - TODO: positional_embedding_type (Trainable/Fixed) - only Trainable is implemented
+    - TODO: experimental.use_composite_layernorm - use composite vs fused layernorm
+    """
 
     vocab_size: int = 50304  # GPT-2 vocab size
     block_size: int = 1024  # Maximum sequence length
@@ -37,8 +81,68 @@ class NanoGPTConfig:
     bias: bool = True  # Use bias in linear layers and layer norm
 
 
+class TrainablePositionalEmbedding(AbstractModuleBase):
+    """Trainable positional embedding matching C++ TrainablePositionalEmbedding."""
+
+    def __init__(
+        self, sequence_length: int, embedding_dim: int, dropout_prob: float = 0.0
+    ) -> None:
+        """Initialize trainable positional embedding.
+
+        Args:
+            sequence_length: Maximum sequence length
+            embedding_dim: Dimension of embeddings
+            dropout_prob: Dropout probability
+        """
+        super().__init__()
+
+        self.sequence_length = sequence_length
+        self.dropout_prob = dropout_prob
+
+        weight_shape = (1, 1, sequence_length, embedding_dim)
+        weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(
+            ml_dtypes.bfloat16
+        )
+        weight_tensor = ttml.autograd.Tensor.from_numpy(
+            weight_np, layout=ttnn.Layout.TILE
+        )
+        self.weight = Parameter(weight_tensor)
+
+    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        """Forward pass: add positional embeddings and apply dropout.
+
+        Args:
+            x: Input tensor (token embeddings), shape [batch, 1, seq_len, embedding_dim]
+
+        Returns:
+            Output tensor with positional embeddings added
+        """
+        # Simply add the positional weight tensor (matching C++ ops::add(input, m_weight))
+        if len(x.shape()) != 4:
+            raise ValueError(
+                f"TrainablePositionalEmbedding: input tensor must have 4 dimensions. Got rank {len(x.shape())}"
+            )
+        if x.shape()[2] != self.sequence_length:
+            raise ValueError(
+                f"TrainablePositionalEmbedding: input tensor sequence length ({x.shape()[2]}) does not match the expected value ({self.sequence_length})"
+            )
+        out = ttml.ops.binary.add(x, self.weight.tensor)
+        # Note: It's better to just use Dropout module here
+        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
+        return out
+
+    def __call__(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        """Call the forward method."""
+        return self.forward(x)
+
+
 class NanoGPT(AbstractModuleBase):
-    """NanoGPT model implemented in Python using ttml operations."""
+    """NanoGPT model implemented in Python using ttml operations.
+
+    This implementation matches the C++ ttml::models::gpt2::Transformer class.
+    See tt-train/sources/ttml/models/gpt2.cpp for reference.
+    """
 
     def __init__(self, config: NanoGPTConfig) -> None:
         """Initialize NanoGPT model.
@@ -52,9 +156,16 @@ class NanoGPT(AbstractModuleBase):
         # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
         # Use get_run_mode() to check, train()/eval() to set
 
-        # Token and position embeddings
-        self.wte = Embedding(config.vocab_size, config.n_embd)
-        self.wpe = Embedding(config.block_size, config.n_embd)
+        # TODO: Implement weight_tying - when enabled, tok_emb shares weights with fc
+        # C++ creates fc first, then passes fc->get_weight() to Embedding constructor
+        self.fc = LinearLayer(
+            config.n_embd, config.vocab_size, False
+        )  # False - no bias
+        vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
+        self.tok_emb = Embedding(vocab_size_divisible_by_32, config.n_embd)
+        self.pos_emb = TrainablePositionalEmbedding(
+            config.block_size, config.n_embd, config.dropout
+        )
 
         # Transformer blocks (ModuleList auto-registers all blocks)
         self.blocks = ModuleList(
@@ -82,15 +193,9 @@ class NanoGPT(AbstractModuleBase):
         else:
             self.ln_f_beta = None
 
-        # Language model head (output projection)
-        # Note: Weight tying with token embeddings will be handled in forward
-        # LM head shape would be (1, 1, config.vocab_size, config.n_embd)
-        # We'll use the same weight as wte for weight tying
-        self.lm_head_weight = self.wte.weight
-
-        # Cache for position tensor (avoids recreating every forward pass)
-        self._cached_pos_tensor = None
-        self._cached_pos_seq_len = None
+        # Initialize weights
+        # This re-initializes all "weight" to normal(0, 0.02) and all "bias" to 0
+        initialize_weights_gpt2(self.parameters())
 
     # train() and eval() are inherited from AbstractModuleBase
     # They automatically propagate RunMode to all registered submodules
@@ -105,51 +210,25 @@ class NanoGPT(AbstractModuleBase):
             mask: Optional causal attention mask, shape [1, 1, seq_len, seq_len]
 
         Returns:
-            Logits tensor, shape [batch_size, 1, 1, seq_len, vocab_size]
+            Logits tensor, shape [batch_size, 1, seq_len, vocab_size]
         """
-        # Token and position embeddings
-        tok_emb = self.wte(idx)
+        # Token embedding (matching C++ tok_emb_out = (*tok_emb)(x))
+        tok_emb_out = self.tok_emb(idx)
+        out = self.pos_emb(tok_emb_out)
 
-        # Create position indices (cached for constant sequence length during training)
-        idx_shape = idx.shape()
-        seq_len = idx_shape[-1]
-
-        # Use cached position tensor if sequence length matches
-        if self._cached_pos_seq_len != seq_len:
-            pos_np = np.arange(seq_len, dtype=np.uint32).reshape(1, 1, 1, seq_len)
-            self._cached_pos_tensor = ttml.autograd.Tensor.from_numpy(
-                pos_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-            )
-            self._cached_pos_seq_len = seq_len
-
-        pos_emb = self.wpe(self._cached_pos_tensor)
-
-        # Add embeddings
-        x = ttml.ops.binary.add(tok_emb, pos_emb)
-
-        # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
-        if self.get_run_mode() == RunMode.TRAIN and self.config.dropout > 0.0:
-            x = ttml.ops.dropout.dropout(x, self.config.dropout)
-
-        # Pass through transformer blocks with mask
+        # TODO: Implement runner_type for memory efficient execution
+        # C++ supports RunnerType::MemoryEfficient which uses memory_efficient_runner()
         for block in self.blocks:
-            x = block(x, mask=mask)
+            out = block(out, mask=mask)
 
-        # Final layer norm (use composite to avoid custom kernel include path issues)
-        x = ttml.ops.layernorm.composite_layernorm(
-            x, self.ln_f_gamma.tensor, self.ln_f_beta.tensor if self.ln_f_beta else None
+        out = ttml.ops.layernorm.layernorm(
+            out,
+            self.ln_f_gamma.tensor,
+            self.ln_f_beta.tensor if self.ln_f_beta else None,
         )
 
-        # Language model head (weight tying: uses same weights as token embedding)
-        logits = ttml.ops.linear.linear(x, self.lm_head_weight.tensor, None)
-
-        # Reshape logits from [B, 1, 1, seq_len, vocab_size] to [B, 1, seq_len, vocab_size]
-        # Use ttml's reshape operation which preserves the computation graph
-        logits_shape = logits.shape()
-        if len(logits_shape) == 5:
-            # [B, 1, 1, seq_len, vocab_size] -> [B, 1, seq_len, vocab_size]
-            new_shape = [logits_shape[0], 1, logits_shape[3], logits_shape[4]]
-            logits = ttml.ops.reshape.reshape(logits, new_shape)
+        # Output projection (matching C++ logits = (*fc)(out))
+        logits = self.fc(out)
 
         return logits
 
@@ -172,4 +251,5 @@ __all__ = [
     "NanoGPT",
     "NanoGPTConfig",
     "create_nanogpt",
+    "initialize_weights_gpt2",
 ]

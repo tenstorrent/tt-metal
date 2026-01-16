@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Utility functions for transformer training."""
+
+from __future__ import annotations
+
 import os, random
 from time import time
 import numpy as np

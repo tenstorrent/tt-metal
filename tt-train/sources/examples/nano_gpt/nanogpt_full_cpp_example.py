@@ -204,11 +204,10 @@ def create_dataset_from_text(
 
         # Create sequences
         dataset = []
-        for i in range(0, len(tokens) - sequence_length, sequence_length):
+        for i in range(len(tokens) - sequence_length):
             seq = tokens[i : i + sequence_length]
             target = tokens[i + 1 : i + sequence_length + 1]
-            if len(seq) == sequence_length and len(target) == sequence_length:
-                dataset.append((seq, target))
+            dataset.append((seq, target))
 
         return dataset, tokenizer
     else:
@@ -1103,6 +1102,9 @@ def main():
     instance.open_device()
     instance.get_device()
 
+    instance.set_seed(training_config.seed)
+    np.random.seed(training_config.seed)
+
     # Handle inference-only mode: load model from checkpoint
     if inference_only:
         model_path = args.model_path if args.model_path else checkpoint_save_path
@@ -1255,9 +1257,6 @@ def main():
         print("\n3. Inference mode - skipping optimizer setup")
     else:
         print("\n3. Setting up optimizer...")
-        # Set seed
-        instance.set_seed(training_config.seed)
-
         # Create optimizer config
         if training_config.use_no_op:
             print("   WARNING: Using NoOp optimizer - parameters will NOT be updated.")
@@ -1359,76 +1358,87 @@ def main():
         # Training loop (matching C++ structure)
         start_time = time.time()
         for epoch in range(training_config.num_epochs):
-            # Shuffle dataset
+            # Shuffle dataset at the start of each epoch
             np.random.shuffle(dataset)
 
-            # Create batches
-            dataset_len = len(dataset)
-            for batch_start in range(0, dataset_len, batch_size):
-                batch_end = batch_start + batch_size
-                if batch_end > dataset_len:
-                    continue  # Skip incomplete batches
-                # Use slice directly without intermediate variable when possible
-                batch_samples = dataset[batch_start:batch_end]
-
-                # Collate batch - creates tensors directly with correct shape via NumPy
-                input_tokens, target_tokens = collate_fn(
-                    batch_samples,
-                    batch_size,
-                    sequence_length,
-                )
-
-                # Training step with mask (matching C++: run_model(model, features, masks))
-                # Pass cached autograd_ctx and batch_size to avoid repeated lookups
-                loss_float, step_time, should_step = train_step(
-                    model,
-                    optimizer,
-                    scheduler_fn,
-                    global_step,
-                    input_tokens,
-                    target_tokens,
-                    mask,  # Pass the causal mask to model
-                    gradient_accumulator,
-                    training_config.use_clip_grad_norm,
-                    training_config.clip_grad_norm_max_norm,
-                    batch_size=batch_size,
-                )
-
-                # Only update counters and print when we've stepped (matching C++: if should_step())
-                if should_step:
-                    avg_loss = gradient_accumulator.average_loss()
-                    loss_meter.update(avg_loss)
-                    print(
-                        f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms"
-                    )
-
-                    # Save checkpoint if needed (matching C++: model_save_interval)
-                    if (
-                        checkpoint_save_path
-                        and global_step % training_config.model_save_interval == 0
-                    ):
-                        checkpoint_path = (
-                            f"{checkpoint_save_path}_step_{global_step}.pkl"
-                        )
-                        save_checkpoint(
-                            checkpoint_path,
-                            global_step,
-                            model,
-                            tokenizer,
-                            model_config,
-                            training_config,
-                        )
-
-                    # Check if max steps reached (matching C++: if (global_step >= training_config.max_steps))
+            # Create batches - continue iterating through dataset until max_steps is reached
+            while global_step < training_config.max_steps:
+                # Iterate through all batches in the dataset
+                for batch_start in range(0, len(dataset), training_config.batch_size):
+                    # Check if we've reached max_steps before processing more batches
                     if global_step >= training_config.max_steps:
                         break
 
-                    # Reset gradient accumulator after stepping (matching C++: gradient_accumulator_helper.reset())
-                    gradient_accumulator.reset()
+                    batch_samples = dataset[
+                        batch_start : batch_start + training_config.batch_size
+                    ]
+                    if len(batch_samples) < training_config.batch_size:
+                        continue  # Skip incomplete batches
 
-                    # Increment global step AFTER all processing
-                    global_step += 1
+                    # Collate batch (matching C++ collate_fn)
+                    input_tokens, target_tokens = collate_fn(
+                        batch_samples,
+                        training_config.batch_size,
+                        sequence_length,
+                    )
 
+                    # Training step with mask (matching C++: run_model(model, features, masks))
+                    loss_float, step_time, should_step = train_step(
+                        model,
+                        optimizer,
+                        scheduler_fn,
+                        global_step,
+                        input_tokens,
+                        target_tokens,
+                        mask,  # Pass the causal mask to model
+                        gradient_accumulator,
+                        training_config.use_clip_grad_norm,
+                        training_config.clip_grad_norm_max_norm,
+                    )
+
+                    # Only update counters and print when we've stepped (matching C++: if should_step())
+                    if should_step:
+                        # Increment global step BEFORE checking (matching C++: optimizer->get_steps() returns count after step())
+                        global_step += 1
+
+                        avg_loss = gradient_accumulator.average_loss()
+                        loss_meter.update(avg_loss)
+                        print(
+                            f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms"
+                        )
+
+                        # Save checkpoint if needed (matching C++: model_save_interval)
+                        if (
+                            checkpoint_save_path
+                            and global_step % training_config.model_save_interval == 0
+                        ):
+                            checkpoint_path = (
+                                f"{checkpoint_save_path}_step_{global_step}.pkl"
+                            )
+                            save_checkpoint(
+                                checkpoint_path,
+                                global_step,
+                                model,
+                                tokenizer,
+                                model_config,
+                                training_config,
+                            )
+
+                        # Reset gradient accumulator after stepping (matching C++: gradient_accumulator_helper.reset())
+                        gradient_accumulator.reset()
+
+                        # Check if max steps reached (matching C++: if (global_step >= training_config.max_steps))
+                        if global_step >= training_config.max_steps:
+                            break
+
+                # Break from outer while loop if we've reached max_steps
+                if global_step >= training_config.max_steps:
+                    break
+
+                # Re-shuffle dataset for next iteration through the dataset (matching C++ DataLoader behavior)
+                np.random.shuffle(dataset)
+
+            # Break from epoch loop if we've reached max_steps (matching C++: check after inner loop)
             if global_step >= training_config.max_steps:
                 break
 
