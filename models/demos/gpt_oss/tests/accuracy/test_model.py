@@ -155,7 +155,7 @@ def test_full_model_accuracy(mesh_device, mesh_shape, device_params, reset_seeds
     """Test full model with accuracy testing using new abstractions"""
 
     # Cache file for reference tokens
-    cache_dir = "models/demos/gpt_oss/tests/unit/"
+    cache_dir = "models/demos/gpt_oss/tests/accuracy/"
     os.makedirs(cache_dir, exist_ok=True)
     cache_file = os.path.join(cache_dir, "reference_tokens.pkl")
 
