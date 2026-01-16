@@ -251,6 +251,13 @@ jobs:
           # All tests run, and this step fails if any test failed.
           failed=0
 
+          pytest --durations-min=3.0 models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+            -m "not slow" \
+            --tb=short \
+            --cov=models.common.modules.rmsnorm.rmsnorm_2d \
+            --cov-report=term-missing \
+            --cov-config=models/common/tests/setup.cfg || failed=1
+
           pytest --durations-min=3.0 models/common/tests/modules/mlp/test_mlp_2d.py \
             -m "not slow" \
             --tb=short \

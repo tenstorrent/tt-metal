@@ -23,7 +23,7 @@ from transformers.modeling_utils import no_init_weights
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
-from models.common.modules.rmsnorm.rmsnorm_2d import SHARD_HEIGHT, RMSNorm2D, RMSNorm2DConfig
+from models.common.modules.rmsnorm.rmsnorm_2d import RMSNorm2D, RMSNorm2DConfig
 from models.common.utility_functions import comp_allclose, comp_pcc
 
 # ============================================================================
@@ -47,17 +47,6 @@ def _get_or_init_norm_weights(model_name: str, reference_norm) -> None:
         reference_norm.weight.copy_(_CACHED_NORM_WEIGHTS[model_name])
 
 
-def get_norm_weight_from_ref_model(reference_norm, dim: int) -> torch.Tensor:
-    """
-    Extract weight from a reference RMSNorm module in TTNN layout.
-
-    Returns:
-        weight tensor in shape (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
-    """
-    weight = reference_norm.weight.detach().clone()
-    return weight.unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
-
-
 # ============================================================================
 # Unit Tests - No device required
 # ============================================================================
@@ -75,7 +64,6 @@ def test_rmsnorm_2d_config_creation():
         add_unit_offset=True,
         mesh_device=mock_mesh_device,
         tt_ccl=mock_tt_ccl,
-        dim=4096,
         max_batch_size=64,
     )
 
@@ -84,7 +72,6 @@ def test_rmsnorm_2d_config_creation():
     assert config.add_unit_offset is True
     assert config.mesh_device == mock_mesh_device
     assert config.tt_ccl == mock_tt_ccl
-    assert config.dim == 4096
     assert config.max_batch_size == 64
 
 
@@ -96,15 +83,12 @@ def test_rmsnorm_2d_config_defaults():
     assert config.eps == 1e-5
     assert config.add_unit_offset is False
     assert config.max_batch_size == 32
-    assert config.weight_dtype == ttnn.bfloat16
-    assert config.fp32_dest_acc_en is False  # TG default
 
     # Optional fields default to None
     assert config.mesh_device is None
     assert config.tt_ccl is None
-    assert config.dim is None
-    assert config.decode_ln_sharded_input_memcfg is None
-    assert config.decode_ln_sharded_progcfg is None
+    assert config.decode_input_memcfg is None
+    assert config.decode_progcfg is None
 
 
 def test_rmsnorm_2d_config_power_user_overrides():
@@ -115,16 +99,14 @@ def test_rmsnorm_2d_config_power_user_overrides():
 
     config = RMSNorm2DConfig(
         weight=MagicMock(),
-        decode_ln_sharded_input_memcfg=mock_mem_config,
-        decode_ln_sharded_progcfg=mock_prg_config,
-        prefill_compute_kernel_config=mock_kernel_config,
-        fp32_dest_acc_en=True,
+        decode_input_memcfg=mock_mem_config,
+        decode_progcfg=mock_prg_config,
+        compute_kernel_config_prefill=mock_kernel_config,
     )
 
-    assert config.decode_ln_sharded_input_memcfg == mock_mem_config
-    assert config.decode_ln_sharded_progcfg == mock_prg_config
-    assert config.prefill_compute_kernel_config == mock_kernel_config
-    assert config.fp32_dest_acc_en is True
+    assert config.decode_input_memcfg == mock_mem_config
+    assert config.decode_progcfg == mock_prg_config
+    assert config.compute_kernel_config_prefill == mock_kernel_config
 
 
 def test_rmsnorm_2d_rejects_non_tg():
@@ -150,10 +132,6 @@ def test_rmsnorm_2d_rejects_non_tg():
 # ============================================================================
 
 
-# Get HF model name from environment variable or use default
-HF_MODEL_NAME = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-
-
 # todo)) tttv1 code for TG has bit-rotten! --> so we start with a simple test case for now
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
@@ -161,16 +139,15 @@ HF_MODEL_NAME = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
     ids=["4x8", "8x4"],
     indirect=True,
 )
-@pytest.mark.parametrize("mode", ["decode", "prefill"])
 @pytest.mark.parametrize(
-    "batch_size,seq_len",
+    "mode,batch_size,seq_len",
     [
-        (1, 1),  # decode
-        (32, 1),  # decode with max batch
-        (1, 128),  # short prefill
-        (1, 512),  # medium prefill
+        ("decode", 1, 1),
+        ("decode", 32, 1),
+        ("prefill", 1, 128),
+        ("prefill", 1, 512),
     ],
-    ids=["b1_s1", "b32_s1", "b1_s128", "b1_s512"],
+    ids=["decode-b1_s1", "decode-b32_s1", "prefill-b1_s128", "prefill-b1_s512"],
 )
 def test_rmsnorm_2d_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
@@ -181,12 +158,6 @@ def test_rmsnorm_2d_vs_reference(
     """
     Test RMSNorm2D.forward(x, mode) matches PyTorch reference on TG.
     """
-    # Skip incompatible mode/seq_len combinations
-    if mode == "decode" and seq_len > 32:
-        pytest.skip("Decode mode only supports seq_len <= 32")
-    if mode == "prefill" and seq_len <= 32:
-        pytest.skip("Prefill mode requires seq_len > 32")
-
     seed = 1234
     torch.manual_seed(seed)
 
@@ -209,9 +180,16 @@ def test_rmsnorm_2d_vs_reference(
     dim = config.hidden_size
     eps = config.rms_norm_eps
 
-    # Build RMSNorm2D
-    weight_torch = get_norm_weight_from_ref_model(reference_norm, dim)
-    torch_input = torch.randn(batch_size, 1, seq_len, dim, dtype=torch.bfloat16)
+    # Build RMSNorm2D - pass raw weight, module handles reshaping
+    weight_torch = reference_norm.weight.detach().clone()
+
+    # TTNN expects different input shapes for decode vs prefill:
+    # - decode: [1, 1, batch, dim] - batch in dim 2 (sharded across batch)
+    # - prefill: [batch, 1, seq, dim] - standard layout
+    if mode == "decode":
+        torch_input = torch.randn(1, 1, batch_size * seq_len, dim, dtype=torch.bfloat16)
+    else:
+        torch_input = torch.randn(batch_size, 1, seq_len, dim, dtype=torch.bfloat16)
 
     # Create LazyWeights
     ttnn.SetDefaultDevice(ttnn_mesh_device)
@@ -223,8 +201,9 @@ def test_rmsnorm_2d_vs_reference(
         cache_dir_weight_name=(cache_dir, "norm_weight_2d"),
     )
 
-    # Construct RMSNorm2D
-    tt_model = RMSNorm2D(weight=lazy_weight, eps=eps)
+    # Construct RMSNorm2D (use from_config to set eps from HF model)
+    tt_config = RMSNorm2DConfig(weight=lazy_weight, eps=eps)
+    tt_model = RMSNorm2D.from_config(tt_config)
 
     # Run TT model
     tt_input = LazyWeight(source=torch_input, dtype=ttnn.bfloat16)
@@ -233,11 +212,19 @@ def test_rmsnorm_2d_vs_reference(
     ttnn.SetDefaultDevice(None)
 
     # Run reference model
-    # PyTorch RMSNorm expects (batch, seq, dim) but we use (batch, 1, seq, dim)
-    torch_input_squeezed = torch_input.squeeze(1)  # (batch, seq, dim)
-    with torch.no_grad():
-        reference_output = reference_norm(torch_input_squeezed)
-    reference_output = reference_output.unsqueeze(1)  # (batch, 1, seq, dim)
+    # PyTorch RMSNorm expects (..., dim) for the last dimension
+    if mode == "decode":
+        # decode input is [1, 1, batch, dim] -> squeeze to [batch, dim] for PyTorch
+        torch_input_for_ref = torch_input.squeeze(0).squeeze(0)  # (batch, dim)
+        with torch.no_grad():
+            reference_output = reference_norm(torch_input_for_ref)
+        reference_output = reference_output.unsqueeze(0).unsqueeze(0)  # back to [1, 1, batch, dim]
+    else:
+        # prefill input is [batch, 1, seq, dim] -> squeeze to [batch, seq, dim] for PyTorch
+        torch_input_for_ref = torch_input.squeeze(1)  # (batch, seq, dim)
+        with torch.no_grad():
+            reference_output = reference_norm(torch_input_for_ref)
+        reference_output = reference_output.unsqueeze(1)  # back to [batch, 1, seq, dim]
 
     # Compare - TG distributed norm may have slightly lower PCC due to distributed computation
     pcc = 0.998
@@ -248,6 +235,10 @@ def test_rmsnorm_2d_vs_reference(
 
     assert passing, f"RMSNorm2D output does not meet PCC requirement {pcc}: {pcc_message}."
     logger.info(f"RMSNorm2D vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
+
+
+# Get HF model name from environment variable or use default
+HF_MODEL_NAME = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
 
 
 @pytest.mark.parametrize(
@@ -269,7 +260,7 @@ def test_rmsnorm_2d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     batch_size = 1
     mode = "decode" if seq_len <= 32 else "prefill"
 
-    # Create ModelArgs
+    # Create ModelArgs (HF_MODEL set at module level via setdefault)
     model_args = ModelArgs(ttnn_mesh_device, max_batch_size=batch_size, max_seq_len=512, cache_hf=True)
     model_args.n_layers = 1
 
