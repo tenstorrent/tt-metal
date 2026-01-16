@@ -29,6 +29,10 @@ class Linear(Module):
         if self.activation_fn == "gelu":
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
+        if self.activation_fn == "quick_gelu":
+            self.activation_fn = None
+            self.fused_activation_fn = ttnn.UnaryOpType.QUICKGELU
+
         self.mesh_device = mesh_device
 
         """
@@ -107,6 +111,9 @@ class ColParallelLinear(Module):
         if self.activation_fn == "gelu":
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
+        if self.activation_fn == "quick_gelu":
+            self.activation_fn = None
+            self.fused_activation_fn = ttnn.UnaryOpType.QUICKGELU
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
@@ -303,8 +310,6 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return ttnn.silu(t)
     if activation_fn == "decomposed_gelu":
         return gelu_decomposed(t)
-    if activation_fn == "quick_gelu":
-        return t * ttnn.sigmoid_accurate(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
         return t * ttnn.silu(gate)
