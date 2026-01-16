@@ -92,7 +92,13 @@ Tensor DeepseekMinimalBroadcastDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t DeepseekMinimalBroadcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    log_trace(tt::LogOp, "DeepseekMinimalBroadcastDeviceOperation::compute_program_hash is called");
+
+    auto subdevice_id = operation_attributes.sub_device_id;
+    auto* mesh_device = tensor_args.input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     return operation::hash_operation<DeepseekMinimalBroadcastDeviceOperation>(
@@ -102,10 +108,8 @@ tt::stl::hash::hash_t DeepseekMinimalBroadcastDeviceOperation::compute_program_h
         operation_attributes.output_mem_config,
         operation_attributes.topology,
         operation_attributes.cluster_axis,
-        operation_attributes.sub_device_id,
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_tensor.device()->id(),
+        subdevice_core_range_set,
+        tensor_args,
         program_factory.index());
 }
 

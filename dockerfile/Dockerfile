@@ -14,6 +14,10 @@ COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
+# Install uv with version pinning (centralized in install-uv.sh)
+COPY scripts/install-uv.sh /tmp/install-uv.sh
+RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
+
 #############################################################
 
 FROM base AS ci-build
@@ -60,10 +64,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zstd \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Install uv with version pinning (centralized in install-uv.sh)
-COPY scripts/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
 
 # Set up virtual environment using uv with centralized Python version
 # Ubuntu 24.04 has Python 3.12 by default, so use that version for compatibility
