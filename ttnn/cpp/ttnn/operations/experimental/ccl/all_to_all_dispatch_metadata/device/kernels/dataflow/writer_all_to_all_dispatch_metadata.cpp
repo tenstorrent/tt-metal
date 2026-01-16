@@ -266,121 +266,60 @@ void kernel_main() {
     // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
     // with a semaphore
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
+    uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
+    uint32_t indices_size_per_core = aligned_indices_page_size * (token_end_idx - token_start_idx);
 
-    // two modes: send pages directly to the output buffer or send pages to the intermediate buffer and then write to
-    // the output buffer latter is slower but is less L1 intensive
-    if constexpr (write_page_by_page) {
-        for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
-            uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
-            uint64_t metadata_write_addr = get_noc_addr(global_token, metadata_addr_gen);
-            uint32_t token_indices_address =
-                base_indices_addr + ((local_token - token_start_idx) * aligned_indices_page_size);
+    uint64_t intermediate_metadata_write_addr = get_noc_addr(get_read_ptr(metadata_buffer_id));
+    uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + (dispatch_index * indices_size) +
+                                             (token_start_idx * aligned_indices_page_size);
 
-            // dispatch the metadata to all other devices
-            for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
-                if (d == linearized_mesh_coord) {
-                    // dispatch the metadata to the current device and increment the local copy of the semaphore
-                    detail::dispatch_metadata_local_device(
-                        token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
-                } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
-                    // dispatch the metadata to the remote device and increment the remote device's copy of the
-                    // semaphore
-                    if constexpr (is_1d_topology<topology>()) {
-                        fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
-                            linearized_mesh_coord,
-                            topology,
-                            mesh_rows,
-                            mesh_cols,
-                            fabric_max_packet_size>(
-                            metadata_addr_gen,
-                            fabric_connections,
-                            metadata_packet_header,
-                            d,
-                            token_indices_address,
-                            global_token,
-                            global_noc_semaphore_address,
-                            (int)metadata_page_size,
-                            alignment,
-                            1,
-                            true);
-                    } else {
-                        fabric_send_chip_unicast_noc_unicast_with_semaphore<
-                            src_chip_id,
-                            mesh_rows,
-                            mesh_cols,
-                            fabric_max_packet_size>(
-                            metadata_addr_gen,
-                            fabric_connections,
-                            metadata_packet_header,
-                            dest_chip_ids[d],
-                            dest_mesh_ids[d],
-                            token_indices_address,
-                            global_token,
-                            global_noc_semaphore_address,
-                            (int)metadata_page_size,
-                            alignment,
-                            1,
-                            true);
-                    }
-                }
+    for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
+        if (d == linearized_mesh_coord) {
+            // dispatch the metadata to the local device
+            detail::dispatch_input_local_device_flushed(
+                base_indices_addr, noc_core_offset_md_write_addr, indices_size_per_core);
+        } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
+            if constexpr (is_1d_topology<topology>()) {
+                l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
+                    linearized_mesh_coord,
+                    topology,
+                    mesh_rows,
+                    mesh_cols,
+                    fabric_max_packet_size>(
+                    fabric_connections,
+                    metadata_packet_header,
+                    d,
+                    base_indices_addr,
+                    noc_core_offset_md_write_addr,
+                    global_noc_semaphore_address,
+                    (int)indices_size_per_core,
+                    alignment,
+                    1,
+                    true);
+            } else {
+                l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore<
+                    src_chip_id,
+                    mesh_rows,
+                    mesh_cols,
+                    fabric_max_packet_size>(
+                    fabric_connections,
+                    metadata_packet_header,
+                    dest_chip_ids[d],
+                    dest_mesh_ids[d],
+                    base_indices_addr,
+                    noc_core_offset_md_write_addr,
+                    global_noc_semaphore_address,
+                    (int)indices_size_per_core,
+                    alignment,
+                    1,
+                    true);
             }
         }
-    } else {
-        uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
-        uint32_t indices_size_per_core = aligned_indices_page_size * (token_end_idx - token_start_idx);
-
-        uint64_t intermediate_metadata_write_addr = get_noc_addr(get_read_ptr(metadata_buffer_id));
-        uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + (dispatch_index * indices_size) +
-                                                 (token_start_idx * aligned_indices_page_size);
-
-        for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
-            if (d == linearized_mesh_coord) {
-                // dispatch the metadata to the local device
-                detail::dispatch_input_local_device_flushed(
-                    base_indices_addr, noc_core_offset_md_write_addr, indices_size_per_core);
-            } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
-                if constexpr (is_1d_topology<topology>()) {
-                    l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
-                        linearized_mesh_coord,
-                        topology,
-                        mesh_rows,
-                        mesh_cols,
-                        fabric_max_packet_size>(
-                        fabric_connections,
-                        metadata_packet_header,
-                        d,
-                        base_indices_addr,
-                        noc_core_offset_md_write_addr,
-                        global_noc_semaphore_address,
-                        (int)indices_size_per_core,
-                        alignment,
-                        1,
-                        true);
-                } else {
-                    l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore<
-                        src_chip_id,
-                        mesh_rows,
-                        mesh_cols,
-                        fabric_max_packet_size>(
-                        fabric_connections,
-                        metadata_packet_header,
-                        dest_chip_ids[d],
-                        dest_mesh_ids[d],
-                        base_indices_addr,
-                        noc_core_offset_md_write_addr,
-                        global_noc_semaphore_address,
-                        (int)indices_size_per_core,
-                        alignment,
-                        1,
-                        true);
-                }
-            }
-        }
-        // Need to wait for the local flushed metadata write.
-        noc_async_write_barrier();
-        noc_semaphore_inc(global_noc_semaphore_address, 1);
-        noc_async_atomic_barrier();
     }
+    // Need to wait for the local flushed metadata write.
+    noc_async_write_barrier();
+    noc_semaphore_inc(global_noc_semaphore_address, 1);
+    noc_async_atomic_barrier();
 
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
