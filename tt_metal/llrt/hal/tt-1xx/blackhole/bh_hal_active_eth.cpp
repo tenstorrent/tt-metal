@@ -153,12 +153,15 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;
+    std::vector<uint8_t> processor_classes_num_fw_binaries;
     if (enable_2_erisc_mode) {
         processor_classes = configure_for_2erisc();
         processor_classes_names = {{{"ER0", "ERISC0"}, {"ER1", "ERISC1"}}};
+        processor_classes_num_fw_binaries = {/*DM*/ 2};
     } else {
         processor_classes = configure_for_1erisc();
         processor_classes_names = {{{"ER", "ERISC"}}};
+        processor_classes_num_fw_binaries = {/*DM*/ 1};
     }
 
     static_assert(sizeof(mailboxes_t) <= MEM_AERISC_MAILBOX_SIZE);
@@ -166,6 +169,7 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
