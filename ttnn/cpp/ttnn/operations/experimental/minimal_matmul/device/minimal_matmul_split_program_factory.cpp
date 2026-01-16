@@ -15,7 +15,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
 
     // Use the shared implementation from minimal_matmul_program_factory
-    auto shared_vars = minimal_matmul_factory_helper_shared(
+    auto shared_vars = minimal_matmul_factory_helper_common(
         program,
         tensor_args.input_tensor,
         tensor_args.weight_tensor,

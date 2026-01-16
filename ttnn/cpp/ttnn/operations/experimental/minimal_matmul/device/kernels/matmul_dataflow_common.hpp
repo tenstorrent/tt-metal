@@ -11,7 +11,8 @@
 namespace detail {
 /**
  * Helper to create tuple of TensorAccessors from TensorAccessorArgs tuple.
- * Unlike make_tensor_accessor_tuple, this takes the actual page_size value, not a CTA index.
+ * Unlike make_tensor_accessor_tuple, this takes the actual page_size value,
+ * not a Compile Time Argument (CTA) index.
  */
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple_with_page_size(
@@ -299,7 +300,6 @@ void write_block_sync_split(
             // Compile-time dispatch preserving concrete types
             write_tile_to_chunk(
                 accessors, chunk_idx, tile_id_in_chunk, read_ptr, std::index_sequence_for<Accessors...>{});
-            //  noc_async_write_tile(tile_id_in_chunk, std::get<chunk_idx>(accessors), read_ptr);
             read_ptr += tile_size_bytes;
         }
         // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
