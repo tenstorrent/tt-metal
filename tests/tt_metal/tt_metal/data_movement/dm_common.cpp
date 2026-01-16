@@ -6,6 +6,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tuple>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::unit_tests::dm {
 
@@ -21,7 +22,7 @@ static uint32_t obtain_page_size_bytes(ARCH arch) { return (arch == ARCH::BLACKH
 L1AddressInfo get_l1_address_and_size(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreCoord& core_coord) {
     // Obtaining L1 address and size for a specific core //
-    const IDevice* device = mesh_device->get_device(0);
+    const IDevice* device = mesh_device->impl().get_device(0);
 
     CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
 
@@ -46,7 +47,7 @@ DramAddressInfo get_dram_address_and_size() {
 
 std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const IDevice* device = mesh_device->get_device(0);
+    const IDevice* device = mesh_device->impl().get_device(0);
     ARCH arch = device->arch();
 
     // Use core {0,0} as representative core for computing physical constraints
