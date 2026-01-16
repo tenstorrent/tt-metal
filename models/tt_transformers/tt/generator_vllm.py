@@ -19,6 +19,11 @@ from vllm.model_executor.models.gemma3_mm import (
 )
 from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsV0Only
 from vllm.model_executor.models.mllama import MllamaProcessingInfo
+from vllm.model_executor.models.pixtral import (
+    PixtralDummyInputsBuilder,
+    PixtralMultiModalProcessor,
+    PixtralProcessingInfo,
+)
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import (
     MultiModalDataDict,
@@ -516,6 +521,11 @@ class MistralForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
+@MULTIMODAL_REGISTRY.register_processor(
+    PixtralMultiModalProcessor,
+    info=PixtralProcessingInfo,
+    dummy_inputs=PixtralDummyInputsBuilder,
+)
 class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
     """
     Mistral 3.1 24B Multimodal (Vision-Language) Model for vLLM.
