@@ -67,8 +67,9 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     const auto& a = tensor_args.input;
     const auto& b = tensor_args.residual_input_tensor;
     const auto& gamma = tensor_args.weight;
-    const auto& stats = tensor_args.stats;
-    auto& output = tensor_return_value;
+    // Stats tensor is now at index 1 of the output tensors (created internally if not provided)
+    const auto& stats = tensor_return_value.at(1);
+    auto& output = tensor_return_value.at(0);
 
     // Program creation logic (previously in frmsnorm_multi_core_sharded)
     float eps = operation_attributes.eps;
@@ -91,7 +92,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     uint32_t stats_page_size;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype());
+    tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
     tt::DataFormat residual_data_format = in_data_format;
     if (b) {
         residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().dtype());
@@ -101,10 +102,10 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     } else {
         output_page_size = output.buffer()->page_size();
     }
-    if (stats.value().layout() == Layout::TILE) {
-        stats_page_size = stats.value().tensor_spec().tile().get_tile_size(stats_data_format);
+    if (stats.layout() == Layout::TILE) {
+        stats_page_size = stats.tensor_spec().tile().get_tile_size(stats_data_format);
     } else {
-        stats_page_size = stats.value().buffer()->page_size();
+        stats_page_size = stats.buffer()->page_size();
     }
 
     size_t num_targets_forward = 0;
@@ -129,8 +130,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     // Tensor Info
     const auto input_tensor_cores = a.memory_config().shard_spec()->grid;
     const auto output_tensor_cores = output.memory_config().shard_spec()->grid;
-    const auto stats_tensor_cores = stats.value().memory_config().shard_spec()->grid;
-    const auto stats_tensor_shard_shape = stats.value().memory_config().shard_spec()->shape;
+    const auto stats_tensor_cores = stats.memory_config().shard_spec()->grid;
+    const auto stats_tensor_shard_shape = stats.memory_config().shard_spec()->shape;
     const auto stats_tensor_shard_num_pages = stats_tensor_shard_shape[0] * stats_tensor_shard_shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation
@@ -245,12 +246,9 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     // block size for in0 (tensor a)
     uint32_t in0_block_tiles = block_wt;
     // post_all_gather_stats_block_tiles
-    uint32_t post_all_gather_stats_block_tiles = 1;
-    uint32_t num_distributed_devices = 1;
-    if (stats.has_value()) {
-        post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / TILE_WIDTH;
-        num_distributed_devices = post_all_gather_stats_block_tiles;
-    }
+    // Stats tensor is always available (provided or created internally)
+    uint32_t post_all_gather_stats_block_tiles = stats.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_distributed_devices = post_all_gather_stats_block_tiles;
 
     uint32_t in0_CB_size = in0_block_tiles * in_single_tile_size;
     // block size for in1 (tensor b)
@@ -592,7 +590,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     tt::tt_metal::CircularBufferConfig stats_cb_config =
         tt::tt_metal::CircularBufferConfig(stats_cb_size, {{cb_stats_index, cb_data_format}})
             .set_page_size(cb_stats_index, single_tile_size)
-            .set_globally_allocated_address(*stats.value().buffer());
+            .set_globally_allocated_address(*stats.buffer());
     auto cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
     uint32_t signaling_cb = tt::CBIndex::c_20;
     tt::tt_metal::CircularBufferConfig signaling_cb_config =
@@ -997,9 +995,9 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         // all_gather_rts Start at RT index 3 of writer
         std::vector<uint32_t> all_gather_rts = {
-            semaphore.address(),               // out_ready_sem_bank_addr (absolute address)
-            out_ready_sem_wait_value,          // out_ready_sem_wait_value
-            stats.value().buffer()->address()  // tensor_address0
+            semaphore.address(),       // out_ready_sem_bank_addr (absolute address)
+            out_ready_sem_wait_value,  // out_ready_sem_wait_value
+            stats.buffer()->address()  // tensor_address0
         };
 
         if (i == 0) {
@@ -1257,9 +1255,11 @@ void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
         auto* const src_buffer_a = tensor_args.input.buffer();
         const auto& b_tensor = tensor_args.residual_input_tensor;
         const auto& gamma_tensor = tensor_args.weight;
-        const auto& stats_tensor = tensor_args.stats;
-        auto* const dst_buffer = tensor_return_value.buffer();
-        bool skip_write_back = tensor_return_value.shard_spec().value() == tensor_args.input.shard_spec().value();
+        // Stats tensor is at index 1 of the output tensors
+        const auto& stats_tensor = tensor_return_value.at(1);
+        const auto& output_tensor = tensor_return_value.at(0);
+        auto* const dst_buffer = output_tensor.buffer();
+        bool skip_write_back = output_tensor.shard_spec().value() == tensor_args.input.shard_spec().value();
 
         auto& writer_sender_args_by_core = GetRuntimeArgs(program, shared_vars.writer_mcast_sender_kernels_id);
         auto& writer_receiver_args_by_core = shared_vars.num_none_all_to_all_workers > 0
@@ -1274,13 +1274,13 @@ void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
             if (writer_kernel_id == shared_vars.writer_mcast_sender_kernels_id) {
                 auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
                 runtime_args[8] = operation_attributes.semaphore.address();
-                runtime_args[10] = stats_tensor.value().buffer()->address();
+                runtime_args[10] = stats_tensor.buffer()->address();
                 // runtime_args[0] holds the start of the post arguments, apply that offset
                 runtime_args[runtime_args[0] + 2] = gamma_address;
             } else if (writer_kernel_id == shared_vars.writer_mcast_receiver_kernels_id) {
                 auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
                 runtime_args[8] = operation_attributes.semaphore.address();
-                runtime_args[10] = stats_tensor.value().buffer()->address();
+                runtime_args[10] = stats_tensor.buffer()->address();
                 runtime_args[runtime_args[0] + 2] = gamma_address;
             }
         }
@@ -1300,7 +1300,7 @@ void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
         } else {
             UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *dst_buffer);
         }
-        auto* const stats_buffer = stats_tensor.value().buffer();
+        auto* const stats_buffer = stats_tensor.buffer();
         UpdateDynamicCircularBufferAddress(program, shared_vars.cb_stats, *stats_buffer);
     }
 }
